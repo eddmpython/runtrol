@@ -15,7 +15,7 @@ import { ConversationDecorations, conversationUri } from "./conversationDecorati
 import type { ProjectRecord } from "./projects";
 import { awaitsVerification, isUsable } from "./providerHealth";
 import type { ProviderCapabilities } from "./runtimeTypes";
-import { RuntimeState } from "./state";
+import { type CoreReach, RuntimeState } from "./state";
 
 /// One conversation, as one row.
 ///
@@ -218,6 +218,7 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
   private listingIncomplete: boolean | null = null;
   private usableProvider: boolean | null = null;
   private verifyingProvider: boolean | null = null;
+  private reach: CoreReach | null = null;
   private revealed: string | null = null;
   private revealedCurrentProject: string | null = null;
 
@@ -355,18 +356,26 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
     void vscode.commands.executeCommand("setContext", "runtrol.listingIncomplete", incomplete);
   }
 
-  /// Distinguish a healthy first run from a machine with no usable coding service.
+  /// Distinguish a healthy first run from a machine with no usable coding service, and both of those from a
+  /// Core this window cannot reach.
   ///
-  /// Without this context both empty states received the same welcome, so a freshly installed and working CLI with
-  /// no conversations was incorrectly reported as missing. The welcome now gives the exact next action for each case.
+  /// Without this context every empty list received the same welcome, so a freshly installed and working CLI
+  /// with no conversations was reported as missing, and later a dropped connection was reported as a machine
+  /// with nothing installed at all (measured on the operator's window 2026-08-26 with three services running).
+  /// The welcome now gives the exact next action for each case.
   private updateWelcomeContext(): void {
     const usable = this.state.providers.some(isUsable);
     const verifying = !usable && this.state.providers.some(awaitsVerification);
-    if (usable === this.usableProvider && verifying === this.verifyingProvider) return;
+    const reach = this.state.coreReach;
+    if (usable === this.usableProvider && verifying === this.verifyingProvider && reach === this.reach) {
+      return;
+    }
     this.usableProvider = usable;
     this.verifyingProvider = verifying;
+    this.reach = reach;
     void vscode.commands.executeCommand("setContext", "runtrol.hasUsableProvider", usable);
     void vscode.commands.executeCommand("setContext", "runtrol.isVerifyingProvider", verifying);
+    void vscode.commands.executeCommand("setContext", "runtrol.coreReach", reach);
   }
 
   private updateBadge(): void {

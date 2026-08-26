@@ -1042,13 +1042,23 @@
     "viewsWelcome": [
       {
         "view": "runtrol.sessions",
-        "contents": "No coding-agent CLI was found on this machine.\n\nRuntrol supervises the CLIs you already have. Install one, then reopen this view.\n[Look again](command:runtrol.refresh)",
-        "when": "!runtrol.hasUsableProvider && !runtrol.isVerifyingProvider"
+        "contents": "Runtrol cannot reach its Core.\n\nThe conversations on this machine are still there; this window just lost the connection.\n[Try again](command:runtrol.refresh)",
+        "when": "runtrol.coreReach == unreachable"
+      },
+      {
+        "view": "runtrol.sessions",
+        "contents": "Connecting to the Runtrol Core...",
+        "when": "runtrol.coreReach == connecting"
       },
       {
         "view": "runtrol.sessions",
         "contents": "Checking the installed coding-agent CLI...",
-        "when": "runtrol.isVerifyingProvider"
+        "when": "runtrol.coreReach == reached && runtrol.isVerifyingProvider"
+      },
+      {
+        "view": "runtrol.sessions",
+        "contents": "No coding-agent CLI was found on this machine.\n\nRuntrol supervises the CLIs you already have. Install one, then reopen this view.\n[Look again](command:runtrol.refresh)",
+        "when": "runtrol.coreReach == reached && !runtrol.hasUsableProvider && !runtrol.isVerifyingProvider"
       },
       {
         "view": "runtrol.sessions",

@@ -17,6 +17,15 @@ import { workspaceIdentity } from "./workspaceCollision";
 
 export type RuntimeStateChange = "rows" | "selection" | "usage";
 
+/// Whether this window has heard from the Core yet.
+///
+/// An empty list has two completely different reasons and they need two different sentences: nobody has
+/// answered us, or the Core answered and this machine really has no coding service. Measured on the
+/// operator's window 2026-08-26: a dropped connection drew "No coding-agent CLI was found on this machine"
+/// while three coding services were installed and answering the Core. That is a lie about their machine
+/// rather than a report about ours.
+export type CoreReach = "connecting" | "reached" | "unreachable";
+
 export class RuntimeState implements vscode.Disposable {
   private readonly changedEmitter = new vscode.EventEmitter<RuntimeStateChange>();
   private readonly cursors = new Map<string, WatchCursor>();
@@ -35,8 +44,20 @@ export class RuntimeState implements vscode.Disposable {
   /// the sidebar reads; it never reaches the daemon or the provider.
   private pinnedKeys: ReadonlySet<string> = new Set();
   private renamedTitles: ReadonlyMap<string, string> = new Map();
+  private reach: CoreReach = "connecting";
 
   readonly onDidChange = this.changedEmitter.event;
+
+  /// Whether the Core has answered this window, so an empty tree can say the true reason.
+  get coreReach(): CoreReach {
+    return this.reach;
+  }
+
+  setCoreReach(reach: CoreReach): void {
+    if (this.reach === reach) return;
+    this.reach = reach;
+    this.changedEmitter.fire("rows");
+  }
 
   /// `projectlessRoot` is the scratch folder conversations without a project run in (null when this
   /// surface has none). Held here because every derived row reads it, and one place answering "is this

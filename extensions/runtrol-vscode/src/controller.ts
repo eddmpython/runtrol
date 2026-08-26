@@ -192,10 +192,19 @@ export class Controller implements vscode.Disposable {
   }
 
   async refresh(): Promise<void> {
-    const [inventory, isolated] = await Promise.all([
-      this.runtime.inventory(),
-      this.isolatedWorkspaces.list(),
-    ]);
+    let inventory: Awaited<ReturnType<typeof this.runtime.inventory>>;
+    let isolated: Awaited<ReturnType<typeof this.isolatedWorkspaces.list>>;
+    try {
+      [inventory, isolated] = await Promise.all([
+        this.runtime.inventory(),
+        this.isolatedWorkspaces.list(),
+      ]);
+    } catch (error) {
+      // Say which of the two empty states this is. The tree's welcome asks the state for it, and without this
+      // an unreachable Core reads as a machine with no coding service installed.
+      this.state.setCoreReach("unreachable");
+      throw error;
+    }
     this.applyListing(
       inventory.sessions.sessions,
       inventory.sessions.warnings,
@@ -1201,6 +1210,9 @@ export class Controller implements vscode.Disposable {
         if (signal.aborted) {
           return;
         }
+        // The watch is how this window stays in touch. Losing it is losing the Core, and the tree says so
+        // rather than letting an empty list be read as an empty machine.
+        this.state.setCoreReach("unreachable");
         this.say(error instanceof Error ? error.message : String(error), "error");
       }
       await abortableDelay(retryMs, signal);
@@ -1213,6 +1225,8 @@ export class Controller implements vscode.Disposable {
     warnings: readonly string[],
     providers: readonly ProviderLine[],
   ): void {
+    // Anything listed at all means the Core answered this window.
+    this.state.setCoreReach("reached");
     const titleProviders = nativeTitleRefreshProviders(this.state.sessions, sessions);
     const previousSelected = this.state.selected;
     const selected = previousSelected?.sessionId ?? null;
