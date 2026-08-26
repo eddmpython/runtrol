@@ -73,16 +73,6 @@ pub enum DeviceScope {
     ConfigRead,
     /// Read the audit record of what was granted, spent, and refused.
     AuditRead,
-    /// Read bounded Mission and Task status metadata.
-    MissionRead,
-    /// Pause new Mission reservations without expanding authority.
-    MissionPause,
-    /// Resume a paused Mission only when no scope or reviewed contract changes.
-    MissionResumeSafe,
-    /// Cancel Mission-owned activity and release proven claims.
-    MissionCancel,
-    /// Read bounded Receipt and Gate outcome summaries.
-    EvidenceReadSummary,
     /// Run sessions under the provider's ordinary permission mode.
     ModeDefault,
     /// Run sessions under a mode that pre-approves edits inside the workspace.
@@ -103,6 +93,19 @@ pub enum DeviceScope {
     /// growing a variant per vendor.
     Provider(ProviderId),
 }
+
+/// Names this build no longer has, that an older pairing may still hold in the store.
+///
+/// Removing a capability must not stop the daemon: a stored grant that names one of these is dropped, so
+/// the device simply loses that authority. Anything not on this list is still refused, because an
+/// uninterpretable grant is not the same as one we retired on purpose.
+pub const RETIRED_DEVICE_SCOPES: &[&str] = &[
+    "mission.read",
+    "mission.pause",
+    "mission.resumeSafe",
+    "mission.cancel",
+    "evidence.read.summary",
+];
 
 impl DeviceScope {
     /// Every scope that names nothing, in a stable order.
@@ -125,11 +128,6 @@ impl DeviceScope {
         Self::ApprovalRespondHigh,
         Self::ConfigRead,
         Self::AuditRead,
-        Self::MissionRead,
-        Self::MissionPause,
-        Self::MissionResumeSafe,
-        Self::MissionCancel,
-        Self::EvidenceReadSummary,
         Self::ModeDefault,
         Self::ModeAcceptEdits,
     ];
@@ -153,11 +151,6 @@ impl DeviceScope {
             Self::ApprovalRespondHigh => "approval.respond.high",
             Self::ConfigRead => "config.read",
             Self::AuditRead => "audit.read",
-            Self::MissionRead => "mission.read",
-            Self::MissionPause => "mission.pause",
-            Self::MissionResumeSafe => "mission.resumeSafe",
-            Self::MissionCancel => "mission.cancel",
-            Self::EvidenceReadSummary => "evidence.read.summary",
             Self::ModeDefault => "mode.default",
             Self::ModeAcceptEdits => "mode.acceptEdits",
             Self::Workspace(_) => "workspace",
@@ -177,18 +170,13 @@ impl DeviceScope {
             | Self::SessionDelete
             | Self::ApprovalRespondLow
             | Self::ApprovalRespondHigh
-            | Self::ModeAcceptEdits
-            | Self::MissionResumeSafe => true,
+            | Self::ModeAcceptEdits => true,
             Self::SessionList
             | Self::SessionOutputRead
             | Self::SessionStop
             | Self::SessionResume
             | Self::ConfigRead
             | Self::AuditRead
-            | Self::MissionRead
-            | Self::MissionPause
-            | Self::MissionCancel
-            | Self::EvidenceReadSummary
             | Self::ModeDefault
             | Self::Workspace(_)
             | Self::Provider(_) => false,
@@ -304,28 +292,10 @@ pub enum LocalScope {
     ProviderInstall,
     /// Approve, deny, narrow, or revoke a public Runtime integration.
     IntegrationAdmin,
-    /// Create or import one project Mission.
-    MissionCreate,
-    /// Approve and start one exact reviewed Mission.
-    MissionStart,
     /// Prepare another bounded Run for one Task.
-    MissionRetryTask,
     /// Submit one exact reviewed Task instruction at the PC.
-    MissionSendTaskInstruction,
     /// Approve local integration after evidence review.
-    MissionIntegrate,
-    /// Archive one terminal Mission.
-    MissionArchive,
-    /// Register or change a fixed local `GateDefinition`.
-    GateRegister,
-    /// Create or change project Mission policy.
-    PolicyWrite,
-    /// Activate one exact verified capability digest.
-    CapabilityPromote,
-    /// Reactivate one previously approved capability digest.
-    CapabilityRollback,
     /// Archive one capability version.
-    CapabilityArchive,
     /// Hand the durable store to a newer daemon generation and finish once no turn is running.
     ///
     /// Which binary answers every later request is executable authority, exactly like installing a
@@ -349,17 +319,6 @@ impl LocalScope {
         Self::ProviderRollback,
         Self::ProviderInstall,
         Self::IntegrationAdmin,
-        Self::MissionCreate,
-        Self::MissionStart,
-        Self::MissionRetryTask,
-        Self::MissionSendTaskInstruction,
-        Self::MissionIntegrate,
-        Self::MissionArchive,
-        Self::GateRegister,
-        Self::PolicyWrite,
-        Self::CapabilityPromote,
-        Self::CapabilityRollback,
-        Self::CapabilityArchive,
         Self::RuntimeDrain,
     ];
 
@@ -377,17 +336,6 @@ impl LocalScope {
             Self::ProviderRollback => "provider.rollback",
             Self::ProviderInstall => "provider.install",
             Self::IntegrationAdmin => "integration.admin",
-            Self::MissionCreate => "mission.create",
-            Self::MissionStart => "mission.start",
-            Self::MissionRetryTask => "mission.retryTask",
-            Self::MissionSendTaskInstruction => "mission.sendTaskInstruction",
-            Self::MissionIntegrate => "mission.integrate",
-            Self::MissionArchive => "mission.archive",
-            Self::GateRegister => "gate.register",
-            Self::PolicyWrite => "policy.write",
-            Self::CapabilityPromote => "capability.promote",
-            Self::CapabilityRollback => "capability.rollback",
-            Self::CapabilityArchive => "capability.archive",
             Self::RuntimeDrain => "runtime.drain",
         }
     }
@@ -436,11 +384,6 @@ mod tests {
             DeviceScope::ApprovalRespondHigh,
             DeviceScope::ConfigRead,
             DeviceScope::AuditRead,
-            DeviceScope::MissionRead,
-            DeviceScope::MissionPause,
-            DeviceScope::MissionResumeSafe,
-            DeviceScope::MissionCancel,
-            DeviceScope::EvidenceReadSummary,
             DeviceScope::ModeDefault,
             DeviceScope::ModeAcceptEdits,
             DeviceScope::Workspace(a_root()),
@@ -564,7 +507,6 @@ mod tests {
                     | DeviceScope::ApprovalRespondLow
                     | DeviceScope::ApprovalRespondHigh
                     | DeviceScope::ModeAcceptEdits
-                    | DeviceScope::MissionResumeSafe
             );
             assert_eq!(
                 scope.changes_the_machine(),
@@ -587,7 +529,7 @@ mod tests {
         // The ledger stores these in a sorted set, so ordering has to be total and cheap.
         let mut scopes = every_device_scope();
         scopes.sort_unstable();
-        assert_eq!(scopes.len(), 20);
+        assert_eq!(scopes.len(), 15);
         let copied = scopes.first().copied();
         assert!(copied.is_some());
     }

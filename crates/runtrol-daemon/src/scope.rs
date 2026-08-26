@@ -525,39 +525,6 @@ mod tests {
     }
 
     #[test]
-    fn mission_expansion_and_capability_changes_are_never_remote() {
-        let ledger = GrantLedger::new();
-        let caller = Caller::Device {
-            device: DeviceId::now(),
-        };
-        for request in every_request() {
-            if matches!(
-                needed(&request),
-                Needed::AtTheMachine(
-                    LocalScope::MissionCreate
-                        | LocalScope::MissionStart
-                        | LocalScope::MissionRetryTask
-                        | LocalScope::MissionSendTaskInstruction
-                        | LocalScope::MissionIntegrate
-                        | LocalScope::MissionArchive
-                        | LocalScope::GateRegister
-                        | LocalScope::CapabilityPromote
-                        | LocalScope::CapabilityRollback
-                        | LocalScope::CapabilityArchive
-                )
-            ) {
-                assert!(
-                    matches!(
-                        allowed(&caller, &request, &ledger),
-                        Err(WallRefusal::NeverRemote { .. })
-                    ),
-                    "{request:?} was not permanently local"
-                );
-            }
-        }
-    }
-
-    #[test]
     fn retiring_the_runtime_is_never_remote() {
         // Which binary answers every later request is executable authority, and a hostile relay
         // must not be able to bounce the daemon. No grant can carry this to a device.

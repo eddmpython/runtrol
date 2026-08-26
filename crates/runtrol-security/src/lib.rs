@@ -47,5 +47,5 @@ pub use presence::{
     PresenceChallenge,
 };
 pub use root_identity::ProjectRootIdentity;
-pub use scope::{DeviceScope, LocalScope, StoredScopeError};
+pub use scope::{DeviceScope, LocalScope, RETIRED_DEVICE_SCOPES, StoredScopeError};
 pub use workspace::{DeniedPath, DenyList, WorkspaceRoot};

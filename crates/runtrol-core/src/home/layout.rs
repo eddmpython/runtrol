@@ -17,9 +17,7 @@
 //! | `providers/` | the manifest loader, last in the discovery order and therefore able to shadow |
 //! | `process-guards/` | child supervision, containing only bounded process identity records |
 //! | the probe cache | the binary-identity cache of what each installed CLI can do |
-//! | the Mission gate registry | fixed local Gate definitions, without process output |
 //! | the isolated workspace registry | Core-owned chat worktree identities and cleanup state |
-//! | the capability trust index | exact local digest approvals, without capability bodies |
 //! | the provider update journal | verified version floors and rollback pins, never provider content |
 //! | the machine identity vault | the per-user OS protector and Noise handshake assembly |
 //! | `agent-tools/` | project-scoped public Runtime integration identities and grants |
@@ -49,17 +47,8 @@ use crate::home::HomeError;
 /// The database. One file, opened by exactly one process at a time.
 const DATABASE: &str = "runtrol.redb";
 
-/// Separate bounded Mission evidence and recovery ledger.
-const MISSION_LEDGER: &str = "mission-ledger.redb";
-
-/// Fixed local Mission Gate definitions.
-const MISSION_GATES: &str = "mission-gates.json";
-
 /// Core-owned ordinary-chat worktrees and their exact cleanup state.
 const ISOLATED_WORKSPACES: &str = "isolated-workspaces.json";
-
-/// Exact local capability approvals and states.
-const CAPABILITY_TRUST: &str = "capability-trust.json";
 
 /// Provider manifests the operator wrote.
 const PROVIDERS: &str = "providers";
@@ -104,14 +93,8 @@ pub struct Layout {
     root: AbsPath,
     /// The database file.
     database: AbsPath,
-    /// Separate Mission evidence ledger file.
-    mission_ledger: AbsPath,
-    /// Fixed local Mission Gate registry.
-    mission_gates: AbsPath,
     /// Core-owned ordinary-chat worktree registry.
     isolated_workspaces: AbsPath,
-    /// Exact local capability approval index.
-    capability_trust: AbsPath,
     /// The operator's manifest directory.
     providers: AbsPath,
     /// Bounded durable process identities for restart recovery.
@@ -156,10 +139,7 @@ impl Layout {
 
         Ok(Self {
             database: entry(DATABASE)?,
-            mission_ledger: entry(MISSION_LEDGER)?,
-            mission_gates: entry(MISSION_GATES)?,
             isolated_workspaces: entry(ISOLATED_WORKSPACES)?,
-            capability_trust: entry(CAPABILITY_TRUST)?,
             providers: entry(PROVIDERS)?,
             process_guards: entry(PROCESS_GUARDS)?,
             probe_cache: entry(PROBE_CACHE)?,
@@ -188,28 +168,10 @@ impl Layout {
         &self.database
     }
 
-    /// The separate bounded Mission evidence ledger.
-    #[must_use]
-    pub const fn mission_ledger(&self) -> &AbsPath {
-        &self.mission_ledger
-    }
-
-    /// Fixed local Mission Gate registry.
-    #[must_use]
-    pub const fn mission_gates(&self) -> &AbsPath {
-        &self.mission_gates
-    }
-
     /// Core-owned ordinary-chat worktree registry.
     #[must_use]
     pub const fn isolated_workspaces(&self) -> &AbsPath {
         &self.isolated_workspaces
-    }
-
-    /// Exact local capability approval index.
-    #[must_use]
-    pub const fn capability_trust(&self) -> &AbsPath {
-        &self.capability_trust
     }
 
     /// The directory the operator puts their own provider manifests in.
@@ -336,10 +298,7 @@ impl Layout {
     fn everything(&self) -> Vec<&AbsPath> {
         vec![
             &self.database,
-            &self.mission_ledger,
-            &self.mission_gates,
             &self.isolated_workspaces,
-            &self.capability_trust,
             &self.providers,
             &self.process_guards,
             &self.probe_cache,

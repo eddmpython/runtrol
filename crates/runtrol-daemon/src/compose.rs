@@ -599,6 +599,13 @@ fn restore_device_authority(
             })?;
         let mut scopes = Vec::with_capacity(stored_scopes.len());
         for stored in stored_scopes {
+            // A capability this build removed on purpose is dropped, never a reason to refuse to start: the
+            // device simply no longer holds it, which is strictly less authority than the store recorded.
+            // Anything else still refuses, because a grant nobody can interpret is not the same as one we
+            // retired (`RETIRED_DEVICE_SCOPES`).
+            if runtrol_security::RETIRED_DEVICE_SCOPES.contains(&stored.as_ref()) {
+                continue;
+            }
             scopes.push(DeviceScope::from_stored(&stored).map_err(|_| {
                 ComposeError::StoredDevice {
                     device,
@@ -924,6 +931,34 @@ mod tests {
         assert_eq!(
             paired.credential_fingerprint.to_bytes(),
             expected_fingerprint
+        );
+    }
+
+    #[test]
+    fn composing_drops_a_retired_scope_instead_of_refusing_to_start() {
+        // Removing a capability must not strand a paired phone's whole grant. The device loses that one
+        // authority and the daemon still assembles, which is the only safe direction.
+        let scratch = Scratch::make("retired-device-scope");
+        let first =
+            Composed::for_tests(&scratch.root, runtrol_drivers::builtin()).expect("first assembly");
+        let device = DeviceId::now();
+        first
+            .store
+            .put_device(
+                runtrol_store::DeviceKey::from_bytes(*device.as_bytes()),
+                &stored_device_row("phone", vec!["session.list".into(), "mission.read".into()]),
+            )
+            .expect("device stored");
+        drop(first);
+
+        let second = Composed::for_tests(&scratch.root, runtrol_drivers::builtin())
+            .expect("a retired scope must not stop assembly");
+        assert!(
+            second
+                .device_authority
+                .grants()
+                .holds(device, runtrol_security::DeviceScope::SessionList),
+            "the surviving scope stays granted"
         );
     }
 

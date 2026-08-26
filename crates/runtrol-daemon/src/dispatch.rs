@@ -2020,9 +2020,6 @@ mod tests {
             runtrol_security::DeviceScope::SessionInputWrite
                 .to_string()
                 .into(),
-            runtrol_security::DeviceScope::MissionRead
-                .to_string()
-                .into(),
         ];
         if grant_workspace {
             scopes.push(
