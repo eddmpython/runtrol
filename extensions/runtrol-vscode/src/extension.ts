@@ -37,7 +37,7 @@ import { UsageView } from "./usageView";
 import { WorkspaceRootFollowing } from "./workspaceRoots";
 import { conversationIcon } from "./conversationIcon";
 import { TerminalTabs } from "./terminalTabs";
-import { ConversationItem, ConversationsTree, ProjectItem, icon } from "./trees";
+import { ConversationItem, ConversationsTree, ProjectItem, ServiceChoiceItem, icon } from "./trees";
 
 declare const RUNTROL_INCLUDE_TEST_JOURNEY: boolean;
 
@@ -130,6 +130,12 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
   );
   context.subscriptions.push(terminals);
   controller = new Controller(context, client, runtime, state, selection, projectStore, terminals);
+  const offerServices = (): readonly { providerId: string; displayName: string; icon: string }[] =>
+    controller.startableServices().map((provider) => ({
+      providerId: provider.providerId,
+      displayName: provider.displayName,
+      icon: providerIcon(provider.providerId, state.providers),
+    }));
   // The window's folders follow into the grant's roots. Enrollment read them once; without this, every folder
   // opened after first activation stayed outside conversation discovery, silently.
   const rootFollowing = new WorkspaceRootFollowing({
@@ -166,6 +172,14 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     vscode.commands.registerCommand(
       "runtrol.refresh",
       () => run(() => afterReady(() => controller.refreshChats())),
+    ),
+    vscode.commands.registerCommand(
+      "runtrol.startSessionWith",
+      (item: ServiceChoiceItem) => run(() => afterReady(async () => {
+        projectsTree.clearServiceChoice();
+        conversations.clearServiceChoice();
+        await controller.startSessionWith(item.providerId, item.workspace);
+      })),
     ),
     vscode.commands.registerCommand(
       "runtrol.restartExtensionHost",
@@ -523,6 +537,21 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
   );
   context.subscriptions.push(
   );
+  projectsTree.offerServices(offerServices);
+  conversations.offerServices(offerServices);
+  // A choice for a project is drawn under Projects; a choice for no project under Conversations. The section
+  // that asked is the section that answers.
+  controller.chooseService = (workspace) => {
+    if (isProjectless(workspace, state.projectlessRoot)) {
+      projectsTree.clearServiceChoice();
+      conversations.chooseService(workspace);
+      void vscode.commands.executeCommand("runtrol.conversations.focus");
+    } else {
+      conversations.clearServiceChoice();
+      projectsTree.chooseService(workspace);
+      void vscode.commands.executeCommand("runtrol.projects.focus");
+    }
+  };
   const projectsView = vscode.window.createTreeView("runtrol.projects", {
     treeDataProvider: projectsTree,
   });

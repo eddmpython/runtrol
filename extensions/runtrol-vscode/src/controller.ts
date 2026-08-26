@@ -605,18 +605,38 @@ export class Controller implements vscode.Disposable {
       this.say("No coding service is installed and signed in yet. Add one from the Agent Usage view.", "warning");
       return;
     }
-    const recent = this.context.globalState.get<string>(RECENT_SERVICE_KEY) ?? null;
-    const ordered = [...usable].sort((left, right) => Number(right.providerId === recent) - Number(left.providerId === recent));
-    const picked = usable.length === 1 || options.interactive === false
-      ? ordered[0]
-      : await vscode.window.showQuickPick(
-        ordered.map((provider) => ({ label: provider.displayName, description: provider.providerId, provider })),
-        { title: "Start a conversation with", placeHolder: "The service's own terminal opens in the project" },
-      ).then((choice) => choice?.provider);
-    if (!picked) return;
-    await this.context.globalState.update(RECENT_SERVICE_KEY, picked.providerId);
-    this.terminals.showFresh(picked.providerId, workspace, workspaceName(workspace) || workspace);
+    if (usable.length === 1 || options.interactive === false) {
+      await this.startSessionWith(this.orderedServices(usable)[0]!.providerId, workspace);
+      return;
+    }
+    // More than one service, so the person chooses. The choice is offered where they pressed the button
+    // (`docs/vscodeSurface.md`): the list opens in the sidebar under that section, not at the top of the
+    // window. A picker at the top of the screen drags the eye off the thing they were looking at.
+    this.chooseService?.(workspace);
   }
+
+  /// Where the sidebar draws the service choice, set by the surface that owns the sections.
+  chooseService: ((workspace: string) => void) | null = null;
+
+  /// Start a conversation with one named service, which is what a chosen row asks for.
+  async startSessionWith(providerId: string, workspace: string): Promise<void> {
+    await this.context.globalState.update(RECENT_SERVICE_KEY, providerId);
+    this.terminals.showFresh(providerId, workspace, workspaceName(workspace) || workspace);
+  }
+
+  /// The services a person may start, most recently used first.
+  private orderedServices(usable: readonly ProviderLine[]): ProviderLine[] {
+    const recent = this.context.globalState.get<string>(RECENT_SERVICE_KEY) ?? null;
+    return [...usable].sort(
+      (left, right) => Number(right.providerId === recent) - Number(left.providerId === recent),
+    );
+  }
+
+  /// The services the sidebar offers in its own chooser, most recently used first.
+  startableServices(): ProviderLine[] {
+    return this.orderedServices(this.state.providers.filter((provider) => isUsable(provider)));
+  }
+
 
   /// The scratch folder, created on first use. One `mkdir` of an empty directory; nothing is written in it
   /// by this extension (the coding CLI runs there, exactly as it runs in any project folder).

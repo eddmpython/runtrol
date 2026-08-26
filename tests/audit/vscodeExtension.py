@@ -697,7 +697,7 @@ def selftest() -> int:
     broad_delete = json.loads(json.dumps(package))
     for entry in broad_delete["contributes"]["menus"]["view/item/context"]:
         if entry.get("command") == "runtrol.deleteConversation":
-            entry["when"] = "view =~ /^runtrol\.(projects|conversations)$/"
+            entry["when"] = r"view =~ /^runtrol\.(projects|conversations)$/"
     cluttered_conversation = json.loads(json.dumps(package))
     cluttered_conversation["contributes"]["menus"]["view/item/context"].append({
         "command": "runtrol.closeSession",

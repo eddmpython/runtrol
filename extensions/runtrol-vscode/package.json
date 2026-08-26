@@ -373,6 +373,11 @@
         "title": "Switch Window to Project...",
         "icon": "$(folder-opened)",
         "category": "Runtrol"
+      },
+      {
+        "command": "runtrol.startSessionWith",
+        "title": "Start a Conversation With This Service",
+        "category": "Runtrol"
       }
     ],
     "keybindings": [
@@ -469,6 +474,10 @@
         },
         {
           "command": "runtrol.answerFromRow",
+          "when": "false"
+        },
+        {
+          "command": "runtrol.startSessionWith",
           "when": "false"
         }
       ],

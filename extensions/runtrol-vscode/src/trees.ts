@@ -99,7 +99,33 @@ function projectContextValue(group: ProjectGroup): string {
   return `runtrol.project.${group.kind}${group.current ? ".current" : ""}${pin}`;
 }
 
-export type ChatTreeItem = ConversationItem | ProjectItem;
+/// One coding service, offered where the person pressed the button.
+///
+/// The choice belongs beside the list, not at the top of the window: a picker up there drags the eye off the
+/// section the person was working in, and they have to come back down to see what happened. These rows are
+/// built from the services the Core reports, so a service added by manifest appears here without this file
+/// knowing its name.
+export class ServiceChoiceItem extends vscode.TreeItem {
+  constructor(
+    readonly providerId: string,
+    readonly workspace: string,
+    displayName: string,
+    icon: string,
+    extensionUri: vscode.Uri | null,
+  ) {
+    super(displayName, vscode.TreeItemCollapsibleState.None);
+    this.id = `choose:${workspace}:${providerId}`;
+    this.iconPath = extensionUri ? conversationIcon(extensionUri, icon) : new vscode.ThemeIcon(icon);
+    this.contextValue = "runtrol.serviceChoice";
+    this.command = {
+      command: "runtrol.startSessionWith",
+      title: "Start a conversation with this service",
+      arguments: [this],
+    };
+  }
+}
+
+export type ChatTreeItem = ConversationItem | ProjectItem | ServiceChoiceItem;
 
 /// Which half of the sidebar one tree draws.
 ///
@@ -234,6 +260,10 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
   private reach: CoreReach | null = null;
   private revealed: string | null = null;
   private revealedCurrentProject: string | null = null;
+  /// The folder a service is being chosen for, or null when nothing is being chosen. Held here because the
+  /// choice is drawn as rows in this very view.
+  private choosingFor: string | null = null;
+  private services: (() => readonly { providerId: string; displayName: string; icon: string }[]) | null = null;
 
   constructor(
     private readonly part: SidebarPart,
@@ -316,6 +346,28 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
     if (!(element instanceof ConversationItem)) return undefined;
     this.ensureItems();
     return this.parents?.get(element.conversation.key);
+  }
+
+  /// Where the services come from, so this file never names one.
+  offerServices(
+    services: () => readonly { providerId: string; displayName: string; icon: string }[],
+  ): void {
+    this.services = services;
+  }
+
+  /// Draw the service choice for one folder, in this section, until something is chosen.
+  chooseService(workspace: string): void {
+    this.choosingFor = workspace;
+    this.forgetItems();
+    this.changedEmitter.fire(undefined);
+  }
+
+  /// Put the choice away again.
+  clearServiceChoice(): void {
+    if (this.choosingFor === null) return;
+    this.choosingFor = null;
+    this.forgetItems();
+    this.changedEmitter.fire(undefined);
   }
 
   getChildren(element?: ChatTreeItem): ChatTreeItem[] {
@@ -495,15 +547,27 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
     const parents = new Map<string, ProjectItem>();
     const grouped = new Map<string, readonly Conversation[]>();
 
+    // A choice in progress leads its own section, so the person's eye stays where they pressed the button.
+    const choices = this.choosingFor === null
+      ? []
+      : (this.services?.() ?? []).map((service) => new ServiceChoiceItem(
+        service.providerId,
+        this.choosingFor as string,
+        service.displayName,
+        service.icon,
+        this.extensionUri,
+      ));
+
     if (this.part === "loose") {
       // Conversations that belong to no project. A folder nobody added contributes none of these, so this
       // section is only ever what the person started without choosing a place (`loose`).
-      this.items = pinnedFirst(loose(rows)).map((row) => new ConversationItem(
+      const rowsHere = pinnedFirst(loose(rows)).map((row) => new ConversationItem(
         row,
         this.state.providerCapabilities(row.providerId),
         this.extensionUri,
       ));
-      this.flat = this.items as ConversationItem[];
+      this.items = [...choices, ...rowsHere];
+      this.flat = rowsHere;
       this.parents = parents;
       this.grouped = grouped;
       return;
@@ -522,7 +586,7 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
       // themselves wait until something asks to draw them.
       for (const row of group.rows) parents.set(row.key, heading);
     }
-    this.items = headings;
+    this.items = [...choices, ...headings];
     this.flat = [];
     this.parents = parents;
     this.grouped = grouped;
