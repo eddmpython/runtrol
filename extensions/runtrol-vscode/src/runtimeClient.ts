@@ -22,6 +22,8 @@ import {
   type RuntimeProviderCapabilities,
   type SessionDescriptor,
   type SessionWorkspaceAccess,
+  type TerminalOpenParams,
+  type TerminalView,
   type ValidatedLocator,
 } from "@runtrol/runtime-client";
 import * as vscode from "vscode";
@@ -143,6 +145,17 @@ export class StudioRuntimeClient implements vscode.Disposable {
   /// Where each account stands against its limits, by each provider's own latest report.
   async providersUsage(): Promise<import("@runtrol/runtime-client").ProviderUsageList> {
     return this.read(async (runtime) => runtime.providers().usage());
+  }
+
+  /// Open one provider-faithful terminal on its own public Runtime connection.
+  async openTerminal(params: TerminalOpenParams): Promise<TerminalView> {
+    const dedicated = await this.connectCommand();
+    try {
+      return await dedicated.terminals().open(params);
+    } catch (error) {
+      dedicated.close();
+      throw error;
+    }
   }
 
   /// The Studio's own integration identity, or null before enrollment has ever succeeded.

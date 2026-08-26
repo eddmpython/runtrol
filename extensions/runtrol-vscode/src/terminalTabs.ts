@@ -1,14 +1,18 @@
+import {
+  PUBLIC_LIMITS,
+  newMutationRequestId,
+  type TerminalControlLease,
+  type TerminalView,
+} from "@runtrol/runtime-client";
 import * as vscode from "vscode";
 import type { Conversation, StartedConversation } from "./conversationList";
 import { projectColorId } from "./projectColor";
-import { FrameTransport } from "./core/framing";
-import type { CoreLocator } from "./core/locator";
-import { type Request, readResponse, requestHello } from "./protocol";
+import type { StudioRuntimeClient } from "./runtimeClient";
 
 /// The conversation surface: the coding service's own terminal interface, hosted by the Core on a pseudo
 /// terminal it owns, shown here as an editor-area tab (`docs/terminalSurface.md`).
 ///
-/// One tab per conversation. The tab is a VS Code terminal whose pseudoterminal is a private-wire
+/// One tab per conversation. The tab is a VS Code terminal whose pseudoterminal is a public Runtime
 /// connection: what the service draws comes down as bytes and is written to the tab as written; what the
 /// person types goes up as bytes. Nothing here reads either. Splitting, grids and full screen are VS
 /// Code's own editor-tab behaviour, which is the point of using its terminal rather than a page of ours.
@@ -23,7 +27,7 @@ export class TerminalTabs implements vscode.Disposable {
   private readonly closing: vscode.Disposable;
 
   constructor(
-    private readonly locator: CoreLocator,
+    private readonly runtime: StudioRuntimeClient,
     /// The glyph for a conversation's service, drawn on the tab so two services' tabs tell apart at a glance.
     private readonly iconFor: (conversation: Conversation) => vscode.ThemeIcon | vscode.Uri,
     /// The same glyph by service id, for a fresh conversation that has no row yet.
@@ -48,10 +52,19 @@ export class TerminalTabs implements vscode.Disposable {
       existing.show(preserveFocus);
       return existing;
     }
-    const pty = new CoreTerminal(this.locator, {
+    const native = conversation.native?.adoptionToken
+      ? {
+          nativeSessionId: conversation.native.nativeSessionId,
+          adoptionToken: conversation.native.adoptionToken,
+        }
+      : null;
+    const pty = new RuntimeTerminal(this.runtime, {
       provider: conversation.providerId,
-      native: conversation.native?.nativeSessionId ?? conversation.session?.nativeSessionId ?? null,
+      native,
       workspace: conversation.workspace,
+      blocked: conversation.session?.nativeSessionId && !native
+        ? "This conversation has no current provider resume proof for the public Runtime terminal."
+        : null,
     });
     // The tab is named for the conversation and coloured for its project. The name answers "which conversation",
     // the colour answers "whose project", and the two together fit in the width a tab actually has.
@@ -73,7 +86,12 @@ export class TerminalTabs implements vscode.Disposable {
   /// conversation to reopen, and the service creates one. The tab is named for the folder until the
   /// service's own listing gives the conversation a title (the sidebar shows it once the store does).
   showFresh(providerId: string, workspace: string, name: string, projectless = false): vscode.Terminal {
-    const pty = new CoreTerminal(this.locator, { provider: providerId, native: null, workspace });
+    const pty = new RuntimeTerminal(this.runtime, {
+      provider: providerId,
+      native: null,
+      workspace,
+      blocked: null,
+    });
     const colour = projectless ? null : projectColorId(workspace);
     const terminal = vscode.window.createTerminal({
       name,
@@ -128,8 +146,9 @@ export class TerminalTabs implements vscode.Disposable {
 
 type Target = {
   provider: string;
-  native: string | null;
+  native: { nativeSessionId: string; adoptionToken: string } | null;
   workspace: string;
+  blocked: string | null;
 };
 
 /// A VS Code pseudoterminal whose other end is the Core's hosted terminal.
@@ -137,20 +156,24 @@ type Target = {
 /// Output is decoded as streaming UTF-8 (a multi-byte character may straddle two chunks). Input is sent as
 /// the UTF-8 bytes of what VS Code hands over, which for mouse reports and special keys is already the
 /// terminal's own escape vocabulary.
-class CoreTerminal implements vscode.Pseudoterminal {
+class RuntimeTerminal implements vscode.Pseudoterminal {
   private readonly writeEmitter = new vscode.EventEmitter<string>();
   private readonly closeEmitter = new vscode.EventEmitter<number | void>();
   readonly onDidWrite = this.writeEmitter.event;
   readonly onDidClose = this.closeEmitter.event;
-  private transport: FrameTransport | null = null;
+  private view: TerminalView | null = null;
+  private lease: TerminalControlLease | null = null;
   private decoder = new TextDecoder("utf-8");
   private closed = false;
+  private commandTail = Promise.resolve();
+  private dimensions = { columns: 120, rows: 40 };
   /// Input typed before the connection is up is kept and sent once it is: a person who starts typing while
   /// the tab opens must not lose the first keys.
-  private pending: string[] = [];
+  private pending: Uint8Array[] = [];
+  private pendingBytes = 0;
 
   constructor(
-    private readonly locator: CoreLocator,
+    private readonly runtime: StudioRuntimeClient,
     private readonly target: Target,
   ) {}
 
@@ -160,149 +183,195 @@ class CoreTerminal implements vscode.Pseudoterminal {
   /// conversation that would not open left no trace at all: a tab flashed and the person was back where they
   /// started with nothing to read (measured 2026-08-26).
   open(initialDimensions: vscode.TerminalDimensions | undefined): void {
-    const cols = initialDimensions?.columns ?? 120;
-    const rows = initialDimensions?.rows ?? 40;
-    void this.connect(cols, rows).catch((error: unknown) => {
-      const message = error instanceof Error ? error.message : String(error);
-      this.writeEmitter.fire(`\r\n\x1b[31m${message}\x1b[0m\r\n`);
-      this.detach();
-    });
+    this.dimensions = {
+      columns: initialDimensions?.columns ?? 120,
+      rows: initialDimensions?.rows ?? 40,
+    };
+    void this.connect().catch((error: unknown) => this.fail(error));
   }
 
   close(): void {
-    this.end();
+    this.detach(true);
   }
 
   handleInput(data: string): void {
     if (this.closed) return;
-    if (!this.transport) {
-      this.pending.push(data);
+    const bytes = Buffer.from(data, "utf8");
+    if (!this.view) {
+      if (this.pendingBytes + bytes.byteLength > PUBLIC_LIMITS.maxTerminalWriteBytes) {
+        this.fail(new Error("Input entered while the terminal opened exceeded the Runtime input bound."));
+        return;
+      }
+      this.pending.push(bytes);
+      this.pendingBytes += bytes.byteLength;
       return;
     }
-    void this.send({ ask: "terminalInput", with: { bytes: Buffer.from(data, "utf8").toString("base64") } });
+    this.queueControl(async (view, lease) => {
+      await view.write({
+        requestId: newMutationRequestId(),
+        terminalId: view.opened.terminal.terminalId,
+        leaseId: lease.leaseId,
+        leaseGeneration: lease.leaseGeneration,
+        bytesBase64: Buffer.from(bytes).toString("base64"),
+      });
+    });
   }
 
   setDimensions(dimensions: vscode.TerminalDimensions): void {
-    if (this.closed || !this.transport) return;
-    void this.send({ ask: "terminalResize", with: { cols: dimensions.columns, rows: dimensions.rows } });
+    this.dimensions = { columns: dimensions.columns, rows: dimensions.rows };
+    if (this.closed || !this.view) return;
+    this.queueControl(async (view, lease) => {
+      await view.resize({
+        requestId: newMutationRequestId(),
+        terminalId: view.opened.terminal.terminalId,
+        leaseId: lease.leaseId,
+        leaseGeneration: lease.leaseGeneration,
+        geometry: this.dimensions,
+      });
+    });
   }
 
-  /// What a draining generation answers when it refuses new work. Matched on the Core's own words because
-  /// that refusal is the one failure a viewer can recover from by itself.
-  private static readonly DRAINING = "generation is draining";
-
-  private async connect(cols: number, rows: number, attempt = 0): Promise<void> {
-    const located = await this.locator.locate();
-    const transport = await FrameTransport.connect(located.endpoint);
-    try {
-      await transport.send(requestHello());
-      const welcome = readResponse(JSON.parse((await transport.receive()).toString("utf8")));
-      if (welcome.say === "failed") throw new Error(welcome.with.message);
-      if (welcome.say !== "welcome") throw new Error(`the Core greeted with ${welcome.say}`);
-      const open: Request = {
-        ask: "terminalOpen",
-        with: { provider: this.target.provider, native: this.target.native, workspace: this.target.workspace, cols, rows },
-      };
-      await transport.send(open);
-      const opened = readResponse(JSON.parse((await transport.receive()).toString("utf8")));
-      if (opened.say === "failed") {
-        // A generation that has begun draining refuses new conversations on purpose: its successor owns
-        // them now. The address this view holds is simply stale, so it is dropped and asked for again
-        // rather than shown to the person as a failure (measured 2026-08-26: a window that had been open
-        // across an update could not start anything, and said so in our own words about generations).
-        if (opened.with.message.includes(CoreTerminal.DRAINING) && attempt === 0) {
-          transport.close();
-          this.locator.invalidate();
-          await this.connect(cols, rows, attempt + 1);
-          return;
-        }
-        throw new Error(opened.with.message);
-      }
-      if (opened.say !== "terminalOpened") throw new Error(`the Core answered ${opened.say} to a terminal open`);
-    } catch (error) {
-      transport.close();
-      throw error;
-    }
+  private async connect(): Promise<void> {
+    if (this.target.blocked) throw new Error(this.target.blocked);
+    const geometry = this.dimensions;
+    const view = await this.runtime.openTerminal({
+      requestId: newMutationRequestId(),
+      providerId: this.target.provider,
+      workspace: this.target.workspace,
+      target: this.target.native
+        ? { kind: "native", ...this.target.native }
+        : { kind: "fresh" },
+      geometry,
+    });
     if (this.closed) {
-      transport.close();
+      view.close();
       return;
     }
-    this.transport = transport;
+    this.view = view;
+    this.lease = view.opened.controlLease ?? null;
+    this.writeEmitter.fire(this.decoder.decode(view.initialScreen, { stream: true }));
+    if (
+      this.dimensions.columns !== geometry.columns
+      || this.dimensions.rows !== geometry.rows
+    ) {
+      this.setDimensions(this.dimensions);
+    }
     const pending = this.pending;
     this.pending = [];
-    for (const data of pending) this.handleInput(data);
-    await this.pump(transport);
+    this.pendingBytes = 0;
+    for (const bytes of pending) {
+      this.queueControl(async (opened, lease) => {
+        await opened.write({
+          requestId: newMutationRequestId(),
+          terminalId: opened.opened.terminal.terminalId,
+          leaseId: lease.leaseId,
+          leaseGeneration: lease.leaseGeneration,
+          bytesBase64: Buffer.from(bytes).toString("base64"),
+        });
+      });
+    }
+    await this.pump(view);
   }
 
   /// Read the view until the service ends or the connection does.
-  private async pump(transport: FrameTransport): Promise<void> {
+  private async pump(view: TerminalView): Promise<void> {
     try {
       for (;;) {
-        const response = readResponse(JSON.parse((await transport.receive()).toString("utf8")));
-        switch (response.say) {
-          case "terminalOutput":
-            this.writeEmitter.fire(this.decoder.decode(Buffer.from(response.with.bytes, "base64"), { stream: true }));
+        const notification = await view.next();
+        switch (notification.kind) {
+          case "output":
+            this.writeEmitter.fire(this.decoder.decode(notification.bytes, { stream: true }));
             break;
-          case "terminalLagged":
+          case "lagged":
             // The Core re-sends the whole screen next; clear so the redraw lands on a clean page, and start
             // decoding afresh so a multibyte tail cut off by the lag never bleeds into it.
             this.decoder = new TextDecoder("utf-8");
             this.writeEmitter.fire("\x1b[2J\x1b[H");
+            this.writeEmitter.fire(this.decoder.decode(notification.screen, { stream: true }));
             break;
-          case "terminalExited":
+          case "exited":
             // A clean exit closes the tab like a shell's would. Anything else keeps the tab, with the
             // service's own last words on it: a resume the service refused (measured: an empty stored
             // conversation exits at once) must not vanish before the person can read why.
-            if (response.with.code === 0) {
+            if (notification.exitCode === 0) {
               this.end(0);
             } else {
               this.writeEmitter.fire(`
-\x1b[2m[${this.target.provider} ended with code ${response.with.code}]\x1b[0m
+\x1b[2m[${this.target.provider} ended with code ${notification.exitCode}]\x1b[0m
 `);
-              this.detach();
+              this.detach(false);
             }
-            return;
-          case "failed":
-            this.writeEmitter.fire(`\r\n\x1b[31m${response.with.message}\x1b[0m\r\n`);
-            this.detach();
-            return;
-          default:
-            this.writeEmitter.fire(`\r\n\x1b[31mthe Core sent ${response.say} on a terminal view\x1b[0m\r\n`);
-            this.detach();
             return;
         }
       }
     } catch (error) {
       if (this.closed) return;
-      const message = error instanceof Error ? error.message : String(error);
-      this.writeEmitter.fire(`\r\n\x1b[31mthe terminal view ended: ${message}\x1b[0m\r\n`);
-      this.detach();
+      this.fail(error);
     }
   }
 
-  private async send(request: Request): Promise<void> {
-    const transport = this.transport;
-    if (!transport) return;
-    try {
-      await transport.send(request);
-    } catch (error) {
+  private queueControl(
+    action: (view: TerminalView, lease: TerminalControlLease) => Promise<void>,
+  ): void {
+    const command = this.commandTail.then(async () => {
       if (this.closed) return;
-      const message = error instanceof Error ? error.message : String(error);
-      this.writeEmitter.fire(`\r\n\x1b[31mthe terminal view ended: ${message}\x1b[0m\r\n`);
-      this.detach();
-    }
+      const view = this.view;
+      if (!view) throw new Error("The public Runtime terminal is not connected.");
+      await action(view, await this.ensureControl(view));
+    });
+    this.commandTail = command.then(
+      () => undefined,
+      () => undefined,
+    );
+    void command.catch((error: unknown) => this.fail(error));
+  }
+
+  private async ensureControl(view: TerminalView): Promise<TerminalControlLease> {
+    const lease = this.lease;
+    if (lease && lease.expiresAtMs > Date.now() + 5_000) return lease;
+    this.lease = lease
+      ? await view.renewControl({
+          requestId: newMutationRequestId(),
+          terminalId: view.opened.terminal.terminalId,
+          leaseId: lease.leaseId,
+          leaseGeneration: lease.leaseGeneration,
+        })
+      : await view.acquireControl({
+          requestId: newMutationRequestId(),
+          terminalId: view.opened.terminal.terminalId,
+          expectedTerminalGeneration: view.opened.terminal.terminalGeneration,
+        });
+    return this.lease;
+  }
+
+  private fail(error: unknown): void {
+    if (this.closed) return;
+    const message = error instanceof Error ? error.message : String(error);
+    this.writeEmitter.fire(`\r\n\x1b[31m${message}\x1b[0m\r\n`);
+    this.detach(false);
   }
 
   private end(code?: number): void {
     if (this.closed) return;
-    this.detach();
+    this.detach(false);
     this.closeEmitter.fire(code);
   }
 
   /// Stop carrying the view but leave the tab open, so what the service wrote last stays readable.
-  private detach(): void {
+  private detach(notifyRuntime: boolean): void {
+    if (this.closed) return;
     this.closed = true;
-    this.transport?.close();
-    this.transport = null;
+    const view = this.view;
+    this.view = null;
+    this.lease = null;
+    if (!view) return;
+    if (notifyRuntime) {
+      void view.detach({
+        terminalId: view.opened.terminal.terminalId,
+        viewId: view.opened.viewId,
+      }).catch(() => view.close());
+    } else {
+      view.close();
+    }
   }
 }

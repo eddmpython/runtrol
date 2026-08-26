@@ -58,10 +58,27 @@ import type {
   StartSessionParams,
   SubmitBlocksParams,
   SubmitInputParams,
+  TerminalAcquireControlParams,
+  TerminalAttachParams,
+  TerminalControlLease,
+  TerminalControlParams,
+  TerminalDetachParams,
+  TerminalExitedNotification,
+  TerminalIndexChangedNotification,
+  TerminalIndexEndedNotification,
+  TerminalIndexSnapshot,
+  TerminalLaggedNotification,
+  TerminalOpenParams,
+  TerminalOutputNotification,
+  TerminalResizeParams,
+  TerminalStopParams,
+  TerminalViewOpened,
+  TerminalWriteParams,
   WatchEventsParams,
   WatchEventsResult,
   WatchProvidersResult,
   WatchSessionIndexResult,
+  WatchTerminalIndexResult,
 } from "./generated/protocol.js";
 import { FINALIZED_REVISIONS, PUBLIC_LIMITS } from "./generated/protocol.js";
 import {
@@ -293,6 +310,10 @@ export class RuntimeClient {
 
   public approvals(): ApprovalClient {
     return new ApprovalClient(this);
+  }
+
+  public terminals(): TerminalClient {
+    return new TerminalClient(this);
   }
 
   public credentials(grant: IntegrationGrant): IntegrationCredentials {
@@ -549,6 +570,438 @@ export class ReconnectingProviderSubscription {
     this.#current?.subscription.close();
     this.#current = null;
   }
+}
+
+export type TerminalFleetOutcome =
+  | { readonly kind: "listed"; readonly snapshot: TerminalIndexSnapshot }
+  | { readonly kind: "unsupported" }
+  | { readonly kind: "failed"; readonly error: Error };
+
+export interface TerminalFleetEntry {
+  readonly runtimeGeneration: string;
+  readonly draining: boolean;
+  readonly outcome: TerminalFleetOutcome;
+}
+
+export class TerminalClient {
+  public constructor(private readonly runtime: RuntimeClient) {}
+
+  public list(): Promise<TerminalIndexSnapshot> {
+    return callRuntime(this.runtime, "terminals/list", {}, "TerminalIndexSnapshot");
+  }
+
+  public async watchIndex(): Promise<TerminalIndexSubscription> {
+    const started = await callRuntime<WatchTerminalIndexResult>(
+      this.runtime,
+      "terminals/watchIndex",
+      {},
+      "WatchTerminalIndexResult",
+    );
+    return new TerminalIndexSubscription(beginStream(this.runtime), started);
+  }
+
+  public async open(params: TerminalOpenParams): Promise<TerminalView> {
+    const opened = await callMutation<TerminalViewOpened>(
+      this.runtime,
+      "terminals/open",
+      params,
+      "TerminalViewOpened",
+    );
+    return new TerminalView(this.runtime, beginStream(this.runtime), opened);
+  }
+
+  public async attach(params: TerminalAttachParams): Promise<TerminalView> {
+    const opened = await callRuntime<TerminalViewOpened>(
+      this.runtime,
+      "terminals/attach",
+      params,
+      "TerminalViewOpened",
+    );
+    return new TerminalView(this.runtime, beginStream(this.runtime), opened);
+  }
+
+  public static async listAllGenerations(
+    connector: RuntimeConnector,
+    locator: RuntimeLocator,
+    options: ClientOptions,
+    signal?: AbortSignal,
+  ): Promise<ReadonlyArray<TerminalFleetEntry>> {
+    const entries: TerminalFleetEntry[] = [];
+    for (const generation of await locator.inspectAll()) {
+      let outcome: TerminalFleetOutcome;
+      try {
+        const runtime = await connector.connect(generation, options, signal);
+        try {
+          outcome = runtime.initialization.serverCapabilities.terminalSurface
+            ? { kind: "listed", snapshot: await runtime.terminals().list() }
+            : { kind: "unsupported" };
+        } finally {
+          runtime.close();
+        }
+      } catch (error) {
+        outcome = {
+          kind: "failed",
+          error: error instanceof Error
+            ? error
+            : new RuntimeProtocolError(`terminal generation failed: ${String(error)}`),
+        };
+      }
+      entries.push({
+        runtimeGeneration: generation.digest,
+        draining: generation.draining,
+        outcome,
+      });
+    }
+    return entries;
+  }
+}
+
+export type TerminalIndexNotification =
+  | { readonly kind: "changed"; readonly changed: TerminalIndexChangedNotification }
+  | { readonly kind: "ended"; readonly ended: TerminalIndexEndedNotification };
+
+export class TerminalIndexSubscription {
+  public constructor(
+    private readonly transport: RuntimeTransport,
+    public readonly started: WatchTerminalIndexResult,
+  ) {}
+
+  public async next(): Promise<TerminalIndexNotification> {
+    const notification = decodeRuntimeNotification(await this.transport.receive(), "terminal index");
+    if (notification.method === "terminals/indexChanged") {
+      const changed = validatePublic<TerminalIndexChangedNotification>(
+        "TerminalIndexChangedNotification",
+        notification.params,
+      );
+      this.#requireTarget(changed.subscriptionId);
+      return { kind: "changed", changed };
+    }
+    if (notification.method === "terminals/indexEnded") {
+      const ended = validatePublic<TerminalIndexEndedNotification>(
+        "TerminalIndexEndedNotification",
+        notification.params,
+      );
+      this.#requireTarget(ended.subscriptionId);
+      return { kind: "ended", ended };
+    }
+    throw new RuntimeProtocolError("dedicated terminal index stream received a different method");
+  }
+
+  public close(): void {
+    abortTransport(this.transport);
+  }
+
+  #requireTarget(subscriptionId: string): void {
+    if (subscriptionId !== this.started.subscriptionId) {
+      throw new RuntimeProtocolError(
+        "terminal index notification target does not match its subscription",
+      );
+    }
+  }
+}
+
+export type TerminalNotification =
+  | { readonly kind: "output"; readonly sequence: number; readonly bytes: Uint8Array }
+  | {
+    readonly kind: "lagged";
+    readonly lostChunks: number;
+    readonly screen: Uint8Array;
+    readonly nextSequence: number;
+  }
+  | { readonly kind: "exited"; readonly exitCode: number };
+
+interface TerminalResponseWaiter {
+  readonly requestId?: MutationRequestId;
+  readonly resultSchema?: string;
+  readonly resolve: (value: unknown) => void;
+  readonly reject: (error: Error) => void;
+}
+
+interface TerminalNotificationWaiter {
+  readonly resolve: (notification: TerminalNotification) => void;
+  readonly reject: (error: Error) => void;
+}
+
+export class TerminalView {
+  public readonly initialScreen: Uint8Array;
+  readonly #commands = new Map<number, TerminalResponseWaiter>();
+  readonly #notifications: TerminalNotification[] = [];
+  readonly #notificationWaiters: TerminalNotificationWaiter[] = [];
+  #closed = false;
+  #ended = false;
+  #failure: Error | null = null;
+  #reading = false;
+
+  public constructor(
+    private readonly runtime: RuntimeClient,
+    private readonly transport: RuntimeTransport,
+    public readonly opened: TerminalViewOpened,
+  ) {
+    this.initialScreen = decodeTerminalBytes(opened.screenBase64, "terminal screen snapshot");
+  }
+
+  public async next(): Promise<TerminalNotification> {
+    const pending = this.#notifications.shift();
+    if (pending) return pending;
+    if (this.#failure) throw this.#failure;
+    if (this.#ended) throw new RuntimeProtocolError("terminal view already ended");
+    const notification = new Promise<TerminalNotification>((resolve, reject) => {
+      this.#notificationWaiters.push({ resolve, reject });
+    });
+    this.#ensureReader();
+    return notification;
+  }
+
+  public acquireControl(params: TerminalAcquireControlParams): Promise<TerminalControlLease> {
+    return this.#command(
+      "terminals/acquireControl",
+      params,
+      "TerminalControlLease",
+      params.requestId,
+    );
+  }
+
+  public renewControl(params: TerminalControlParams): Promise<TerminalControlLease> {
+    return this.#command(
+      "terminals/renewControl",
+      params,
+      "TerminalControlLease",
+      params.requestId,
+    );
+  }
+
+  public async releaseControl(params: TerminalControlParams): Promise<void> {
+    requireEmpty(await this.#command("terminals/releaseControl", params, undefined, params.requestId));
+  }
+
+  public async write(params: TerminalWriteParams): Promise<void> {
+    requireEmpty(await this.#command("terminals/write", params, undefined, params.requestId));
+  }
+
+  public async resize(params: TerminalResizeParams): Promise<void> {
+    requireEmpty(await this.#command("terminals/resize", params, undefined, params.requestId));
+  }
+
+  public async stop(params: TerminalStopParams): Promise<void> {
+    requireEmpty(await this.#command("terminals/stop", params, undefined, params.requestId));
+  }
+
+  public async detach(params: TerminalDetachParams): Promise<void> {
+    requireEmpty(await this.#command("terminals/detach", params));
+    this.#finish(new RuntimeTransportError("terminal view was detached"), false);
+  }
+
+  public close(): void {
+    this.#finish(new RuntimeTransportError("terminal view was closed"), true);
+  }
+
+  async #command<T>(
+    method: RuntimeMethod,
+    params: unknown,
+    resultSchema?: string,
+    requestId?: MutationRequestId,
+  ): Promise<T> {
+    if (this.#failure) throw this.#failure;
+    if (this.#ended) throw new RuntimeProtocolError("terminal view already ended");
+    const state = runtimeState(this.runtime);
+    if (!Number.isSafeInteger(state.nextId)) {
+      throw new RuntimeProtocolError("connection exhausted its safe request identifiers");
+    }
+    const id = state.nextId;
+    state.nextId += 1;
+    const result = new Promise<unknown>((resolve, reject) => {
+      this.#commands.set(id, {
+        ...(requestId ? { requestId } : {}),
+        ...(resultSchema ? { resultSchema } : {}),
+        resolve,
+        reject,
+      });
+    });
+    try {
+      await this.transport.send(encoder.encode(JSON.stringify({ jsonrpc: "2.0", id, method, params })));
+    } catch (error) {
+      this.#commands.delete(id);
+      throw terminalCommandFailure(terminalError(error), requestId);
+    }
+    this.#ensureReader();
+    return await result as T;
+  }
+
+  #ensureReader(): void {
+    if (this.#reading || this.#closed || !this.#needsReader()) return;
+    this.#reading = true;
+    void this.#readUntilIdle()
+      .catch((error: unknown) => this.#fail(terminalError(error)))
+      .finally(() => {
+        this.#reading = false;
+        this.#ensureReader();
+      });
+  }
+
+  async #readUntilIdle(): Promise<void> {
+    while (!this.#closed && this.#needsReader()) {
+      const decoded = decodeJson(await this.transport.receive());
+      if (isObject(decoded) && "id" in decoded) {
+        this.#receiveResponse(decoded);
+      } else {
+        this.#receiveNotification(this.#decodeNotificationValue(decoded));
+      }
+    }
+  }
+
+  #needsReader(): boolean {
+    return this.#commands.size > 0 || this.#notificationWaiters.length > 0;
+  }
+
+  #receiveResponse(decoded: unknown): void {
+    const response = validatePublic<JsonRpcResponse>("JsonRpcResponse", decoded);
+    if (
+      response.jsonrpc !== "2.0"
+      || typeof response.id !== "number"
+      || !Number.isSafeInteger(response.id)
+    ) {
+      throw new RuntimeProtocolError("terminal response envelope is invalid");
+    }
+    const waiter = this.#commands.get(response.id);
+    if (!waiter) {
+      throw new RuntimeProtocolError("terminal response does not match a pending request");
+    }
+    if ("error" in response) {
+      this.#commands.delete(response.id);
+      waiter.reject(new RuntimeRequestError(response.error));
+      return;
+    }
+    const value = waiter.resultSchema
+      ? validatePublic<unknown>(waiter.resultSchema, response.result)
+      : response.result;
+    this.#commands.delete(response.id);
+    waiter.resolve(value);
+  }
+
+  #receiveNotification(notification: TerminalNotification): void {
+    if (notification.kind === "exited") this.#ended = true;
+    const waiter = this.#notificationWaiters.shift();
+    if (waiter) {
+      waiter.resolve(notification);
+      return;
+    }
+    const maximum = this.runtime.initialization.limits.maxTerminalViewQueueChunks
+      ?? PUBLIC_LIMITS.maxTerminalViewQueueChunks;
+    if (this.#notifications.length >= maximum) {
+      throw new RuntimeProtocolError("terminal notification queue exceeded the negotiated bound");
+    }
+    this.#notifications.push(notification);
+  }
+
+  #finish(error: Error, abort: boolean): void {
+    if (this.#closed) return;
+    this.#closed = true;
+    this.#ended = true;
+    this.#failure = error;
+    this.#notifications.length = 0;
+    this.#rejectWaiters(error);
+    if (abort) abortTransport(this.transport);
+    else this.transport.close();
+  }
+
+  #fail(error: Error): void {
+    if (this.#closed) return;
+    this.#closed = true;
+    this.#failure = error;
+    this.#rejectWaiters(error);
+    abortTransport(this.transport);
+  }
+
+  #rejectWaiters(error: Error): void {
+    for (const waiter of this.#commands.values()) {
+      waiter.reject(terminalCommandFailure(error, waiter.requestId));
+    }
+    this.#commands.clear();
+    for (const waiter of this.#notificationWaiters.splice(0)) waiter.reject(error);
+  }
+
+  #decodeNotificationValue(decoded: unknown): TerminalNotification {
+    const notification = validatePublic<JsonRpcNotification>("JsonRpcNotification", decoded);
+    if (notification.jsonrpc !== "2.0") {
+      throw new RuntimeProtocolError("terminal notification JSON-RPC version is not 2.0");
+    }
+    if (notification.method === "terminals/output") {
+      const output = validatePublic<TerminalOutputNotification>(
+        "TerminalOutputNotification",
+        notification.params,
+      );
+      this.#requireView(output.viewId);
+      return {
+        kind: "output",
+        sequence: output.sequence,
+        bytes: decodeTerminalBytes(output.bytesBase64, "terminal output"),
+      };
+    }
+    if (notification.method === "terminals/lagged") {
+      const lagged = validatePublic<TerminalLaggedNotification>(
+        "TerminalLaggedNotification",
+        notification.params,
+      );
+      this.#requireView(lagged.viewId);
+      return {
+        kind: "lagged",
+        lostChunks: lagged.lostChunks,
+        screen: decodeTerminalBytes(lagged.screenBase64, "terminal replacement screen"),
+        nextSequence: lagged.nextSequence,
+      };
+    }
+    if (notification.method === "terminals/exited") {
+      const exited = validatePublic<TerminalExitedNotification>(
+        "TerminalExitedNotification",
+        notification.params,
+      );
+      this.#requireView(exited.viewId);
+      return { kind: "exited", exitCode: exited.exitCode };
+    }
+    throw new RuntimeProtocolError("dedicated terminal view received a different method");
+  }
+
+  #requireView(viewId: string): void {
+    if (viewId !== this.opened.viewId) {
+      throw new RuntimeProtocolError("terminal notification target does not match its view");
+    }
+  }
+}
+
+function terminalError(error: unknown): Error {
+  return error instanceof Error
+    ? error
+    : new RuntimeProtocolError(`terminal connection failed: ${String(error)}`);
+}
+
+function terminalCommandFailure(error: Error, requestId?: MutationRequestId): Error {
+  if (!(error instanceof RuntimeTransportError) || !requestId) return error;
+  return new RuntimeRequestError({
+    code: "outcomeUnknown",
+    correlationId: requestId,
+    message: "Runtime connection ended while the terminal mutation outcome was unresolved",
+    retryable: false,
+  });
+}
+
+function decodeRuntimeNotification(payload: Uint8Array, surface: string): JsonRpcNotification {
+  const notification = validatePublic<JsonRpcNotification>("JsonRpcNotification", decodeJson(payload));
+  if (notification.jsonrpc !== "2.0") {
+    throw new RuntimeProtocolError(`${surface} notification JSON-RPC version is not 2.0`);
+  }
+  return notification;
+}
+
+function decodeTerminalBytes(encoded: string, surface: string): Uint8Array {
+  const bytes = Buffer.from(encoded, "base64");
+  if (bytes.toString("base64") !== encoded) {
+    throw new RuntimeProtocolError(`${surface} is not canonical base64`);
+  }
+  return bytes;
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 export class SessionClient {

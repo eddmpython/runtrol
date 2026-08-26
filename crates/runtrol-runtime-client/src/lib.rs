@@ -7,6 +7,7 @@ mod client;
 mod connection;
 mod identity;
 mod locator;
+mod terminal;
 
 pub use client::{
     ApprovalClient, ClientOptions, EnrollmentProposal, EventSubscription, IntegrationClient,
@@ -19,6 +20,10 @@ pub use client::{
 pub use identity::{IntegrationCredentials, IntegrationIdentity};
 pub use locator::{LocatorError, LocatorState, RuntimeLocator, ValidatedLocator};
 pub use runtrol_runtime_protocol as protocol;
+pub use terminal::{
+    TerminalClient, TerminalFleetEntry, TerminalFleetOutcome, TerminalIndexNotification,
+    TerminalIndexSubscription, TerminalNotification, TerminalView,
+};
 
 /// A public client operation failed.
 #[derive(Debug, thiserror::Error)]

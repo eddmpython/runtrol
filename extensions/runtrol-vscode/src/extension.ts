@@ -135,7 +135,7 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
   );
   // The conversation surface: the service's own terminal interface in an editor tab, hosted by the Core.
   const terminals = new TerminalTabs(
-    locator,
+    runtime,
     (row) => icon(row, context.extensionUri),
     (providerId) => conversationIcon(context.extensionUri, providerIcon(providerId, state.providers)),
     () => state.setStarted(terminals.startedConversations()),

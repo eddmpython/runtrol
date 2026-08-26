@@ -1949,10 +1949,8 @@ async fn converse_inner(
 
         // Refused before a slot is reserved or a provider process started: a draining generation opens
         // nothing new, and the successor is already listening for exactly this request.
-        if matches!(
-            request,
-            Request::Start { .. } | Request::Resume { .. } | Request::TerminalOpen { .. }
-        ) && composed.draining.load(std::sync::atomic::Ordering::Acquire)
+        if matches!(request, Request::Start { .. } | Request::Resume { .. })
+            && composed.draining.load(std::sync::atomic::Ordering::Acquire)
         {
             if write(&mut connection, &refuse(DRAINING_REFUSAL))
                 .await
@@ -1961,22 +1959,6 @@ async fn converse_inner(
                 return;
             }
             continue;
-        }
-
-        // A terminal view is the connection changing what it is for, like a watch: served in its own
-        // module until the hosted CLI ends or this end goes away, and never back to requests.
-        if matches!(
-            request,
-            Request::TerminalOpen { .. } | Request::TerminalAttach { .. }
-        ) {
-            crate::terminal_surface::serve(
-                &mut connection,
-                Arc::clone(&composed),
-                conversation.caller().clone(),
-                request,
-            )
-            .await;
-            return;
         }
 
         // The owner has already published the exact current listing as encoded wire bytes. A refresh that queued a

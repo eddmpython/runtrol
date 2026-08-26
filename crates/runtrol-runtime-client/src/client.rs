@@ -269,8 +269,8 @@ fn jittered(delay: Duration) -> Duration {
 
 /// One initialized public connection. It owns no Runtime or provider session.
 pub struct RuntimeClient {
-    connection: Connection,
-    next_id: u64,
+    pub(crate) connection: Connection,
+    pub(crate) next_id: u64,
     initialized: InitializeResult,
     challenge: ServerChallenge,
     supported_revisions: Vec<runtrol_runtime_protocol::ProtocolRevision>,
@@ -280,6 +280,21 @@ pub struct RuntimeClient {
 }
 
 impl RuntimeClient {
+    /// Connect to one exact SDK-validated Runtime generation.
+    ///
+    /// This is the generation-pinned entry point used for terminal reattachment during graceful Runtime updates.
+    /// It never redirects a terminal identity to the current generation.
+    ///
+    /// # Errors
+    ///
+    /// Transport, challenge, authentication, negotiation, or Runtime validation failure.
+    pub async fn connect_to(
+        locator: ValidatedLocator,
+        options: ClientOptions,
+    ) -> Result<Self, ClientError> {
+        Self::connect(locator, options).await
+    }
+
     async fn connect(
         locator: ValidatedLocator,
         options: ClientOptions,
@@ -383,6 +398,11 @@ impl RuntimeClient {
         ApprovalClient { runtime: self }
     }
 
+    /// Provider-faithful terminal operations.
+    pub fn terminals(&mut self) -> crate::terminal::TerminalClient<'_> {
+        crate::terminal::TerminalClient::new(self)
+    }
+
     /// Bind an approved grant returned on this connection to its consumer-owned signing identity.
     ///
     /// # Errors
@@ -410,7 +430,7 @@ impl RuntimeClient {
         Ok(())
     }
 
-    async fn call<P: Serialize, R: DeserializeOwned>(
+    pub(crate) async fn call<P: Serialize, R: DeserializeOwned>(
         &mut self,
         method: RuntimeMethod,
         params: &P,
@@ -418,7 +438,7 @@ impl RuntimeClient {
         call_connection(&mut self.connection, &mut self.next_id, method, params).await
     }
 
-    async fn call_mutation<P: Serialize, R: DeserializeOwned>(
+    pub(crate) async fn call_mutation<P: Serialize, R: DeserializeOwned>(
         &mut self,
         method: RuntimeMethod,
         request_id: &MutationRequestId,
