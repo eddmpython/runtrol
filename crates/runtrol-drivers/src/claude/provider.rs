@@ -43,6 +43,11 @@ pub struct ClaudeProvider {
     unavailable_flags: BTreeMap<Box<str>, &'static str>,
     /// The CLI's own status command, from the manifest's `[account]`; none means the surface is unpublished.
     account_status: Option<Vec<Box<str>>>,
+    /// The arguments that open this CLI's headless control channel, from the manifest's `[account] usage`.
+    ///
+    /// Empty means this installation publishes no way to ask for limits outside a turn, and the report then
+    /// carries no windows rather than a guess.
+    account_usage: Vec<Box<str>>,
 }
 
 impl ClaudeProvider {
@@ -67,6 +72,10 @@ impl ClaudeProvider {
             store: ClaudeStore::from_environment(),
             available_flags,
             unavailable_flags,
+            account_usage: account
+                .as_ref()
+                .map(|account| account.usage.clone())
+                .unwrap_or_default(),
             account_status: account.map(|account| account.status),
         }
     }
@@ -76,6 +85,101 @@ impl ClaudeProvider {
     pub const fn program(&self) -> &Program {
         &self.program
     }
+
+    /// Ask this CLI where the account stands, over its own headless control channel.
+    ///
+    /// One request line in, the pipe closed straight after, one answer line out. Closing the pipe is what
+    /// makes this finish: the CLI ends a session with no message rather than waiting for a prompt that
+    /// never comes, so the same call that asks also cleans up. Measured 2026-08-26 on 2.1.246, the answer
+    /// lands about six seconds in and the process closes about six after that.
+    ///
+    /// `Ok(None)` when the manifest declares no such channel, which is nothing to explain to anybody.
+    /// `Err` carries a sentence a strip can show, because "asked and could not read it" is a different
+    /// thing to tell somebody than "this service publishes no limits".
+    async fn read_usage(&self) -> Result<Option<super::limits::UsageAnswer>, String> {
+        if self.account_usage.is_empty() {
+            return Ok(None);
+        }
+        let args: Vec<String> = self.account_usage.iter().map(ToString::to_string).collect();
+        let mut request = serde_json::to_vec(&serde_json::json!({
+            "type": "control_request",
+            "request_id": USAGE_REQUEST_ID,
+            "request": { "subtype": "get_usage" },
+        }))
+        .map_err(|error| format!("the usage request could not be written: {error}"))?;
+        request.push(b'\n');
+        let output = runtrol_childproc::capture_with_input(
+            &self.program,
+            &args,
+            &request,
+            ACCOUNT_USAGE_DEADLINE,
+            &self.contained_by,
+        )
+        .await
+        .map_err(|error| format!("the usage channel did not answer: {error}"))?;
+        usage_answer(&String::from_utf8_lossy(&output.stdout)).map(Some)
+    }
+}
+
+/// The identifier runtrol puts on its one usage request, so the answer to it is the one that is read.
+///
+/// Fixed rather than generated: one request travels this channel, the process is this driver's own and
+/// lives for one exchange, and a counter would only make the same line harder to recognise in a log.
+const USAGE_REQUEST_ID: &str = "runtrol-usage";
+
+/// The answer to the one control request, out of everything the channel said.
+///
+/// The channel also carries the session's own frames, so the answer is found by its request identifier
+/// rather than by position. A refusal is read as a refusal: this CLI answers `subtype: "error"` with its
+/// own sentence when the request is not supported, and reporting that as "no limits" would put a wrong
+/// cause on the row.
+fn usage_answer(stdout: &str) -> Result<super::limits::UsageAnswer, String> {
+    use serde::Deserialize;
+
+    /// One line of the control channel, in the shape that matters here.
+    #[derive(Deserialize)]
+    struct ControlLine {
+        #[serde(rename = "type")]
+        kind: Option<String>,
+        #[serde(default)]
+        response: Option<ControlBody>,
+    }
+
+    /// The body of a control response.
+    #[derive(Deserialize)]
+    struct ControlBody {
+        #[serde(default)]
+        subtype: Option<String>,
+        #[serde(default)]
+        request_id: Option<String>,
+        #[serde(default)]
+        error: Option<String>,
+        #[serde(default)]
+        response: Option<super::limits::UsageAnswer>,
+    }
+
+    for line in stdout.lines() {
+        let Ok(read) = serde_json::from_str::<ControlLine>(line) else {
+            // Not a control line at all. The channel carries the session's own frames too, and one it
+            // cannot read is not this exchange's answer; the loop keeps looking for the one that is.
+            continue;
+        };
+        if read.kind.as_deref() != Some("control_response") {
+            continue;
+        }
+        let Some(body) = read.response else { continue };
+        if body.request_id.as_deref() != Some(USAGE_REQUEST_ID) {
+            continue;
+        }
+        return match (body.subtype.as_deref(), body.response) {
+            (Some("success"), Some(answer)) => Ok(answer),
+            (Some("success"), None) => Err("the usage answer arrived without a body".to_owned()),
+            _ => Err(body.error.unwrap_or_else(|| {
+                "the CLI refused the usage request without saying why".to_owned()
+            })),
+        };
+    }
+    Err("the usage channel closed without answering".to_owned())
 }
 
 #[async_trait]
@@ -183,9 +287,17 @@ impl Provider for ClaudeProvider {
             })
     }
 
-    /// `claude auth status --json`: this CLI's own answer to "who is signed in", measured on 2.1.242
-    /// (`loggedIn`, `authMethod`, `subscriptionType`). Limits are not asked here: this CLI reports them
-    /// only on a turn, and that report fills the same gauge.
+    /// Two questions this CLI answers about the account, neither of them a turn.
+    ///
+    /// `claude auth status --json` says who is signed in (measured 2.1.242: `loggedIn`, `authMethod`,
+    /// `subscriptionType`). A `get_usage` control request on its headless stream channel says where the
+    /// account stands against every window it has (measured 2.1.246). The second one is only asked of an
+    /// account that is signed in, because a signed-out CLI has no limits to state and asking anyway would
+    /// spend six seconds learning that.
+    ///
+    /// The limits question failing does not fail this answer. Sign-in state is a separate fact and still
+    /// true, so the report carries it along with why the windows are missing; a strip that loses both
+    /// would say "no usage published" about a service that publishes it perfectly well.
     async fn account(&self) -> Result<runtrol_provider::AccountReport, ProviderError> {
         // The command is the manifest's `[account] status`, so the surface this driver reads is declared
         // beside every other reachable fact about the CLI rather than spelled here a second time.
@@ -209,13 +321,40 @@ impl Provider for ClaudeProvider {
             doing: "asking the CLI who is signed in",
             detail: error.to_string(),
         })?;
-        account_report(&String::from_utf8_lossy(&output.stdout)).ok_or_else(|| {
-            ProviderError::Protocol {
-                provider: self.id,
-                doing: "asking the CLI who is signed in",
-                detail: "the status answer carried no readable loggedIn field".to_owned(),
+        let mut report =
+            account_report(&String::from_utf8_lossy(&output.stdout)).ok_or_else(|| {
+                ProviderError::Protocol {
+                    provider: self.id,
+                    doing: "asking the CLI who is signed in",
+                    detail: "the status answer carried no readable loggedIn field".to_owned(),
+                }
+            })?;
+        if matches!(report.status, runtrol_provider::AccountStatus::SignedIn) {
+            match self.read_usage().await {
+                Ok(Some(answer)) => {
+                    if answer.rate_limits_available {
+                        report.limits = Some(runtrol_provider::AccountLimits::new(
+                            answer.windows(),
+                            answer.reached(),
+                        ));
+                    } else {
+                        // The CLI's own word for "plan limits do not apply here": an API key, Bedrock,
+                        // Vertex, or a sign-in without the scope that reads them. Saying so beats an empty
+                        // bar, and it is not a failure to retry.
+                        report.limits_unread =
+                            Some("this sign-in has no plan limits to report".into());
+                    }
+                    if report.plan.is_none() {
+                        report.plan = answer.plan();
+                    }
+                }
+                // The manifest declares no channel for this installation, so nothing was asked and there is
+                // nothing to explain: the absent windows are the absent declaration.
+                Ok(None) => {}
+                Err(why) => report.limits_unread = Some(why.into()),
             }
-        })
+        }
+        Ok(report)
     }
 
     async fn models(&self) -> Result<ModelCatalog, ProviderError> {
@@ -274,6 +413,14 @@ impl Provider for ClaudeProvider {
 /// How long the status command may take. It reads a local file and prints; a signed-out CLI answers as fast.
 const ACCOUNT_STATUS_DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
 
+/// How long the limits question may take.
+///
+/// Longer than the sign-in one because it is a different kind of work: the CLI opens its own machine
+/// channel, asks its vendor for the account's position and then closes down, which measured about twelve
+/// seconds end to end on 2.1.246. The bound is well past that so a slow network reports a limit instead of
+/// a timeout, and bounded at all so a child that hangs cannot hold up the round that asks every service.
+const ACCOUNT_USAGE_DEADLINE: std::time::Duration = std::time::Duration::from_secs(45);
+
 /// `auth status --json`, the fields this build reads.
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -302,6 +449,7 @@ fn account_report(answer: &str) -> Option<runtrol_provider::AccountReport> {
         plan: account_token(status.subscription_type.as_deref()),
         method: account_token(status.auth_method.as_deref()),
         limits: None,
+        limits_unread: None,
         tokens_today: None,
     })
 }

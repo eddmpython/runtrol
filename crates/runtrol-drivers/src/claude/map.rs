@@ -27,7 +27,7 @@ use std::collections::BTreeMap;
 use bytes::Bytes;
 use runtrol_provider::{
     CapabilitySet, Chunk, EventBody, Level, MessageId, NativeSessionId, Notice, NoticeCode, Opaque,
-    RateLimit, StopReason, ToolCallFrame, ToolCallId, ToolCallStatus, Unmapped, WallMs, Window,
+    RateLimit, StopReason, ToolCallFrame, ToolCallId, ToolCallStatus, Unmapped,
 };
 use serde::Deserialize;
 use serde_json::value::RawValue;
@@ -276,60 +276,7 @@ struct RateLimitInfo<'line> {
     utilization: Option<f64>,
     /// Every window the account has, by the provider's own names.
     #[serde(default, rename = "unifiedWindows")]
-    unified_windows: Option<BTreeMap<String, RateLimitWindow>>,
-}
-
-/// One window inside `unifiedWindows`.
-#[derive(Deserialize)]
-struct RateLimitWindow {
-    /// How full that window is, as a fraction from zero to one.
-    #[serde(default)]
-    utilization: Option<f64>,
-    /// When that window resets, in unix seconds.
-    #[serde(default, rename = "resetsAt")]
-    resets_at: Option<u64>,
-}
-
-/// The window names this CLI uses, and how long each one is.
-///
-/// Named rather than parsed: the length is what the strip labels a bar with, and inventing a length from a name
-/// this build has not seen would put a wrong label on a real number. An unknown name still draws its bar, with
-/// no length claimed.
-const WINDOW_MINUTES: &[(&str, u32)] = &[("five_hour", 300), ("seven_day", 10_080)];
-
-/// Turn one reported window into the shape a gauge draws.
-fn window_of(name: &str, window: &RateLimitWindow) -> Option<Window> {
-    if window.utilization.is_none() && window.resets_at.is_none() {
-        return None;
-    }
-    Some(Window {
-        used_percent: window.utilization.map(percent_of),
-        resets_at: window
-            .resets_at
-            .map(|seconds| WallMs::from_millis(seconds.saturating_mul(1_000))),
-        window_minutes: WINDOW_MINUTES
-            .iter()
-            .find(|(known, _)| *known == name)
-            .map(|(_, minutes)| *minutes),
-    })
-}
-
-/// A fraction from zero to one as the whole percent a bar can draw.
-///
-/// Clamped rather than trusted: the bar is a proportion, and a value outside the range would either overflow the
-/// cast or draw a bar longer than its track.
-fn percent_of(fraction: f64) -> u8 {
-    let scaled = (fraction * 100.0).round();
-    if scaled.is_nan() || scaled <= 0.0 {
-        return 0;
-    }
-    if scaled >= 100.0 {
-        return 100;
-    }
-    // In range and finite by the two guards above, so this cast is exact rather than truncating.
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let whole = scaled as u8;
-    whole
+    unified_windows: Option<BTreeMap<String, super::limits::UnifiedWindow>>,
 }
 
 /// The account's limit position, from the fields this CLI reports.
@@ -345,49 +292,29 @@ fn rate_limit(line: &Bytes, envelope: &Envelope<'_>) -> RateLimit {
         Some(Err(_)) | None => None,
     };
     let status = read.as_ref().and_then(|read| read.status);
-    // The shortest window first, because that is the one a person is about to hit. The provider names its
-    // windows and this build knows how long two of them are; an unknown name still draws, unlabelled.
-    let mut windows: Vec<Window> = read
+    let mut windows = read
         .as_ref()
         .and_then(|read| read.unified_windows.as_ref())
-        .map(|reported| {
-            let mut ordered: Vec<(u32, Window)> = reported
-                .iter()
-                .filter_map(|(name, window)| {
-                    window_of(name, window)
-                        .map(|drawn| (drawn.window_minutes.unwrap_or(u32::MAX), drawn))
-                })
-                .collect();
-            ordered.sort_by_key(|(minutes, _)| *minutes);
-            ordered.into_iter().map(|(_, drawn)| drawn).collect()
-        })
+        .map(super::limits::from_unified)
         .unwrap_or_default();
     if windows.is_empty() {
         // Older builds of this CLI reported one governing window at the top level and no `unifiedWindows`. That
         // report is still a real limit position and still draws.
-        if let Some(read) = read
-            .as_ref()
-            .filter(|read| read.utilization.is_some() || read.resets_at.is_some())
-        {
-            windows.push(Window {
-                used_percent: read.utilization.map(percent_of),
-                resets_at: read
-                    .resets_at
-                    .map(|seconds| WallMs::from_millis(seconds.saturating_mul(1_000))),
-                window_minutes: None,
-            });
+        if let Some(read) = read.as_ref() {
+            windows.extend(super::limits::governing_only(
+                read.utilization,
+                read.resets_at,
+            ));
         }
     }
-    let mut windows = windows.into_iter();
-    RateLimit {
-        primary: windows.next(),
-        secondary: windows.next(),
+    RateLimit::new(
+        windows,
         // Only the provider's own good word means requests pass. A status this build has never seen reads as
         // reached, which errs loudly in a warning colour rather than silently as "no limit exists": the same
         // rule stop reasons follow, where not understood is never rendered as success.
-        reached: status != Some("allowed"),
-        detail: payload_of(line, envelope.rate_limit_info),
-    }
+        status != Some("allowed"),
+        payload_of(line, envelope.rate_limit_info),
+    )
 }
 
 /// A fragment's nested kind.
@@ -1452,13 +1379,16 @@ mod tests {
                     !limit.reached,
                     "the provider's own word for passing is allowed"
                 );
-                let window = limit.primary.expect("the reset instant makes a window");
+                let window = limit
+                    .windows
+                    .first()
+                    .expect("the reset instant makes a window");
                 assert_eq!(
                     window.used_percent, None,
                     "no number was reported, so none is shown"
                 );
                 assert_eq!(
-                    window.resets_at.map(WallMs::as_millis),
+                    window.resets_at.map(runtrol_provider::WallMs::as_millis),
                     Some(1_787_131_200_000),
                     "the provider counts seconds and the vocabulary counts milliseconds"
                 );
@@ -1481,14 +1411,23 @@ mod tests {
         ));
         match read(&measured).expect("readable") {
             Frame::Body(EventBody::RateLimitUpdate(limit)) => {
-                let primary = limit.primary.expect("the five hour window");
+                assert_eq!(
+                    limit
+                        .windows
+                        .iter()
+                        .map(|window| window.id.as_ref())
+                        .collect::<Vec<_>>(),
+                    vec!["five_hour", "seven_day"],
+                    "the shorter window leads, and both keep the names the provider gave them"
+                );
+                let primary = limit.windows.first().expect("the five hour window");
                 assert_eq!(primary.used_percent, Some(21));
                 assert_eq!(primary.window_minutes, Some(300));
                 assert_eq!(
-                    primary.resets_at.map(WallMs::as_millis),
+                    primary.resets_at.map(runtrol_provider::WallMs::as_millis),
                     Some(1_787_749_800_000)
                 );
-                let secondary = limit.secondary.expect("the seven day window");
+                let secondary = limit.windows.get(1).expect("the seven day window");
                 assert_eq!(secondary.used_percent, Some(94));
                 assert_eq!(secondary.window_minutes, Some(10_080));
                 assert!(
@@ -1509,13 +1448,13 @@ mod tests {
         ));
         match read(&older).expect("readable") {
             Frame::Body(EventBody::RateLimitUpdate(limit)) => {
-                let window = limit.primary.expect("one window");
+                let window = limit.windows.first().expect("one window");
                 assert_eq!(window.used_percent, Some(50));
                 assert_eq!(
                     window.window_minutes, None,
                     "no name, so no length is claimed"
                 );
-                assert!(limit.secondary.is_none());
+                assert_eq!(limit.windows.len(), 1);
             }
             other => panic!("expected a limit update, got {other:?}"),
         }

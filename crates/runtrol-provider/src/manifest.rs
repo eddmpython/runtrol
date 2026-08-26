@@ -886,18 +886,193 @@ pub struct AccountSpec {
     /// Arguments to the CLI's own status command, whose output the driver reads.
     #[serde(default)]
     pub status: Vec<Box<str>>,
+    /// Arguments that open the CLI's own headless control channel, where it answers a usage question.
+    ///
+    /// Declared rather than discovered because no CLI publishes "the flags that open a machine channel";
+    /// they are read out of its help text once and measured. A driver that has these asks the account's
+    /// limits without a turn, which is the difference between a bar and "usage arrives with the first turn".
+    #[serde(default)]
+    pub usage: Vec<Box<str>>,
     /// The protocol surface that publishes the account, when the driver reads it there instead.
     #[serde(default)]
     pub protocol: Option<Box<str>>,
+    /// The protocol method that answers who is signed in, and where that answer keeps each fact.
+    ///
+    /// For an agent whose account surface is a vendor extension of a standard protocol. The generic driver
+    /// speaks the standard and knows nothing about any vendor, so the vendor's method name and the places
+    /// its answer keeps things are data here rather than a branch in the driver. A new agent joins by
+    /// writing this block.
+    #[serde(default)]
+    pub identity: Option<AccountIdentitySpec>,
+    /// Each limit window this agent publishes, and where its numbers sit in the answer.
+    ///
+    /// Repeated, because one method's answer can describe several windows and an agent can publish them
+    /// across several methods. Read only for an account the identity block reports as signed in.
+    #[serde(default, rename = "window")]
+    pub windows: Vec<AccountWindowSpec>,
+}
+
+/// Where one agent's own extension keeps the account's identity.
+///
+/// Every field but the method is a JSON Pointer (RFC 6901) into that method's result. A pointer that finds
+/// nothing costs the fact it names and nothing else, so an agent that stops publishing its plan keeps its
+/// sign-in state.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AccountIdentitySpec {
+    /// The protocol method to call, exactly as the agent answers it.
+    pub method: Box<str>,
+    /// Where the answer keeps whether anybody is signed in.
+    pub signed_in: Box<str>,
+    /// Where it keeps the plan token, when it publishes one.
+    #[serde(default)]
+    pub plan: Option<Box<str>>,
+    /// Where it keeps how the operator signed in, when it says.
+    #[serde(default)]
+    pub via: Option<Box<str>>,
+}
+
+/// One limit window an agent publishes, and where to read its numbers.
+///
+/// The window's length is never declared here. It is read from the agent's own two instants when it states
+/// both, because an account billed monthly and one billed weekly answer the same method and a declared
+/// length would be wrong for one of them.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AccountWindowSpec {
+    /// The protocol method whose answer carries this window.
+    pub method: Box<str>,
+    /// The identity this window keeps across reports.
+    pub id: Box<str>,
+    /// Where the answer keeps how full the window is, as a percentage, when it publishes one.
+    #[serde(default)]
+    pub used_percent: Option<Box<str>>,
+    /// Where it keeps when the window opened, which is half of how long the window is.
+    #[serde(default)]
+    pub starts_at: Option<Box<str>>,
+    /// Where it keeps when the window resets.
+    #[serde(default)]
+    pub resets_at: Option<Box<str>>,
 }
 
 impl AccountSpec {
+    /// One argument the driver hands the process spawner, never a line typed into a shell.
+    ///
+    /// `[help]` commands are placed in the operator's own terminal, so their characters are checked against
+    /// what a shell does with them. These never meet a shell: they become argv elements directly. One of
+    /// them has to be a JSON document, because a CLI that takes its configuration inline takes it as
+    /// `--settings {"...":true}`, and the shell whitelist has no braces in it by design.
+    ///
+    /// What still matters is that one argument stays one argument, so whitespace and control characters are
+    /// refused and the length is bounded exactly as before.
+    fn refuse_unless_argv_token(text: &str) -> Result<(), ManifestError> {
+        let refuse = |why: &'static str| ManifestError::HelpCommand {
+            text: text.to_string(),
+            why,
+        };
+        if text.trim().is_empty() {
+            return Err(refuse("is empty, so there is nothing to pass"));
+        }
+        if text.len() > MAX_HELP_COMMAND_BYTES {
+            return Err(refuse("is longer than any real argument"));
+        }
+        if text.chars().any(char::is_whitespace) {
+            return Err(refuse(
+                "carries whitespace, so it is more than one argument",
+            ));
+        }
+        if text.chars().any(char::is_control) {
+            return Err(refuse("carries a control character"));
+        }
+        Ok(())
+    }
+
+    /// One name that travels on a protocol line, or a refusal naming which declaration is wrong.
+    ///
+    /// Wider than a bare token, because a protocol extension's method name is the vendor's to choose and the
+    /// measured ones carry dots, slashes and a leading underscore. Narrower than free text: bounded, and
+    /// free of whitespace and control characters, so a declaration cannot smuggle a second line onto a
+    /// stream that is framed by lines.
+    fn refuse_unless_wire_name(what: &'static str, name: &str) -> Result<(), ManifestError> {
+        let refuse = |why: &'static str| ManifestError::Token {
+            what,
+            token: name.to_owned(),
+            why,
+        };
+        if name.is_empty() {
+            return Err(refuse("is empty"));
+        }
+        if name.len() > MAX_HELP_COMMAND_BYTES {
+            return Err(refuse("is longer than any protocol name this build knows"));
+        }
+        if name
+            .chars()
+            .any(|character| character.is_whitespace() || character.is_control())
+        {
+            return Err(refuse("carries whitespace or a control character"));
+        }
+        Ok(())
+    }
+
+    /// One JSON Pointer into a protocol answer, or a refusal naming which declaration is wrong.
+    ///
+    /// Bounded and rooted, which is the whole of RFC 6901's shape that matters here: a pointer that does
+    /// not start at the root is a relative path this build has no root to resolve it against.
+    fn refuse_unless_pointer(what: &'static str, pointer: &str) -> Result<(), ManifestError> {
+        if !pointer.starts_with('/') || pointer.len() > MAX_HELP_COMMAND_BYTES {
+            return Err(ManifestError::Token {
+                what,
+                token: pointer.to_owned(),
+                why: "is not a rooted JSON Pointer into the answer",
+            });
+        }
+        Ok(())
+    }
+
     fn validate(&self) -> Result<(), ManifestError> {
         for argument in &self.status {
             HelpCommands::refuse_unless_one_word(argument)?;
         }
+        for argument in &self.usage {
+            Self::refuse_unless_argv_token(argument)?;
+        }
         if let Some(protocol) = &self.protocol {
             refuse_unless_token("account.protocol", protocol)?;
+        }
+        if let Some(identity) = &self.identity {
+            Self::refuse_unless_wire_name("account.identity.method", &identity.method)?;
+            Self::refuse_unless_pointer("account.identity.signed_in", &identity.signed_in)?;
+            for (what, pointer) in [
+                ("account.identity.plan", identity.plan.as_deref()),
+                ("account.identity.via", identity.via.as_deref()),
+            ] {
+                if let Some(pointer) = pointer {
+                    Self::refuse_unless_pointer(what, pointer)?;
+                }
+            }
+        }
+        if !self.windows.is_empty() && self.identity.is_none() {
+            return Err(ManifestError::Token {
+                what: "account",
+                token: "window".to_owned(),
+                why: "declares limit windows with no identity block, so nothing knows whether to ask",
+            });
+        }
+        for window in &self.windows {
+            Self::refuse_unless_wire_name("account.window.method", &window.method)?;
+            Self::refuse_unless_wire_name("account.window.id", &window.id)?;
+            for (what, pointer) in [
+                (
+                    "account.window.used_percent",
+                    window.used_percent.as_deref(),
+                ),
+                ("account.window.starts_at", window.starts_at.as_deref()),
+                ("account.window.resets_at", window.resets_at.as_deref()),
+            ] {
+                if let Some(pointer) = pointer {
+                    Self::refuse_unless_pointer(what, pointer)?;
+                }
+            }
         }
         if !self.status.is_empty() && self.protocol.is_some() {
             return Err(ManifestError::Token {

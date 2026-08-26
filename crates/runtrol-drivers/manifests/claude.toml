@@ -98,8 +98,47 @@ location = [".claude/projects"]
 format = "jsonl-per-session"
 
 [account]
-# `claude auth status --json`, measured 2.1.242: `loggedIn`, `authMethod`, `subscriptionType`.
+# `claude auth status --json`, measured 2.1.242: `loggedIn`, `authMethod`, `subscriptionType`. It answers who
+# is signed in and nothing about limits.
 status = ["auth", "status", "--json"]
+# The limits themselves, measured 2.1.246. This CLI answers a `get_usage` control request on its own headless
+# stream channel, with no turn, no prompt and no cost: the driver writes one request line, closes the pipe and
+# reads the answer. It returns the five-hour window, the whole-account week and every model-scoped week, which
+# is the same set its own `/usage` screen draws.
+#
+# Every flag here exists to keep a background reading from touching the operator's own machine:
+#
+#   --print --input-format stream-json --output-format stream-json --verbose
+#       Opens the machine channel rather than a terminal interface. `--verbose` is what makes it emit frames.
+#   --strict-mcp-config --mcp-config {"mcpServers":{}}
+#       Starts none of the operator's MCP servers. Measured: without it, asking for usage every few minutes
+#       boots every server they have configured, including runtrol's own.
+#   --disable-slash-commands
+#       Skips plugin and skill resolution, which a question about limits has no use for.
+#   --settings {"disableAllHooks":true}
+#       Runs none of the operator's hooks. Measured: without it every reading fires their `SessionStart`
+#       commands, and a usage strip must not run somebody's scripts on a timer.
+#
+# Rejected after measuring: `--bare` skips hooks and MCP by itself in 1.1 seconds instead of 6, but it also
+# refuses to read the browser sign-in, and the answer then comes back with `rate_limits_available: false`.
+# A fast answer that says the account has no limits is worse than a slow one that is true.
+#
+# The reading leaves nothing behind: a session with no message writes no transcript, so the conversation list
+# does not grow an empty row every time the strip refreshes (measured 2026-08-26).
+usage = [
+  "--print",
+  "--input-format",
+  "stream-json",
+  "--output-format",
+  "stream-json",
+  "--verbose",
+  "--strict-mcp-config",
+  "--mcp-config",
+  "{\"mcpServers\":{}}",
+  "--disable-slash-commands",
+  "--settings",
+  "{\"disableAllHooks\":true}",
+]
 
 [events]
 # Turn boundaries come from the stream-json transport the driver already reads.
