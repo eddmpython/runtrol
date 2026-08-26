@@ -1058,9 +1058,34 @@ impl AccountSpec {
                 why: "declares limit windows with no identity block, so nothing knows whether to ask",
             });
         }
-        for window in &self.windows {
+        for (position, window) in self.windows.iter().enumerate() {
             Self::refuse_unless_wire_name("account.window.method", &window.method)?;
             Self::refuse_unless_wire_name("account.window.id", &window.id)?;
+            // An identity is what a surface keeps a row on and what two readings of one account are merged
+            // by, so two windows cannot share one. Refused here rather than quietly deduplicated, because
+            // the file says two things and only one of them can be what was meant.
+            if self
+                .windows
+                .iter()
+                .take(position)
+                .any(|earlier| earlier.id == window.id)
+            {
+                return Err(ManifestError::Token {
+                    what: "account.window.id",
+                    token: window.id.to_string(),
+                    why: "is declared by more than one window, and an identity names one limit",
+                });
+            }
+            if window.used_percent.is_none()
+                && window.starts_at.is_none()
+                && window.resets_at.is_none()
+            {
+                return Err(ManifestError::Token {
+                    what: "account.window",
+                    token: window.id.to_string(),
+                    why: "declares no field to read, so it could only ever draw an empty window",
+                });
+            }
             for (what, pointer) in [
                 (
                     "account.window.used_percent",
