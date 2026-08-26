@@ -63,6 +63,7 @@ export class RuntimeState implements vscode.Disposable {
   /// surface has none). Held here because every derived row reads it, and one place answering "is this
   /// conversation projectless" keeps the sidebar, the switcher and the tabs in agreement.
   private started: readonly StartedConversation[] = [];
+  private remember: ((catalogues: readonly NativeChatCatalogue[]) => void) | null = null;
 
   constructor(readonly projectlessRoot: string | null = null) {}
 
@@ -220,7 +221,24 @@ export class RuntimeState implements vscode.Disposable {
   setNativeCatalogue(catalogue: NativeChatCatalogue): void {
     this.nativeCatalogues.set(catalogue.providerId, catalogue);
     this.conversationRows = null;
+    this.remember?.([...this.nativeCatalogues.values()]);
     this.changedEmitter.fire("rows");
+  }
+
+  /// Draw a list before anything has been asked, from what the last window drew.
+  ///
+  /// Only ever at the start, and only into an empty state: once a service has answered this window, its own
+  /// answer is the truth and a remembered list must not overwrite it.
+  restoreRemembered(catalogues: readonly NativeChatCatalogue[]): void {
+    if (this.nativeCatalogues.size > 0) return;
+    for (const catalogue of catalogues) this.nativeCatalogues.set(catalogue.providerId, catalogue);
+    this.conversationRows = null;
+    this.changedEmitter.fire("rows");
+  }
+
+  /// Told what to keep for the next window. Set once, at activation.
+  onRemember(remember: (catalogues: readonly NativeChatCatalogue[]) => void): void {
+    this.remember = remember;
   }
 
   /// Drop one provider conversation from its catalogue, as the provider's own answer to a deletion says it

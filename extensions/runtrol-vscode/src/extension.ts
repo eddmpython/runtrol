@@ -32,6 +32,7 @@ import { providerDisplayName, providerIcon, sessionTitle, workspaceName } from "
 import { RuntimeState } from "./state";
 import { StudioRuntimeClient } from "./runtimeClient";
 import { workspaceCovers, workspaceIdentity } from "./workspaceCollision";
+import { rememberedList, rememberList } from "./listMemory";
 import { UsageView } from "./usageView";
 import { WorkspaceRootFollowing } from "./workspaceRoots";
 import { conversationIcon } from "./conversationIcon";
@@ -94,6 +95,11 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
   // Conversations started with no project run in the extension's own scratch folder; the state knows it so
   // every derived row agrees on which conversations are projectless.
   const state = new RuntimeState(projectlessRoot(context.globalStorageUri.fsPath));
+  // Before anything is located, connected to or asked: the list this window drew last time. Reading it is a
+  // synchronous memento lookup, so the panel has rows in its first paint rather than a sentence about connecting
+  // (`memory/MEMORY.md`, section 3: a person who can see the wait is the failure).
+  state.restoreRemembered(rememberedList(context.globalState));
+  state.onRemember((catalogues) => rememberList(context.globalState, catalogues));
   const selection = new SelectionStore(context.globalStorageUri.fsPath);
   let settleReady: ((error?: unknown) => void) | null = null;
   let lifecycle: Promise<void> = new Promise<void>((resolve, reject) => {
