@@ -89,6 +89,23 @@ export class ProjectStore {
     await this.replace(next);
   }
 
+  /// Move the project on this folder one place up or down in the list.
+  ///
+  /// The order is the person's: the sidebar draws projects in the order they put them, never in the order
+  /// they happened to be used (operator, 2026-08-26). Moving past the end is not an error, it simply does
+  /// nothing, so holding the button at the top of the list does not wrap the project to the bottom.
+  async move(workspace: string, by: -1 | 1): Promise<void> {
+    const key = workspaceIdentity(workspace);
+    const at = this.records.findIndex((record) => record.key === key);
+    const to = at + by;
+    if (at < 0 || to < 0 || to >= this.records.length) return;
+    const next = [...this.records];
+    const [moved] = next.splice(at, 1);
+    if (!moved) return;
+    next.splice(to, 0, moved);
+    await this.replace(next);
+  }
+
   /// Remove the project on this folder. Its conversations lose their heading and nothing else: removal files
   /// nothing, deletes nothing, and adding the project again is one click. The folder on disk is never
   /// touched: removing a project is a list decision, deleting a folder is not one this surface makes.

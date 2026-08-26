@@ -276,6 +276,20 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
       }),
     ),
     vscode.commands.registerCommand(
+      "runtrol.moveProjectUp",
+      (item: unknown) => run(async () => {
+        if (!(item instanceof ProjectItem)) return;
+        await projectStore.move(item.group.workspace, -1);
+      }),
+    ),
+    vscode.commands.registerCommand(
+      "runtrol.moveProjectDown",
+      (item: unknown) => run(async () => {
+        if (!(item instanceof ProjectItem)) return;
+        await projectStore.move(item.group.workspace, 1);
+      }),
+    ),
+    vscode.commands.registerCommand(
       "runtrol.pinProject",
       (item: unknown) => run(async () => {
         if (!(item instanceof ProjectItem)) return;

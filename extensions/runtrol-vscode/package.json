@@ -95,7 +95,9 @@
     "onCommand:runtrol.pinConversation",
     "onCommand:runtrol.unpinConversation",
     "onCommand:runtrol.enableAgentTools",
-    "onCommand:runtrol.disableAgentTools"
+    "onCommand:runtrol.disableAgentTools",
+    "onCommand:runtrol.moveProjectUp",
+    "onCommand:runtrol.moveProjectDown"
   ],
   "contributes": {
     "viewsContainers": {
@@ -377,6 +379,18 @@
       {
         "command": "runtrol.startSessionWith",
         "title": "Start a Conversation With This Service",
+        "category": "Runtrol"
+      },
+      {
+        "command": "runtrol.moveProjectUp",
+        "title": "Move Project Up",
+        "icon": "$(arrow-up)",
+        "category": "Runtrol"
+      },
+      {
+        "command": "runtrol.moveProjectDown",
+        "title": "Move Project Down",
+        "icon": "$(arrow-down)",
         "category": "Runtrol"
       }
     ],
@@ -663,6 +677,16 @@
           "command": "runtrol.signInFromRow",
           "group": "inline@0",
           "when": "view =~ /^runtrol\\.(projects|conversations)$/ && viewItem =~ /^runtrol\\.conversation\\.live(\\.|$).*signIn/"
+        },
+        {
+          "command": "runtrol.moveProjectUp",
+          "when": "view == runtrol.projects && viewItem =~ /^runtrol\\.project\\.created/",
+          "group": "1_manage@0"
+        },
+        {
+          "command": "runtrol.moveProjectDown",
+          "when": "view == runtrol.projects && viewItem =~ /^runtrol\\.project\\.created/",
+          "group": "1_manage@0"
         }
       ]
     },
