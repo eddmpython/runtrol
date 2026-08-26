@@ -3,7 +3,6 @@ import path from "node:path";
 import * as vscode from "vscode";
 
 import { AgentToolsController, type AgentToolsAction } from "./agentTools";
-import { CandidateController } from "./capability/controller";
 import { conversations as conversationRows } from "./conversationList";
 import { ActivityWatcher } from "./activityWatch";
 import { WatchLifecycleGate } from "./watchLifecycleGate";
@@ -140,7 +139,6 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     openFolders: () => (vscode.workspace.workspaceFolders ?? []).map((folder) => folder.uri.fsPath),
     warn: (message) => void vscode.window.showWarningMessage(message),
   });
-  const candidateController = new CandidateController(client);
   const conversations = new ConversationsTree(state, projectStore, agentTools, context.extensionUri);
   const usage = new UsageView(context.extensionUri, {
     usage: () => runtime.providersUsage(),
@@ -157,7 +155,6 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
   context.subscriptions.push(
     state,
     controller,
-    candidateController,
     agentTools,
     conversations,
     usage,
@@ -169,38 +166,6 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     vscode.commands.registerCommand(
       "runtrol.restartExtensionHost",
       () => run(restartExtensionHost),
-    ),
-    vscode.commands.registerCommand(
-      "runtrol.proposeCapability",
-      () => run(() => afterReady(() => candidateController.propose())),
-    ),
-    vscode.commands.registerCommand(
-      "runtrol.capabilityInbox",
-      () => run(() => afterReady(() => candidateController.inbox())),
-    ),
-    vscode.commands.registerCommand(
-      "runtrol.verifyCapability",
-      () => run(() => afterReady(() => candidateController.verify())),
-    ),
-    vscode.commands.registerCommand(
-      "runtrol.approveCapability",
-      () => run(() => afterReady(() => candidateController.approve())),
-    ),
-    vscode.commands.registerCommand(
-      "runtrol.rejectCapability",
-      () => run(() => afterReady(() => candidateController.reject())),
-    ),
-    vscode.commands.registerCommand(
-      "runtrol.quarantineCapability",
-      () => run(() => afterReady(() => candidateController.quarantine())),
-    ),
-    vscode.commands.registerCommand(
-      "runtrol.rollbackCapability",
-      () => run(() => afterReady(() => candidateController.rollback())),
-    ),
-    vscode.commands.registerCommand(
-      "runtrol.archiveCapability",
-      () => run(() => afterReady(() => candidateController.archive())),
     ),
     vscode.commands.registerCommand(
       "runtrol.checkProviderUpdates",

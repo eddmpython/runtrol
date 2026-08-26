@@ -175,46 +175,6 @@ GATES: dict[str, tuple[str, list[str]]] = {
         "공개 Runtime 프로토콜, 연동, 보안, 운영 문서 대조",
         [*PY, f"{HOOKS}/runtimeDocumentation.py"],
     ),
-    "orchestrationThinBoundarySelftest": (
-        "Mission thin boundary 검출기 자체 검증",
-        [*PY, f"{HOOKS}/orchestrationThinBoundary.py", "--selftest"],
-    ),
-    "orchestrationThinBoundary": (
-        "Mission 계층은 내용 비저장, provider 중립",
-        [*PY, f"{HOOKS}/orchestrationThinBoundary.py"],
-    ),
-    "evidenceBoundarySelftest": (
-        "Mission 증거 경계 검출기 자체 검증",
-        [*PY, f"{HOOKS}/evidenceBoundary.py", "--selftest"],
-    ),
-    "evidenceBoundary": (
-        "Mission 증거는 식별자와 digest만 저장",
-        [*PY, f"{HOOKS}/evidenceBoundary.py"],
-    ),
-    "missionGrowthContractsSelftest": (
-        "Mission 및 Capability 계약 게이트 자체 검증",
-        [*PY, f"{HOOKS}/missionGrowthContracts.py", "--selftest"],
-    ),
-    "missionGrowthContracts": (
-        "Mission 실행, 복구, 로컬 승인, 명시적 Capability 재사용",
-        [*PY, f"{HOOKS}/missionGrowthContracts.py"],
-    ),
-    "missionLiveJourneySelftest": (
-        "실물 두 provider Mission 여정 게이트 자체 검증",
-        [*PY, f"{HOOKS}/missionLiveJourney.py", "--selftest"],
-    ),
-    "missionLiveJourney": (
-        "실물 두 provider의 검토, 실행, Receipt, 통합, 보관 여정",
-        [*PY, f"{HOOKS}/missionLiveJourney.py", "--require-external"],
-    ),
-    "fleetComparisonSmokeSelftest": (
-        "병렬 결과 비교 게이트 자체 검증",
-        [*PY, f"{HOOKS}/fleetComparisonSmoke.py", "--selftest"],
-    ),
-    "fleetComparisonSmoke": (
-        "실물 두 provider의 병렬 worktree 실행, 비교, 선택 결과 통합",
-        [*PY, f"{HOOKS}/fleetComparisonSmoke.py", "--require-external"],
-    ),
     "vscodePackageSelftest": (
         "VS Code 플랫폼 패키지 게이트 자체 검증",
         [*PY, f"{HOOKS}/vscodePackage.py", "--selftest"],
@@ -511,10 +471,6 @@ SUITES: dict[str, tuple[str, ...]] = {
         "vscodeHostPerformance",
         "vscodeRealProviderJourneySelftest",
         "vscodeRealProviderJourney",
-        "missionLiveJourneySelftest",
-        "missionLiveJourney",
-        "fleetComparisonSmokeSelftest",
-        "fleetComparisonSmoke",
         "phoneDrivesPcSmokeSelftest",
         "phoneDrivesPcSmoke",
         "approvalRoundtripSmokeSelftest",
@@ -568,9 +524,6 @@ CARGO_GATES = frozenset(
         "cargoBuild",
         "vscodeHostPerformance",
         "vscodeRealProviderJourney",
-        "missionLiveJourneySelftest",
-        "missionLiveJourney",
-        "fleetComparisonSmoke",
         "vscodeUpgradeRollback",
         "cargoTest",
         "sessionOverlapGuard",
@@ -642,13 +595,9 @@ def skipReasonFor(name: str) -> str | None:
         return f"{CROSS_TARGET} C 컴파일러 없음"
     if name == "externalAcpSmoke" and shutil.which("opencode") is None:
         return "독립 ACP CLI 미설치 (npm install --global opencode-ai@1.2.27)"
-    if name in {"missionLiveJourney", "fleetComparisonSmoke"} and shutil.which("opencode") is None:
-        return "독립 ACP CLI 미설치 (npm install --global opencode-ai@1.2.27)"
     if name in {
         "approvalRoundtripSmoke",
         "claudeApprovalSmoke",
-        "missionLiveJourney",
-        "fleetComparisonSmoke",
         "phoneDrivesPcSmoke",
         "remoteResilienceFaultInjection",
         "vscodeRealProviderJourney",
@@ -656,8 +605,6 @@ def skipReasonFor(name: str) -> str | None:
         return "Claude Code 미설치 (npm install --global @anthropic-ai/claude-code@2.1.220)"
     if name in {
         "approvalRoundtripSmoke",
-        "missionLiveJourney",
-        "fleetComparisonSmoke",
         "phoneDrivesPcSmoke",
         "remoteResilienceFaultInjection",
     } and shutil.which("node") is None:

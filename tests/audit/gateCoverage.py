@@ -49,6 +49,8 @@ NOT_A_GATE: dict[str, str] = {
     "northStar gates rather than run on its own",
     "rustSource.py": "reading Rust source the way a gate has to. imported by the gates that scan "
     "source rather than run on its own, and its selftest runs inside theirs",
+    "loopbackClaudeModel.py": "one loopback model endpoint the journey gates run against. imported "
+    "by the gates that need a real CLI to answer without a network, never run on its own",
 }
 
 # Preflight gates that intentionally have no counterpart step in the workflow.

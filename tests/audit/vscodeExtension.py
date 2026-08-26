@@ -68,22 +68,37 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
         and "command:runtrol.startSession" in str(entry.get("contents", ""))
         for entry in welcomes
     )
-    has_missing_welcome = any(
-        isinstance(entry, dict)
-        and entry.get("view") == "runtrol.sessions"
-        and entry.get("when") == "!runtrol.hasUsableProvider && !runtrol.isVerifyingProvider"
-        and "command:runtrol.refresh" in str(entry.get("contents", ""))
-        for entry in welcomes
+    def welcome_for(when: str, token: str) -> bool:
+        return any(
+            isinstance(entry, dict)
+            and entry.get("view") == "runtrol.sessions"
+            and entry.get("when") == when
+            and token in str(entry.get("contents", ""))
+            for entry in welcomes
+        )
+
+    # An empty list has more than one reason and each needs its own sentence. Measured 2026-08-26 on the
+    # operator's window: a Core this window could not reach was drawn as "No coding-agent CLI was found on
+    # this machine", which is a lie about their machine rather than a report about ours.
+    has_unreachable_welcome = welcome_for("runtrol.coreReach == unreachable", "command:runtrol.refresh")
+    has_connecting_welcome = welcome_for("runtrol.coreReach == connecting", "Connecting")
+    has_missing_welcome = welcome_for(
+        "runtrol.coreReach == reached && !runtrol.hasUsableProvider && !runtrol.isVerifyingProvider",
+        "command:runtrol.refresh",
     )
-    has_verifying_welcome = any(
-        isinstance(entry, dict)
-        and entry.get("view") == "runtrol.sessions"
-        and entry.get("when") == "runtrol.isVerifyingProvider"
-        and "Checking" in str(entry.get("contents", ""))
-        for entry in welcomes
+    has_verifying_welcome = welcome_for(
+        "runtrol.coreReach == reached && runtrol.isVerifyingProvider", "Checking"
     )
-    if not has_ready_welcome or not has_missing_welcome or not has_verifying_welcome:
-        found.append("the empty sidebar must distinguish usable, verifying, and absent coding-agent CLIs")
+    if not (
+        has_ready_welcome
+        and has_missing_welcome
+        and has_verifying_welcome
+        and has_unreachable_welcome
+        and has_connecting_welcome
+    ):
+        found.append(
+            "the empty sidebar must say which of connecting, unreachable, verifying and absent it is"
+        )
     menus = contributes.get("menus") if isinstance(contributes, dict) else None
     title_entries = menus.get("view/title") if isinstance(menus, dict) else None
     title_commands = {
@@ -123,75 +138,13 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
     ]
     if conversation_inline != ["runtrol.deleteConversation"]:
         found.append("a conversation row must expose one inline X for real deletion and no other buttons")
-    winner_task_when = (
-        "view == runtrol.missions && viewItem =~ "
-        "/^runtrol\\.missionTask\\.passed(\\.session)?\\.chooseOne\\.integrating$/"
-    )
-    winner_task_entry = any(
-        isinstance(entry, dict)
-        and entry.get("command") == "runtrol.reviewMissionLanding"
-        and entry.get("when") == winner_task_when
-        for entry in winner_entries
-    )
-    winner_mission_entry = any(
-        isinstance(entry, dict)
-        and entry.get("command") == "runtrol.reviewMissionLanding"
-        and entry.get("when") == "view == runtrol.missions && viewItem == runtrol.mission.integrating.chooseOne"
-        for entry in winner_entries
-    )
-    if not winner_task_entry or not winner_mission_entry:
-        found.append("Fleet winner Landing must be reachable from both the integrating Mission and a passed Task")
-    recovery_entry = any(
-        isinstance(entry, dict)
-        and entry.get("command") == "runtrol.recoverInterruptedMission"
-        and entry.get("when") == (
-            "view == runtrol.missions && viewItem =~ "
-            "/^runtrol\\.mission\\.blocked(\\.chooseOne)?(\\.autoFlight)?$/"
-        )
-        for entry in winner_entries
-    )
-    if not recovery_entry:
-        found.append("a recoverable blocked Mission must expose the exact interrupted-recovery action")
-
     command_entries = contributes.get("commands") if isinstance(contributes, dict) else None
     command_ids = {
         entry.get("command")
         for entry in command_entries if isinstance(entry, dict)
     } if isinstance(command_entries, list) else set()
-    schedule_commands = {"runtrol.scheduleMission", "runtrol.cancelMissionSchedule"}
-    if not schedule_commands.issubset(command_ids):
-        found.append("Mission schedule and exact cancel commands must both be contributed")
     activation_events = package.get("activationEvents")
     activations = set(activation_events) if isinstance(activation_events, list) else set()
-    if not {f"onCommand:{command}" for command in schedule_commands}.issubset(activations):
-        found.append("Mission schedule and exact cancel commands must both activate the extension")
-    delete_command = next(
-        (
-            entry for entry in command_entries
-            if isinstance(entry, dict) and entry.get("command") == "runtrol.deleteConversation"
-        ),
-        None,
-    ) if isinstance(command_entries, list) else None
-    if (
-        not isinstance(delete_command, dict)
-        or delete_command.get("title") != "Delete Conversation"
-        or delete_command.get("icon") != "$(close)"
-    ):
-        found.append("the row's single deletion action must be an unbranded X")
-    schedule_entry = any(
-        isinstance(entry, dict)
-        and entry.get("command") == "runtrol.scheduleMission"
-        and entry.get("when") == "view == runtrol.missions && viewItem =~ /^runtrol\\.mission\\.validated/"
-        for entry in winner_entries
-    )
-    cancel_schedule_entry = any(
-        isinstance(entry, dict)
-        and entry.get("command") == "runtrol.cancelMissionSchedule"
-        and entry.get("when") == "view == runtrol.missions && viewItem =~ /schedulePending/"
-        for entry in winner_entries
-    )
-    if not schedule_entry or not cancel_schedule_entry:
-        found.append("a reviewed Mission and its pending schedule must expose schedule and exact cancel actions")
     if "runtrol.discoverServices" not in command_ids or "onCommand:runtrol.discoverServices" not in activations:
         found.append("the fixed sidebar service catalogue must have one activatable discovery command")
 
@@ -210,9 +163,6 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
     for token, meaning in forbidden.items():
         if token in all_source:
             found.append(f"{meaning} is reachable through `{token}`")
-    for relative in ("mission/controller.ts", "mission/schedule.ts"):
-        if "setTimeout(" in sources.get(relative, ""):
-            found.append(f"Core-owned Mission wake must not be replaced by a timer in {relative}")
 
     writers = [relative for relative, source in sources.items() if "writeFile(" in source]
     # The selected-session scalar, and the Core installer's digest memory (file identity -> sha256, so an
@@ -228,20 +178,22 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
         for relative, source in sources.items()
         if "handle.write(" in source or re.search(r"\bopen\([^,\n]+,\s*[\"'][wax]", source)
     ]
-    if handleWriters != ["mission/landing/atomicFile.ts"]:
+    # No source may open a write handle. The one that did (Mission landing) is gone; the extension writes
+    # nothing of its own, and a new writer has to argue for itself here first.
+    if handleWriters:
         found.append(
-            "write-capable file handles must stay in mission/landing/atomicFile.ts, found "
-            + (", ".join(handleWriters) if handleWriters else "none")
+            "no extension source may open a write-capable file handle, found "
+            + ", ".join(handleWriters)
         )
     coreWriters = [
         relative
         for relative, source in sources.items()
         if any(token in source for token in ("copyFile(", "link(", "rename(", "unlink("))
     ]
-    expected_replacers = {"core/managedCore.ts", "mission/landing/atomicFile.ts"}
+    expected_replacers = {"core/managedCore.ts"}
     if set(coreWriters) != expected_replacers or len(coreWriters) != len(expected_replacers):
         found.append(
-            "atomic replacement must stay in managedCore.ts and mission/landing/atomicFile.ts, found "
+            "atomic replacement must stay in core/managedCore.ts, found "
             + (", ".join(coreWriters) if coreWriters else "none")
         )
     selection_source = sources.get("selectionStore.ts", "")
@@ -295,10 +247,7 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             "afterReady",
             "selfApproveIntegration(client, pendingId, signature)",
             'initializationStage = "runtime:bootstrap"',
-            "missionController.startAutoFlights()",
             'executeCommand("runtrol.usage.focus")',
-            '"runtrol.scheduleMission"',
-            '"runtrol.cancelMissionSchedule"',
             '"runtrol.discoverServices"',
         ],
         "providerHealth.ts": [
@@ -331,7 +280,8 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             'new vscode.ThemeIcon("sync~spin")',
             "this.revealCurrentProject()",
             "this.state.incompleteDiscovery",
-            "view.message = undefined",
+            "this.state.coreReach",
+            "Cannot reach the Runtrol Core.",
             '"runtrol.hasUsableProvider"',
             '"runtrol.isVerifyingProvider"',
             "awaitsVerification",
@@ -400,117 +350,6 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             "reconnect",
             "workspaceCollisions",
         ],
-        "mission/autoFlight.ts": [
-            "MAX_AUTO_FLIGHTS",
-            "sessionGeneration",
-            "recordAutoFlightSubmissions",
-            "readAutoFlightArms",
-            "pendingSignal",
-            "stageSignal",
-        ],
-        "mission/controller.ts": [
-            "AUTO_FLIGHTS_KEY",
-            "runtimeState.onDidChange",
-            "beforeSubmissions",
-            "recordSubmissions",
-            "startAutoFlights",
-            "missionFlightSignal",
-            "missionFlightSignalClear",
-            "hasAutoFlightRecord",
-            "Integrated winner Task",
-            "Integrated winner Receipt",
-            "recoverInterruptedMission",
-            "assertInterruptedRecoveryAuthority",
-            "reviewMissionSchedule",
-            "assertMissionScheduleAuthority",
-            "commitScheduleReview",
-            'ask: "missionScheduleCancel"',
-            "Core starts after Studio closes",
-            "MissionWaveRunner",
-            "for (const missionId of this.documents.openMissionIds())",
-            "this.documents.update(await this.get(missionId))",
-            "refreshRows",
-        ],
-        "mission/recovery.ts": [
-            "interruptedRecoveryPlan",
-            "assertInterruptedRecoveryAuthority",
-            "missionSha256",
-            "policySha256",
-            "providerSelector",
-            "baseCommit",
-            "The previous provider input may already have caused external effects",
-        ],
-        "mission/schedule.ts": [
-            "MIN_SCHEDULE_LEAD_MS",
-            "MAX_SCHEDULE_LEAD_MS",
-            "reviewMissionSchedule",
-            "assertMissionScheduleAuthority",
-            "missionSha256",
-            "snapshot.policy_sha256",
-            "task.instruction_sha256",
-            "task.provider_selector",
-            "task.workspace_mode",
-            "replacesScheduleId",
-            "dueUnixMs",
-            "providers",
-        ],
-        "mission/waveRunner.ts": [
-            "hasAmbiguousSubmission",
-            "markAmbiguousSubmission",
-            "resolveInstruction",
-            "submit",
-            "clearAmbiguousSubmission",
-        ],
-        "mission/landing/apply.ts": [
-            "applyLandingTransaction",
-            "landingCompletionProblem",
-            "readMissionLanding",
-            "createLandingDirectories",
-            "writeAtomicLandingFile",
-            "readLandingTarget",
-        ],
-        "mission/landing/model.ts": [
-            "type LandingSelection",
-            "missionWinnerLanding",
-            'selection.kind === "chooseOne"',
-            "snapshot.tasks.filter",
-            "selection: landing.selection",
-            "landingCompletionProblem",
-            "selected_receipt_id",
-        ],
-        "mission/landing/review.ts": [
-            "MAX_DIFF_TEXT",
-            "document.isDirty",
-            "tab.isDirty",
-            "Receipt Artifact evidence mismatch",
-        ],
-        "mission/landing/localFile.ts": [
-            "inspectSafeLocalFile",
-            "readExactLocalFile",
-            "opened.dev !== file.device",
-            "named.isSymbolicLink()",
-        ],
-        "mission/landing/atomicFile.ts": [
-            'open(temporary, "wx+"',
-            "handle.write",
-            "handle.sync",
-            "beforeReplace",
-            "rename(temporary, target)",
-        ],
-        "mission/landing/controller.ts": [
-            "private currentReview",
-            'state: "reviewed" | "appliedAwaitingCore"',
-            "withProjectLease",
-            "completeLandingWithRecovery",
-            "review.landing.selection.taskId",
-        ],
-        "mission/projectLease.ts": [
-            "runtrol-project-integration-leases",
-            "acquireProcessLease",
-            "ACTIVE_PROCESS_LEASES",
-            "attempt < 3",
-            "process.kill(pid, 0)",
-        ],
         "core/client.ts": ["commandConnection", "commandTail"],
         "runtimeClient.ts": [
             "RuntimeLocator.system(",
@@ -545,14 +384,9 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             'process.env.RUNTROL_VSCODE_REAL_PROVIDER_JOURNEY !== "1"',
             "return undefined",
             "sessions: () => [...state.sessions]",
-            'controller.startResolvedSession(provider, workspace, model, reasoningEffort, "exclusive", false, permission)',
-            "missions.scheduleMissionForJourney(missionId, dueUnixMs, operatorChoiceProvider)",
         ],
         "protocol.ts": [
-            "MissionScheduleLine",
-            'ask: "missionSchedule"',
             "replaces_schedule_id",
-            'ask: "missionScheduleCancel"',
         ],
     }
     for relative, tokens in required.items():
@@ -609,8 +443,6 @@ def selftest() -> int:
     package = {
         "engines": {"vscode": "^1.106.0"},
         "activationEvents": [
-            "onCommand:runtrol.scheduleMission",
-            "onCommand:runtrol.cancelMissionSchedule",
             "onCommand:runtrol.discoverServices",
         ],
         "contributes": {
@@ -630,13 +462,23 @@ def selftest() -> int:
             "viewsWelcome": [
                 {
                     "view": "runtrol.sessions",
+                    "contents": "Cannot reach the Runtrol Core. (command:runtrol.refresh)",
+                    "when": "runtrol.coreReach == unreachable",
+                },
+                {
+                    "view": "runtrol.sessions",
+                    "contents": "Connecting to the Runtrol Core...",
+                    "when": "runtrol.coreReach == connecting",
+                },
+                {
+                    "view": "runtrol.sessions",
                     "contents": "Look again (command:runtrol.refresh)",
-                    "when": "!runtrol.hasUsableProvider && !runtrol.isVerifyingProvider",
+                    "when": "runtrol.coreReach == reached && !runtrol.hasUsableProvider && !runtrol.isVerifyingProvider",
                 },
                 {
                     "view": "runtrol.sessions",
                     "contents": "Checking",
-                    "when": "runtrol.isVerifyingProvider",
+                    "when": "runtrol.coreReach == reached && runtrol.isVerifyingProvider",
                 },
                 {
                     "view": "runtrol.sessions",
@@ -744,7 +586,7 @@ def selftest() -> int:
             'conversationIcon(extensionUri, conversation.serviceIcon) new vscode.ThemeIcon("sync~spin") '
             'canDelete(conversation, capabilities) '
             'this.revealCurrentProject() '
-            'this.state.incompleteDiscovery view.message = undefined '
+            'this.state.incompleteDiscovery this.state.coreReach Cannot reach the Runtrol Core. '
             '"runtrol.hasUsableProvider" "runtrol.isVerifyingProvider" awaitsVerification'
         ),
         "usageView.ts": (
@@ -789,57 +631,6 @@ def selftest() -> int:
             'reconnect workspaceCollisions '
             ''
             '"Start here anyway"'
-        ),
-        "mission/autoFlight.ts": (
-            "MAX_AUTO_FLIGHTS sessionGeneration recordAutoFlightSubmissions readAutoFlightArms "
-            "pendingSignal stageSignal"
-        ),
-        "mission/controller.ts": (
-            "AUTO_FLIGHTS_KEY runtimeState.onDidChange beforeSubmissions recordSubmissions startAutoFlights "
-            "missionFlightSignal missionFlightSignalClear hasAutoFlightRecord "
-            "Integrated winner Task Integrated winner Receipt recoverInterruptedMission "
-            "assertInterruptedRecoveryAuthority reviewMissionSchedule assertMissionScheduleAuthority "
-            'commitScheduleReview ask: "missionScheduleCancel" Core starts after Studio closes MissionWaveRunner '
-            "for (const missionId of this.documents.openMissionIds()) "
-            "this.documents.update(await this.get(missionId)) refreshRows"
-        ),
-        "mission/recovery.ts": (
-            "interruptedRecoveryPlan assertInterruptedRecoveryAuthority missionSha256 policySha256 "
-            "providerSelector baseCommit The previous provider input may already have caused external effects"
-        ),
-        "mission/schedule.ts": (
-            "MIN_SCHEDULE_LEAD_MS MAX_SCHEDULE_LEAD_MS reviewMissionSchedule "
-            "assertMissionScheduleAuthority missionSha256 snapshot.policy_sha256 task.instruction_sha256 "
-            "task.provider_selector task.workspace_mode replacesScheduleId dueUnixMs providers"
-        ),
-        "mission/waveRunner.ts": (
-            "hasAmbiguousSubmission markAmbiguousSubmission resolveInstruction submit clearAmbiguousSubmission"
-        ),
-        "mission/landing/apply.ts": (
-            "applyLandingTransaction landingCompletionProblem readMissionLanding createLandingDirectories "
-            "writeAtomicLandingFile readLandingTarget"
-        ),
-        "mission/landing/model.ts": (
-            'type LandingSelection missionWinnerLanding selection.kind === "chooseOne" '
-            "snapshot.tasks.filter selection: landing.selection landingCompletionProblem selected_receipt_id"
-        ),
-        "mission/landing/review.ts": (
-            "MAX_DIFF_TEXT document.isDirty tab.isDirty Receipt Artifact evidence mismatch"
-        ),
-        "mission/landing/localFile.ts": (
-            "inspectSafeLocalFile readExactLocalFile opened.dev !== file.device "
-            "named.isSymbolicLink()"
-        ),
-        "mission/landing/atomicFile.ts": (
-            'open(temporary, "wx+" handle.write handle.sync beforeReplace rename(temporary, target)'
-        ),
-        "mission/landing/controller.ts": (
-            'private currentReview state: "reviewed" | "appliedAwaitingCore" withProjectLease '
-            "completeLandingWithRecovery review.landing.selection.taskId"
-        ),
-        "mission/projectLease.ts": (
-            "runtrol-project-integration-leases acquireProcessLease ACTIVE_PROCESS_LEASES "
-            "attempt < 3 process.kill(pid, 0)"
         ),
         "core/client.ts": "commandConnection commandTail",
         "runtimeClient.ts": (
@@ -916,7 +707,6 @@ def selftest() -> int:
         ({**package, "contributes": {"viewsContainers": {"activitybar": []}}}, sources),
         ({"engines": {"vscode": "^1.100.0"}, "contributes": {"viewsContainers": {"activitybar": [], "secondarySidebar": []}}}, sources),
         (package, {**sources, "controller.ts": "setInterval("}),
-        (package, {**sources, "mission/controller.ts": sources["mission/controller.ts"] + " setTimeout("}),
         (package, {**sources, "core/framing.ts": "MAX_FRAME_BYTES"}),
         (
             package,
@@ -978,97 +768,7 @@ def selftest() -> int:
             package,
             {
                 **sources,
-                "mission/landing/apply.ts": sources["mission/landing/apply.ts"].replace(
-                    "applyLandingTransaction", ""
-                ),
-            },
-        ),
-        (
-            package,
-            {
-                **sources,
-                "mission/controller.ts": sources["mission/controller.ts"].replace(
-                    "this.documents.update(await this.get(missionId))", ""
-                ),
-            },
-        ),
-        (
-            package,
-            {
-                **sources,
-                "mission/recovery.ts": sources["mission/recovery.ts"].replace(
-                    "assertInterruptedRecoveryAuthority", ""
-                ),
-            },
-        ),
-        (
-            package,
-            {
-                **sources,
-                "mission/schedule.ts": sources["mission/schedule.ts"].replace(
-                    "task.instruction_sha256", ""
-                ),
-            },
-        ),
-        (
-            package,
-            {
-                **sources,
                 "protocol.ts": sources["protocol.ts"].replace("replaces_schedule_id", ""),
-            },
-        ),
-        (
-            package,
-            {
-                **sources,
-                "mission/waveRunner.ts": sources["mission/waveRunner.ts"].replace(
-                    "markAmbiguousSubmission", ""
-                ),
-            },
-        ),
-        (
-            package,
-            {
-                **sources,
-                "mission/landing/model.ts": sources["mission/landing/model.ts"].replace(
-                    "missionWinnerLanding", ""
-                ),
-            },
-        ),
-        (
-            package,
-            {
-                **sources,
-                "mission/landing/localFile.ts": sources["mission/landing/localFile.ts"].replace(
-                    "named.isSymbolicLink()", ""
-                ),
-            },
-        ),
-        (
-            package,
-            {
-                **sources,
-                "mission/landing/atomicFile.ts": sources["mission/landing/atomicFile.ts"].replace(
-                    "beforeReplace", ""
-                ),
-            },
-        ),
-        (
-            package,
-            {
-                **sources,
-                "mission/landing/controller.ts": sources["mission/landing/controller.ts"].replace(
-                    "completeLandingWithRecovery", ""
-                ),
-            },
-        ),
-        (
-            package,
-            {
-                **sources,
-                "mission/projectLease.ts": sources["mission/projectLease.ts"].replace(
-                    "acquireProcessLease", ""
-                ),
             },
         ),
         (package, {**sources, "selectionStore.ts": sources["selectionStore.ts"] + " prompt"}),
@@ -1079,13 +779,6 @@ def selftest() -> int:
         (package, {**sources, "controller.ts": sources["controller.ts"].replace("this.runtime.inventory()", "")}),
         (package, {**sources, "controller.ts": sources["controller.ts"].replace("this.runtime.verifyProvider(", "")}),
         (package, {**sources, "extension.ts": sources["extension.ts"].replace("selfApproveIntegration", "")}),
-        (
-            package,
-            {
-                **sources,
-                "mission/autoFlight.ts": sources["mission/autoFlight.ts"].replace("sessionGeneration", ""),
-            },
-        ),
         (
             package,
             {

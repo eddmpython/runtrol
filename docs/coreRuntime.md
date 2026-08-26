@@ -25,7 +25,6 @@ prompts, replies, event history, Gate output, environment values, credentials, o
 Mission files, instructions, handoffs, outputs, and capability bodies remain project files. Provider-native
 conversations remain provider files. Deleting the Runtrol home removes session pointers, Mission evidence, and local
 capability trust, but does not remove either class of owner data. The operational details are
-[Mission operations](missionOperations.md) and [project capability trust](capabilityTrust.md).
 
 ## Runtime and admission
 

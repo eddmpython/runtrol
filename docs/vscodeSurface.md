@@ -338,8 +338,6 @@ identical bytes.
 The Capability Candidate Inbox uses a native quick pick and Markdown review document. Verification and approval name
 one exact project version. Approval opens the built-in VS Code file or diff review first. Reject, quarantine, rollback,
 and archive are also modal local actions. Candidate bodies stay in project files, and no action injects those bodies
-into a Task. The detailed contracts are [Mission operations](missionOperations.md) and
-[project capability trust](capabilityTrust.md).
 
 ## Agent Tools surface
 

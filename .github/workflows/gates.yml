@@ -202,24 +202,6 @@ jobs:
       - name: 공개 Runtime 프로토콜, 연동, 보안, 운영 문서 대조
         if: needs.detect.outputs.hasWorkspace == 'true'
         run: python -X utf8 tests/audit/runtimeDocumentation.py
-      - name: Mission thin boundary 검출기 자체 검증
-        if: needs.detect.outputs.hasWorkspace == 'true'
-        run: python -X utf8 tests/audit/orchestrationThinBoundary.py --selftest
-      - name: Mission 계층은 내용 비저장, provider 중립
-        if: needs.detect.outputs.hasWorkspace == 'true'
-        run: python -X utf8 tests/audit/orchestrationThinBoundary.py
-      - name: Mission 증거 경계 검출기 자체 검증
-        if: needs.detect.outputs.hasWorkspace == 'true'
-        run: python -X utf8 tests/audit/evidenceBoundary.py --selftest
-      - name: Mission 증거는 식별자와 digest만 저장
-        if: needs.detect.outputs.hasWorkspace == 'true'
-        run: python -X utf8 tests/audit/evidenceBoundary.py
-      - name: Mission 및 Capability 계약 게이트 자체 검증
-        if: needs.detect.outputs.hasWorkspace == 'true'
-        run: python -X utf8 tests/audit/missionGrowthContracts.py --selftest
-      - name: Mission 실행, 복구, 로컬 승인, 명시적 Capability 재사용
-        if: needs.detect.outputs.hasWorkspace == 'true'
-        run: python -X utf8 tests/audit/missionGrowthContracts.py
       - name: 공식 ACP Registry 검출기 자체 검증
         if: needs.detect.outputs.hasWorkspace == 'true'
         run: python -X utf8 tests/audit/acpRegistry.py --selftest
@@ -467,18 +449,6 @@ jobs:
         env:
           TMPDIR: ${{ matrix.os == 'macos-latest' && '/tmp' || runner.temp }}
         run: python -X utf8 tests/audit/vscodeRealProviderJourney.py --require-external
-      - name: 실물 두 provider Mission 여정 게이트 자체 검증
-        run: python -X utf8 tests/audit/missionLiveJourney.py --selftest
-      - name: 실물 두 provider의 검토, 실행, Receipt, 통합, 보관 여정
-        env:
-          TMPDIR: ${{ matrix.os == 'macos-latest' && '/tmp' || runner.temp }}
-        run: python -X utf8 tests/audit/missionLiveJourney.py --require-external
-      - name: 병렬 결과 비교 게이트 자체 검증
-        run: python -X utf8 tests/audit/fleetComparisonSmoke.py --selftest
-      - name: 실물 두 provider의 병렬 worktree 실행, 비교, 선택 결과 통합
-        env:
-          TMPDIR: ${{ matrix.os == 'macos-latest' && '/tmp' || runner.temp }}
-        run: python -X utf8 tests/audit/fleetComparisonSmoke.py --require-external
       - name: 실물 Codex 고정 판본 설치
         run: npm install --global @openai/codex@0.146.0
       - name: 실물 Grok 고정 판본 설치

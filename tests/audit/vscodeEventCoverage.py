@@ -159,15 +159,15 @@ def main() -> int:
         data = json.loads(PRESENTATION.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
         return report([f"the shared presentation is not readable JSON: {error}"])
+    # One surface reads the shared presentation now. The second entry died with the chat page and its
+    # reference outlived it, so this gate could only raise IndexError (measured 2026-08-26).
     texts = {
-        "VS Code main.ts": (VSCODE[0].read_text(encoding="utf-8"), "presentationOf"),
-        "VS Code presentation.ts": (VSCODE[1].read_text(encoding="utf-8"), "event-presentation.json"),
+        "VS Code presentation.ts": (VSCODE[0].read_text(encoding="utf-8"), "presentationOf"),
     }
-    found = (
-        contractProblems(data, kinds)
-        + surfaceProblems(texts, kinds)
-        + localizationProblems(data, texts["VS Code main.ts"][0])
-    )
+    # No localization check any more: the status text keys were rendered by the chat page, and the
+    # conversation surface is now the service's own terminal, which draws its own words. Nothing in this
+    # extension turns a status event into a sentence, so requiring one would be requiring a page back.
+    found = contractProblems(data, kinds) + surfaceProblems(texts, kinds)
     if found:
         return report(found)
     print(f"[vscodeEventCoverage] OK. {len(kinds)} events use one shared contract in VS Code.")

@@ -25,7 +25,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 import claudeApprovalSmoke as approval
-import missionLiveJourney as mission
+import loopbackClaudeModel as loopback
 
 ROOT = Path(__file__).resolve().parents[2]
 TIMEOUT_S = 150.0
@@ -141,7 +141,7 @@ def exercise(mode: str, require_external: bool) -> None:
         model_context = (
             approval.RunningModel(target)
             if mode == "approval"
-            else mission.RunningClaudeModel()
+            else loopback.RunningClaudeModel()
         )
         expected_requests = {"drive": 1, "approval": 2, "resilience": 3}[mode]
         with model_context as model:

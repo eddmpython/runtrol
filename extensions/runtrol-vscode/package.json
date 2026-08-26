@@ -89,14 +89,6 @@
     "onCommand:runtrol.openWorkspace",
     "onCommand:runtrol.interrupt",
     "onCommand:runtrol.closeSession",
-    "onCommand:runtrol.proposeCapability",
-    "onCommand:runtrol.capabilityInbox",
-    "onCommand:runtrol.verifyCapability",
-    "onCommand:runtrol.approveCapability",
-    "onCommand:runtrol.rejectCapability",
-    "onCommand:runtrol.quarantineCapability",
-    "onCommand:runtrol.rollbackCapability",
-    "onCommand:runtrol.archiveCapability",
     "onCommand:runtrol.archiveConversation",
     "onCommand:runtrol.deleteConversation",
     "onCommand:runtrol.pinConversation",
@@ -282,54 +274,6 @@
         "command": "runtrol.unpinConversation",
         "title": "Unpin Conversation",
         "icon": "$(pinned)",
-        "category": "Runtrol"
-      },
-      {
-        "command": "runtrol.proposeCapability",
-        "title": "Propose Project Capability",
-        "icon": "$(new-folder)",
-        "category": "Runtrol"
-      },
-      {
-        "command": "runtrol.capabilityInbox",
-        "title": "Open Capability Candidate Inbox",
-        "icon": "$(inbox)",
-        "category": "Runtrol"
-      },
-      {
-        "command": "runtrol.verifyCapability",
-        "title": "Verify Capability Candidate",
-        "icon": "$(beaker)",
-        "category": "Runtrol"
-      },
-      {
-        "command": "runtrol.approveCapability",
-        "title": "Approve Exact Capability Digest",
-        "icon": "$(verified-filled)",
-        "category": "Runtrol"
-      },
-      {
-        "command": "runtrol.rejectCapability",
-        "title": "Reject Capability Candidate",
-        "icon": "$(close)",
-        "category": "Runtrol"
-      },
-      {
-        "command": "runtrol.quarantineCapability",
-        "title": "Quarantine Capability",
-        "icon": "$(shield)",
-        "category": "Runtrol"
-      },
-      {
-        "command": "runtrol.rollbackCapability",
-        "title": "Roll Back Capability",
-        "icon": "$(history)",
-        "category": "Runtrol"
-      },
-      {
-        "command": "runtrol.archiveCapability",
-        "title": "Archive Capability",
-        "icon": "$(archive)",
         "category": "Runtrol"
       },
       {
