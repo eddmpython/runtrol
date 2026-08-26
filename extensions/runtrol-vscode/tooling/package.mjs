@@ -49,10 +49,12 @@ try {
   const stagedResources = path.join(staging, "resources");
   const stagedCore = path.join(stagedResources, "core");
   const stagedProviderIcons = path.join(stagedResources, "provider-icons");
+  const stagedActionIcons = path.join(stagedResources, "action-icons");
   await Promise.all([
     mkdir(stagedDist, { recursive: true }),
     mkdir(stagedCore, { recursive: true }),
     mkdir(stagedProviderIcons, { recursive: true }),
+    mkdir(stagedActionIcons, { recursive: true }),
   ]);
   await Promise.all([
     writeFile(path.join(staging, "package.json"), `${JSON.stringify(packageManifest, null, 2)}\n`, "utf8"),
@@ -62,6 +64,7 @@ try {
     cp(path.join(extensionRoot, "resources/icon.png"), path.join(stagedResources, "icon.png")),
     cp(path.join(extensionRoot, "resources/symbol.svg"), path.join(stagedResources, "symbol.svg")),
     cp(path.join(extensionRoot, "resources/provider-icons"), stagedProviderIcons, { recursive: true }),
+    cp(path.join(extensionRoot, "resources/action-icons"), stagedActionIcons, { recursive: true }),
     cp(path.join(extensionRoot, "resources/LICENSE"), path.join(stagedResources, "LICENSE")),
     cp(path.join(extensionRoot, "resources/CODICONS_LICENSE.txt"), path.join(stagedResources, "CODICONS_LICENSE.txt")),
     // Staged under the .txt name the package contract pins: vsce renames LICENSE to LICENSE.txt on its
