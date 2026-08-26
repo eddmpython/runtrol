@@ -115,15 +115,15 @@ export class UsageView implements vscode.WebviewViewProvider, vscode.Disposable 
     }
   }
 
-  /// Open the set-up list, from the section title's plus.
+  /// Show or hide the set-up list, from the section title's plus.
   ///
   /// It opens in the panel itself rather than in a picker at the top of the window: the reader pressed a control
   /// in the sidebar, and sending their eye to the title bar to answer is the interruption this product exists to
-  /// avoid.
-  openSetup(): void {
-    this.setupOpen = true;
+  /// avoid. The same control closes it, so the list is never something the reader has to live with.
+  toggleSetup(): void {
+    this.setupOpen = !this.setupOpen;
     this.postSnapshot();
-    void this.view?.show?.(true);
+    if (this.setupOpen) void this.view?.show?.(true);
   }
 
   private publish(next: UsageRow[], force = false): void {

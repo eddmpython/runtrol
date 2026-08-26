@@ -373,10 +373,11 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
       }),
     ),
     vscode.commands.registerCommand(
-      // The plus on the usage section's title. It opens the list in the panel itself; nothing is asked at the
-      // top of the window, because the reader's eye is already at the bottom of the sidebar.
+      // The plus on the usage section's title. It shows the list in the panel itself; nothing is asked at the
+      // top of the window, because the reader's eye is already at the bottom of the sidebar. Pressing it again
+      // puts the list away.
       "runtrol.setUpServices",
-      () => usage.openSetup(),
+      () => usage.toggleSetup(),
     ),
     vscode.commands.registerCommand(
       "runtrol.selectSession",
