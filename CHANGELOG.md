@@ -12,6 +12,19 @@ and refactoring that no user can observe do not belong here.
 
 ### Added
 
+- Agent Usage draws every limit a service actually has, one named bar each, and all three services now fill
+  them without a turn. Claude Code shows its five-hour window, its whole-account week and its per-model week
+  side by side, named for the model the service scoped them to; Codex shows every metered bucket it has,
+  including the model-scoped pair it publishes beside the account's own week; Grok shows its plan, its sign-in
+  and its usage period. The line above the bars names the window the service says is binding right now rather
+  than the first one, because on a measured account the five-hour window read 13% while the model-scoped week
+  was at 100% and refusing work.
+
+- A row with no bar names which of four things is true, because they need four different responses: nobody is
+  signed in, the service publishes no usage at all, the service was asked and the answer could not be read, or
+  the check has not finished. Only the third is Runtrol's to retry, and the previous wording sent people to
+  sign in when they already were.
+
 - Agent Usage now says where each account stands before any turn runs. A service that publishes its own
   status (Claude Code's `auth status`, Codex's account methods) shows whether it is signed in and the plan it
   names in its own word (`max plan via claude.ai`); Codex's limit windows are read on request and drawn as bars
