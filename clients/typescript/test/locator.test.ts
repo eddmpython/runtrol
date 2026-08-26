@@ -111,3 +111,29 @@ async function makeOwnerOnly(path: string): Promise<void> {
     { windowsHide: true },
   );
 }
+
+test("the system locator reads the home the operator chose, the way the Core does", async () => {
+  // The defect this exists for: the Core resolved `RUNTROL_HOME` and this SDK resolved only the platform
+  // directory, so one process could hold a daemon in one home and a locator in another. Nothing failed loudly;
+  // enrollment simply never completed, because each half was talking to a different Runtime.
+  const chosen = await mkdtemp(join(tmpdir(), "runtrol-ts-home-"));
+  const previous = process.env.RUNTROL_HOME;
+  process.env.RUNTROL_HOME = chosen;
+  try {
+    const locator = RuntimeLocator.system();
+    assert.equal(await locator.inspect().then((state) => state.state), "notInstalled");
+    // Nothing is installed there, and the point is which file was looked for: an absolute path inside the
+    // chosen home rather than one under the platform directory.
+    assert.ok(locator.path.startsWith(chosen), `${locator.path} is not inside ${chosen}`);
+
+    process.env.RUNTROL_HOME = "relative/home";
+    assert.throws(
+      () => RuntimeLocator.system(),
+      (error: unknown) => error instanceof RuntimeLocatorError && error.code === "environment",
+    );
+  } finally {
+    if (previous === undefined) delete process.env.RUNTROL_HOME;
+    else process.env.RUNTROL_HOME = previous;
+    await rm(chosen, { recursive: true, force: true });
+  }
+});

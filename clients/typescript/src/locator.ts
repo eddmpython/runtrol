@@ -73,7 +73,7 @@ export class RuntimeLocator {
   public static system(options: RuntimeLocatorOptions = {}): RuntimeLocator {
     return new RuntimeLocator(
       runtimeLocatorToken,
-      join(systemStateRoot(), "runtrol", "runtime.locator.json"),
+      join(runtrolHome(), "runtime.locator.json"),
       options.runtimeExecutable,
       options.preferDigest,
     );
@@ -339,6 +339,31 @@ function validateGeneration(generation: RuntimeGeneration, locatorPath: string):
       "Runtime socket escaped its owner-only state directory",
     );
   }
+}
+
+/// The environment variable that names the Runtrol home, when the operator set one.
+const HOME_ENVIRONMENT = "RUNTROL_HOME";
+
+/// Where this machine's Runtrol home is, by the same rule the Core itself follows.
+///
+/// The Core reads `RUNTROL_HOME` first and falls back to the platform's own directory (see
+/// `crates/runtrol-core/src/home/mod.rs`). This used to read only the platform directory, so a process that had
+/// set `RUNTROL_HOME` found a daemon in one home through its command line and a locator in another home through
+/// this SDK. Both halves believed they were talking to the same Runtime, and the enrollment one half created was
+/// invisible to the other: measured 2026-08-26, an extension in a chosen home could never finish enrolling and
+/// reported `the pending enrollment does not exist` forever.
+///
+/// One rule, in the one place each side reads it, is the whole fix. An explicit setting is used exactly as
+/// given, because writing somewhere other than where the operator said is the one thing it must never do.
+function runtrolHome(): string {
+  const chosen = process.env[HOME_ENVIRONMENT];
+  if (chosen && chosen.length > 0) {
+    if (!isAbsolute(chosen)) {
+      throw new RuntimeLocatorError("environment", `${HOME_ENVIRONMENT} is not an absolute path`);
+    }
+    return chosen;
+  }
+  return join(systemStateRoot(), "runtrol");
 }
 
 function systemStateRoot(): string {
