@@ -1061,16 +1061,48 @@ async function inspectRuntimeLocator(
   const deadline = Date.now() + RUNTIME_LOCATOR_SETTLE_MS;
   while (true) {
     const inspected = await locator.inspect();
-    // The installed generation is what this window started through `runtrol endpoint`; a locator that lists
-    // only other generations is still settling, so it is read again rather than accepted.
-    if (inspected.state === "running" && (!preferDigest || inspected.locator.digest === preferDigest)) {
-      return inspected.locator;
+    if (inspected.state === "running") {
+      // The generation this window installed, when it is serving. Otherwise the newest one that is, which is
+      // what the locator already chose and what `runtrol endpoint` itself follows.
+      //
+      // Waiting for our own digest is right while the locator is still settling and wrong the moment it says
+      // our generation is draining: that is settled information, and it happens on every rollback to a build
+      // that is still finishing the conversations it started. Insisting then meant a window that could never
+      // attach to anything (measured 2026-08-26 by the upgrade journey, which found its own generation listed
+      // as draining beside a healthy one and gave up on both).
+      if (!preferDigest || inspected.locator.digest === preferDigest || ownGenerationIsDraining(
+        await locator.inspectAll().catch(() => []),
+        preferDigest,
+      )) {
+        return inspected.locator;
+      }
     }
     if (Date.now() >= deadline) {
-      throw new Error("Runtrol Runtime is not installed");
+      // Named, because "not installed" is the one sentence that fits four different situations: nothing is
+      // published, something is published somewhere else, the generation listed is draining, or the generation
+      // listed is a different build than the one this window installed. Whoever reads this next should not have
+      // to guess which.
+      const listed = await locator.inspectAll().catch(() => []);
+      const seen = listed.map((entry) => `${entry.digest.slice(0, 16)}${entry.draining ? " draining" : ""}`);
+      throw new Error(
+        `Runtrol Runtime is not installed: ${locator.path} lists ${
+          seen.length === 0 ? "no generation" : seen.join(", ")
+        }${preferDigest ? `, and this window installed ${preferDigest.slice(0, 16)}` : ""}`,
+      );
     }
     await new Promise((resolve) => setTimeout(resolve, RUNTIME_LOCATOR_POLL_MS));
   }
+}
+
+/// Whether the build this window installed is listed and draining, which settles the wait for it.
+///
+/// Absent is not draining: a generation that has not been published yet is still on its way, and that is exactly
+/// the case the settle loop exists for.
+function ownGenerationIsDraining(
+  listed: ReadonlyArray<{ digest: string; draining: boolean }>,
+  preferDigest: string,
+): boolean {
+  return listed.some((entry) => entry.digest === preferDigest && entry.draining);
 }
 
 function extensionVersion(context: vscode.ExtensionContext): string {
