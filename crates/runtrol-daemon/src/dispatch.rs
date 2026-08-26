@@ -1532,23 +1532,6 @@ fn bound(
     }
 }
 
-/// How many live sessions ending this generation would interrupt: a turn is running, or a driver
-/// is still attaching and its first turn may already be in flight. An idle session is not one of
-/// them, however alive its process is: nothing observable is happening, and the conversation
-/// reopens from the provider's own store under the successor generation.
-pub(crate) fn live_turns<'sessions>(
-    states: impl Iterator<Item = &'sessions SessionState>,
-) -> usize {
-    states
-        .filter(|state| {
-            matches!(
-                state.lifecycle(),
-                Lifecycle::Busy { .. } | Lifecycle::Starting
-            )
-        })
-        .count()
-}
-
 fn mismatched(prepared: Prepared) -> Reply {
     let response = refuse("provider preparation does not belong to this request");
     match prepared {
@@ -2989,34 +2972,6 @@ mod tests {
             other => panic!("expected the drain, got {}", shape(&other)),
         }
         clean(composed, &path);
-    }
-
-    /// What keeps a draining generation alive, over the exact lifecycle vocabulary: a running turn
-    /// or a driver still attaching counts, an idle or detached session never does.
-    #[test]
-    fn live_turns_counts_only_sessions_mid_motion() {
-        use runtrol_core::Observed;
-        use runtrol_provider::TurnId;
-        let now = WallMs::now();
-        let detached = SessionState::new(now);
-        let mut starting = SessionState::new(now);
-        drop(starting.observe(Observed::Attaching, now));
-        let mut idle = SessionState::new(now);
-        drop(idle.observe(Observed::Attaching, now));
-        drop(idle.observe(Observed::Attached, now));
-        let mut busy = SessionState::new(now);
-        drop(busy.observe(Observed::Attaching, now));
-        drop(busy.observe(Observed::Attached, now));
-        drop(busy.observe(
-            Observed::TurnStarted {
-                turn: TurnId { epoch: 0, index: 0 },
-            },
-            now,
-        ));
-        assert_eq!(live_turns([&detached, &idle].into_iter()), 0);
-        assert_eq!(live_turns([&starting, &idle, &busy].into_iter()), 2);
-        assert_eq!(live_turns([&busy].into_iter()), 1);
-        assert_eq!(live_turns([].into_iter()), 0);
     }
 
     /// Agree a wire format, so the rest of a test can ask for something.

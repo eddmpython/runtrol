@@ -1561,9 +1561,20 @@ fn begin_drain(
     *relay_hub = None;
 }
 
-/// How much work is live here: running turns plus open terminals. What keeps a draining generation alive,
-/// and what `runtrol status` shows. A hosted terminal is a conversation a person is looking at, and a
-/// generation that ended under it would take the screen with it.
+/// How much work is live here: every supervised session plus every open terminal. What keeps a draining
+/// generation alive, and what `runtrol status` shows.
+///
+/// # Why a session counts even when nothing is running in it
+///
+/// A supervised session is a provider process this generation started and owns. Between turns it is idle, not
+/// finished: the person's conversation is sitting there with its context, waiting for the next thing they type.
+/// This counted running turns instead, so a generation draining while every session happened to be between
+/// turns saw zero work and left, taking those processes with it. Measured 2026-08-26: the upgrade journey
+/// started one session, upgraded, and found the original daemon gone, which is exactly a person losing an open
+/// conversation to an update they never noticed.
+///
+/// A hosted terminal counts for the same reason: it is a conversation somebody is looking at, and a generation
+/// that ended under it would take the screen with it.
 fn live_work_of(sessions: &SessionManager, composed: &Composed) -> u32 {
     let terminals = u32::try_from(
         composed
@@ -1571,15 +1582,8 @@ fn live_work_of(sessions: &SessionManager, composed: &Composed) -> u32 {
             .load(std::sync::atomic::Ordering::Acquire),
     )
     .unwrap_or(u32::MAX);
-    live_turns_of(sessions).saturating_add(terminals)
-}
-
-/// How many turns are running here.
-fn live_turns_of(sessions: &SessionManager) -> u32 {
-    u32::try_from(crate::dispatch::live_turns(
-        sessions.live_sessions().map(|live| live.state),
-    ))
-    .unwrap_or(u32::MAX)
+    let supervised = u32::try_from(sessions.live_sessions().count()).unwrap_or(u32::MAX);
+    supervised.saturating_add(terminals)
 }
 
 fn schedule_push_wakes(
@@ -2633,6 +2637,38 @@ fn encode_response(response: &Response) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
+
+    #[tokio::test]
+    async fn a_session_between_turns_still_keeps_a_draining_generation_alive() {
+        // The rule a generation drains by. An open session is a provider process this generation started and
+        // owns; between turns it is idle, not finished. Counting running turns instead let an update end the
+        // conversations a person had open simply because none of them happened to be mid-answer.
+        let scratch =
+            std::env::temp_dir().join(format!("runtrol-live-work-{}", std::process::id()));
+        if scratch.exists() {
+            std::fs::remove_dir_all(&scratch).expect("clear the previous run");
+        }
+        std::fs::create_dir(&scratch).expect("create the scratch home");
+        let home = scratch.to_str().expect("UTF-8 scratch path");
+        let composed = crate::Composed::for_tests(home, runtrol_drivers::builtin())
+            .expect("a fresh home composes");
+        let sessions = SessionManager::default();
+        assert_eq!(
+            live_work_of(&sessions, &composed),
+            0,
+            "a generation holding nothing has nothing to finish"
+        );
+
+        composed
+            .open_terminals
+            .store(2, std::sync::atomic::Ordering::Release);
+        assert_eq!(
+            live_work_of(&sessions, &composed),
+            2,
+            "a hosted terminal is a conversation somebody is looking at"
+        );
+        std::fs::remove_dir_all(&scratch).expect("clean the scratch home");
+    }
 
     #[tokio::test]
     async fn preparation_lanes_are_per_provider_and_shared_per_provider() {
