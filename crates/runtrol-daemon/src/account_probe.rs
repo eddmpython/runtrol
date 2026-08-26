@@ -14,8 +14,15 @@ use tokio::sync::watch;
 
 use crate::Composed;
 
-/// How long one service may take to answer. A status command reads a file; a protocol read is one round trip.
-const ACCOUNT_PROBE_DEADLINE: Duration = Duration::from_secs(20);
+/// How long one service may take to answer.
+///
+/// Generous, because what one service does to answer is not what another does. Measured 2026-08-26 on this
+/// machine: two answer in about three seconds each over a protocol they already speak, and the third takes
+/// about fourteen because it opens its own headless channel, asks its vendor where the account stands, and
+/// shuts down again. A bound near that fourteen turns a slow network into "this service publishes nothing",
+/// which takes the sign-in state off the row along with the limits. Nothing waits behind it: the services
+/// are asked at the same time.
+const ACCOUNT_PROBE_DEADLINE: Duration = Duration::from_mins(1);
 /// How long after start the first round runs. Past the moment the window has drawn, and past the point a
 /// footprint measurement calls a fresh daemon "idle": an account round prepares drivers and momentarily is
 /// not idle, so a daemon measured in its first seconds must not be mid-round. It releases its working set at
@@ -180,16 +187,35 @@ pub(crate) async fn round(
         .filter(|provider| provider.is_usable())
         .map(runtrol_core::registry::Provider::id)
         .collect();
-    let mut changed = false;
+
+    // All at once, because the services have nothing to do with each other. Asked one after another a round
+    // took as long as the answers added up, and every service behind the slow one had a standing bar for
+    // those seconds; asked together it takes as long as the slowest, and one service being slow costs only
+    // that service. It is also what lets the deadline above be generous without anything else paying for it.
+    let mut asking = tokio::task::JoinSet::new();
     for id in ids {
-        let Some(report) = ask(composed, id).await else {
-            continue;
-        };
-        let now = WallMs::now();
+        let composed = Arc::clone(composed);
+        drop(asking.spawn(async move { (id, ask(&composed, id).await) }));
+    }
+    let mut answers = Vec::new();
+    while let Some(joined) = asking.join_next().await {
+        // Two ways to come back with nothing, and neither writes a report. A service that could not be
+        // prepared is an installation problem the inventory already names, and a task that did not finish
+        // is a reading nobody took. In both the row keeps its last answer and the next round asks again.
+        if let Ok((id, Some(report))) = joined {
+            answers.push((id, report));
+        }
+    }
+
+    let now = WallMs::now();
+    let mut changed = false;
+    {
         let mut reports = composed.account_reports.lock().await;
-        let same = reports.get(id).is_some_and(|known| known.report == report);
-        reports.record(id, report, now);
-        changed |= !same;
+        for (id, report) in answers {
+            let same = reports.get(id).is_some_and(|known| known.report == report);
+            reports.record(id, report, now);
+            changed |= !same;
+        }
     }
     // Asking a service means preparing its driver and, for a protocol CLI, a short-lived subprocess; both
     // are dropped by here, but the allocator keeps their pages as working set. Hand them back so a round on

@@ -219,6 +219,11 @@ pub(crate) fn merge_probed_usage(
                 known
                     .windows
                     .sort_by_key(|window| window.window_minutes.unwrap_or(u32::MAX));
+                // Only a probe reads a daily token count, so a turn arriving after one would otherwise take
+                // the number off the row until the next round put it back.
+                if known.tokens_today.is_none() {
+                    known.tokens_today = gauge.tokens_today;
+                }
             }
             Some(known) => {
                 let cost = known.cost.take();
