@@ -217,7 +217,7 @@ export function usageRows(
       icon: providerIcon(providerId, providers),
       // The bar is the row. The plan the service named is true but not what this line is for, and prefixing it
       // pushed the number a person came to read off the end of a narrow sidebar. It is in the hover.
-      detail: usageDetail(gauge, nowMs),
+      detail: unmeteredDetail(gauge, account, nowMs),
       meters: usageMeters(gauge, nowMs),
       reached: gauge.reached,
       state: "available",
@@ -392,6 +392,23 @@ export function usageDetail(gauge: ProviderUsageGauge, nowMs: number): string {
     parts.push(window ? "within limits" : "no limit reported");
   }
   return parts.join(" · ");
+}
+
+/// The line for a service that reported windows, with its own reason first when none of them carry a number.
+///
+/// A period with a reset and no bar reads as something that failed. Measured on a real account: one service
+/// answers about the plan and the period and states no percentage at all, because that account is metered by
+/// a team the operator cannot see. The service has a word for that and the row leads with it, because it is
+/// the answer to the question the missing bar asks.
+export function unmeteredDetail(
+  gauge: ProviderUsageGauge,
+  account: ProviderLine["account"] | null | undefined,
+  nowMs: number,
+): string {
+  const detail = usageDetail(gauge, nowMs);
+  const metered = (gauge.windows ?? []).some((window) => boundedPercent(window.usedPercent) !== null);
+  if (metered || !account?.limitsUnread) return detail;
+  return `${account.limitsUnread} · ${detail}`;
 }
 
 /// The one window this row's line is about.

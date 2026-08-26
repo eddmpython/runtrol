@@ -17,12 +17,17 @@ body {
 
 #usage {
   display: grid;
-  gap: 3px;
+  /* The gap between services, deliberately larger than the gap between one service's own bars. Grouping by
+     whitespace costs no rows: a header line per service would have spent three of the seven rows this panel
+     shows before it scrolls, on a label the glyph beside the group already gives. */
+  gap: 10px;
 }
 
 .usage-row {
   display: flex;
-  align-items: center;
+  /* The glyph sits on the first of its service's bars rather than in the middle of them. Centred, it read
+     as belonging to whichever bar it happened to land beside; at the top it reads as starting the group. */
+  align-items: start;
   gap: 8px;
   width: 100%;
   padding: 5px 7px;
@@ -51,6 +56,8 @@ button.setup-row:focus-visible {
 
 .provider-icon {
   flex: none;
+  /* Optical centring on the first bar row, which is 16px of glyph against an 18px row. */
+  margin-top: 1px;
   width: 16px;
   height: 16px;
   object-fit: contain;
@@ -64,7 +71,9 @@ button.setup-row:focus-visible {
      and no more, so every bar of a service that reported several windows starts at the same place however
      long one of the names is. */
   grid-template-columns: minmax(0, auto) minmax(40px, 1fr) auto;
-  gap: 4px 6px;
+  /* Tight between one service's own bars: they are one reading in three parts, and spacing them like
+     separate services made three windows of one account look like three accounts. */
+  gap: 2px 6px;
   align-items: center;
   flex: 1;
   min-width: 0;

@@ -190,6 +190,59 @@ test("the hover spells out every window, including the one that is governing", (
   assert.ok(row?.tooltip.includes("5h: 13% used"), row?.tooltip);
 });
 
+test("a service that reported a period and no number leads with its own reason", () => {
+  // Measured: one service answers about the plan and the period and states no percentage, because that
+  // account is metered by a team. A bar-less row saying only when it resets reads as a failure.
+  const providers = [
+    {
+      providerId: "grok",
+      displayName: "Grok",
+      icon: "grok",
+      installation: { state: "usable" },
+      account: {
+        status: "signedIn",
+        plan: "SuperGrok",
+        limitsUnread: "team-managed",
+        checkedAtMs: NOW,
+      },
+    },
+  ] as unknown as ProviderLine[];
+  const [row] = usageRows(
+    [gauge({
+      providerId: "grok",
+      windows: [window("billing_period", {
+        windowMinutes: 10_080,
+        resetsAtMs: NOW + 4 * 86_400_000,
+      })],
+    })],
+    providers,
+    NOW,
+  );
+  assert.equal(row?.detail, "team-managed · 7d · resets in 4d");
+  assert.deepEqual(row?.meters, [], "no number was stated, so no bar is drawn");
+});
+
+test("a service that did state a number keeps its number and not the reason", () => {
+  const providers = [
+    {
+      providerId: "grok",
+      displayName: "Grok",
+      icon: "grok",
+      installation: { state: "usable" },
+      account: { status: "signedIn", limitsUnread: "team-managed", checkedAtMs: NOW },
+    },
+  ] as unknown as ProviderLine[];
+  const [row] = usageRows(
+    [gauge({
+      providerId: "grok",
+      windows: [window("billing_period", { usedPercent: 42, windowMinutes: 10_080 })],
+    })],
+    providers,
+    NOW,
+  );
+  assert.equal(row?.detail, "7d 42%");
+});
+
 test("rows carry the service's declared mark and name", () => {
   const rows = usageRows(
     [gauge({ providerId: "claude", windows: [window("five_hour", { resetsAtMs: NOW + 60_000 })] })],
