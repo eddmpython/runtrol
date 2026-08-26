@@ -186,11 +186,16 @@ export function usageRows(
     }
     const plan = accountLine(account);
     if (!gauge) {
+      // No bar, so the row says why in as few words as it takes, and the rest goes to the hover. The plan is not
+      // that reason: `max plan via claude.ai` on a row with no bar reads like the bar is coming, when what is
+      // true is that the service publishes no number for one (measured on Claude Code 2.1.235 and 2.1.246: no
+      // command, no stream field, no file). A row that states its cause can be acted on; a row that states a
+      // plan cannot.
       return {
         key: `usage:${encodeURIComponent(providerId)}`,
         name,
         icon: providerIcon(providerId, providers),
-        detail: plan ?? accountAbsence(name, account),
+        detail: usageAbsenceCause(account),
         meters: [],
         reached: false,
         state: "available",
@@ -205,7 +210,9 @@ export function usageRows(
       key: `usage:${encodeURIComponent(providerId)}`,
       name,
       icon: providerIcon(providerId, providers),
-      detail: plan ? `${plan} · ${usageDetail(gauge, nowMs)}` : usageDetail(gauge, nowMs),
+      // The bar is the row. The plan the service named is true but not what this line is for, and prefixing it
+      // pushed the number a person came to read off the end of a narrow sidebar. It is in the hover.
+      detail: usageDetail(gauge, nowMs),
       meters: usageMeters(gauge, nowMs),
       reached: gauge.reached,
       state: "available",
@@ -214,6 +221,19 @@ export function usageRows(
       tooltip: plan ? `${name}: ${plan}\n${usageTooltip(name, gauge, nowMs)}` : usageTooltip(name, gauge, nowMs),
     };
   });
+}
+
+/// Why this row has no bar, in the fewest words that name a cause rather than a symptom.
+///
+/// Three causes and three sentences, because they need three different things from the reader: one is theirs to
+/// fix by signing in, one is the service's own limitation and nothing to act on, and one is a check that has not
+/// finished. Collapsing them would send someone to sign in when they already are.
+export function usageAbsenceCause(account: ProviderLine["account"] | null | undefined): string {
+  // Not the bare "Checking" an unprobed install says: that one is about the executable, this one is about the
+  // account, and a reader who saw the same word twice would not know which had stalled.
+  if (!account) return "Checking usage";
+  if (account.status === "signedOut") return "Not signed in · Sign in";
+  return "No usage published";
 }
 
 /// The plan and sign-in method the service named, in its own tokens, or null when it named none.

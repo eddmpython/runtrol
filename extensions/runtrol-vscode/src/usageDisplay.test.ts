@@ -91,8 +91,8 @@ test("every connected CLI stays visible before it reports usage", () => {
   const rows = usageRows([], PROVIDERS, NOW);
   // Nobody has asked the service anything yet, and the line says exactly that instead of "Ready".
   assert.deepEqual(rows.map((row) => [row.name, row.detail]), [
-    ["Claude Code", "Not checked yet"],
-    ["Codex", "Not checked yet"],
+    ["Claude Code", "Checking usage"],
+    ["Codex", "Checking usage"],
   ]);
 });
 
@@ -124,7 +124,7 @@ test("the fixed area includes checking and broken installed CLIs but omits missi
 
   const rows = usageRows([], providers, NOW);
   assert.deepEqual(rows.map((row) => [row.name, row.detail, row.state]), [
-    ["Claude Code", "Not checked yet", "available"],
+    ["Claude Code", "Checking usage", "available"],
     ["Codex", "Checking", "checking"],
     ["Grok", "Unavailable · Fix", "unavailable"],
   ]);
@@ -202,11 +202,15 @@ test("the account line says what the service said: signed out is an action, a pl
   ] as unknown as ProviderLine[];
   const rows = usageRows([gauge({ providerId: "claude", primary: { usedPercent: 40 } })], providers, NOW);
   assert.deepEqual(rows.map((row) => [row.name, row.detail, row.state]), [
-    ["Claude Code", "max plan via claude.ai · 40%", "available"],
+    // The bar row is the number and nothing else; the plan the service named is in the hover.
+    ["Claude Code", "40%", "available"],
     ["Codex", "Not signed in · Sign in", "signedOut"],
-    ["Grok", "Grok publishes no usage or sign-in status", "available"],
+    // No bar, so the row names the cause and the service's own sentence moves to the hover.
+    ["Grok", "No usage published", "available"],
   ]);
   assert.equal(rows[0]?.meters.length, 1, "a reported window is still a bar");
+  assert.match(rows[2]?.tooltip ?? "", /publishes no usage or sign-in status/);
+  assert.match(rows[0]?.tooltip ?? "", /max plan via claude\.ai/);
   assert.match(rows[1]?.tooltip ?? "", /Press Enter to sign in/);
 });
 
