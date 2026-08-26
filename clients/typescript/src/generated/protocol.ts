@@ -176,7 +176,7 @@ export type ProtocolRevision = string;
 
 Limit windows a service reports on request (outside any turn) do not travel here: they land in the
 usage list beside the windows a turn reports, so a surface reads one gauge per service. */
-export interface ProviderAccount { readonly checkedAtMs: number; readonly method?: string | null; readonly plan?: string | null; readonly status: ProviderAccountStatus; readonly why?: string | null; }
+export interface ProviderAccount { readonly checkedAtMs: number; readonly limitsUnread?: string | null; readonly method?: string | null; readonly plan?: string | null; readonly status: ProviderAccountStatus; readonly why?: string | null; }
 
 /** Whether the operator is signed in to one service, by that service's own word. */
 export type ProviderAccountStatus = "signedIn" | "signedOut" | "unpublished";
@@ -221,7 +221,7 @@ export interface ProviderList { readonly providers: ReadonlyArray<ProviderDescri
 export interface ProviderUsageCost { readonly amount: number; readonly currency: string; }
 
 /** One provider's most recent limit report. */
-export interface ProviderUsageGauge { readonly atMs: number; readonly cost?: ProviderUsageCost | null; readonly primary?: ProviderUsageWindow | null; readonly providerId: ProviderId; readonly reached: boolean; readonly secondary?: ProviderUsageWindow | null; readonly tokensToday?: number | null; }
+export interface ProviderUsageGauge { readonly atMs: number; readonly cost?: ProviderUsageCost | null; readonly providerId: ProviderId; readonly reached: boolean; readonly tokensToday?: number | null; readonly windows?: ReadonlyArray<ProviderUsageWindow>; }
 
 /** Where each account stands against its limits, by each provider's own latest report.
 
@@ -232,7 +232,7 @@ and a surface says "no report yet" rather than inventing a green light. */
 export interface ProviderUsageList { readonly providers: ReadonlyArray<ProviderUsageGauge>; }
 
 /** One rate limit window, as far as the provider described it. */
-export interface ProviderUsageWindow { readonly resetsAtMs?: number | null; readonly usedPercent?: number | null; readonly windowMinutes?: number | null; }
+export interface ProviderUsageWindow { readonly governing?: boolean; readonly id: string; readonly label?: string | null; readonly resetsAtMs?: number | null; readonly scope?: string | null; readonly usedPercent?: number | null; readonly windowMinutes?: number | null; }
 
 /** Why a provider inventory subscription ended. */
 export type ProviderWatchEndReason = "integrationRevoked" | "authorityChanged" | "runtimeUnavailable";

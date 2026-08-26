@@ -1331,6 +1331,13 @@
           "minimum": 0,
           "type": "integer"
         },
+        "limitsUnread": {
+          "description": "Why this signed-in account has no limit windows, when the service has a limits surface that did not\nanswer.\n\nThe one absence that is runtrol's own problem rather than the service's. Without it a surface has to\nchoose between saying the service publishes nothing (untrue) and saying a number is coming (also\nuntrue), and both send the reader somewhere useless.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "method": {
           "description": "How the operator is signed in, as the service names it, when it says.",
           "type": [
@@ -1605,17 +1612,6 @@
           ],
           "description": "The latest running spend the provider stated, when it states one.\n\nAbsent for a provider that reports only limits. The newest report wins, so this is the most recent\nturn's cost as the provider gave it, never a total runtrol summed."
         },
-        "primary": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ProviderUsageWindow"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "The shorter window, when the provider reports one."
-        },
         "providerId": {
           "$ref": "#/$defs/ProviderId",
           "description": "Opaque selection value."
@@ -1623,17 +1619,6 @@
         "reached": {
           "description": "A limit is blocking right now, by the provider's own word.",
           "type": "boolean"
-        },
-        "secondary": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ProviderUsageWindow"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "The longer window, when the provider reports one."
         },
         "tokensToday": {
           "description": "Tokens the account spent today by the provider's own daily count, when it publishes one.\n\nRead on request from the provider's own usage surface (the manifest's account protocol), never summed by\nRuntime. Absent for a provider that publishes limits only.",
@@ -1643,6 +1628,13 @@
             "integer",
             "null"
           ]
+        },
+        "windows": {
+          "description": "Every limit window the provider described, shortest first.\n\nA list, because a plan is not two windows: measured, one service publishes a five-hour window, a\nwhole-account week and a week scoped to one model, and another publishes a short and a long window for\neach metered model. A surface draws them all rather than being handed the two a driver chose.",
+          "items": {
+            "$ref": "#/$defs/ProviderUsageWindow"
+          },
+          "type": "array"
         }
       },
       "required": [
@@ -1673,12 +1665,34 @@
       "additionalProperties": false,
       "description": "One rate limit window, as far as the provider described it.",
       "properties": {
+        "governing": {
+          "description": "The provider says this window is the one governing right now.",
+          "type": "boolean"
+        },
+        "id": {
+          "description": "Stable identity within one provider's report, as that provider names the window.\n\nA surface keys its row on this, so a window keeps its place when a later report adds a sibling.",
+          "type": "string"
+        },
+        "label": {
+          "description": "What the provider calls this window for a person to read, when it names one.\n\nThe provider's own label and nothing composed here. Absent when it named none, and a surface then\nsays the window's length instead of inventing a name.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "resetsAtMs": {
           "description": "When it resets, in unix milliseconds, when the provider says.",
           "format": "uint64",
           "minimum": 0,
           "type": [
             "integer",
+            "null"
+          ]
+        },
+        "scope": {
+          "description": "What this limit is scoped to, when the provider scopes it (one model, one surface).",
+          "type": [
+            "string",
             "null"
           ]
         },
@@ -1702,6 +1716,9 @@
           ]
         }
       },
+      "required": [
+        "id"
+      ],
       "type": "object"
     },
     "ProviderWatchEndReason": {

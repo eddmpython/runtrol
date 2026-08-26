@@ -20,7 +20,7 @@ test("a pushed usage snapshot arrives on the provider subscription as its own no
           providers: [{
             providerId: "codex",
             reached: false,
-            primary: { usedPercent: 65, windowDurationMinutes: undefined },
+            windows: [{ id: "codex.primary", usedPercent: 65, windowMinutes: 10_080 }],
             tokensToday: 1234,
             atMs: 1,
           }],
@@ -33,7 +33,10 @@ test("a pushed usage snapshot arrives on the provider subscription as its own no
   assert.equal(notification.kind, "usageChanged");
   if (notification.kind === "usageChanged") {
     assert.equal(notification.usageChanged.snapshot.providers[0]?.tokensToday, 1234);
-    assert.equal(notification.usageChanged.snapshot.providers[0]?.primary?.usedPercent, 65);
+    assert.equal(
+      notification.usageChanged.snapshot.providers[0]?.windows?.[0]?.usedPercent,
+      65,
+    );
   }
 });
 
