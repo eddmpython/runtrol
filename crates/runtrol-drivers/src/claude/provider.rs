@@ -346,8 +346,9 @@ impl Provider for ClaudeProvider {
                         // The CLI's own word for "plan limits do not apply here": an API key, Bedrock,
                         // Vertex, or a sign-in without the scope that reads them. Saying so beats an empty
                         // bar, and it is not a failure to retry.
-                        report.limits_unread =
-                            Some("this sign-in has no plan limits to report".into());
+                        report.limits_absent = Some(runtrol_provider::LimitsAbsent::Unmetered {
+                            why: "this sign-in has no plan limits".into(),
+                        });
                     }
                     if report.plan.is_none() {
                         report.plan = answer.plan();
@@ -356,7 +357,10 @@ impl Provider for ClaudeProvider {
                 // The manifest declares no channel for this installation, so nothing was asked and there is
                 // nothing to explain: the absent windows are the absent declaration.
                 Ok(None) => {}
-                Err(why) => report.limits_unread = Some(why.into()),
+                Err(why) => {
+                    report.limits_absent =
+                        Some(runtrol_provider::LimitsAbsent::Unread { why: why.into() });
+                }
             }
         }
         Ok(report)
@@ -454,7 +458,7 @@ fn account_report(answer: &str) -> Option<runtrol_provider::AccountReport> {
         plan: account_token(status.subscription_type.as_deref()),
         method: account_token(status.auth_method.as_deref()),
         limits: None,
-        limits_unread: None,
+        limits_absent: None,
         tokens_today: None,
     })
 }

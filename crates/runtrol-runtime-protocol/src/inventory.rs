@@ -178,16 +178,35 @@ pub struct ProviderAccount {
     /// Why nothing can be asked, in the service's own terms, for an unpublished status.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub why: Option<String>,
-    /// Why this signed-in account has no limit windows, when the service has a limits surface that did not
-    /// answer.
+    /// Why this signed-in account has no limit numbers, when it has none.
     ///
-    /// The one absence that is runtrol's own problem rather than the service's. Without it a surface has to
-    /// choose between saying the service publishes nothing (untrue) and saying a number is coming (also
-    /// untrue), and both send the reader somewhere useless.
+    /// Two silences that a surface has to tell apart: one is the service answering that this account is
+    /// metered somewhere the operator cannot see, and the other is a question that did not come back. They
+    /// want different words on the row, and only the second is anybody's to retry.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub limits_unread: Option<String>,
+    pub limits_absent: Option<ProviderLimitsAbsent>,
     /// When the service answered, in unix milliseconds, which is how a surface says how stale it is.
     pub checked_at_ms: u64,
+}
+
+/// Why a signed-in account shows no limit numbers.
+#[derive(Clone, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProviderLimitsAbsent {
+    /// Which of the two silences this is.
+    pub kind: ProviderLimitsAbsentKind,
+    /// The reason, in the service's own words where it gave one.
+    pub why: String,
+}
+
+/// The two silences, told apart.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ProviderLimitsAbsentKind {
+    /// The surface was asked and the answer could not be read. Runtime asks again soon.
+    Unread,
+    /// The service answered and this account has no numbers of its own. Asking again changes nothing.
+    Unmetered,
 }
 
 /// A bounded provider inventory snapshot.

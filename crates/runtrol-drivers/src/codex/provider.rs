@@ -900,7 +900,7 @@ fn account_report(answer: AccountAnswer) -> runtrol_provider::AccountReport {
             plan: account_token(account.plan_type.as_deref()),
             method: account_token(Some(&account.kind)),
             limits: None,
-            limits_unread: None,
+            limits_absent: None,
             tokens_today: None,
         },
         None => AccountReport {
@@ -908,7 +908,7 @@ fn account_report(answer: AccountAnswer) -> runtrol_provider::AccountReport {
             plan: None,
             method: None,
             limits: None,
-            limits_unread: None,
+            limits_absent: None,
             tokens_today: None,
         },
     }

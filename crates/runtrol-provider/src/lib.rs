@@ -38,7 +38,8 @@ pub mod path;
 pub mod time;
 
 pub use account::{
-    AccountLimits, AccountReport, AccountStatus, MAX_ACCOUNT_TOKEN_BYTES, account_token,
+    AccountLimits, AccountReport, AccountStatus, LimitsAbsent, MAX_ACCOUNT_TOKEN_BYTES,
+    account_token,
 };
 pub use agent::{Agent, Provider};
 pub use capability::{

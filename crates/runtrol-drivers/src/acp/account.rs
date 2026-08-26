@@ -35,7 +35,7 @@ use std::collections::BTreeMap;
 use runtrol_childproc::{Containment, Program};
 use runtrol_provider::{
     AccountIdentitySpec, AccountLimits, AccountReport, AccountStatus, AccountUnmeteredSpec,
-    AccountWindowSpec, ProviderError, ProviderId, WallMs, Window, account_token,
+    AccountWindowSpec, LimitsAbsent, ProviderError, ProviderId, WallMs, Window, account_token,
 };
 
 use crate::acp::scratch::ScratchConnection;
@@ -62,8 +62,9 @@ pub(super) async fn read(
         if matches!(report.status, AccountStatus::SignedIn) && !windows.is_empty() {
             match read_windows(&mut connection, windows).await {
                 Ok(drawn) if drawn.is_empty() => {
-                    report.limits_unread =
-                        Some("this account publishes no limit numbers to read".into());
+                    report.limits_absent = Some(LimitsAbsent::Unmetered {
+                        why: "this account publishes no limit numbers".into(),
+                    });
                 }
                 Ok(drawn) => {
                     // A window with a reset and no percentage is a period the operator cannot see the
@@ -72,12 +73,12 @@ pub(super) async fn read(
                     let metered = drawn.iter().any(|window| window.used_percent.is_some());
                     report.limits = Some(AccountLimits::new(drawn, false));
                     if !metered {
-                        report.limits_unread =
+                        report.limits_absent =
                             unmetered_reason(&mut connection, unmetered, &identity.method, &answer)
                                 .await;
                     }
                 }
-                Err(why) => report.limits_unread = Some(why.into()),
+                Err(why) => report.limits_absent = Some(LimitsAbsent::Unread { why: why.into() }),
             }
         }
         Ok(report)
@@ -99,7 +100,7 @@ async fn unmetered_reason(
     spec: Option<&AccountUnmeteredSpec>,
     identity_method: &str,
     identity_answer: &serde_json::Value,
-) -> Option<Box<str>> {
+) -> Option<LimitsAbsent> {
     let spec = spec?;
     let answer = if spec.method.as_ref() == identity_method {
         identity_answer.clone()
@@ -116,7 +117,9 @@ async fn unmetered_reason(
         Some(serde_json::Value::String(text)) => !text.trim().is_empty(),
         Some(_) => true,
     };
-    holds.then(|| spec.say.clone())
+    holds.then(|| LimitsAbsent::Unmetered {
+        why: spec.say.clone(),
+    })
 }
 
 /// One extension call with no parameters, answered as a value the pointers can walk.
@@ -163,7 +166,7 @@ fn identity_of(spec: &AccountIdentitySpec, answer: &serde_json::Value) -> Accoun
         plan: token_at(answer, spec.plan.as_deref()),
         method: token_at(answer, spec.via.as_deref()),
         limits: None,
-        limits_unread: None,
+        limits_absent: None,
         tokens_today: None,
     }
 }

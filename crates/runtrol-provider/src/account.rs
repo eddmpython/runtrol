@@ -39,15 +39,50 @@ pub struct AccountReport {
     pub method: Option<Box<str>>,
     /// The limit windows the service reports on request, outside any turn, when it has such a surface.
     pub limits: Option<AccountLimits>,
-    /// Why no windows are here, when the service has a limits surface and the reading of it failed.
+    /// Why this signed-in account shows no limit numbers, when it shows none.
     ///
-    /// Three different silences look identical without this. A service that publishes no limits surface at
-    /// all is one, a signed-out account is another, and a surface that was asked and did not answer is the
-    /// third, which is the only one that is runtrol's own problem to retry. Absent whenever windows are
-    /// present, and absent when nothing was asked.
-    pub limits_unread: Option<Box<str>>,
+    /// Absent when the numbers are there and when nothing was asked.
+    pub limits_absent: Option<LimitsAbsent>,
     /// Tokens spent today by the service's own daily count, when it publishes one.
     pub tokens_today: Option<u64>,
+}
+
+/// Why a signed-in account has no limit numbers to show.
+///
+/// Two different silences, and telling them apart is the whole reason this is not one string. One is the
+/// service's answer and the other is runtrol's failure, so they want different words on the row and
+/// different behaviour from the loop that asks: there is nothing to retry about an account that is metered
+/// somewhere else, and everything to retry about a question that did not come back.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+#[non_exhaustive]
+pub enum LimitsAbsent {
+    /// The surface was asked and the answer could not be read. Ours to ask again, and soon.
+    Unread {
+        /// What went wrong, in a sentence a row can show.
+        why: Box<str>,
+    },
+    /// The service answered and this account has no numbers of its own. Asking again changes nothing.
+    Unmetered {
+        /// The service's own reason, in its own words.
+        why: Box<str>,
+    },
+}
+
+impl LimitsAbsent {
+    /// The sentence, whichever kind this is.
+    #[must_use]
+    pub fn why(&self) -> &str {
+        match self {
+            Self::Unread { why } | Self::Unmetered { why } => why,
+        }
+    }
+
+    /// Whether asking again could change the answer.
+    #[must_use]
+    pub const fn is_worth_retrying(&self) -> bool {
+        matches!(self, Self::Unread { .. })
+    }
 }
 
 /// Limit windows read on request. The same windows a turn reports, without the turn.
@@ -80,7 +115,7 @@ impl AccountReport {
             plan: None,
             method: None,
             limits: None,
-            limits_unread: None,
+            limits_absent: None,
             tokens_today: None,
         }
     }

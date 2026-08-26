@@ -1331,12 +1331,16 @@
           "minimum": 0,
           "type": "integer"
         },
-        "limitsUnread": {
-          "description": "Why this signed-in account has no limit windows, when the service has a limits surface that did not\nanswer.\n\nThe one absence that is runtrol's own problem rather than the service's. Without it a surface has to\nchoose between saying the service publishes nothing (untrue) and saying a number is coming (also\nuntrue), and both send the reader somewhere useless.",
-          "type": [
-            "string",
-            "null"
-          ]
+        "limitsAbsent": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProviderLimitsAbsent"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Why this signed-in account has no limit numbers, when it has none.\n\nTwo silences that a surface has to tell apart: one is the service answering that this account is\nmetered somewhere the operator cannot see, and the other is a question that did not come back. They\nwant different words on the row, and only the second is anybody's to retry."
         },
         "method": {
           "description": "How the operator is signed in, as the service names it, when it says.",
@@ -1553,6 +1557,40 @@
     "ProviderId": {
       "description": "An opaque provider identity discovered by Runtime.",
       "type": "string"
+    },
+    "ProviderLimitsAbsent": {
+      "additionalProperties": false,
+      "description": "Why a signed-in account shows no limit numbers.",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/ProviderLimitsAbsentKind",
+          "description": "Which of the two silences this is."
+        },
+        "why": {
+          "description": "The reason, in the service's own words where it gave one.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "why"
+      ],
+      "type": "object"
+    },
+    "ProviderLimitsAbsentKind": {
+      "description": "The two silences, told apart.",
+      "oneOf": [
+        {
+          "const": "unread",
+          "description": "The surface was asked and the answer could not be read. Runtime asks again soon.",
+          "type": "string"
+        },
+        {
+          "const": "unmetered",
+          "description": "The service answered and this account has no numbers of its own. Asking again changes nothing.",
+          "type": "string"
+        }
+      ]
     },
     "ProviderList": {
       "additionalProperties": false,

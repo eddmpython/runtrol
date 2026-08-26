@@ -48,6 +48,12 @@ const TURN_QUIET: Duration = Duration::from_secs(3);
 /// Short turns in a row would otherwise pay that every few seconds. Per service rather than overall, so a
 /// slow answer from one never delays another.
 const SERVICE_FLOOR: Duration = Duration::from_secs(30);
+/// How soon a question that did not come back is asked again.
+///
+/// A read that failed is the one absence that is runtrol's own, so it is not left to the slow sweep: the
+/// row says "Usage unreadable" and the loop tries again a minute later rather than in ten. Long enough that
+/// a service which is down is not hammered, short enough that a blip heals itself while somebody watches.
+const RETRY_AFTER: Duration = Duration::from_mins(1);
 /// How often the loop looks at the terminals.
 ///
 /// Cheap on purpose: it reads one atomic per open terminal and starts nothing unless one of them has just
@@ -113,11 +119,16 @@ impl AccountReports {
             plan: reported.report.plan.as_ref().map(ToString::to_string),
             method: reported.report.method.as_ref().map(ToString::to_string),
             why,
-            limits_unread: reported
-                .report
-                .limits_unread
-                .as_ref()
-                .map(ToString::to_string),
+            limits_absent: reported.report.limits_absent.as_ref().map(|absent| {
+                runtrol_runtime_protocol::ProviderLimitsAbsent {
+                    kind: if absent.is_worth_retrying() {
+                        runtrol_runtime_protocol::ProviderLimitsAbsentKind::Unread
+                    } else {
+                        runtrol_runtime_protocol::ProviderLimitsAbsentKind::Unmetered
+                    },
+                    why: absent.why().to_owned(),
+                }
+            }),
             checked_at_ms: reported.at.as_millis(),
         })
     }
@@ -187,7 +198,12 @@ pub(crate) async fn supervise(
             }
         }
         let now = WallMs::now();
-        let due = due_now(&composed, &asked, swept_at, now).await;
+        let mut due = due_now(&composed, &asked, swept_at, now).await;
+        for id in unread(&composed, &asked, now).await {
+            if !due.contains(&id) {
+                due.push(id);
+            }
+        }
         if due.is_empty() {
             continue;
         }
@@ -200,6 +216,35 @@ pub(crate) async fn supervise(
         }
         ask_all(&composed, &providers, &usage, due).await;
     }
+}
+
+/// Services whose last answer was a question that did not come back, and are ready to be asked again.
+///
+/// Told apart from a service that answered and has no numbers, because there is nothing to retry about the
+/// second. That distinction is the reason the report carries a kind rather than a sentence.
+async fn unread(
+    composed: &Composed,
+    asked: &BTreeMap<ProviderId, WallMs>,
+    now: WallMs,
+) -> Vec<ProviderId> {
+    let reports = composed.account_reports.lock().await;
+    usable(composed)
+        .into_iter()
+        .filter(|id| {
+            reports.get(*id).is_some_and(|reported| {
+                reported
+                    .report
+                    .limits_absent
+                    .as_ref()
+                    .is_some_and(runtrol_provider::LimitsAbsent::is_worth_retrying)
+            })
+        })
+        .filter(|id| {
+            asked
+                .get(id)
+                .is_none_or(|asked| asked.millis_until(now).unwrap_or(0) >= millis(RETRY_AFTER))
+        })
+        .collect()
 }
 
 /// Every service this build can actually ask.

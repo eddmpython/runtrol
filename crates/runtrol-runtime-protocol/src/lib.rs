@@ -37,12 +37,13 @@ pub use integration::{
 pub use inventory::{
     GetSessionParams, InstallationObservation, InstallationState, LifecycleState,
     ManagedSessionList, ProviderAccount, ProviderAccountStatus, ProviderDescriptor, ProviderHelp,
-    ProviderId, ProviderList, ProviderUsageCost, ProviderUsageGauge, ProviderUsageList,
-    ProviderUsageWindow, ProviderWatchEndReason, ProviderWatchEndedNotification,
-    ProvidersChangedNotification, ProvidersUsageChangedNotification, RuntimeSessionId,
-    SessionDescriptor, SessionIndexChangedNotification, SessionIndexEndReason,
-    SessionIndexEndedNotification, WaitingOn, WatchProvidersParams, WatchProvidersResult,
-    WatchSessionIndexParams, WatchSessionIndexResult,
+    ProviderId, ProviderLimitsAbsent, ProviderLimitsAbsentKind, ProviderList, ProviderUsageCost,
+    ProviderUsageGauge, ProviderUsageList, ProviderUsageWindow, ProviderWatchEndReason,
+    ProviderWatchEndedNotification, ProvidersChangedNotification,
+    ProvidersUsageChangedNotification, RuntimeSessionId, SessionDescriptor,
+    SessionIndexChangedNotification, SessionIndexEndReason, SessionIndexEndedNotification,
+    WaitingOn, WatchProvidersParams, WatchProvidersResult, WatchSessionIndexParams,
+    WatchSessionIndexResult,
 };
 pub use locator::{
     RUNTIME_LOCATOR_SCHEMA, RuntimeEndpointKind, RuntimeGeneration, RuntimeLocatorRecord,

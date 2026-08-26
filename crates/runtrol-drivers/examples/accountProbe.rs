@@ -121,8 +121,13 @@ async fn report(id: &str, manifest: Manifest, contained_by: &Arc<Containment>) {
                     .map(|method| format!(" via {method}"))
                     .unwrap_or_default(),
             );
-            if let Some(why) = report.limits_unread.as_deref() {
-                println!("    no windows: {why}");
+            if let Some(absent) = report.limits_absent.as_ref() {
+                let kind = if absent.is_worth_retrying() {
+                    "unread"
+                } else {
+                    "unmetered"
+                };
+                println!("    no numbers ({kind}): {}", absent.why());
             }
             match report.limits.as_ref() {
                 None => println!("    no windows reported"),

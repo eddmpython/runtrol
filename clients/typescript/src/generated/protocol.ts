@@ -176,7 +176,7 @@ export type ProtocolRevision = string;
 
 Limit windows a service reports on request (outside any turn) do not travel here: they land in the
 usage list beside the windows a turn reports, so a surface reads one gauge per service. */
-export interface ProviderAccount { readonly checkedAtMs: number; readonly limitsUnread?: string | null; readonly method?: string | null; readonly plan?: string | null; readonly status: ProviderAccountStatus; readonly why?: string | null; }
+export interface ProviderAccount { readonly checkedAtMs: number; readonly limitsAbsent?: ProviderLimitsAbsent | null; readonly method?: string | null; readonly plan?: string | null; readonly status: ProviderAccountStatus; readonly why?: string | null; }
 
 /** Whether the operator is signed in to one service, by that service's own word. */
 export type ProviderAccountStatus = "signedIn" | "signedOut" | "unpublished";
@@ -213,6 +213,12 @@ export interface ProviderHelp { readonly diagnose?: string | null; readonly inst
 
 /** An opaque provider identity discovered by Runtime. */
 export type ProviderId = string;
+
+/** Why a signed-in account shows no limit numbers. */
+export interface ProviderLimitsAbsent { readonly kind: ProviderLimitsAbsentKind; readonly why: string; }
+
+/** The two silences, told apart. */
+export type ProviderLimitsAbsentKind = "unread" | "unmetered";
 
 /** A bounded provider inventory snapshot. */
 export interface ProviderList { readonly providers: ReadonlyArray<ProviderDescriptor>; }
