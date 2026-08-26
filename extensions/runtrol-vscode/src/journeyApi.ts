@@ -1,8 +1,7 @@
 import * as vscode from "vscode";
 
 import { Controller } from "./controller";
-import type { MissionController } from "./mission/controller";
-import type { IsolatedWorkspaceLine, MissionSnapshot } from "./protocol";
+import type { IsolatedWorkspaceLine } from "./protocol";
 import type { ProviderLine, SessionLine } from "./runtimeTypes";
 import { RuntimeState } from "./state";
 import { workspaceCollisions } from "./workspaceCollision";
@@ -95,35 +94,10 @@ export type JourneyApi = {
   refreshChats(): Promise<void>;
   /// Wait until one session reports a lifecycle, or fail at the deadline.
   waitForLifecycle(session: string, lifecycle: SessionLine["lifecycle"], deadlineMs: number): Promise<void>;
-  registerMissionGate(gateId: string, program: string, arguments_: string[]): Promise<void>;
-  validateMissionFile(file: string): Promise<MissionSnapshot>;
-  launchFleet(missionId: string): Promise<string[]>;
-  continueMission(
-    missionId: string,
-    operatorChoiceProvider: string,
-  ): Promise<{ snapshot: MissionSnapshot; sessionIds: readonly string[]; verified: number }>;
-  continueReadyMissions(
-    operatorChoiceProvider: string,
-  ): Promise<{ missions: number; sessionIds: readonly string[]; verified: number; remainingReady: number }>;
-  armMissionAutoFlight(missionId: string, operatorChoiceProvider: string | null): Promise<void>;
-  scheduleMission(
-    missionId: string,
-    dueUnixMs: number,
-    operatorChoiceProvider: string | null,
-  ): Promise<MissionSnapshot>;
-  autoFlightArmed(missionId: string): boolean;
-  autoFlightRetained(missionId: string): boolean;
-  refreshMissions(): Promise<void>;
-  mission(missionId: string): Promise<MissionSnapshot>;
-  verifyMissionTask(missionId: string, taskId: string): Promise<MissionSnapshot>;
-  compareMissionResults(missionId: string): Promise<void>;
-  reviewMissionLanding(missionId: string, taskId?: string): Promise<void>;
-  applyMissionLanding(missionId: string, taskId?: string): Promise<MissionSnapshot>;
 };
 
 export function journeyApi(
   controller: Controller,
-  missions: MissionController,
   state: RuntimeState,
   afterReady: <T>(action: () => Promise<T>) => Promise<T>,
   extensionMode: vscode.ExtensionMode,
@@ -144,7 +118,7 @@ export function journeyApi(
       () => controller.startResolvedSession(provider, workspace, model, reasoningEffort, "exclusive", false, permission),
     ),
     select: (session) => afterReady(() => controller.select(session)),
-    // Structured-session tools for the journey and Missions: text and settings go to the public Runtime
+    // Structured-session tools for the journey: text and settings go to the public Runtime
     // session directly; the terminal tab is the surface for people, not for this harness.
     prompt: (text) => afterReady(async () => {
       const selected = state.selected;
@@ -334,40 +308,6 @@ export function journeyApi(
     },
     treeItemIds: () => treeItemIds(),
     refreshChats: () => afterReady(() => controller.refreshChats()),
-    registerMissionGate: (gateId, program, arguments_) => afterReady(
-      () => missions.registerGateForJourney(gateId, program, arguments_),
-    ),
-    validateMissionFile: (file) => afterReady(() => missions.validateMissionFile(vscode.Uri.file(file))),
-    launchFleet: (missionId) => afterReady(() => missions.launchFleetForJourney(missionId)),
-    continueMission: (missionId, operatorChoiceProvider) => afterReady(
-      () => missions.continueMissionForJourney(missionId, operatorChoiceProvider),
-    ),
-    continueReadyMissions: (operatorChoiceProvider) => afterReady(
-      () => missions.continueReadyMissionsForJourney(operatorChoiceProvider),
-    ),
-    armMissionAutoFlight: (missionId, operatorChoiceProvider) => afterReady(
-      () => missions.armMissionAutoFlightForJourney(missionId, operatorChoiceProvider),
-    ),
-    scheduleMission: (missionId, dueUnixMs, operatorChoiceProvider) => afterReady(
-      () => missions.scheduleMissionForJourney(missionId, dueUnixMs, operatorChoiceProvider),
-    ),
-    autoFlightArmed: (missionId) => missions.isAutoFlightArmed(missionId),
-    autoFlightRetained: (missionId) => missions.hasAutoFlightRecord(missionId),
-    refreshMissions: () => afterReady(() => missions.refresh()),
-    mission: (missionId) => afterReady(() => missions.snapshot(missionId)),
-    verifyMissionTask: (missionId, taskId) => afterReady(
-      () => missions.verifyTaskForJourney(missionId, taskId),
-    ),
-    compareMissionResults: (missionId) => afterReady(async () => {
-      const snapshot = await missions.snapshot(missionId);
-      await missions.compareResults({ mission: snapshot.mission });
-    }),
-    reviewMissionLanding: (missionId, taskId) => afterReady(
-      () => missions.reviewMissionLandingForJourney(missionId, taskId),
-    ),
-    applyMissionLanding: (missionId, taskId) => afterReady(
-      () => missions.applyMissionLandingForJourney(missionId, taskId),
-    ),
     waitForLifecycle: (session, lifecycle, deadlineMs) => afterReady(() => new Promise<void>((resolve, reject) => {
       const matches = (): boolean =>
         state.sessions.some((candidate) => candidate.sessionId === session && candidate.lifecycle === lifecycle);

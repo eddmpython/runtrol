@@ -22,8 +22,6 @@ import {
   selfApproveIntegration,
 } from "./integrationAdministration";
 import { journeyApi, type JourneyApi } from "./journeyApi";
-import { MissionController } from "./mission/controller";
-import { MissionTree } from "./mission/tree";
 import { isProjectless, projectlessRoot } from "./projectlessWorkspace";
 import { ProjectStore } from "./projects";
 import { isBroken } from "./providerHealth";
@@ -110,14 +108,8 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
       }
     };
   });
-  let missionLifecycle: Promise<void> = Promise.resolve();
   const afterReady = async <T>(action: () => Promise<T>): Promise<T> => {
     await lifecycle;
-    return action();
-  };
-  const afterMissionReady = async <T>(action: () => Promise<T>): Promise<T> => {
-    await lifecycle;
-    await missionLifecycle;
     return action();
   };
   let controller: Controller;
@@ -148,9 +140,7 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     openFolders: () => (vscode.workspace.workspaceFolders ?? []).map((folder) => folder.uri.fsPath),
     warn: (message) => void vscode.window.showWarningMessage(message),
   });
-  const missionController = new MissionController(client, controller, state, context, diffDocuments);
   const candidateController = new CandidateController(client);
-  const missions = new MissionTree(missionController);
   const conversations = new ConversationsTree(state, projectStore, agentTools, context.extensionUri);
   const usage = new UsageView(context.extensionUri, {
     usage: () => runtime.providersUsage(),
@@ -167,127 +157,18 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
   context.subscriptions.push(
     state,
     controller,
-    missionController,
     candidateController,
     agentTools,
-    missions,
     conversations,
     usage,
-    vscode.window.registerTreeDataProvider("runtrol.missions", missions),
     vscode.window.registerFileDecorationProvider(conversations.decorations),
-    vscode.workspace.registerTextDocumentContentProvider("runtrol-mission", missionController.documentProvider()),
     vscode.commands.registerCommand(
       "runtrol.refresh",
-      () => run(() => afterMissionReady(async () => Promise.all([
-        controller.refreshChats(),
-        missionController.refresh(),
-      ]).then(() => undefined))),
+      () => run(() => afterReady(() => controller.refreshChats())),
     ),
     vscode.commands.registerCommand(
       "runtrol.restartExtensionHost",
       () => run(restartExtensionHost),
-    ),
-    vscode.commands.registerCommand(
-      "runtrol.validateMission",
-      () => run(() => afterMissionReady(() => missionController.validateMission())),
-    ),
-    vscode.commands.registerCommand(
-      "runtrol.fanOutInstruction",
-      () => run(() => afterMissionReady(() => missionController.fanOutInstruction())),
-    ),
-    vscode.commands.registerCommand(
-      "runtrol.registerMissionGate",
-      () => run(() => afterMissionReady(async () => {
-        await missionController.registerGate();
-      })),
-    ),
-    vscode.commands.registerCommand(
-      "runtrol.openMission",
-      (item) => run(() => afterMissionReady(() => missionController.openMission(item))),
-    ),
-    vscode.commands.registerCommand(
-      "runtrol.startMission",
-      (item) => run(() => afterMissionReady(() => missionController.startMission(item))),
-    ),
-    vscode.commands.registerCommand(
-      "runtrol.scheduleMission",
-      (item) => run(() => afterMissionReady(() => missionController.scheduleMission(item))),
-    ),
-    vscode.commands.registerCommand(
-      "runtrol.cancelMissionSchedule",
-      (item) => run(() => afterMissionReady(() => missionController.cancelMissionSchedule(item))),
-    ),
-    vscode.commands.registerCommand(
-      "runtrol.continueMission",
-      (item) => run(() => afterMissionReady(() => missionController.continueMission(item))),
-    ),
-    vscode.commands.registerCommand(
-      "runtrol.armMissionAutoFlight",
-      (item) => run(() => afterMissionReady(() => missionController.armMissionAutoFlight(item))),
-    ),
-    vscode.commands.registerCommand(
-      "runtrol.disarmMissionAutoFlight",
-      (item) => run(() => afterMissionReady(() => missionController.disarmMissionAutoFlight(item))),
-    ),
-    vscode.commands.registerCommand(
-      "runtrol.continueReadyMissions",
-      () => run(() => afterMissionReady(() => missionController.continueReadyMissions())),
-    ),
-    vscode.commands.registerCommand(
-      "runtrol.reviewMissionLanding",
-      (item) => run(() => afterMissionReady(() => missionController.reviewMissionLanding(item))),
-    ),
-    vscode.commands.registerCommand(
-      "runtrol.launchFleet",
-      (item) => run(() => afterMissionReady(() => missionController.launchFleet(item))),
-    ),
-    vscode.commands.registerCommand(
-      "runtrol.prepareMissionTask",
-      (item) => run(() => afterMissionReady(() => missionController.prepareTask(item))),
-    ),
-    vscode.commands.registerCommand(
-      "runtrol.sendTaskInstruction",
-      (item) => run(() => afterMissionReady(() => missionController.sendTaskInstruction(item))),
-    ),
-    vscode.commands.registerCommand(
-      "runtrol.verifyMissionTask",
-      (item) => run(() => afterMissionReady(() => missionController.verifyTask(item))),
-    ),
-    vscode.commands.registerCommand(
-      "runtrol.retryMissionTask",
-      (item) => run(() => afterMissionReady(() => missionController.retryTask(item))),
-    ),
-    vscode.commands.registerCommand(
-      "runtrol.recoverInterruptedMission",
-      (item) => run(() => afterMissionReady(() => missionController.recoverInterruptedMission(item))),
-    ),
-    vscode.commands.registerCommand(
-      "runtrol.pauseMission",
-      (item) => run(() => afterMissionReady(() => missionController.pauseMission(item))),
-    ),
-    vscode.commands.registerCommand(
-      "runtrol.resumeMission",
-      (item) => run(() => afterMissionReady(() => missionController.resumeMission(item))),
-    ),
-    vscode.commands.registerCommand(
-      "runtrol.cancelMission",
-      (item) => run(() => afterMissionReady(() => missionController.cancelMission(item))),
-    ),
-    vscode.commands.registerCommand(
-      "runtrol.completeMissionIntegration",
-      (item) => run(() => afterMissionReady(() => missionController.completeIntegration(item))),
-    ),
-    vscode.commands.registerCommand(
-      "runtrol.compareMissionResults",
-      (item) => run(() => afterMissionReady(() => missionController.compareResults(item))),
-    ),
-    vscode.commands.registerCommand(
-      "runtrol.archiveMission",
-      (item) => run(() => afterMissionReady(() => missionController.archiveMission(item))),
-    ),
-    vscode.commands.registerCommand(
-      "runtrol.openTaskSession",
-      (item) => run(() => afterMissionReady(() => missionController.openTaskSession(item))),
     ),
     vscode.commands.registerCommand(
       "runtrol.proposeCapability",
@@ -685,13 +566,7 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     initializationStage = "controller";
     await controller.initialize();
   });
-  missionLifecycle = missionController.initialize().catch((error: unknown) => {
-    initializationStage = "mission";
-    throw error;
-  });
-  const readyInitialization = Promise.all([controllerInitialization, missionLifecycle]).then(() => {
-    missionController.startAutoFlights();
-  });
+  const readyInitialization = controllerInitialization;
   readyInitialization.then(
     () => {
       initializationStage = "ready";
@@ -746,7 +621,6 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     conversationsView,
   );
   void run(() => lifecycle);
-  void run(() => missionLifecycle);
   void run(async () => {
     await lifecycle;
     await configureRemoteConnection(client);
@@ -901,7 +775,6 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     journey: RUNTROL_INCLUDE_TEST_JOURNEY
       ? journeyApi(
         controller,
-        missionController,
         state,
         afterReady,
         context.extensionMode,

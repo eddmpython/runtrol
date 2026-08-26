@@ -526,7 +526,7 @@ export class Controller implements vscode.Disposable {
       afterApplied();
       return;
     }
-    // A session named directly (a Mission task, a restored selection): its row's terminal, when the row is
+    // A session named directly (a restored selection): its row's terminal, when the row is
     // listed. Deliberately no window-follow here: selecting a conversation opens ITS tab beside whatever is
     // already open and NOTHING else moves (`docs/vscodeSurface.md`).
     const session: SessionLine = target;
@@ -552,18 +552,18 @@ export class Controller implements vscode.Disposable {
     }
   }
 
-  /// Text into a Mission task's session on the public Runtime. Missions speak the structured protocol; the
-  /// terminal surface is for people.
+  /// Text into a structured session on the public Runtime. The journey harness speaks that protocol; the
+  /// terminal surface is what people use.
   async submitResolvedInput(sessionId: string, text: string): Promise<void> {
     await this.refresh();
     const session = this.state.sessions.find((candidate) => candidate.sessionId === sessionId);
     if (!session) {
-      throw new Error("the Mission session is no longer listed by Runtime");
+      throw new Error("that session is no longer listed by Runtime");
     }
     await this.runtime.submitInput(runtimeAction(session), text);
   }
 
-  /// A structured session's model, set on the public Runtime (Missions and the journey; a person uses the
+  /// A structured session's model, set on the public Runtime (the journey harness; a person uses the
   /// service's own `/model` in the terminal).
   async setSelectedModel(session: SessionLine, model: string): Promise<void> {
     await this.runtime.setModel(runtimeAction(session), model);
@@ -648,7 +648,7 @@ export class Controller implements vscode.Disposable {
     }
     const pausedDiscoveries = this.beginForegroundAction();
     try {
-      // A structured session on the public Runtime, the shape Missions and the journey speak. The
+      // A structured session on the public Runtime, the shape the journey harness speaks. The
       // conversation surface for people is the terminal tab; this path is for the machinery.
       const openedId = (await this.runtime.start(
         provider.providerId,

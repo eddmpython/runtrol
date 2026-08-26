@@ -68,7 +68,6 @@
   "icon": "resources/icon.png",
   "activationEvents": [
     "onView:runtrol.sessions",
-    "onView:runtrol.missions",
     "onCommand:runtrol.refresh",
     "onCommand:runtrol.restartExtensionHost",
     "onCommand:runtrol.checkProviderUpdates",
@@ -90,31 +89,6 @@
     "onCommand:runtrol.openWorkspace",
     "onCommand:runtrol.interrupt",
     "onCommand:runtrol.closeSession",
-    "onCommand:runtrol.fanOutInstruction",
-    "onCommand:runtrol.validateMission",
-    "onCommand:runtrol.registerMissionGate",
-    "onCommand:runtrol.openMission",
-    "onCommand:runtrol.startMission",
-    "onCommand:runtrol.scheduleMission",
-    "onCommand:runtrol.cancelMissionSchedule",
-    "onCommand:runtrol.continueMission",
-    "onCommand:runtrol.armMissionAutoFlight",
-    "onCommand:runtrol.disarmMissionAutoFlight",
-    "onCommand:runtrol.continueReadyMissions",
-    "onCommand:runtrol.reviewMissionLanding",
-    "onCommand:runtrol.launchFleet",
-    "onCommand:runtrol.prepareMissionTask",
-    "onCommand:runtrol.sendTaskInstruction",
-    "onCommand:runtrol.verifyMissionTask",
-    "onCommand:runtrol.retryMissionTask",
-    "onCommand:runtrol.recoverInterruptedMission",
-    "onCommand:runtrol.pauseMission",
-    "onCommand:runtrol.resumeMission",
-    "onCommand:runtrol.cancelMission",
-    "onCommand:runtrol.completeMissionIntegration",
-    "onCommand:runtrol.compareMissionResults",
-    "onCommand:runtrol.archiveMission",
-    "onCommand:runtrol.openTaskSession",
     "onCommand:runtrol.proposeCapability",
     "onCommand:runtrol.capabilityInbox",
     "onCommand:runtrol.verifyCapability",
@@ -145,11 +119,6 @@
         {
           "id": "runtrol.sessions",
           "name": "Conversations"
-        },
-        {
-          "id": "runtrol.missions",
-          "name": "Missions",
-          "visibility": "collapsed"
         },
         {
           "id": "runtrol.usage",
@@ -313,155 +282,6 @@
         "command": "runtrol.unpinConversation",
         "title": "Unpin Conversation",
         "icon": "$(pinned)",
-        "category": "Runtrol"
-      },
-      {
-        "command": "runtrol.fanOutInstruction",
-        "title": "Try One Instruction Several Ways...",
-        "icon": "$(type-hierarchy)",
-        "category": "Runtrol"
-      },
-      {
-        "command": "runtrol.validateMission",
-        "title": "Validate Mission",
-        "icon": "$(new-file)",
-        "category": "Runtrol"
-      },
-      {
-        "command": "runtrol.registerMissionGate",
-        "title": "Register Mission Gate",
-        "icon": "$(tools)",
-        "category": "Runtrol"
-      },
-      {
-        "command": "runtrol.openMission",
-        "title": "Open Mission",
-        "category": "Runtrol"
-      },
-      {
-        "command": "runtrol.startMission",
-        "title": "Start Reviewed Mission",
-        "icon": "$(play)",
-        "category": "Runtrol"
-      },
-      {
-        "command": "runtrol.scheduleMission",
-        "title": "Schedule Reviewed Mission...",
-        "icon": "$(calendar)",
-        "category": "Runtrol"
-      },
-      {
-        "command": "runtrol.cancelMissionSchedule",
-        "title": "Cancel Mission Schedule",
-        "icon": "$(trash)",
-        "category": "Runtrol"
-      },
-      {
-        "command": "runtrol.continueMission",
-        "title": "Continue Reviewed Mission",
-        "icon": "$(run-all)",
-        "category": "Runtrol"
-      },
-      {
-        "command": "runtrol.armMissionAutoFlight",
-        "title": "Arm Mission Auto Flight",
-        "icon": "$(rocket)",
-        "category": "Runtrol"
-      },
-      {
-        "command": "runtrol.disarmMissionAutoFlight",
-        "title": "Disarm Mission Auto Flight",
-        "icon": "$(debug-stop)",
-        "category": "Runtrol"
-      },
-      {
-        "command": "runtrol.continueReadyMissions",
-        "title": "Continue Ready Missions",
-        "icon": "$(run-all)",
-        "category": "Runtrol"
-      },
-      {
-        "command": "runtrol.reviewMissionLanding",
-        "title": "Review and Apply Mission Landing",
-        "icon": "$(diff-multiple)",
-        "category": "Runtrol"
-      },
-      {
-        "command": "runtrol.launchFleet",
-        "title": "Run All Reviewed Attempts",
-        "icon": "$(run-all)",
-        "category": "Runtrol"
-      },
-      {
-        "command": "runtrol.prepareMissionTask",
-        "title": "Prepare Mission Task",
-        "icon": "$(vm-running)",
-        "category": "Runtrol"
-      },
-      {
-        "command": "runtrol.sendTaskInstruction",
-        "title": "Send Task Instruction",
-        "icon": "$(send)",
-        "category": "Runtrol"
-      },
-      {
-        "command": "runtrol.verifyMissionTask",
-        "title": "Verify Mission Task",
-        "icon": "$(beaker)",
-        "category": "Runtrol"
-      },
-      {
-        "command": "runtrol.retryMissionTask",
-        "title": "Retry Mission Task",
-        "icon": "$(redo)",
-        "category": "Runtrol"
-      },
-      {
-        "command": "runtrol.recoverInterruptedMission",
-        "title": "Recover Interrupted Mission",
-        "icon": "$(debug-restart)",
-        "category": "Runtrol"
-      },
-      {
-        "command": "runtrol.pauseMission",
-        "title": "Pause Mission",
-        "icon": "$(debug-pause)",
-        "category": "Runtrol"
-      },
-      {
-        "command": "runtrol.resumeMission",
-        "title": "Resume Mission Safely",
-        "icon": "$(debug-continue)",
-        "category": "Runtrol"
-      },
-      {
-        "command": "runtrol.cancelMission",
-        "title": "Cancel Mission",
-        "icon": "$(debug-stop)",
-        "category": "Runtrol"
-      },
-      {
-        "command": "runtrol.completeMissionIntegration",
-        "title": "Verify and Complete Mission Integration",
-        "icon": "$(verified-filled)",
-        "category": "Runtrol"
-      },
-      {
-        "command": "runtrol.compareMissionResults",
-        "title": "Compare Passing Results",
-        "icon": "$(compare-changes)",
-        "category": "Runtrol"
-      },
-      {
-        "command": "runtrol.archiveMission",
-        "title": "Archive Mission",
-        "icon": "$(archive)",
-        "category": "Runtrol"
-      },
-      {
-        "command": "runtrol.openTaskSession",
-        "title": "Open Task Session",
-        "icon": "$(comment-discussion)",
         "category": "Runtrol"
       },
       {
@@ -711,16 +531,6 @@
       ],
       "view/title": [
         {
-          "command": "runtrol.armMissionAutoFlight",
-          "when": "view == runtrol.missions",
-          "group": "navigation@0"
-        },
-        {
-          "command": "runtrol.continueReadyMissions",
-          "when": "view == runtrol.missions",
-          "group": "navigation@1"
-        },
-        {
           "command": "runtrol.startSession",
           "when": "view == runtrol.sessions",
           "group": "navigation@0"
@@ -789,36 +599,6 @@
           "command": "runtrol.restartExtensionHost",
           "when": "view == runtrol.sessions",
           "group": "5_recover@1"
-        },
-        {
-          "command": "runtrol.reviewMissionLanding",
-          "when": "view == runtrol.missions",
-          "group": "navigation@1"
-        },
-        {
-          "command": "runtrol.fanOutInstruction",
-          "when": "view == runtrol.missions",
-          "group": "navigation@2"
-        },
-        {
-          "command": "runtrol.validateMission",
-          "when": "view == runtrol.missions",
-          "group": "navigation@3"
-        },
-        {
-          "command": "runtrol.registerMissionGate",
-          "when": "view == runtrol.missions",
-          "group": "navigation@4"
-        },
-        {
-          "command": "runtrol.refresh",
-          "when": "view == runtrol.missions",
-          "group": "navigation@5"
-        },
-        {
-          "command": "runtrol.capabilityInbox",
-          "when": "view == runtrol.missions",
-          "group": "navigation@6"
         },
         {
           "command": "runtrol.explainListing",
@@ -916,106 +696,6 @@
           "command": "runtrol.closeSession",
           "when": "view == runtrol.sessions && viewItem =~ /^runtrol\\.conversation\\.live/",
           "group": "1_manage@3"
-        },
-        {
-          "command": "runtrol.armMissionAutoFlight",
-          "when": "view == runtrol.missions && (viewItem == runtrol.mission.validated || viewItem == runtrol.mission.running)",
-          "group": "inline@1"
-        },
-        {
-          "command": "runtrol.disarmMissionAutoFlight",
-          "when": "view == runtrol.missions && viewItem =~ /^runtrol\\.mission\\.(validated|running|paused)\\.autoFlight$/",
-          "group": "inline@1"
-        },
-        {
-          "command": "runtrol.continueMission",
-          "when": "view == runtrol.missions && (viewItem == runtrol.mission.validated || viewItem == runtrol.mission.running)",
-          "group": "inline@2"
-        },
-        {
-          "command": "runtrol.scheduleMission",
-          "when": "view == runtrol.missions && viewItem =~ /^runtrol\\.mission\\.validated/",
-          "group": "inline@3"
-        },
-        {
-          "command": "runtrol.cancelMissionSchedule",
-          "when": "view == runtrol.missions && viewItem =~ /schedulePending/",
-          "group": "inline@4"
-        },
-        {
-          "command": "runtrol.launchFleet",
-          "when": "view == runtrol.missions && viewItem == runtrol.mission.validated.chooseOne",
-          "group": "inline@1"
-        },
-        {
-          "command": "runtrol.pauseMission",
-          "when": "view == runtrol.missions && viewItem =~ /^runtrol\\.mission\\.running/",
-          "group": "inline@2"
-        },
-        {
-          "command": "runtrol.resumeMission",
-          "when": "view == runtrol.missions && viewItem =~ /^runtrol\\.mission\\.paused/",
-          "group": "inline@2"
-        },
-        {
-          "command": "runtrol.recoverInterruptedMission",
-          "when": "view == runtrol.missions && viewItem =~ /^runtrol\\.mission\\.blocked(\\.chooseOne)?(\\.autoFlight)?$/",
-          "group": "inline@1"
-        },
-        {
-          "command": "runtrol.cancelMission",
-          "when": "view == runtrol.missions && viewItem =~ /^runtrol\\.mission\\.(running|paused|blocked)/",
-          "group": "inline@3"
-        },
-        {
-          "command": "runtrol.reviewMissionLanding",
-          "when": "view == runtrol.missions && viewItem == runtrol.mission.integrating",
-          "group": "inline@1"
-        },
-        {
-          "command": "runtrol.compareMissionResults",
-          "when": "view == runtrol.missions && viewItem == runtrol.mission.integrating.chooseOne",
-          "group": "inline@1"
-        },
-        {
-          "command": "runtrol.reviewMissionLanding",
-          "when": "view == runtrol.missions && viewItem == runtrol.mission.integrating.chooseOne",
-          "group": "inline@2"
-        },
-        {
-          "command": "runtrol.archiveMission",
-          "when": "view == runtrol.missions && viewItem =~ /^runtrol\\.mission\\.(completed|failed|cancelled)/",
-          "group": "inline@2"
-        },
-        {
-          "command": "runtrol.prepareMissionTask",
-          "when": "view == runtrol.missions && viewItem =~ /^runtrol\\.missionTask\\.reserved/",
-          "group": "inline@1"
-        },
-        {
-          "command": "runtrol.sendTaskInstruction",
-          "when": "view == runtrol.missions && viewItem =~ /^runtrol\\.missionTask\\.awaitingInput\\.session/",
-          "group": "inline@1"
-        },
-        {
-          "command": "runtrol.verifyMissionTask",
-          "when": "view == runtrol.missions && viewItem =~ /^runtrol\\.missionTask\\.running\\.session/",
-          "group": "inline@1"
-        },
-        {
-          "command": "runtrol.retryMissionTask",
-          "when": "view == runtrol.missions && viewItem =~ /^runtrol\\.missionTask\\.retryable/",
-          "group": "inline@1"
-        },
-        {
-          "command": "runtrol.reviewMissionLanding",
-          "when": "view == runtrol.missions && viewItem =~ /^runtrol\\.missionTask\\.passed(\\.session)?\\.chooseOne\\.integrating$/",
-          "group": "inline@1"
-        },
-        {
-          "command": "runtrol.completeMissionIntegration",
-          "when": "view == runtrol.missions && viewItem =~ /^runtrol\\.missionTask\\.passed(\\.session)?\\.chooseOne\\.integrating$/",
-          "group": "inline@2"
         },
         {
           "command": "runtrol.allowFromRow",
