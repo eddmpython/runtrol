@@ -718,6 +718,22 @@ impl RuntimeSessionCatalogue {
             Some(session.descriptor.session_id.clone())
         }))
     }
+
+    /// One live structured owner for an exact provider-native conversation.
+    ///
+    /// This is structural admission state only. It never reads provider output or storage to invent an identity.
+    pub(crate) fn live_native_owner(
+        &self,
+        provider: CoreProviderId,
+        native: &str,
+    ) -> Option<RuntimeSessionId> {
+        self.sessions.iter().find_map(|session| {
+            (session.provider == provider
+                && session.native.as_deref() == Some(native)
+                && session.descriptor.hot)
+                .then(|| session.descriptor.session_id.clone())
+        })
+    }
 }
 
 /// One exact currently valid approved root and its filesystem identity.

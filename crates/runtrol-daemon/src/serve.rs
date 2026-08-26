@@ -780,6 +780,7 @@ async fn serve_surfaces(
     )
     .await
     .map_err(|error| ServeError::RuntimeBootstrap(error.to_string()))?;
+    crate::generations::prime_generation_barrier(&composed, identity.digest());
     // Flipped once, by a successor's drain request, and never back. From then on the store belongs to
     // the successor, nothing new is opened here, and this loop ends when no turn is running.
     let mut draining = false;
@@ -825,6 +826,12 @@ async fn serve_surfaces(
         )));
     let discovering = Arc::new(DiscoveryGates::new(&composed.registry));
     let mut connections = JoinSet::new();
+    background.push(
+        connections.spawn(crate::generations::relay_generation_state(
+            Arc::clone(&composed),
+            identity.digest().to_owned(),
+        )),
+    );
     let push_wake_active = Arc::new(AtomicBool::new(false));
     let mut relay_hub = match relay {
         Some(relay) => {
@@ -1547,6 +1554,9 @@ fn begin_drain(
     composed
         .draining
         .store(true, std::sync::atomic::Ordering::Release);
+    // Freeze before releasing the database. Failure leaves the relay unavailable, which retires public
+    // terminal authority instead of letting a draining generation keep an independent stale grant.
+    composed.generation_authority.freeze(&composed.store);
     // The successor is retrying its open right now; this is the moment it succeeds. The session store is
     // the exclusive file it waits on, and holding it a moment longer than needed is the whole gap
     // generations exist to close.
@@ -2586,6 +2596,7 @@ fn publish_session_index(
     sessions: &SessionManager,
     provider_update_notices: &BTreeMap<ProviderId, Box<str>>,
 ) {
+    composed.native_claims.replace_structured(sessions);
     let next = build_session_index(composed, sessions, provider_update_notices);
     session_index.send_if_modified(|current| {
         if current.full_frame.as_ref() == next.full_frame.as_ref() {

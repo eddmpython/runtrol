@@ -19,7 +19,9 @@
 //! for long.
 
 use core::time::Duration;
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use runtrol_core::{Layout, RuntrolHome};
 use runtrol_ipc::frame::WIRE_VERSION;
@@ -243,6 +245,75 @@ async fn drain_predecessors(paths: &Layout, own_digest: &str) {
 /// session replies to a local pipe in single-digit milliseconds; one that has gone leaves a name nothing is
 /// listening on, and waiting on that would put the caller's answer behind a dead process.
 const PEER_ANSWER_WITHIN: Duration = Duration::from_millis(400);
+const GENERATION_RELAY_INTERVAL: Duration = Duration::from_secs(1);
+
+/// Keep every draining generation beneath this successor's current authority and import its live claims.
+pub(crate) async fn relay_generation_state(composed: Arc<Composed>, own_digest: String) {
+    let mut compatible = BTreeSet::<String>::new();
+    loop {
+        let peers = match read_locator(composed.home.paths().runtime_locator().as_std_path()) {
+            Ok(Located::Current(record)) => record
+                .generations
+                .into_iter()
+                .filter(|generation| generation.digest != own_digest && generation.draining)
+                .collect::<Vec<_>>(),
+            Ok(Located::Absent | Located::Legacy) | Err(_) => Vec::new(),
+        };
+        composed
+            .native_claims
+            .retain_remote(peers.iter().map(|generation| generation.digest.as_str()));
+        compatible.retain(|digest| peers.iter().any(|peer| peer.digest == *digest));
+        if let Ok(authorities) =
+            crate::generation_authority::GenerationAuthorityRelay::snapshot(&composed.store)
+        {
+            let claims = composed.native_claims.snapshot_except(None);
+            for peer in &peers {
+                let request = Request::GenerationHandoff {
+                    successor_digest: own_digest.clone().into_boxed_str(),
+                    authorities: authorities.clone(),
+                    claims: claims.clone(),
+                };
+                let response = tokio::time::timeout(
+                    PEER_ANSWER_WITHIN,
+                    ask_for_answer(&peer.control_endpoint, &request),
+                )
+                .await;
+                if let Ok(Some(Response::GenerationHandoff {
+                    capabilities,
+                    claims,
+                })) = response
+                    && capabilities.public_terminal
+                    && capabilities.authority_relay
+                    && capabilities.native_live_claims
+                {
+                    composed.native_claims.replace_remote(&peer.digest, claims);
+                    compatible.insert(peer.digest.clone());
+                }
+            }
+        }
+        composed.native_claims.replace_legacy_generations(
+            peers
+                .iter()
+                .filter(|peer| !compatible.contains(&peer.digest))
+                .map(|peer| peer.digest.as_str()),
+        );
+        tokio::time::sleep(GENERATION_RELAY_INTERVAL).await;
+    }
+}
+
+/// Mark every currently draining peer incompatible until its private handoff proves otherwise.
+pub(crate) fn prime_generation_barrier(composed: &Composed, own_digest: &str) {
+    let peers = match read_locator(composed.home.paths().runtime_locator().as_std_path()) {
+        Ok(Located::Current(record)) => record.generations,
+        Ok(Located::Absent | Located::Legacy) | Err(_) => Vec::new(),
+    };
+    composed.native_claims.replace_legacy_generations(
+        peers
+            .iter()
+            .filter(|generation| generation.digest != own_digest && generation.draining)
+            .map(|generation| generation.digest.as_str()),
+    );
+}
 
 pub(crate) async fn ask_draining_peer(
     paths: &Layout,

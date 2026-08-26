@@ -100,6 +100,16 @@ pub(crate) fn authenticate(
             "the integration is not enrolled",
         ));
     };
+    authenticate_against_row(context, authentication, key, &row)
+}
+
+/// Verify initialization against a row supplied by the successor-owned draining-generation relay.
+pub(crate) fn authenticate_against_row(
+    context: &ClientContext,
+    authentication: &IntegrationAuthentication,
+    key: IntegrationKey,
+    row: &IntegrationRow,
+) -> Result<AuthorizedIntegration, AuthorizationFailure> {
     if row.revoked_at.is_some() {
         return Err(AuthorizationFailure {
             kind: RuntimeErrorKind::IntegrationRevoked,
@@ -124,8 +134,8 @@ pub(crate) fn authenticate(
     verify_signature(&row.public_key, &authentication.signature, &payload)?;
     Ok(AuthorizedIntegration {
         key,
-        grant: grant(authentication.integration_id.clone(), &row)?,
-        roots: row.roots,
+        grant: grant(authentication.integration_id.clone(), row)?,
+        roots: row.roots.clone(),
     })
 }
 
@@ -142,6 +152,14 @@ pub(crate) fn refresh(
             "the integration grant no longer exists",
         ));
     };
+    refresh_against_row(current, &row)
+}
+
+/// Revalidate an existing connection against one exact authoritative row.
+pub(crate) fn refresh_against_row(
+    current: &AuthorizedIntegration,
+    row: &IntegrationRow,
+) -> Result<AuthorizedIntegration, AuthorizationFailure> {
     if row.revoked_at.is_some() {
         return Err(AuthorizationFailure {
             kind: RuntimeErrorKind::IntegrationRevoked,
@@ -153,7 +171,7 @@ pub(crate) fn refresh(
             "the integration key changed; reconnect and authenticate again",
         ));
     }
-    let next = grant(current.grant.integration_id.clone(), &row)?;
+    let next = grant(current.grant.integration_id.clone(), row)?;
     if row.grant_generation != current.grant.grant_generation {
         // A newer generation that only ADDED authority continues in place. The caller proved its identity
         // against this same key generation, the store row stays the authority for every request either way,
@@ -170,7 +188,7 @@ pub(crate) fn refresh(
     Ok(AuthorizedIntegration {
         key: current.key,
         grant: next,
-        roots: row.roots,
+        roots: row.roots.clone(),
     })
 }
 

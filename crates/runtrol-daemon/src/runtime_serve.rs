@@ -4,6 +4,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
+use base64ct::Encoding as _;
 use runtrol_core::{ApprovalAuthority, WorkspaceClaim};
 use runtrol_ipc::transport::Connection;
 use runtrol_provider::{CloseMode, Disposition, OpenIntent, WorkspaceAccess};
@@ -13,19 +14,25 @@ use runtrol_runtime_protocol::{
     FINALIZED_REVISIONS, ForgetSessionParams, GetProviderCapabilitiesParams, GetSessionParams,
     InitializeParams, InitializeResult, JsonRpcId, JsonRpcNotification, JsonRpcRequest,
     JsonRpcResponse, LaggedNotification, ListModelsParams, ListNativeSessionsParams,
-    ListPendingApprovalsParams, MAX_MODEL_SELECTION_BYTES, MAX_NATIVE_ADOPTION_TOKEN_BYTES,
-    MAX_NATIVE_PUBLIC_CURSOR_BYTES, MAX_PAGE_ITEMS, MAX_REVISION_OFFERS, ProtocolRevision,
-    ProviderCapabilityAvailability, ProviderCapabilityObservation, ProviderCapabilityProvenance,
-    ProviderList, ProviderUsageList, ProviderWatchEndReason, ProviderWatchEndedNotification,
-    ProvidersChangedNotification, ProvidersUsageChangedNotification, RequestEnrollmentParams,
-    RespondApprovalParams, ResumeSessionParams, RotateIntegrationKeyParams, RuntimeCapabilities,
-    RuntimeError, RuntimeErrorKind, RuntimeInstance, RuntimeLimits, RuntimeMethod,
-    RuntimeModelCatalog, RuntimeModelChoice, RuntimeProviderCapabilities, RuntimeReasoningChoice,
-    RuntimeSessionId, SessionIndexChangedNotification, SessionIndexEndReason,
-    SessionIndexEndedNotification, SessionWorkspaceAccess, SetModeParams, SetModelParams,
-    StartSessionParams, SubmitBlocksParams, SubmitInputParams, SuccessResponse,
-    WatchEnrollmentParams, WatchEventsParams, WatchEventsResult, WatchProvidersParams,
-    WatchProvidersResult, WatchSessionIndexParams, WatchSessionIndexResult, negotiate,
+    ListPendingApprovalsParams, ListTerminalsParams, MAX_MODEL_SELECTION_BYTES,
+    MAX_NATIVE_ADOPTION_TOKEN_BYTES, MAX_NATIVE_PUBLIC_CURSOR_BYTES, MAX_PAGE_ITEMS,
+    MAX_REVISION_OFFERS, ProtocolRevision, ProviderCapabilityAvailability,
+    ProviderCapabilityObservation, ProviderCapabilityProvenance, ProviderList, ProviderUsageList,
+    ProviderWatchEndReason, ProviderWatchEndedNotification, ProvidersChangedNotification,
+    ProvidersUsageChangedNotification, RequestEnrollmentParams, RespondApprovalParams,
+    ResumeSessionParams, RotateIntegrationKeyParams, RuntimeCapabilities, RuntimeError,
+    RuntimeErrorKind, RuntimeInstance, RuntimeLimits, RuntimeMethod, RuntimeModelCatalog,
+    RuntimeModelChoice, RuntimeProviderCapabilities, RuntimeReasoningChoice, RuntimeSessionId,
+    SessionIndexChangedNotification, SessionIndexEndReason, SessionIndexEndedNotification,
+    SessionWorkspaceAccess, SetModeParams, SetModelParams, StartSessionParams, SubmitBlocksParams,
+    SubmitInputParams, SuccessResponse, TerminalAcquireControlParams, TerminalAttachParams,
+    TerminalControlParams, TerminalDetachParams, TerminalExitedNotification,
+    TerminalIndexChangedNotification, TerminalIndexEndReason, TerminalIndexEndedNotification,
+    TerminalLaggedNotification, TerminalOpenParams, TerminalOutputNotification,
+    TerminalResizeParams, TerminalStopParams, TerminalWriteParams, WatchEnrollmentParams,
+    WatchEventsParams, WatchEventsResult, WatchProvidersParams, WatchProvidersResult,
+    WatchSessionIndexParams, WatchSessionIndexResult, WatchTerminalIndexParams,
+    WatchTerminalIndexResult, negotiate,
 };
 use runtrol_store::IntegrationAuditOutcome;
 use runtrol_store::{EnrollmentKey, IntegrationKeyRotation};
@@ -34,8 +41,9 @@ use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::Composed;
 use crate::runtime_auth::{
-    AuthorizationFailure, AuthorizedIntegration, ClientContext, authenticate, challenge,
-    enrollment_decision, refresh, request_enrollment,
+    AuthorizationFailure, AuthorizedIntegration, ClientContext, authenticate,
+    authenticate_against_row, challenge, enrollment_decision, integration_key, refresh,
+    refresh_against_row, request_enrollment,
 };
 use crate::runtime_control::{
     ApprovalScopes, RuntimeAgentGuard, RuntimeAsked, RuntimeControlFailure, RuntimeControlReply,
@@ -46,6 +54,7 @@ use crate::runtime_inventory::{
     RuntimeInventoryFailure, RuntimeSessionCatalogue, authorized_roots, authorized_workspace,
 };
 use crate::runtime_native_sessions::{NativeCursorCodec, NativeCursorFailure};
+use crate::runtime_terminal::{TerminalRuntimeFailure, TerminalView, has_scopes};
 
 /// Serve one public connection until it closes or violates the public frame contract.
 #[expect(
@@ -278,6 +287,33 @@ impl Answer {
             }),
         }
     }
+
+    fn watching_terminal(id: JsonRpcId, view: TerminalView) -> Self {
+        let result = view.opened.clone();
+        Self {
+            response: success(id, &result),
+            close: false,
+            watching: Some(Watching::Terminal(Box::new(view))),
+        }
+    }
+
+    fn watching_terminal_index(
+        id: JsonRpcId,
+        result: &WatchTerminalIndexResult,
+        updates: watch::Receiver<u64>,
+        authority: AuthorizedIntegration,
+    ) -> Self {
+        Self {
+            response: success(id, result),
+            close: false,
+            watching: Some(Watching::TerminalIndex {
+                subscription_id: result.subscription_id.clone(),
+                last: result.snapshot.clone(),
+                updates,
+                authority,
+            }),
+        }
+    }
 }
 
 enum Watching {
@@ -298,6 +334,34 @@ enum Watching {
         usage: watch::Receiver<Arc<ProviderUsageList>>,
         authority: AuthorizedIntegration,
     },
+    Terminal(Box<TerminalView>),
+    TerminalIndex {
+        subscription_id: String,
+        last: runtrol_runtime_protocol::TerminalIndexSnapshot,
+        updates: watch::Receiver<u64>,
+        authority: AuthorizedIntegration,
+    },
+}
+
+struct TerminalViewResponse {
+    response: JsonRpcResponse,
+    detach: bool,
+}
+
+impl TerminalViewResponse {
+    const fn continuing(response: JsonRpcResponse) -> Self {
+        Self {
+            response,
+            detach: false,
+        }
+    }
+
+    const fn detaching(response: JsonRpcResponse) -> Self {
+        Self {
+            response,
+            detach: true,
+        }
+    }
 }
 
 #[expect(
@@ -307,7 +371,7 @@ enum Watching {
 async fn answer(
     state: &mut PublicState,
     instance_id: &str,
-    composed: &Composed,
+    composed: &Arc<Composed>,
     discovering: &crate::serve::DiscoveryGates,
     native_cursors: &NativeCursorCodec,
     provider_updates: &watch::Sender<Arc<ProviderList>>,
@@ -417,7 +481,7 @@ async fn answer(
 async fn dispatch_public(
     state: &mut PublicState,
     instance_id: &str,
-    composed: &Composed,
+    composed: &Arc<Composed>,
     discovering: &crate::serve::DiscoveryGates,
     native_cursors: &NativeCursorCodec,
     provider_updates: &watch::Sender<Arc<ProviderList>>,
@@ -540,11 +604,20 @@ async fn dispatch_public(
             | RuntimeMethod::TerminalsWrite
             | RuntimeMethod::TerminalsResize
             | RuntimeMethod::TerminalsDetach
-            | RuntimeMethod::TerminalsStop => Answer::plain(
-                id,
-                RuntimeErrorKind::CapabilityUnavailable,
-                "the public terminal surface is not available in this Runtime generation",
-            ),
+            | RuntimeMethod::TerminalsStop => {
+                terminal_operation(
+                    state,
+                    composed,
+                    discovering,
+                    native_cursors,
+                    providers,
+                    sessions,
+                    method,
+                    id,
+                    params,
+                )
+                .await
+            }
             RuntimeMethod::Initialized
             | RuntimeMethod::Challenge
             | RuntimeMethod::ProvidersChanged
@@ -570,6 +643,283 @@ async fn dispatch_public(
             ),
         }
     }
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    clippy::too_many_lines,
+    reason = "the closed terminal method table keeps each DTO, composite scope set, and adapter call adjacent"
+)]
+async fn terminal_operation(
+    state: &mut PublicState,
+    composed: &Arc<Composed>,
+    discovering: &crate::serve::DiscoveryGates,
+    native_cursors: &NativeCursorCodec,
+    providers: &ProviderList,
+    sessions: &RuntimeSessionCatalogue,
+    method: RuntimeMethod,
+    id: JsonRpcId,
+    params: serde_json::Value,
+) -> Answer {
+    match method {
+        RuntimeMethod::TerminalsList => {
+            if serde_json::from_value::<ListTerminalsParams>(params).is_err() {
+                return Answer::plain(
+                    id,
+                    RuntimeErrorKind::InvalidRequest,
+                    "terminal list parameters are invalid",
+                );
+            }
+            let authority = match authorized_scopes(state, composed, &[AppScope::SessionList]) {
+                Ok(authority) => authority.clone(),
+                Err(failure) => return Answer::failure(id, failure),
+            };
+            match composed.runtime_terminals.list(composed, &authority).await {
+                Ok(snapshot) => Answer::success(id, &snapshot),
+                Err(failure) => terminal_failure(id, failure),
+            }
+        }
+        RuntimeMethod::TerminalsWatchIndex => {
+            if serde_json::from_value::<WatchTerminalIndexParams>(params).is_err() {
+                return Answer::plain(
+                    id,
+                    RuntimeErrorKind::InvalidRequest,
+                    "terminal index watch parameters are invalid",
+                );
+            }
+            let authority = match authorized_scopes(state, composed, &[AppScope::SessionList]) {
+                Ok(authority) => authority.clone(),
+                Err(failure) => return Answer::failure(id, failure),
+            };
+            let snapshot = match composed.runtime_terminals.list(composed, &authority).await {
+                Ok(snapshot) => snapshot,
+                Err(failure) => return terminal_failure(id, failure),
+            };
+            let Ok(subscription_id) = random_subscription_id() else {
+                return Answer::plain(
+                    id,
+                    RuntimeErrorKind::Internal,
+                    "Runtime could not allocate a terminal index subscription",
+                );
+            };
+            let result = WatchTerminalIndexResult {
+                subscription_id,
+                snapshot,
+            };
+            let updates = composed.runtime_terminals.changes(composed).await;
+            Answer::watching_terminal_index(id, &result, updates, authority)
+        }
+        RuntimeMethod::TerminalsOpen => {
+            let Ok(params) = serde_json::from_value::<TerminalOpenParams>(params) else {
+                return Answer::plain(
+                    id,
+                    RuntimeErrorKind::InvalidRequest,
+                    "terminal open parameters are invalid",
+                );
+            };
+            let lifecycle_scope = match &params.target {
+                runtrol_runtime_protocol::TerminalOpenTarget::Fresh => AppScope::SessionStart,
+                runtrol_runtime_protocol::TerminalOpenTarget::Native { .. } => {
+                    AppScope::SessionResume
+                }
+            };
+            let authority = match authorized_scopes(
+                state,
+                composed,
+                &[lifecycle_scope, AppScope::SessionOutputRead],
+            ) {
+                Ok(authority) => authority.clone(),
+                Err(failure) => return Answer::failure(id, failure),
+            };
+            match composed
+                .runtime_terminals
+                .open(
+                    composed,
+                    discovering,
+                    native_cursors,
+                    providers,
+                    sessions,
+                    authority,
+                    &params,
+                )
+                .await
+            {
+                Ok(view) => Answer::watching_terminal(id, view),
+                Err(failure) => terminal_failure(id, failure),
+            }
+        }
+        RuntimeMethod::TerminalsAttach => {
+            let Ok(params) = serde_json::from_value::<TerminalAttachParams>(params) else {
+                return Answer::plain(
+                    id,
+                    RuntimeErrorKind::InvalidRequest,
+                    "terminal attach parameters are invalid",
+                );
+            };
+            let authority = match authorized_scopes(state, composed, &[AppScope::SessionOutputRead])
+            {
+                Ok(authority) => authority.clone(),
+                Err(failure) => return Answer::failure(id, failure),
+            };
+            match composed
+                .runtime_terminals
+                .attach(composed, authority, &params)
+                .await
+            {
+                Ok(view) => Answer::watching_terminal(id, view),
+                Err(failure) => terminal_failure(id, failure),
+            }
+        }
+        RuntimeMethod::TerminalsAcquireControl => {
+            let Ok(params) = serde_json::from_value::<TerminalAcquireControlParams>(params) else {
+                return Answer::plain(
+                    id,
+                    RuntimeErrorKind::InvalidRequest,
+                    "terminal control acquisition parameters are invalid",
+                );
+            };
+            let authority = match authorized_scopes(state, composed, &[AppScope::SessionInputWrite])
+            {
+                Ok(authority) => authority.clone(),
+                Err(failure) => return Answer::failure(id, failure),
+            };
+            match composed
+                .runtime_terminals
+                .acquire(composed, &authority, &params)
+                .await
+            {
+                Ok(lease) => Answer::success(id, &lease),
+                Err(failure) => terminal_failure(id, failure),
+            }
+        }
+        RuntimeMethod::TerminalsRenewControl => {
+            let Ok(params) = serde_json::from_value::<TerminalControlParams>(params) else {
+                return Answer::plain(
+                    id,
+                    RuntimeErrorKind::InvalidRequest,
+                    "terminal control renewal parameters are invalid",
+                );
+            };
+            let authority = match authorized_scopes(state, composed, &[AppScope::SessionInputWrite])
+            {
+                Ok(authority) => authority.clone(),
+                Err(failure) => return Answer::failure(id, failure),
+            };
+            match composed
+                .runtime_terminals
+                .renew(composed, &authority, &params)
+                .await
+            {
+                Ok(lease) => Answer::success(id, &lease),
+                Err(failure) => terminal_failure(id, failure),
+            }
+        }
+        RuntimeMethod::TerminalsReleaseControl => {
+            let Ok(params) = serde_json::from_value::<TerminalControlParams>(params) else {
+                return Answer::plain(
+                    id,
+                    RuntimeErrorKind::InvalidRequest,
+                    "terminal control release parameters are invalid",
+                );
+            };
+            let authority = match authorized_scopes(state, composed, &[AppScope::SessionInputWrite])
+            {
+                Ok(authority) => authority.clone(),
+                Err(failure) => return Answer::failure(id, failure),
+            };
+            match composed
+                .runtime_terminals
+                .release(composed, &authority, &params)
+                .await
+            {
+                Ok(()) => Answer::success(id, &EmptyResult {}),
+                Err(failure) => terminal_failure(id, failure),
+            }
+        }
+        RuntimeMethod::TerminalsWrite => {
+            let Ok(params) = serde_json::from_value::<TerminalWriteParams>(params) else {
+                return Answer::plain(
+                    id,
+                    RuntimeErrorKind::InvalidRequest,
+                    "terminal write parameters are invalid",
+                );
+            };
+            let authority = match authorized_scopes(state, composed, &[AppScope::SessionInputWrite])
+            {
+                Ok(authority) => authority.clone(),
+                Err(failure) => return Answer::failure(id, failure),
+            };
+            match composed
+                .runtime_terminals
+                .write(composed, &authority, &params)
+                .await
+            {
+                Ok(()) => Answer::success(id, &EmptyResult {}),
+                Err(failure) => terminal_failure(id, failure),
+            }
+        }
+        RuntimeMethod::TerminalsResize => {
+            let Ok(params) = serde_json::from_value::<TerminalResizeParams>(params) else {
+                return Answer::plain(
+                    id,
+                    RuntimeErrorKind::InvalidRequest,
+                    "terminal resize parameters are invalid",
+                );
+            };
+            let authority = match authorized_scopes(state, composed, &[AppScope::SessionInputWrite])
+            {
+                Ok(authority) => authority.clone(),
+                Err(failure) => return Answer::failure(id, failure),
+            };
+            match composed
+                .runtime_terminals
+                .resize(composed, &authority, &params)
+                .await
+            {
+                Ok(()) => Answer::success(id, &EmptyResult {}),
+                Err(failure) => terminal_failure(id, failure),
+            }
+        }
+        RuntimeMethod::TerminalsStop => {
+            let Ok(params) = serde_json::from_value::<TerminalStopParams>(params) else {
+                return Answer::plain(
+                    id,
+                    RuntimeErrorKind::InvalidRequest,
+                    "terminal stop parameters are invalid",
+                );
+            };
+            let authority = match authorized_scopes(
+                state,
+                composed,
+                &[AppScope::SessionStop, AppScope::SessionInputWrite],
+            ) {
+                Ok(authority) => authority.clone(),
+                Err(failure) => return Answer::failure(id, failure),
+            };
+            match composed
+                .runtime_terminals
+                .stop(composed, &authority, &params)
+                .await
+            {
+                Ok(()) => Answer::success(id, &EmptyResult {}),
+                Err(failure) => terminal_failure(id, failure),
+            }
+        }
+        RuntimeMethod::TerminalsDetach => Answer::plain(
+            id,
+            RuntimeErrorKind::InvalidRequest,
+            "terminal detach belongs to the connection-bound terminal view",
+        ),
+        _ => Answer::plain(
+            id,
+            RuntimeErrorKind::Internal,
+            "non-terminal method reached terminal dispatch",
+        ),
+    }
+}
+
+fn terminal_failure(id: JsonRpcId, failure: TerminalRuntimeFailure) -> Answer {
+    Answer::plain(id, failure.kind, failure.message)
 }
 
 fn required_scope(method: RuntimeMethod) -> Option<AppScope> {
@@ -715,7 +1065,7 @@ fn initialize(
         capabilities: params.client_capabilities,
     };
     let authority = match params.authentication.as_ref() {
-        Some(proof) => match authenticate(&composed.store, &context, proof) {
+        Some(proof) => match authenticate_current(composed, &context, proof) {
             Ok(authorized) => PublicAuthority::Authorized(authorized),
             Err(failure) => return Answer::failure(id, failure),
         },
@@ -741,7 +1091,7 @@ fn initialize(
             native_session_catalogue: true,
             session_control: true,
             session_events: true,
-            terminal_surface: false,
+            terminal_surface: true,
         },
         limits: RuntimeLimits::default(),
         grant: granted,
@@ -824,7 +1174,7 @@ fn grant(
             "integration grant parameters are invalid",
         );
     }
-    match authorized(state, &composed.store, None) {
+    match authorized(state, composed, None) {
         Ok(authority) => Answer::success(id, &authority.grant),
         Err(failure) => Answer::failure(id, failure),
     }
@@ -843,7 +1193,7 @@ async fn rotate_integration_key(
             "integration key rotation parameters are invalid",
         );
     };
-    let authority = match authorized(state, &composed.store, None) {
+    let authority = match authorized(state, composed, None) {
         Ok(authority) => authority.clone(),
         Err(failure) => return Answer::failure(id, failure),
     };
@@ -965,7 +1315,7 @@ fn providers_list(
             "provider list parameters are invalid",
         );
     }
-    match authorized(state, &composed.store, Some(AppScope::ProviderRead)) {
+    match authorized(state, composed, Some(AppScope::ProviderRead)) {
         Ok(_) => Answer::success(id, providers),
         Err(failure) => Answer::failure(id, failure),
     }
@@ -990,7 +1340,7 @@ fn providers_usage(
             "provider usage parameters are invalid",
         );
     }
-    match authorized(state, &composed.store, Some(AppScope::ProviderRead)) {
+    match authorized(state, composed, Some(AppScope::ProviderRead)) {
         Ok(_) => Answer::success(id, usage),
         Err(failure) => Answer::failure(id, failure),
     }
@@ -1011,7 +1361,7 @@ fn providers_watch(
             "provider watch parameters are invalid",
         );
     }
-    let authority = match authorized(state, &composed.store, Some(AppScope::ProviderRead)) {
+    let authority = match authorized(state, composed, Some(AppScope::ProviderRead)) {
         Ok(authority) => authority.clone(),
         Err(failure) => return Answer::failure(id, failure),
     };
@@ -1053,7 +1403,7 @@ async fn get_provider_capabilities(
             "provider capability parameters are invalid",
         );
     };
-    if let Err(failure) = authorized(state, &composed.store, Some(AppScope::ProviderRead)) {
+    if let Err(failure) = authorized(state, composed, Some(AppScope::ProviderRead)) {
         return Answer::failure(id, failure);
     }
     let Ok(provider_id) = runtrol_provider::ProviderId::parse(params.provider_id.as_str()) else {
@@ -1088,7 +1438,7 @@ async fn get_provider_capabilities(
             );
         }
     };
-    if let Err(failure) = authorized(state, &composed.store, Some(AppScope::ProviderRead)) {
+    if let Err(failure) = authorized(state, composed, Some(AppScope::ProviderRead)) {
         return Answer::failure(id, failure);
     }
     Answer::success(
@@ -1162,7 +1512,7 @@ async fn list_models(
             "model catalogue parameters are invalid",
         );
     };
-    if let Err(failure) = authorized(state, &composed.store, Some(AppScope::ModelRead)) {
+    if let Err(failure) = authorized(state, composed, Some(AppScope::ModelRead)) {
         return Answer::failure(id, failure);
     }
     let Ok(provider_id) = runtrol_provider::ProviderId::parse(params.provider_id.as_str()) else {
@@ -1233,11 +1583,7 @@ async fn list_native_sessions(
             "the native session catalogue cursor is oversized",
         );
     }
-    let authority = match authorized(
-        state,
-        &composed.store,
-        Some(AppScope::SessionNativeDiscover),
-    ) {
+    let authority = match authorized(state, composed, Some(AppScope::SessionNativeDiscover)) {
         Ok(authority) => authority.clone(),
         Err(failure) => return Answer::failure(id, failure),
     };
@@ -1476,7 +1822,7 @@ fn sessions_list(
             "session list parameters are invalid",
         );
     }
-    match authorized(state, &composed.store, Some(AppScope::SessionList)) {
+    match authorized(state, composed, Some(AppScope::SessionList)) {
         Ok(authority) => match sessions.authorized(authority) {
             Ok(list) => Answer::success(id, &list),
             Err(RuntimeInventoryFailure::Unavailable) => Answer::plain(
@@ -1513,7 +1859,7 @@ fn sessions_watch_index(
             "session index watch parameters are invalid",
         );
     }
-    let authority = match authorized(state, &composed.store, Some(AppScope::SessionList)) {
+    let authority = match authorized(state, composed, Some(AppScope::SessionList)) {
         Ok(authority) => authority.clone(),
         Err(failure) => return Answer::failure(id, failure),
     };
@@ -1555,7 +1901,7 @@ fn sessions_get(
             "session descriptor parameters are invalid",
         );
     };
-    match authorized(state, &composed.store, Some(AppScope::SessionList)) {
+    match authorized(state, composed, Some(AppScope::SessionList)) {
         Ok(authority) => match sessions.authorized_descriptor(authority, &params.session_id) {
             Ok(descriptor) => Answer::success(id, &descriptor),
             Err(failure) => inventory_failure(id, failure),
@@ -1582,7 +1928,7 @@ async fn session_operation(
         Ok(parsed) => parsed,
         Err(message) => return Answer::plain(id, RuntimeErrorKind::InvalidRequest, message),
     };
-    let authority = match authorized(state, &composed.store, required_scope(method)) {
+    let authority = match authorized(state, composed, required_scope(method)) {
         Ok(authority) => authority.clone(),
         Err(failure) => return Answer::failure(id, failure),
     };
@@ -1694,7 +2040,7 @@ async fn forget_session(
             "session forget parameters are invalid",
         );
     };
-    let authority = match authorized(state, &composed.store, Some(AppScope::SessionDelete)) {
+    let authority = match authorized(state, composed, Some(AppScope::SessionDelete)) {
         Ok(authority) => authority.clone(),
         Err(failure) => return Answer::failure(id, failure),
     };
@@ -1859,7 +2205,7 @@ async fn mutate_native_session(
         Ok(parsed) => parsed,
         Err(message) => return Answer::plain(id, RuntimeErrorKind::InvalidRequest, message),
     };
-    let authority = match authorized(state, &composed.store, Some(AppScope::SessionDelete)) {
+    let authority = match authorized(state, composed, Some(AppScope::SessionDelete)) {
         Ok(authority) => authority.clone(),
         Err(failure) => return Answer::failure(id, failure),
     };
@@ -2047,7 +2393,7 @@ async fn open_session(
     id: JsonRpcId,
     params: serde_json::Value,
 ) -> Answer {
-    let authority = match authorized(state, &composed.store, required_scope(method)) {
+    let authority = match authorized(state, composed, required_scope(method)) {
         Ok(authority) => authority.clone(),
         Err(failure) => return Answer::failure(id, failure),
     };
@@ -2428,7 +2774,7 @@ async fn perform_runtime_open(
         Some(opening) => opening.method,
         None => return control_failure(id, RuntimeControlFailure::outcome_unknown()),
     };
-    let authority = match authorized(state, &composed.store, required_scope(method)) {
+    let authority = match authorized(state, composed, required_scope(method)) {
         Ok(authority) => authority.clone(),
         Err(failure) => {
             return send_open_denied(
@@ -2585,8 +2931,7 @@ async fn perform_runtime_open(
     .await;
     match opened {
         Ok(Ok(agent)) => {
-            let still_authorized = match authorized(state, &composed.store, required_scope(method))
-            {
+            let still_authorized = match authorized(state, composed, required_scope(method)) {
                 Ok(authority) => authorized_workspace(authority, workspace.as_str())
                     .is_ok_and(|current| current.path == workspace),
                 Err(_) => false,
@@ -3173,7 +3518,457 @@ async fn relay_watch(
             )
             .await;
         }
+        Watching::Terminal(view) => relay_terminal(connection, composed, *view).await,
+        Watching::TerminalIndex {
+            subscription_id,
+            last,
+            updates,
+            authority,
+        } => {
+            relay_terminal_index(
+                connection,
+                composed,
+                subscription_id,
+                last,
+                updates,
+                authority,
+            )
+            .await;
+        }
     }
+}
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "one dedicated terminal transport orders exact output, lag replacement, exit, authority refresh, and control replies"
+)]
+async fn relay_terminal(connection: &mut Connection, composed: &Composed, mut view: TerminalView) {
+    let mut sequence = 1_u64;
+    let mut authority_tick = tokio::time::interval(Duration::from_millis(500));
+    authority_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let already_exited = *view.attachment.exited.borrow();
+    if let Some(exit_code) = already_exited {
+        drop(
+            send_notification(
+                connection,
+                RuntimeMethod::TerminalsExited,
+                &TerminalExitedNotification {
+                    view_id: view.opened.view_id,
+                    exit_code,
+                },
+            )
+            .await,
+        );
+        return;
+    }
+    loop {
+        tokio::select! {
+            output = view.attachment.live.recv() => {
+                match output {
+                    Ok(chunk) => {
+                        if chunk.len() > runtrol_runtime_protocol::MAX_TERMINAL_OUTPUT_BYTES {
+                            return;
+                        }
+                        let notification = TerminalOutputNotification {
+                            view_id: view.opened.view_id.clone(),
+                            sequence,
+                            bytes_base64: base64ct::Base64::encode_string(&chunk),
+                        };
+                        sequence = sequence.saturating_add(1);
+                        if send_notification(connection, RuntimeMethod::TerminalsOutput, &notification)
+                            .await
+                            .is_err()
+                        {
+                            return;
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(lost)) => {
+                        let fresh = view.hosted.terminal.attach().await;
+                        if fresh.snapshot.len() > runtrol_runtime_protocol::MAX_TERMINAL_SCREEN_BYTES {
+                            return;
+                        }
+                        view.attachment.live = fresh.live;
+                        view.attachment.exited = fresh.exited;
+                        let notification = TerminalLaggedNotification {
+                            view_id: view.opened.view_id.clone(),
+                            lost_chunks: lost,
+                            screen_base64: base64ct::Base64::encode_string(&fresh.snapshot),
+                            next_sequence: sequence,
+                        };
+                        if send_notification(connection, RuntimeMethod::TerminalsLagged, &notification)
+                            .await
+                            .is_err()
+                        {
+                            return;
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
+                }
+            }
+            changed = view.attachment.exited.changed() => {
+                if changed.is_err() {
+                    return;
+                }
+                let Some(exit_code) = *view.attachment.exited.borrow() else {
+                    continue;
+                };
+                while let Ok(chunk) = view.attachment.live.try_recv() {
+                    if chunk.len() > runtrol_runtime_protocol::MAX_TERMINAL_OUTPUT_BYTES {
+                        return;
+                    }
+                    let notification = TerminalOutputNotification {
+                        view_id: view.opened.view_id.clone(),
+                        sequence,
+                        bytes_base64: base64ct::Base64::encode_string(&chunk),
+                    };
+                    sequence = sequence.saturating_add(1);
+                    if send_notification(connection, RuntimeMethod::TerminalsOutput, &notification)
+                        .await
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
+                drop(
+                    send_notification(
+                        connection,
+                        RuntimeMethod::TerminalsExited,
+                        &TerminalExitedNotification {
+                            view_id: view.opened.view_id,
+                            exit_code,
+                        },
+                    )
+                    .await,
+                );
+                return;
+            }
+            inbound = connection.recv() => {
+                let Ok(Some(payload)) = inbound else {
+                    return;
+                };
+                let Ok(request) = serde_json::from_slice::<JsonRpcRequest>(&payload) else {
+                    return;
+                };
+                let handled = terminal_view_request(composed, &mut view, request).await;
+                if send_response(connection, &handled.response).await.is_err() || handled.detach {
+                    return;
+                }
+            }
+            _ = authority_tick.tick() => {
+                let Ok(current) = refresh_current(composed, &view.authority) else {
+                    return;
+                };
+                if !has_scopes(&current.grant, &[AppScope::SessionOutputRead])
+                    || composed
+                        .runtime_terminals
+                        .validate_view(composed, &current, view.hosted.id)
+                        .await
+                        .is_err()
+                {
+                    return;
+                }
+                view.authority = current;
+            }
+        }
+    }
+}
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "the dedicated stream has one closed terminal-control method table with per-method DTO validation"
+)]
+async fn terminal_view_request(
+    composed: &Composed,
+    view: &mut TerminalView,
+    request: JsonRpcRequest,
+) -> TerminalViewResponse {
+    let id = request.id;
+    if request.jsonrpc != "2.0" {
+        return TerminalViewResponse::continuing(failure_response(
+            id,
+            RuntimeErrorKind::InvalidRequest,
+            "JSON-RPC version must be 2.0",
+        ));
+    }
+    let Ok(method) = request.method.parse::<RuntimeMethod>() else {
+        return TerminalViewResponse::continuing(failure_response(
+            id,
+            RuntimeErrorKind::MethodNotFound,
+            "the public Runtime method does not exist",
+        ));
+    };
+    let scopes: &[AppScope] = match method {
+        RuntimeMethod::TerminalsDetach => &[AppScope::SessionOutputRead],
+        RuntimeMethod::TerminalsAcquireControl
+        | RuntimeMethod::TerminalsRenewControl
+        | RuntimeMethod::TerminalsReleaseControl
+        | RuntimeMethod::TerminalsWrite
+        | RuntimeMethod::TerminalsResize => &[AppScope::SessionInputWrite],
+        RuntimeMethod::TerminalsStop => &[AppScope::SessionStop, AppScope::SessionInputWrite],
+        _ => {
+            return TerminalViewResponse::continuing(failure_response(
+                id,
+                RuntimeErrorKind::InvalidRequest,
+                "the dedicated terminal view accepts only terminal control requests",
+            ));
+        }
+    };
+    let current = match refresh_current(composed, &view.authority) {
+        Ok(current) if has_scopes(&current.grant, scopes) => current,
+        Ok(_) => {
+            return TerminalViewResponse::continuing(failure_response(
+                id,
+                RuntimeErrorKind::ScopeDenied,
+                "the integration grant lacks a required terminal scope",
+            ));
+        }
+        Err(failure) => {
+            return TerminalViewResponse::continuing(failure_response(
+                id,
+                failure.kind,
+                failure.message,
+            ));
+        }
+    };
+    if let Err(failure) = composed
+        .runtime_terminals
+        .validate_view(composed, &current, view.hosted.id)
+        .await
+    {
+        return TerminalViewResponse::continuing(failure_response(
+            id,
+            failure.kind,
+            failure.message,
+        ));
+    }
+    view.authority = current;
+    let response = match method {
+        RuntimeMethod::TerminalsDetach => {
+            let Ok(params) = serde_json::from_value::<TerminalDetachParams>(request.params) else {
+                return TerminalViewResponse::continuing(failure_response(
+                    id,
+                    RuntimeErrorKind::InvalidRequest,
+                    "terminal detach parameters are invalid",
+                ));
+            };
+            if params.view_id != view.opened.view_id
+                || params.terminal_id != view.opened.terminal.terminal_id
+            {
+                return TerminalViewResponse::continuing(failure_response(
+                    id,
+                    RuntimeErrorKind::TerminalNotFound,
+                    "the terminal view is not bound to this connection",
+                ));
+            }
+            return TerminalViewResponse::detaching(success(id, &EmptyResult {}));
+        }
+        RuntimeMethod::TerminalsAcquireControl => {
+            let Ok(params) = serde_json::from_value::<TerminalAcquireControlParams>(request.params)
+            else {
+                return TerminalViewResponse::continuing(failure_response(
+                    id,
+                    RuntimeErrorKind::InvalidRequest,
+                    "terminal control acquisition parameters are invalid",
+                ));
+            };
+            match composed
+                .runtime_terminals
+                .acquire(composed, &view.authority, &params)
+                .await
+            {
+                Ok(lease) => success(id, &lease),
+                Err(failure) => failure_response(id, failure.kind, failure.message),
+            }
+        }
+        RuntimeMethod::TerminalsRenewControl => {
+            let Ok(params) = serde_json::from_value::<TerminalControlParams>(request.params) else {
+                return TerminalViewResponse::continuing(failure_response(
+                    id,
+                    RuntimeErrorKind::InvalidRequest,
+                    "terminal control renewal parameters are invalid",
+                ));
+            };
+            match composed
+                .runtime_terminals
+                .renew(composed, &view.authority, &params)
+                .await
+            {
+                Ok(lease) => success(id, &lease),
+                Err(failure) => failure_response(id, failure.kind, failure.message),
+            }
+        }
+        RuntimeMethod::TerminalsReleaseControl => {
+            let Ok(params) = serde_json::from_value::<TerminalControlParams>(request.params) else {
+                return TerminalViewResponse::continuing(failure_response(
+                    id,
+                    RuntimeErrorKind::InvalidRequest,
+                    "terminal control release parameters are invalid",
+                ));
+            };
+            match composed
+                .runtime_terminals
+                .release(composed, &view.authority, &params)
+                .await
+            {
+                Ok(()) => success(id, &EmptyResult {}),
+                Err(failure) => failure_response(id, failure.kind, failure.message),
+            }
+        }
+        RuntimeMethod::TerminalsWrite => {
+            let Ok(params) = serde_json::from_value::<TerminalWriteParams>(request.params) else {
+                return TerminalViewResponse::continuing(failure_response(
+                    id,
+                    RuntimeErrorKind::InvalidRequest,
+                    "terminal write parameters are invalid",
+                ));
+            };
+            match composed
+                .runtime_terminals
+                .write(composed, &view.authority, &params)
+                .await
+            {
+                Ok(()) => success(id, &EmptyResult {}),
+                Err(failure) => failure_response(id, failure.kind, failure.message),
+            }
+        }
+        RuntimeMethod::TerminalsResize => {
+            let Ok(params) = serde_json::from_value::<TerminalResizeParams>(request.params) else {
+                return TerminalViewResponse::continuing(failure_response(
+                    id,
+                    RuntimeErrorKind::InvalidRequest,
+                    "terminal resize parameters are invalid",
+                ));
+            };
+            match composed
+                .runtime_terminals
+                .resize(composed, &view.authority, &params)
+                .await
+            {
+                Ok(()) => success(id, &EmptyResult {}),
+                Err(failure) => failure_response(id, failure.kind, failure.message),
+            }
+        }
+        RuntimeMethod::TerminalsStop => {
+            let Ok(params) = serde_json::from_value::<TerminalStopParams>(request.params) else {
+                return TerminalViewResponse::continuing(failure_response(
+                    id,
+                    RuntimeErrorKind::InvalidRequest,
+                    "terminal stop parameters are invalid",
+                ));
+            };
+            match composed
+                .runtime_terminals
+                .stop(composed, &view.authority, &params)
+                .await
+            {
+                Ok(()) => success(id, &EmptyResult {}),
+                Err(failure) => failure_response(id, failure.kind, failure.message),
+            }
+        }
+        _ => failure_response(
+            id,
+            RuntimeErrorKind::Internal,
+            "non-terminal method reached terminal view dispatch",
+        ),
+    };
+    TerminalViewResponse::continuing(response)
+}
+
+async fn relay_terminal_index(
+    connection: &mut Connection,
+    composed: &Composed,
+    subscription_id: String,
+    mut last: runtrol_runtime_protocol::TerminalIndexSnapshot,
+    mut updates: watch::Receiver<u64>,
+    mut authority: AuthorizedIntegration,
+) {
+    let mut authority_tick = tokio::time::interval(Duration::from_millis(500));
+    authority_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        tokio::select! {
+            peer = connection.recv() => {
+                drop(peer);
+                return;
+            }
+            changed = updates.changed() => {
+                if changed.is_err() {
+                    send_terminal_index_end(
+                        connection,
+                        subscription_id,
+                        TerminalIndexEndReason::RuntimeUnavailable,
+                    ).await;
+                    return;
+                }
+            }
+            _ = authority_tick.tick() => {}
+        }
+        authority = match refresh_current(composed, &authority) {
+            Ok(current) if has_scopes(&current.grant, &[AppScope::SessionList]) => current,
+            Ok(_) => {
+                send_terminal_index_end(
+                    connection,
+                    subscription_id,
+                    TerminalIndexEndReason::AuthorityChanged,
+                )
+                .await;
+                return;
+            }
+            Err(failure) => {
+                let reason = if failure.kind == RuntimeErrorKind::IntegrationRevoked {
+                    TerminalIndexEndReason::IntegrationRevoked
+                } else {
+                    TerminalIndexEndReason::AuthorityChanged
+                };
+                send_terminal_index_end(connection, subscription_id, reason).await;
+                return;
+            }
+        };
+        let Ok(snapshot) = composed.runtime_terminals.list(composed, &authority).await else {
+            send_terminal_index_end(
+                connection,
+                subscription_id,
+                TerminalIndexEndReason::AuthorityChanged,
+            )
+            .await;
+            return;
+        };
+        if snapshot == last {
+            continue;
+        }
+        last = snapshot.clone();
+        let notification = TerminalIndexChangedNotification {
+            subscription_id: subscription_id.clone(),
+            snapshot,
+        };
+        if send_notification(
+            connection,
+            RuntimeMethod::TerminalsIndexChanged,
+            &notification,
+        )
+        .await
+        .is_err()
+        {
+            return;
+        }
+    }
+}
+
+async fn send_terminal_index_end(
+    connection: &mut Connection,
+    subscription_id: String,
+    reason: TerminalIndexEndReason,
+) {
+    drop(
+        send_notification(
+            connection,
+            RuntimeMethod::TerminalsIndexEnded,
+            &TerminalIndexEndedNotification {
+                subscription_id,
+                reason,
+            },
+        )
+        .await,
+    );
 }
 
 #[expect(
@@ -3213,6 +4008,7 @@ const fn method_needs_provider_refresh(method: RuntimeMethod) -> bool {
             | RuntimeMethod::SessionsStart
             | RuntimeMethod::SessionsAdoptNative
             | RuntimeMethod::SessionsResume
+            | RuntimeMethod::TerminalsOpen
     )
 }
 
@@ -3285,7 +4081,7 @@ async fn relay_providers(
             .await;
             return;
         }
-        match refresh(&composed.store, &authority) {
+        match refresh_current(composed, &authority) {
             Ok(current) if current.grant.scopes.contains(&AppScope::ProviderRead) => {}
             Ok(_) => {
                 send_provider_watch_end(
@@ -3425,7 +4221,7 @@ async fn relay_session_index(
             .await;
             return;
         }
-        let current_authority = match refresh(&composed.store, &authority) {
+        let current_authority = match refresh_current(composed, &authority) {
             Ok(authority) if authority.grant.scopes.contains(&AppScope::SessionList) => authority,
             Ok(_) => {
                 send_index_end(
@@ -3547,8 +4343,19 @@ fn event_notification_edges(
 
 fn authorized<'a>(
     state: &'a mut PublicState,
-    store: &runtrol_store::Store,
+    composed: &Composed,
     needed: Option<AppScope>,
+) -> Result<&'a AuthorizedIntegration, AuthorizationFailure> {
+    match needed {
+        Some(scope) => authorized_scopes(state, composed, std::slice::from_ref(&scope)),
+        None => authorized_scopes(state, composed, &[]),
+    }
+}
+
+fn authorized_scopes<'a>(
+    state: &'a mut PublicState,
+    composed: &Composed,
+    needed: &[AppScope],
 ) -> Result<&'a AuthorizedIntegration, AuthorizationFailure> {
     let PublicState::Ready { authority, .. } = state else {
         return Err(AuthorizationFailure {
@@ -3566,14 +4373,60 @@ fn authorized<'a>(
             message: "local integration approval and authenticated reconnect are required",
         });
     };
-    *current = refresh(store, current)?;
-    if needed.is_some_and(|scope| !current.grant.scopes.contains(&scope)) {
+    *current = refresh_current(composed, current)?;
+    if !has_scopes(&current.grant, needed) {
         return Err(AuthorizationFailure {
             kind: RuntimeErrorKind::ScopeDenied,
             message: "the integration grant lacks the required app scope",
         });
     }
     Ok(current)
+}
+
+fn authenticate_current(
+    composed: &Composed,
+    context: &ClientContext,
+    authentication: &runtrol_runtime_protocol::IntegrationAuthentication,
+) -> Result<AuthorizedIntegration, AuthorizationFailure> {
+    if !composed.draining.load(std::sync::atomic::Ordering::Acquire) {
+        return authenticate(&composed.store, context, authentication);
+    }
+    let key = integration_key(&authentication.integration_id)?;
+    let row = composed
+        .generation_authority
+        .row(key)
+        .map_err(relay_authorization_failure)?;
+    authenticate_against_row(context, authentication, key, &row)
+}
+
+fn refresh_current(
+    composed: &Composed,
+    current: &AuthorizedIntegration,
+) -> Result<AuthorizedIntegration, AuthorizationFailure> {
+    if !composed.draining.load(std::sync::atomic::Ordering::Acquire) {
+        return refresh(&composed.store, current);
+    }
+    let row = composed
+        .generation_authority
+        .row(current.key)
+        .map_err(relay_authorization_failure)?;
+    refresh_against_row(current, &row)
+}
+
+const fn relay_authorization_failure(
+    failure: crate::generation_authority::RelayFailure,
+) -> AuthorizationFailure {
+    match failure {
+        crate::generation_authority::RelayFailure::Missing => AuthorizationFailure {
+            kind: RuntimeErrorKind::IntegrationRevoked,
+            message: "the integration is not in the draining generation's frozen authority",
+        },
+        crate::generation_authority::RelayFailure::State
+        | crate::generation_authority::RelayFailure::Unavailable => AuthorizationFailure {
+            kind: RuntimeErrorKind::RuntimeUnavailable,
+            message: "the successor authority relay is unavailable",
+        },
+    }
 }
 
 fn not_ready(id: JsonRpcId) -> Answer {
@@ -3887,7 +4740,6 @@ mod tests {
     }
 
     use super::*;
-    use base64ct::Encoding as _;
 
     const NATIVE_PROVIDER_MANIFEST: &str = r#"
 schema = 1

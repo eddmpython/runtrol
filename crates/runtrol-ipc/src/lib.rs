@@ -25,6 +25,8 @@ pub mod wire;
 pub use frame::{Decoded, FrameError, MAX_FRAME, WIRE_VERSION, check_version, decode, encode};
 pub use transport::{Connection, Listener, TransportError, connect};
 pub use wire::{
-    EventResponseEdges, ProviderLine, Request, Response, SessionLine, SessionListing,
-    TerminalBytes, WireError, agree, event_response_edges,
+    EventResponseEdges, GenerationAuthorityLine, GenerationAuthorityRoot,
+    GenerationHandoffCapabilities, GenerationLiveClaimLine, GenerationLiveClaimSurface,
+    ProviderLine, Request, Response, SessionLine, SessionListing, TerminalBytes, WireError, agree,
+    event_response_edges,
 };

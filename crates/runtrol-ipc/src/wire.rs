@@ -407,6 +407,26 @@ pub enum Request {
     /// successor sends this from its own startup; nothing a person types carries it.
     Drain,
 
+    /// Establish the successor-owned authority relay after this generation began draining.
+    GenerationHandoff {
+        /// Exact successor executable digest.
+        successor_digest: Box<str>,
+        /// Current successor grant rows. The draining generation intersects them with its frozen ceiling.
+        authorities: Vec<GenerationAuthorityLine>,
+        /// Current successor-owned native live claims.
+        claims: Vec<GenerationLiveClaimLine>,
+    },
+
+    /// Refresh a previously established successor-owned authority and native-claim relay.
+    GenerationAuthorityUpdate {
+        /// Exact successor executable digest bound by the handoff.
+        successor_digest: Box<str>,
+        /// Complete current successor grant rows.
+        authorities: Vec<GenerationAuthorityLine>,
+        /// Complete current successor-owned native live claims.
+        claims: Vec<GenerationLiveClaimLine>,
+    },
+
     /// Every cross-consult direction this build knows, with its current wired state.
     ///
     /// Read-only: the state lives in the CLIs' own configuration and is asked for fresh, so there is no second
@@ -662,6 +682,14 @@ pub enum Response {
         code: i32,
     },
 
+    /// Private generation handoff capabilities and the draining generation's current live claims.
+    GenerationHandoff {
+        /// Closed handoff capability set implemented by the draining generation.
+        capabilities: GenerationHandoffCapabilities,
+        /// Current draining-generation live claims for successor admission.
+        claims: Vec<GenerationLiveClaimLine>,
+    },
+
     /// Every cross-consult direction, each with its current state.
     ///
     /// Answered for the status request and after a wire or unwire, so a surface renders one shape and never
@@ -670,6 +698,72 @@ pub enum Response {
 
     /// It did not work.
     Failed(WireError),
+}
+
+/// Private generation handoff capabilities. This never grants public authority by itself.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub struct GenerationHandoffCapabilities {
+    /// The generation serves the finalized public terminal contract.
+    pub public_terminal: bool,
+    /// The generation can accept successor-owned grant shrink and revocation updates.
+    pub authority_relay: bool,
+    /// The generation can export and accept provider-native live claims.
+    pub native_live_claims: bool,
+}
+
+/// One complete integration authority row carried only on the owner-only generation control pipe.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub struct GenerationAuthorityLine {
+    /// Private fixed integration store key.
+    pub integration_key: [u8; 16],
+    /// Stable public integration identity.
+    pub integration_id: Box<str>,
+    /// Ed25519 verification key used only to reject stale reconnects.
+    pub public_key: [u8; 32],
+    /// Exact current stable scope names.
+    pub scopes: Vec<Box<str>>,
+    /// Exact current canonical roots and filesystem identities.
+    pub roots: Vec<GenerationAuthorityRoot>,
+    /// Current key generation.
+    pub key_generation: u64,
+    /// Current grant generation.
+    pub grant_generation: u64,
+    /// Whether the successor has revoked this authority.
+    pub revoked: bool,
+}
+
+/// One canonical integration root on the private generation relay.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub struct GenerationAuthorityRoot {
+    /// Canonical approved path.
+    pub path: Box<str>,
+    /// Filesystem identity approved for that exact path.
+    pub identity: [u8; 24],
+}
+
+/// Which provider process surface owns one exact or unresolved live claim.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum GenerationLiveClaimSurface {
+    /// Runtime structured session process.
+    Structured,
+    /// Provider-faithful terminal process.
+    Terminal,
+}
+
+/// One content-free provider-native live admission claim.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub struct GenerationLiveClaimLine {
+    /// Opaque provider identity.
+    pub provider_id: Box<str>,
+    /// Provider-native identity when known before launch.
+    pub native_session_id: Option<Box<str>>,
+    /// Exact canonical workspace.
+    pub workspace: Box<str>,
+    /// Owning public process surface.
+    pub surface: GenerationLiveClaimSurface,
+    /// Surface-local owner identity with no content.
+    pub owner_id: Box<str>,
 }
 
 /// One cross-consult direction, as a surface shows it.

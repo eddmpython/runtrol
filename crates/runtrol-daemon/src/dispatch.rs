@@ -1290,6 +1290,61 @@ pub(crate) fn answer_prepared(
         // provider's own store and the successor resumes it from there on demand.
         Request::Drain => Reply::Draining,
 
+        Request::GenerationHandoff {
+            successor_digest,
+            authorities,
+            claims,
+        } => {
+            if !composed.draining.load(std::sync::atomic::Ordering::Acquire) {
+                return Reply::One(refuse(
+                    "generation authority handoff is accepted only after drain begins",
+                ));
+            }
+            if composed
+                .generation_authority
+                .apply(&successor_digest, &authorities)
+                .is_err()
+            {
+                return Reply::One(refuse(
+                    "generation authority handoff does not match the bound successor",
+                ));
+            }
+            composed
+                .native_claims
+                .replace_remote(&successor_digest, claims);
+            Reply::One(Response::GenerationHandoff {
+                capabilities: runtrol_ipc::GenerationHandoffCapabilities {
+                    public_terminal: true,
+                    authority_relay: true,
+                    native_live_claims: true,
+                },
+                claims: composed
+                    .native_claims
+                    .snapshot_except(Some(&successor_digest)),
+            })
+        }
+
+        Request::GenerationAuthorityUpdate {
+            successor_digest,
+            authorities,
+            claims,
+        } => {
+            if !composed.draining.load(std::sync::atomic::Ordering::Acquire)
+                || composed
+                    .generation_authority
+                    .apply(&successor_digest, &authorities)
+                    .is_err()
+            {
+                return Reply::One(refuse(
+                    "generation authority update does not match a draining handoff",
+                ));
+            }
+            composed
+                .native_claims
+                .replace_remote(&successor_digest, claims);
+            Reply::One(Response::Done)
+        }
+
         // The exchange already happened in the connection task. What is verified here is the binding: the
         // answer must be the one computed for this exact request, the rule every prepared result follows.
         consult @ (Request::Consult

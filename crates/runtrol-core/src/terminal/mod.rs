@@ -14,7 +14,7 @@
 
 use std::io::{Read, Write};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use runtrol_provider::WallMs;
 use std::time::Duration;
@@ -124,6 +124,8 @@ struct Shared {
     /// One relaxed store per chunk. Nothing orders anything against it and a reader that is one chunk
     /// behind asks again a moment later.
     wrote_at: AtomicU64,
+    /// Current shared PTY geometry packed as columns in the high half and rows in the low half.
+    geometry: AtomicU32,
 }
 
 impl std::fmt::Debug for Shared {
@@ -188,6 +190,7 @@ impl Terminal {
             exited,
             finished: AtomicBool::new(false),
             wrote_at: AtomicU64::new(0),
+            geometry: AtomicU32::new(pack_size(size)),
         });
         let (chunks, mut incoming) = mpsc::channel::<Bytes>(RING_CHUNKS);
         std::thread::Builder::new()
@@ -255,7 +258,16 @@ impl Terminal {
             .await
             .screen
             .set_size(size.rows, size.cols);
+        self.shared
+            .geometry
+            .store(pack_size(size), Ordering::Release);
         Ok(())
+    }
+
+    /// Current shared PTY geometry.
+    #[must_use]
+    pub fn size(&self) -> PtySize {
+        unpack_size(self.shared.geometry.load(Ordering::Acquire))
     }
 
     /// The exit code, once the CLI has ended.
@@ -299,6 +311,21 @@ impl Terminal {
             .write_all(bytes)
             .and_then(|()| writer.flush())
             .map_err(TerminalError::Input)
+    }
+}
+
+const fn pack_size(size: PtySize) -> u32 {
+    (size.cols as u32) << 16 | size.rows as u32
+}
+
+fn unpack_size(packed: u32) -> PtySize {
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "each field was packed from one u16 and masked back to that exact width"
+    )]
+    PtySize {
+        cols: (packed >> 16) as u16,
+        rows: (packed & u32::from(u16::MAX)) as u16,
     }
 }
 
@@ -405,6 +432,20 @@ mod tests {
                 rows: 40
             }
         );
+    }
+
+    #[test]
+    fn packed_geometry_round_trips_without_crossing_fields() {
+        for size in [
+            PtySize { cols: 2, rows: 1 },
+            PtySize { cols: 80, rows: 24 },
+            PtySize {
+                cols: MAX_COLS,
+                rows: MAX_ROWS,
+            },
+        ] {
+            assert_eq!(unpack_size(pack_size(size)), size);
+        }
     }
 
     #[tokio::test]

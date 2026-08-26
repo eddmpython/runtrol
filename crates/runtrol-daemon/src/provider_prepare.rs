@@ -40,6 +40,8 @@ pub(crate) async fn driver(
 pub(crate) struct PreparedDriver {
     pub(crate) driver: Box<dyn Provider>,
     pub(crate) binary_identity: [u8; 32],
+    /// Exact resolved program used by the probe, retained for the terminal surface.
+    pub(crate) terminal_program: Option<runtrol_childproc::Program>,
 }
 
 /// Build a driver and retain the exact binary identity needed to scope a provider cursor.
@@ -102,6 +104,7 @@ pub(crate) async fn prepared_driver(
     let encoded_facts = serde_json::to_vec(&probed.bin)
         .map_err(|error| ProviderPreparationError::new(error.to_string()))?;
     let binary_identity: [u8; 32] = Sha256::digest(encoded_facts).into();
+    let terminal_program = program.clone();
     Ok(PreparedDriver {
         driver: make(&DriverContext {
             provider: id,
@@ -115,6 +118,7 @@ pub(crate) async fn prepared_driver(
             contained_by: Arc::clone(&composed.containment),
         }),
         binary_identity,
+        terminal_program: Some(terminal_program),
     })
 }
 
@@ -259,6 +263,7 @@ mod tests {
                 answer,
             }),
             binary_identity: [identity; 32],
+            terminal_program: None,
         }
     }
 

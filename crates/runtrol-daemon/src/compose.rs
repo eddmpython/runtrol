@@ -299,6 +299,10 @@ pub struct Composed {
     pub(crate) isolated_workspaces: Mutex<crate::isolated_workspace::IsolatedWorkspaceController>,
     /// Local-only pending approval challenges for public Runtime integrations.
     pub(crate) integration_admin: crate::integration_admin::IntegrationAdmin,
+    /// Successor-owned grant relay used only after this generation releases the durable store.
+    pub(crate) generation_authority: crate::generation_authority::GenerationAuthorityRelay,
+    /// Content-free provider-process claims shared across live daemon generations.
+    pub(crate) native_claims: crate::native_claims::NativeLiveClaimRegistry,
     /// One-use phone pairing offers and local approval decisions.
     pub(crate) pairing_admin: crate::pairing_admin::PairingAdmin,
     /// The guarantee that children die with this process.
@@ -332,6 +336,8 @@ pub struct Composed {
     /// Every hosted terminal (a provider's own terminal interface on a daemon-owned pseudo terminal), by
     /// id and by the conversation it shows, so a second viewer joins the one that is open.
     pub(crate) terminals: tokio::sync::Mutex<crate::terminal_surface::Terminals>,
+    /// Public terminal leases and bounded mutation outcomes over the same Core-owned terminal table.
+    pub(crate) runtime_terminals: crate::runtime_terminal::TerminalRuntimeAdapter,
     /// How many terminals are open, readable without the table's lock: a draining generation stays alive
     /// while one is, exactly as it does for a running turn.
     pub(crate) open_terminals: std::sync::atomic::AtomicUsize,
@@ -414,6 +420,8 @@ impl Composed {
             store,
             isolated_workspaces: Mutex::new(isolated_workspaces),
             integration_admin: crate::integration_admin::IntegrationAdmin::default(),
+            generation_authority: crate::generation_authority::GenerationAuthorityRelay::default(),
+            native_claims: crate::native_claims::NativeLiveClaimRegistry::default(),
             pairing_admin: crate::pairing_admin::PairingAdmin::default(),
             containment,
             registry,
@@ -424,6 +432,7 @@ impl Composed {
             ),
             account_probe_wake: tokio::sync::Notify::new(),
             terminals: tokio::sync::Mutex::new(crate::terminal_surface::Terminals::default()),
+            runtime_terminals: crate::runtime_terminal::TerminalRuntimeAdapter::default(),
             open_terminals: std::sync::atomic::AtomicUsize::new(0),
             terminal_closed: tokio::sync::Notify::new(),
             provider_inventory: Mutex::new(
@@ -470,6 +479,8 @@ impl Composed {
             store,
             isolated_workspaces: Mutex::new(isolated_workspaces),
             integration_admin: crate::integration_admin::IntegrationAdmin::default(),
+            generation_authority: crate::generation_authority::GenerationAuthorityRelay::default(),
+            native_claims: crate::native_claims::NativeLiveClaimRegistry::default(),
             pairing_admin: crate::pairing_admin::PairingAdmin::default(),
             containment: Arc::new(Containment::without_any()),
             registry,
@@ -480,6 +491,7 @@ impl Composed {
             ),
             account_probe_wake: tokio::sync::Notify::new(),
             terminals: tokio::sync::Mutex::new(crate::terminal_surface::Terminals::default()),
+            runtime_terminals: crate::runtime_terminal::TerminalRuntimeAdapter::default(),
             open_terminals: std::sync::atomic::AtomicUsize::new(0),
             terminal_closed: tokio::sync::Notify::new(),
             provider_inventory: Mutex::new(
