@@ -626,7 +626,14 @@ export class Controller implements vscode.Disposable {
   /// Start a conversation with one named service, which is what a chosen row asks for.
   async startSessionWith(providerId: string, workspace: string): Promise<void> {
     await this.context.globalState.update(RECENT_SERVICE_KEY, providerId);
-    this.terminals.showFresh(providerId, workspace, workspaceName(workspace) || workspace);
+    // Until the service names the conversation, the tab says what the person just did. It used to say the folder,
+    // which for a conversation with no project read `no-project`: the one name on screen was the name of an
+    // implementation detail (measured 2026-08-26).
+    const projectless = isProjectless(workspace, this.state.projectlessRoot);
+    const name = projectless
+      ? `New ${providerDisplayName(providerId, this.state.providers)} conversation`
+      : workspaceName(workspace) || workspace;
+    this.terminals.showFresh(providerId, workspace, name, projectless);
   }
 
   /// The services a person may start, most recently used first.

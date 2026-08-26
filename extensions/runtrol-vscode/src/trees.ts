@@ -12,6 +12,7 @@ import {
   type ProjectGroup,
 } from "./conversationList";
 import { ConversationDecorations, conversationUri } from "./conversationDecorations";
+import { projectColorId } from "./projectColor";
 import type { ProjectRecord } from "./projects";
 import { awaitsVerification, isUsable } from "./providerHealth";
 import type { ProviderCapabilities } from "./runtimeTypes";
@@ -82,9 +83,15 @@ export class ProjectItem extends vscode.TreeItem {
     this.tooltip = agentToolsEnabled
       ? `${group.workspace}\nAgent Tools enabled for this project`
       : group.workspace;
+    // The project's own colour, which its conversation tabs carry too, so a tab and its heading are read as one
+    // thing. Something waiting outranks it: an unanswered agent is the one state that has to break the pattern.
+    const colour = projectColorId(group.workspace);
     this.iconPath = group.attention > 0
       ? new vscode.ThemeIcon("folder", new vscode.ThemeColor("notificationsWarningIcon.foreground"))
-      : new vscode.ThemeIcon(group.pinned ? "pinned" : group.current ? "folder-opened" : "folder");
+      : new vscode.ThemeIcon(
+        group.pinned ? "pinned" : group.current ? "folder-opened" : "folder",
+        colour ? new vscode.ThemeColor(colour) : undefined,
+      );
     this.accessibilityInformation = {
       label: `${group.name}${group.current ? ", this window's project" : ""}${this.description ? `, ${this.description}` : ""}`,
     };

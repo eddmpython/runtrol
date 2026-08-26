@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import type { Conversation } from "./conversationList";
+import { projectColorId } from "./projectColor";
 import { FrameTransport } from "./core/framing";
 import type { CoreLocator } from "./core/locator";
 import { type Request, readResponse, requestHello } from "./protocol";
@@ -44,9 +45,13 @@ export class TerminalTabs implements vscode.Disposable {
       native: conversation.native?.nativeSessionId ?? conversation.session?.nativeSessionId ?? null,
       workspace: conversation.workspace,
     });
+    // The tab is named for the conversation and coloured for its project. The name answers "which conversation",
+    // the colour answers "whose project", and the two together fit in the width a tab actually has.
+    const colour = conversation.projectless ? null : projectColorId(conversation.workspace);
     const terminal = vscode.window.createTerminal({
       name: conversation.title,
       iconPath: this.iconFor(conversation),
+      color: colour ? new vscode.ThemeColor(colour) : undefined,
       pty,
       location: vscode.TerminalLocation.Editor,
       isTransient: true,
@@ -59,11 +64,13 @@ export class TerminalTabs implements vscode.Disposable {
   /// Start a fresh conversation with a service in a folder: the service's terminal interface opens with no
   /// conversation to reopen, and the service creates one. The tab is named for the folder until the
   /// service's own listing gives the conversation a title (the sidebar shows it once the store does).
-  showFresh(providerId: string, workspace: string, name: string): vscode.Terminal {
+  showFresh(providerId: string, workspace: string, name: string, projectless = false): vscode.Terminal {
     const pty = new CoreTerminal(this.locator, { provider: providerId, native: null, workspace });
+    const colour = projectless ? null : projectColorId(workspace);
     const terminal = vscode.window.createTerminal({
       name,
       iconPath: this.iconForProvider(providerId),
+      color: colour ? new vscode.ThemeColor(colour) : undefined,
       pty,
       location: vscode.TerminalLocation.Editor,
       isTransient: true,
