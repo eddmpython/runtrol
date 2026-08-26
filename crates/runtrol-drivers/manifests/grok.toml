@@ -121,5 +121,20 @@ used_percent = "/config/creditUsagePercent"
 starts_at = "/config/billingPeriodStart"
 resets_at = "/config/billingPeriodEnd"
 
+# Why this account shows a period and no percentage, in this CLI's own terms.
+#
+# Measured 2026-08-27: this operator's account answers `check_subscription` with a `team_id`, and its
+# billing answer then carries no `creditUsagePercent`, no `monthlyLimit` and no `used` at all. This CLI's
+# own usage screen draws exactly two things from the two methods declared above, and for an account shaped
+# like this it prints "Usage limits are managed by your team." rather than a bar. So there is no number
+# being withheld here: the meter belongs to the team, and the row says that instead of standing empty and
+# reading like something failed.
+#
+# An account with its own meter is unaffected: this only speaks when no window came back with a percentage.
+[account.unmetered]
+method = "_x.ai/auth/check_subscription"
+when = "/meta/team_id"
+say = "team-managed"
+
 [events]
 source = "acp"

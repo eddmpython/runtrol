@@ -63,10 +63,10 @@ pub use id::{
     TerminalId, ToolCallId, TurnId,
 };
 pub use manifest::{
-    AccountIdentitySpec, AccountSpec, AccountWindowSpec, BinSpec, EventsSpec, FallbackSpec,
-    FlagProbe, HelpCommands, Kind, MANIFEST_SCHEMA, Manifest, ManifestError, ModelAliases,
-    ProbeSpec, SecretPaths, StoreSpec, TransportSpec, TuiSpec, UpdateHint, UpdateSpec,
-    VersionParse, VersionProbe,
+    AccountIdentitySpec, AccountSpec, AccountUnmeteredSpec, AccountWindowSpec, BinSpec, EventsSpec,
+    FallbackSpec, FlagProbe, HelpCommands, Kind, MANIFEST_SCHEMA, Manifest, ManifestError,
+    ModelAliases, ProbeSpec, SecretPaths, StoreSpec, TransportSpec, TuiSpec, UpdateHint,
+    UpdateSpec, VersionParse, VersionProbe,
 };
 pub use native_catalogue::{
     MAX_NATIVE_ADDITIONAL_DIRECTORIES, MAX_NATIVE_CURSOR_BYTES, MAX_NATIVE_SESSION_ITEMS,

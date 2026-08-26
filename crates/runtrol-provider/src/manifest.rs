@@ -31,6 +31,7 @@ use core::fmt;
 
 use serde::{Deserialize, Deserializer, Serialize};
 
+use crate::account::MAX_ACCOUNT_TOKEN_BYTES;
 use crate::id::{IdError, ProviderId};
 
 /// The manifest format this build understands.
@@ -910,6 +911,29 @@ pub struct AccountSpec {
     /// across several methods. Read only for an account the identity block reports as signed in.
     #[serde(default, rename = "window")]
     pub windows: Vec<AccountWindowSpec>,
+    /// How this agent says an account has no numbers of its own to show.
+    ///
+    /// Some accounts are metered somewhere the operator cannot see: measured, an agent whose account
+    /// belongs to a team answers about the plan and the period and states no percentage at all, and its
+    /// own screen says so in words rather than standing empty. Without this the row shows a reset with no
+    /// bar and no reason, which reads as a service that failed rather than one that answered.
+    #[serde(default)]
+    pub unmetered: Option<AccountUnmeteredSpec>,
+}
+
+/// Where an agent says the numbers are not this account's, and what to say when it does.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AccountUnmeteredSpec {
+    /// The protocol method whose answer carries the fact.
+    pub method: Box<str>,
+    /// Where that answer keeps it. A value that is present and not false means yes.
+    pub when: Box<str>,
+    /// The reason, in as few words as a row has room for.
+    ///
+    /// Declared rather than composed, because the reason is a fact about that service's accounts and a
+    /// sentence runtrol wrote would be runtrol explaining somebody else's billing.
+    pub say: Box<str>,
 }
 
 /// Where one agent's own extension keeps the account's identity.
@@ -1050,6 +1074,24 @@ impl AccountSpec {
                     Self::refuse_unless_pointer(what, pointer)?;
                 }
             }
+        }
+        if let Some(unmetered) = &self.unmetered {
+            Self::refuse_unless_wire_name("account.unmetered.method", &unmetered.method)?;
+            Self::refuse_unless_pointer("account.unmetered.when", &unmetered.when)?;
+            if unmetered.say.trim().is_empty() || unmetered.say.len() > MAX_ACCOUNT_TOKEN_BYTES {
+                return Err(ManifestError::Token {
+                    what: "account.unmetered.say",
+                    token: unmetered.say.to_string(),
+                    why: "is empty or longer than a row has room for",
+                });
+            }
+        }
+        if self.unmetered.is_some() && self.identity.is_none() {
+            return Err(ManifestError::Token {
+                what: "account",
+                token: "unmetered".to_owned(),
+                why: "explains an absence with no identity block to ask about, so nothing would read it",
+            });
         }
         if !self.windows.is_empty() && self.identity.is_none() {
             return Err(ManifestError::Token {

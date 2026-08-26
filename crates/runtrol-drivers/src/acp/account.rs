@@ -34,8 +34,8 @@ use std::collections::BTreeMap;
 
 use runtrol_childproc::{Containment, Program};
 use runtrol_provider::{
-    AccountIdentitySpec, AccountLimits, AccountReport, AccountStatus, AccountWindowSpec,
-    ProviderError, ProviderId, WallMs, Window, account_token,
+    AccountIdentitySpec, AccountLimits, AccountReport, AccountStatus, AccountUnmeteredSpec,
+    AccountWindowSpec, ProviderError, ProviderId, WallMs, Window, account_token,
 };
 
 use crate::acp::scratch::ScratchConnection;
@@ -50,6 +50,7 @@ pub(super) async fn read(
     transport_argv: &[Box<str>],
     identity: &AccountIdentitySpec,
     windows: &[AccountWindowSpec],
+    unmetered: Option<&AccountUnmeteredSpec>,
     contained_by: &Containment,
 ) -> Result<AccountReport, ProviderError> {
     let mut connection =
@@ -64,7 +65,18 @@ pub(super) async fn read(
                     report.limits_unread =
                         Some("this account publishes no limit numbers to read".into());
                 }
-                Ok(drawn) => report.limits = Some(AccountLimits::new(drawn, false)),
+                Ok(drawn) => {
+                    // A window with a reset and no percentage is a period the operator cannot see the
+                    // fill of. The agent has its own word for why, and saying it beats a bar-less row
+                    // that looks like something went wrong.
+                    let metered = drawn.iter().any(|window| window.used_percent.is_some());
+                    report.limits = Some(AccountLimits::new(drawn, false));
+                    if !metered {
+                        report.limits_unread =
+                            unmetered_reason(&mut connection, unmetered, &identity.method, &answer)
+                                .await;
+                    }
+                }
                 Err(why) => report.limits_unread = Some(why.into()),
             }
         }
@@ -76,6 +88,35 @@ pub(super) async fn read(
         (Err(error), _) | (Ok(_), Err(error)) => Err(error),
         (Ok(report), Ok(())) => Ok(report),
     }
+}
+
+/// The agent's own word for why this account shows no numbers, when it has one and it applies.
+///
+/// Asked of the identity answer first, because that is already in hand: an agent that keeps the fact
+/// beside who is signed in costs no second call for it.
+async fn unmetered_reason(
+    connection: &mut ScratchConnection,
+    spec: Option<&AccountUnmeteredSpec>,
+    identity_method: &str,
+    identity_answer: &serde_json::Value,
+) -> Option<Box<str>> {
+    let spec = spec?;
+    let answer = if spec.method.as_ref() == identity_method {
+        identity_answer.clone()
+    } else {
+        match ask(connection, &spec.method).await {
+            Ok(answer) => answer,
+            // The reason is an explanation, never the reading itself. A method that did not answer costs
+            // the sentence and nothing else, and the row still shows the period it did read.
+            Err(_) => return None,
+        }
+    };
+    let holds = match answer.pointer(&spec.when) {
+        None | Some(serde_json::Value::Null | serde_json::Value::Bool(false)) => false,
+        Some(serde_json::Value::String(text)) => !text.trim().is_empty(),
+        Some(_) => true,
+    };
+    holds.then(|| spec.say.clone())
 }
 
 /// One extension call with no parameters, answered as a value the pointers can walk.

@@ -248,6 +248,7 @@ impl Provider for AcpProvider {
             &self.transport_argv,
             identity,
             &spec.windows,
+            spec.unmetered.as_ref(),
             &self.contained_by,
         )
         .await
