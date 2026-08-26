@@ -19,6 +19,7 @@ export class UsageView implements vscode.WebviewViewProvider, vscode.Disposable 
   private setupOpen = false;
   private error: string | null = null;
   private notice: string | null = null;
+  private staleWindow: string | null = null;
   private view: vscode.WebviewView | null = null;
   private viewSubscriptions: vscode.Disposable[] = [];
   private fetching = false;
@@ -135,10 +136,30 @@ export class UsageView implements vscode.WebviewViewProvider, vscode.Disposable 
     if (changed || force) this.postSnapshot();
   }
 
-  /// Say, or stop saying, that an older Core generation is still serving this window.
+  /// Say, or stop saying, that this window is behind something.
+  ///
+  /// Two things can put a window behind: an older Core generation still serving it, and an older set of
+  /// view registrations the editor read when the window opened. Both are the same sentence to a reader
+  /// ("what you are looking at is not the build that is installed"), and both end the same way, so they
+  /// share the one line under the strip. The stale-registration one wins while it stands, because a window
+  /// that cannot draw Projects at all is the larger thing to say.
   setUpdateNotice(notice: string | null): void {
+    if (this.staleWindow !== null) return;
     if (notice === this.notice) return;
     this.notice = notice;
+    this.postSnapshot();
+  }
+
+  /// Say that this window read its view registrations before this build shipped them.
+  ///
+  /// Measured on the operator's own window: the editor keeps the set of views a container had when the
+  /// window opened, so views this build deleted are still drawn (as an empty box saying no data provider is
+  /// registered) and views it added are missing entirely. Nothing in the extension can re-register them;
+  /// the editor reads that set once. Left alone it reads as a broken sidebar, which is why it is said.
+  setStaleWindow(notice: string | null): void {
+    if (notice === this.staleWindow) return;
+    this.staleWindow = notice;
+    this.notice = notice ?? this.notice;
     this.postSnapshot();
   }
 

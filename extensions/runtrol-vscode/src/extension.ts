@@ -564,6 +564,18 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
   const usageRegistration = vscode.window.registerWebviewViewProvider("runtrol.usage", usage, {
     webviewOptions: { retainContextWhenHidden: false },
   });
+  // Whether this window knows the views this build declares.
+  //
+  // The editor reads a container's set of views when the window opens and keeps it: a view this build
+  // deleted is still drawn as an empty box, and one it added is missing. Nothing here can re-register them,
+  // and the sidebar that results reads as broken rather than as behind. The focus command the editor makes
+  // for each declared view is the honest test, because it exists exactly when the registration does.
+  void vscode.commands.getCommands(true).then((known) => {
+    if (known.includes("runtrol.projects.focus")) return;
+    usage.setStaleWindow(
+      "This window opened before this version of Runtrol. Open a new window to see Projects, and to lose the empty sections this one is still holding.",
+    );
+  });
   let revealingUsage = false;
   const ensureUsageVisible = async (): Promise<void> => {
     if (usage.visible || revealingUsage || !(projectsView.visible || conversationsView.visible)) return;
