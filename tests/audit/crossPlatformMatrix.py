@@ -103,8 +103,15 @@ def evidenceProblems(evidence: dict[str, Any], expectedTarget: str) -> list[str]
         if extensionPath is not None and not isWithin(bundledCore, extensionPath):
             found.append("bundled Core is outside the installed extension")
     if managedCore is not None:
-        if managedCore.name != executable:
-            found.append(f"managed Core is not named {executable}")
+        # The copy the extension runs is named for its own contents, which is what lets a new build start beside
+        # the one already running instead of being written over it. The bundled file inside the package keeps the
+        # plain name; only the copy carries the digest.
+        managed = re.fullmatch(
+            r"runtrol-[0-9a-f]{16}" + (r"\.exe" if expectedTarget.startswith("win32-") else ""),
+            managedCore.name,
+        )
+        if managed is None:
+            found.append(f"managed Core is not named for its contents: {managedCore.name}")
         if extensionPath is not None and isWithin(managedCore, extensionPath):
             found.append("managed Core was not copied out of the installed extension")
     return found
@@ -138,13 +145,15 @@ def selftest() -> int:
     temporary = Path(tempfile.gettempdir()).resolve()
     extension = temporary / "runtrol-cross-platform-selftest" / "extensions" / "runtrol.runtrol-studio-0.1.9"
     executable = "runtrol.exe" if target.startswith("win32-") else "runtrol"
+    # The copy the extension runs carries the digest of its own bytes; the bundled file does not.
+    managedName = "runtrol-0123456789abcdef" + (".exe" if target.startswith("win32-") else "")
     valid: dict[str, Any] = {
         "vscode": "1.132.1",
         "extensionVersion": "0.1.9",
         "target": target,
         "extensionPath": str(extension),
         "bundledCore": str(extension / "resources" / "core" / executable),
-        "managedCore": str(temporary / "runtrol-cross-platform-selftest" / "user-data" / executable),
+        "managedCore": str(temporary / "runtrol-cross-platform-selftest" / "user-data" / managedName),
         "configuredCore": "",
         "newConversation": "terminal",
         "newConversationTitle": "runtrol",
@@ -202,6 +211,8 @@ def command(program: list[str], environment: dict[str, str] | None = None, timeo
 def buildArchive(directory: Path, target: str) -> Path:
     """Build one current-host package without leaving a release artifact in the repository."""
     executable = "runtrol.exe" if target.startswith("win32-") else "runtrol"
+    # The copy the extension runs carries the digest of its own bytes; the bundled file does not.
+    managedName = "runtrol-0123456789abcdef" + (".exe" if target.startswith("win32-") else "")
     command(["cargo", "build", "-p", "runtrol", "--bin", "runtrol"])
     binary = ROOT / "target" / "debug" / executable
     if not binary.is_file():
