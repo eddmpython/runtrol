@@ -53,6 +53,13 @@ and refactoring that no user can observe do not belong here.
   chips did (model, mode, effort, project, service) is the service's own command in that terminal. New
   Conversation now asks only which service, and opens that service's terminal in the project.
 
+### Removed
+
+- Missions and everything under them are gone: the Missions view, its twenty five commands, Auto Flight,
+  scheduling, landing review, the Receipt ledger, the Gate registry, Fleet Compare, and project Capability
+  approval. The sidebar is the conversations list and the usage strip, and nothing else. A phone paired with
+  Mission permissions keeps working; it simply no longer holds those, and no update is needed.
+
 ### Fixed
 
 - Deleting a conversation now removes the row the moment it is clicked; the service's own deletion and its
