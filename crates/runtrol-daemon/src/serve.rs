@@ -48,7 +48,6 @@ use runtrol_provider::{
     AbsPath, AgentCommand, CloseMode, ProviderError, ProviderId, SessionId, WorkspaceAccess,
 };
 use runtrol_security::Caller;
-use runtrol_store::{MissionSignalKind, MissionSignalRow};
 use runtrol_transport::{
     CryptoError, LinkKind, NoiseUpgrade, NoiseWebSocket, PhoneHttp, PhoneHttpError, SessionBinding,
     StaticKeypair, WebSocketLinkError, response,
@@ -62,9 +61,8 @@ use crate::compose::Composed;
 use crate::dispatch::{
     Cleanup, CleanupReservation, Conversation, Discovered, Prepared, PreparedKind, Reply,
     answer_prepared, complete_prepare_for, discover, is_integration_admin, needs_driver,
-    prepare_capability_verification, prepare_consult, prepare_integration_admin,
-    prepare_isolated_workspace, prepare_mission_integration, prepare_mission_verification,
-    prepare_mission_workspace, prepare_provider_updates, refuse,
+    prepare_consult, prepare_integration_admin, prepare_isolated_workspace,
+    prepare_provider_updates, refuse,
 };
 
 /// How many answered requests may be waiting to reach the one task that answers them.
@@ -773,7 +771,6 @@ async fn serve_surfaces(
         .address()
         .to_owned();
     let mut runtime_listener = Listener::bind_owner_only(&runtime_address).await?;
-    let control_address = listener.address().to_owned();
     let mut generation = crate::generations::PublishedGeneration::publish(
         composed.home.paths(),
         &runtime_instance,
@@ -829,7 +826,6 @@ async fn serve_surfaces(
     let discovering = Arc::new(DiscoveryGates::new(&composed.registry));
     let mut connections = JoinSet::new();
     let push_wake_active = Arc::new(AtomicBool::new(false));
-    let mission_schedule_wake = Arc::new(tokio::sync::Notify::new());
     let mut relay_hub = match relay {
         Some(relay) => {
             let identity = composed
@@ -914,11 +910,6 @@ async fn serve_surfaces(
         Arc::clone(&composed),
         runtime_providers.clone(),
         account_gauges.clone(),
-    )));
-    background.push(connections.spawn(crate::mission_schedule::supervise(
-        Arc::clone(&composed),
-        control_address,
-        Arc::clone(&mission_schedule_wake),
     )));
     let (runtime_failed, mut runtime_failures) = mpsc::unbounded_channel();
     {
@@ -1099,11 +1090,6 @@ async fn serve_surfaces(
 
             Some(ask) = asked.recv() => {
                 let Asked { mut conversation, request, prepared, reservation, answered } = *ask;
-                let mission_flight_signal = matches!(&request, Request::MissionFlightSignal { .. });
-                let mission_schedule_mutation = matches!(
-                    &request,
-                    Request::MissionSchedule { .. } | Request::MissionScheduleCancel { .. }
-                );
                 let changes_index = matches!(
                     &request,
                     Request::Start { .. }
@@ -1127,9 +1113,6 @@ async fn serve_surfaces(
                     begin_drain(&composed, &mut background, &mut relay_hub);
                     generation.update(live_work_of(&sessions, &composed), true);
                 }
-                let wakes_for_new_signal = wakes_for_new_mission_flight_signal(mission_flight_signal, &reply);
-                let wakes_mission_schedule = mission_schedule_mutation
-                    && matches!(&reply, Reply::One(Response::Mission(_)));
                 // The connection stopped while its request was being answered. Nothing to report and nowhere to
                 // report it: the caller is gone, and the sessions already record everything the request did.
                 let abandoned_agent = deliver_answer(
@@ -1150,12 +1133,6 @@ async fn serve_surfaces(
                     generation.update(live_work_of(&sessions, &composed), draining);
                     // A conversation opened or closed: the account probe asks the services again soon.
                     composed.account_probe_wake.notify_one();
-                }
-                if wakes_for_new_signal {
-                    schedule_push_wakes(&mut connections, &composed, &push_wake_active);
-                }
-                if wakes_mission_schedule {
-                    mission_schedule_wake.notify_one();
                 }
                 if draining && live_work_of(&sessions, &composed) == 0 {
                     break Ok(());
@@ -1459,33 +1436,6 @@ async fn serve_surfaces(
                     let should_wake = published.event.body.deserves_a_notification();
                     // A draining generation persists nothing: the store belongs to its successor now,
                     // and the provider's own transcript is where this conversation reopens from.
-                    if index_changed
-                        && !draining
-                        && let runtrol_provider::EventBody::ApprovalRequested(request) = &published.event.body
-                    {
-                        let target = {
-                            let controller = composed.missions.lock().await;
-                            controller.flight_signal_mission_for_session(
-                                &composed.ledger,
-                                &session.to_string(),
-                            )
-                        };
-                        match target {
-                            Ok(Some((mission_id, mission_sha256))) => {
-                                composed.store.append_mission_signal(&MissionSignalRow {
-                                    dedupe: *request.id.as_bytes(),
-                                    mission_id,
-                                    mission_sha256,
-                                    kind: MissionSignalKind::Person,
-                                    session_id: Some(session.to_string().into()),
-                                })?;
-                            }
-                            Ok(None) => {}
-                            Err(message) => {
-                                break Err(ServeError::MissionFlightSignal(message.into()));
-                            }
-                        }
-                    }
                     if !draining {
                         if let Err(error) = crate::dispatch::persist_live(&composed, &sessions, session) {
                             break Err(error.into());
@@ -1597,19 +1547,13 @@ fn begin_drain(
     composed
         .draining
         .store(true, std::sync::atomic::Ordering::Release);
-    // The successor is retrying its open right now; this is the moment it succeeds. Both exclusive
-    // files go, the session store and the Mission ledger: measured 2026-08-25, releasing only the store
-    // left the successor dying on "mission ledger is already open" after this generation had already
-    // drained and exited, which is exactly the gap generations exist to close.
+    // The successor is retrying its open right now; this is the moment it succeeds. The session store is
+    // the exclusive file it waits on, and holding it a moment longer than needed is the whole gap
+    // generations exist to close.
     let released = composed.store.release();
     debug_assert!(
         released,
         "a drain request reached a store that was already released"
-    );
-    let ledger_released = composed.ledger.release();
-    debug_assert!(
-        ledger_released,
-        "a drain request reached a ledger that was already released"
     );
     for task in background.drain(..) {
         task.abort();
@@ -1664,14 +1608,6 @@ fn schedule_push_wakes(
             }
         }
     });
-}
-
-fn wakes_for_new_mission_flight_signal(is_signal_request: bool, reply: &Reply) -> bool {
-    is_signal_request
-        && matches!(
-            reply,
-            Reply::One(Response::MissionFlightSignalRecorded { inserted: true })
-        )
 }
 
 struct PushWakeGuard(Arc<AtomicBool>);
@@ -2196,14 +2132,6 @@ async fn converse_inner(
             Request::WorkspaceIsolatePrepare { .. } | Request::WorkspaceIsolateRelease { .. }
         ) {
             prepare_isolated_workspace(&conversation, &composed, &request).await
-        } else if matches!(request, Request::MissionPrepareTask { .. }) {
-            prepare_mission_workspace(&conversation, &composed, &request).await
-        } else if matches!(request, Request::MissionVerifyTask { .. }) {
-            prepare_mission_verification(&conversation, &composed, &request).await
-        } else if matches!(request, Request::MissionCompleteIntegration { .. }) {
-            prepare_mission_integration(&conversation, &composed, &request).await
-        } else if matches!(request, Request::CapabilityVerify { .. }) {
-            prepare_capability_verification(&conversation, &composed, &request).await
         } else {
             // The old gate's presence doubled as this signal; named directly now that the lanes are a set.
             let discovered = if needs_driver(&request) || provider_update {
@@ -2706,28 +2634,6 @@ fn encode_response(response: &Response) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
 
-    #[test]
-    fn only_the_first_committed_mission_flight_signal_wakes_phones() {
-        let request = Request::MissionFlightSignal {
-            signal_id: SessionId::now().to_string().into(),
-            mission_id: "01900000-0000-7000-8000-000000000001".into(),
-            mission_sha256: "11".repeat(32).into(),
-            kind: "landing".into(),
-        };
-        assert!(wakes_for_new_mission_flight_signal(
-            matches!(&request, Request::MissionFlightSignal { .. }),
-            &Reply::One(Response::MissionFlightSignalRecorded { inserted: true }),
-        ));
-        assert!(!wakes_for_new_mission_flight_signal(
-            matches!(&request, Request::MissionFlightSignal { .. }),
-            &Reply::One(Response::MissionFlightSignalRecorded { inserted: false }),
-        ));
-        assert!(!wakes_for_new_mission_flight_signal(
-            matches!(&Request::List, Request::MissionFlightSignal { .. }),
-            &Reply::One(Response::MissionFlightSignalRecorded { inserted: true }),
-        ));
-    }
-
     #[tokio::test]
     async fn preparation_lanes_are_per_provider_and_shared_per_provider() {
         // The cold-start fix in one assertion: holding one provider's lane must not make another
@@ -2802,7 +2708,6 @@ mod tests {
     use hyper::Request as HttpRequest;
     use hyper::upgrade::Upgraded;
     use hyper_util::rt::TokioIo;
-    use runtrol_ledger::LedgerError;
     use runtrol_provider::{
         AbsPath, Agent, AgentCommand, Opaque, Produced, ProviderError, ProviderId, WallMs,
     };
@@ -3295,10 +3200,9 @@ mod tests {
             let mut composed = loop {
                 match crate::compose::Composed::for_tests(&seed.home, runtrol_drivers::builtin()) {
                     Ok(composed) => break composed,
-                    Err(
-                        crate::compose::ComposeError::Store(StoreError::AlreadyOpen { .. })
-                        | crate::compose::ComposeError::Ledger(LedgerError::AlreadyOpen),
-                    ) if tokio::time::Instant::now() < deadline => {
+                    Err(crate::compose::ComposeError::Store(StoreError::AlreadyOpen {
+                        ..
+                    })) if tokio::time::Instant::now() < deadline => {
                         tokio::time::sleep(Duration::from_millis(10)).await;
                     }
                     Err(error) => panic!("the resilience home does not recompose: {error}"),

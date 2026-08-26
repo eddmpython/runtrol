@@ -182,10 +182,9 @@ pub async fn assemble_superseding(
         drain_predecessors(home.paths(), identity.digest()).await;
         match Composed::assemble(None, builtin) {
             // Either exclusive file still held by a predecessor means the handover is in flight, not failed.
-            Err(
-                ComposeError::Store(runtrol_store::StoreError::AlreadyOpen { .. })
-                | ComposeError::Ledger(runtrol_ledger::LedgerError::AlreadyOpen),
-            ) if tokio::time::Instant::now() < deadline => {
+            Err(ComposeError::Store(runtrol_store::StoreError::AlreadyOpen { .. }))
+                if tokio::time::Instant::now() < deadline =>
+            {
                 tokio::time::sleep(STORE_HANDOVER_RETRY).await;
             }
             outcome => return outcome,

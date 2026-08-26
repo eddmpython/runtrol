@@ -26,7 +26,7 @@ serde_json = { workspace = true, features = ["std", "raw_value"] }
 # The local connection. `net` is the named pipe and the socket file; `io-util` is the buffered read; `time` is the wait
 # while a pipe instance is being replaced, which is the one condition here that is answered by asking again. Nothing
 # here wants a network stack, and neither mechanism brings one.
-tokio = { workspace = true, features = ["net", "io-util", "time"] }
+tokio = { workspace = true, features = ["macros", "net", "io-util", "time"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true, features = [

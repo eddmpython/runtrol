@@ -21,9 +21,6 @@ runtrol-transport = { workspace = true }
 runtrol-vault = { workspace = true }
 runtrol-update = { workspace = true }
 runtrol-runtime-protocol = { workspace = true }
-runtrol-ledger = { workspace = true }
-runtrol-orchestrator = { workspace = true }
-runtrol-growth = { workspace = true }
 
 thiserror = { workspace = true }
 bytes = { workspace = true }

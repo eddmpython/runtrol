@@ -68,10 +68,6 @@ pub enum Needed {
 /// rather than allowed. `Request` is open ended on purpose, which is what makes that arm necessary and what makes
 /// `scopeWall.py` necessary beside it: the compiler cannot tell anyone here that a variant went unmapped.
 #[must_use]
-#[expect(
-    clippy::too_many_lines,
-    reason = "one arm per public request is the point of this registry, so it grows with the wire"
-)]
 pub fn needed(request: &Request) -> Needed {
     match request {
         Request::Hello { .. } => {
@@ -119,51 +115,12 @@ pub fn needed(request: &Request) -> Needed {
         | Request::RuntimeSharedOpenConfirm { .. } => {
             Needed::AtTheMachine(LocalScope::IntegrationAdmin)
         }
-        // Listing shares the registering scope: the audience is the same person deciding what to
-        // register or reference, and gate programs are machine-local facts that never leave the PC.
-        Request::MissionRegisterGate { .. } | Request::MissionListGates => {
-            Needed::AtTheMachine(LocalScope::GateRegister)
-        }
-        Request::MissionValidate { .. } => Needed::AtTheMachine(LocalScope::MissionCreate),
-        Request::MissionList
-        | Request::MissionGet { .. }
-        | Request::MissionFlightSignals { .. } => Needed::Scope(DeviceScope::MissionRead),
-        Request::MissionStart { .. }
-        | Request::MissionSchedule { .. }
-        | Request::MissionScheduleCancel { .. }
-        | Request::MissionPrepareTask { .. }
-        | Request::MissionBindSession { .. }
-        | Request::MissionFlightSignal { .. }
-        | Request::MissionFlightSignalClear { .. } => {
-            Needed::AtTheMachine(LocalScope::MissionStart)
-        }
-        Request::MissionSendTaskInstruction { .. } => {
-            Needed::AtTheMachine(LocalScope::MissionSendTaskInstruction)
-        }
-        Request::MissionVerifyTask { .. } | Request::MissionCompleteIntegration { .. } => {
-            Needed::AtTheMachine(LocalScope::MissionIntegrate)
-        }
-        Request::MissionRetryTask { .. } => Needed::AtTheMachine(LocalScope::MissionRetryTask),
-        Request::MissionArchive { .. } => Needed::AtTheMachine(LocalScope::MissionArchive),
-        Request::CapabilityPropose { .. }
-        | Request::CapabilityList
-        | Request::CapabilityVerify { .. }
-        | Request::CapabilityApprove { .. }
-        | Request::CapabilityReject { .. }
-        | Request::CapabilityQuarantine { .. } => {
-            Needed::AtTheMachine(LocalScope::CapabilityPromote)
-        }
-        Request::CapabilityRollback { .. } => Needed::AtTheMachine(LocalScope::CapabilityRollback),
-        Request::CapabilityArchive { .. } => Needed::AtTheMachine(LocalScope::CapabilityArchive),
         Request::WorkspaceIsolatePrepare { .. }
         | Request::WorkspaceIsolateList
         | Request::WorkspaceIsolateBind { .. }
         | Request::WorkspaceIsolateRelease { .. } => {
             Needed::AtTheMachine(LocalScope::WorkspaceShare)
         }
-        Request::MissionPause { .. } => Needed::Scope(DeviceScope::MissionPause),
-        Request::MissionResumeSafe { .. } => Needed::Scope(DeviceScope::MissionResumeSafe),
-        Request::MissionCancel { .. } => Needed::Scope(DeviceScope::MissionCancel),
         Request::Start {
             workspace_access: WorkspaceAccess::Shared,
             ..
@@ -462,108 +419,6 @@ mod tests {
             Request::ConsultUnwire {
                 from: "claude".into(),
                 to: "codex".into(),
-            },
-            Request::MissionRegisterGate {
-                gate_id: "check".into(),
-                program: "cargo".into(),
-                arguments: vec!["test".into()],
-                timeout_ms: 1_000,
-            },
-            Request::MissionValidate {
-                project: "/work".into(),
-                mission_ref: "mission.toml".into(),
-            },
-            Request::MissionList,
-            Request::MissionGet {
-                mission_id: "msn_fixture".into(),
-            },
-            Request::MissionFlightSignals { after: None },
-            Request::MissionFlightSignal {
-                signal_id: SessionId::now().to_string().into(),
-                mission_id: "msn_fixture".into(),
-                mission_sha256: "11".repeat(32).into(),
-                kind: "landing".into(),
-            },
-            Request::MissionFlightSignalClear {
-                mission_id: "msn_fixture".into(),
-                mission_sha256: "11".repeat(32).into(),
-            },
-            Request::MissionStart {
-                mission_id: "msn_fixture".into(),
-                mission_sha256: "11".repeat(32).into(),
-            },
-            Request::MissionPrepareTask {
-                mission_id: "msn_fixture".into(),
-                task_id: "tsk_fixture".into(),
-            },
-            Request::MissionBindSession {
-                mission_id: "msn_fixture".into(),
-                task_id: "tsk_fixture".into(),
-                session_id: SessionId::now().to_string().into(),
-                provider_runtime_id: "fixture".into(),
-                native_session_id: None,
-                workspace: "/work".into(),
-            },
-            Request::MissionSendTaskInstruction {
-                mission_id: "msn_fixture".into(),
-                task_id: "tsk_fixture".into(),
-                instruction_sha256: "22".repeat(32).into(),
-            },
-            Request::MissionVerifyTask {
-                mission_id: "msn_fixture".into(),
-                task_id: "tsk_fixture".into(),
-            },
-            Request::MissionRetryTask {
-                mission_id: "msn_fixture".into(),
-                task_id: "tsk_fixture".into(),
-            },
-            Request::MissionCompleteIntegration {
-                mission_id: "msn_fixture".into(),
-                task_id: None,
-            },
-            Request::MissionArchive {
-                mission_id: "msn_fixture".into(),
-            },
-            Request::MissionPause {
-                mission_id: "msn_fixture".into(),
-            },
-            Request::MissionResumeSafe {
-                mission_id: "msn_fixture".into(),
-            },
-            Request::MissionCancel {
-                mission_id: "msn_fixture".into(),
-            },
-            Request::CapabilityPropose {
-                project: "/work".into(),
-                candidate_ref: ".runtrol/capabilities/candidates/one".into(),
-            },
-            Request::CapabilityList,
-            Request::CapabilityVerify {
-                project: "/work".into(),
-                capability_id: "reviewed-skill".into(),
-                version_sha256: "33".repeat(32).into(),
-            },
-            Request::CapabilityApprove {
-                project: "/work".into(),
-                capability_id: "reviewed-skill".into(),
-                version_sha256: "33".repeat(32).into(),
-            },
-            Request::CapabilityReject {
-                project: "/work".into(),
-                capability_id: "reviewed-skill".into(),
-            },
-            Request::CapabilityQuarantine {
-                project: "/work".into(),
-                capability_id: "reviewed-skill".into(),
-            },
-            Request::CapabilityRollback {
-                project: "/work".into(),
-                capability_id: "reviewed-skill".into(),
-                version_sha256: "44".repeat(32).into(),
-            },
-            Request::CapabilityArchive {
-                project: "/work".into(),
-                capability_id: "reviewed-skill".into(),
             },
         ]
     }
