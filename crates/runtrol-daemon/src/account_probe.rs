@@ -26,6 +26,19 @@ const FIRST_ROUND_DELAY: Duration = Duration::from_secs(8);
 /// The rounds that matter are the ones a session event wakes (a conversation attached, a turn ended), so
 /// a limit moves on the sidebar within seconds of the turn that moved it.
 const ROUND_INTERVAL: Duration = Duration::from_mins(10);
+/// The backstop while a conversation is open on this machine.
+///
+/// A conversation held as its CLI's own terminal produces no structured turn boundary to wake on: the CLI
+/// draws to a pseudo terminal and runtrol does not read what it drew, which is the thin principle and not
+/// negotiable. So while somebody is actually working, this clock is the only thing that moves the strip,
+/// and ten minutes of it is long enough to spend a fifth of a five-hour window with the bar standing still.
+///
+/// Not shorter, because a round is real work: measured 2026-08-26 across the three services this build
+/// ships, one round costs about eleven seconds of child process time (six for the CLI that opens a headless
+/// channel, three for the one that starts a protocol agent, two for the one already running a daemon). At
+/// ninety seconds that is an eighth of one core, and it stops the moment the last conversation closes, so
+/// the idle machine keeps the footprint its budget contract fixes.
+const BUSY_INTERVAL: Duration = Duration::from_secs(90);
 /// How long a wake waits before its round, so a burst of session events becomes one round.
 const WAKE_SETTLE: Duration = Duration::from_secs(2);
 /// The least time between two rounds however many wakes arrive: a service is asked at most this often.
@@ -127,13 +140,30 @@ pub(crate) async fn supervise(
         round(&composed, &providers, &usage).await;
         let floor = tokio::time::sleep(ROUND_FLOOR);
         tokio::select! {
-            () = tokio::time::sleep(ROUND_INTERVAL) => {}
+            () = tokio::time::sleep(backstop(&composed)) => {}
             () = composed.account_probe_wake.notified() => {
                 // Coalesce the burst, then honour the floor before asking again.
                 tokio::time::sleep(WAKE_SETTLE).await;
                 floor.await;
             }
         }
+    }
+}
+
+/// How long to wait before asking again with nobody waking this.
+///
+/// Read once per wait rather than watched, because the answer only has to be right for the wait it starts:
+/// a conversation opening also wakes this loop, so a machine that becomes busy is asked at once and does not
+/// have to serve out a ten-minute sleep first.
+fn backstop(composed: &Composed) -> Duration {
+    if composed
+        .open_terminals
+        .load(std::sync::atomic::Ordering::Relaxed)
+        > 0
+    {
+        BUSY_INTERVAL
+    } else {
+        ROUND_INTERVAL
     }
 }
 

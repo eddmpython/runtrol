@@ -117,6 +117,11 @@ impl ClaudeProvider {
         )
         .await
         .map_err(|error| format!("the usage channel did not answer: {error}"))?;
+        if output.truncated {
+            // The answer was cut mid-line, so the tail of it is not JSON any more. Said as truncation rather
+            // than as "no answer", because the two want different things looked at.
+            return Err("the usage answer was longer than this build reads".to_owned());
+        }
         usage_answer(&String::from_utf8_lossy(&output.stdout)).map(Some)
     }
 }
