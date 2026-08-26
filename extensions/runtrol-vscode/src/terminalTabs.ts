@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import type { Conversation } from "./conversationList";
+import type { Conversation, StartedConversation } from "./conversationList";
 import { projectColorId } from "./projectColor";
 import { FrameTransport } from "./core/framing";
 import type { CoreLocator } from "./core/locator";
@@ -17,6 +17,9 @@ import { type Request, readResponse, requestHello } from "./protocol";
 /// a phone) share one screen and one keyboard.
 export class TerminalTabs implements vscode.Disposable {
   private readonly open = new Map<string, vscode.Terminal>();
+  /// Conversations opened here that no service has described yet, by the tab showing each one.
+  private readonly started = new Map<vscode.Terminal, StartedConversation>();
+  private nextStarted = 0;
   private readonly closing: vscode.Disposable;
 
   constructor(
@@ -25,11 +28,16 @@ export class TerminalTabs implements vscode.Disposable {
     private readonly iconFor: (conversation: Conversation) => vscode.ThemeIcon | vscode.Uri,
     /// The same glyph by service id, for a fresh conversation that has no row yet.
     private readonly iconForProvider: (providerId: string) => vscode.ThemeIcon | vscode.Uri,
+    /// Told whenever the set of not-yet-described conversations changes, so the list redraws at once.
+    private readonly startedChanged: () => void = () => undefined,
   ) {
     this.closing = vscode.window.onDidCloseTerminal((terminal) => {
       for (const [key, open] of this.open) {
         if (open === terminal) this.open.delete(key);
       }
+      // A tab closed before its service named the conversation takes its placeholder row with it. Leaving the row
+      // would leave a conversation on screen that nothing on this machine can open.
+      if (this.started.delete(terminal)) this.startedChanged();
     });
   }
 
@@ -75,8 +83,21 @@ export class TerminalTabs implements vscode.Disposable {
       location: vscode.TerminalLocation.Editor,
       isTransient: true,
     });
+    this.started.set(terminal, {
+      id: `${providerId}:${this.nextStarted += 1}`,
+      providerId,
+      workspace,
+      title: name,
+      startedAtMs: Date.now(),
+    });
+    this.startedChanged();
     terminal.show(false);
     return terminal;
+  }
+
+  /// The conversations this window opened that no service has described yet.
+  startedConversations(): StartedConversation[] {
+    return [...this.started.values()];
   }
 
   /// Spread the open conversation tabs over editor groups: each tab after the first moves to a group of

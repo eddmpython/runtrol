@@ -984,3 +984,46 @@ test("a pin and a nickname survive the moment the service names the conversation
   assert.equal(later?.pinned, true, "the pin chosen before that moment is still a pin");
   assert.equal(later?.title, "My chat", "and the chosen name is still the name");
 });
+
+test("a conversation runtrol just started stands in the list until its service names it", () => {
+  const providers = [
+    { providerId: "grok", displayName: "Grok", icon: "grok", installation: { state: "usable" } },
+  ] as unknown as ProviderLine[];
+  const root = "C:/storage/no-project";
+  const started = [{ id: "grok:1", providerId: "grok", workspace: root, title: "New Grok conversation", startedAtMs: 1_700_000_000_000 }];
+
+  // The service has written nothing down yet, which is the whole gap this closes: the person pressed new, a
+  // terminal opened, and the list would otherwise still say there are no conversations.
+  const fresh = conversations([], providers, [], null, root, new Map(), new Map(), new Set(), new Map(), started);
+  assert.deepEqual(fresh.map((row) => [row.title, row.projectless, row.live]), [
+    ["New Grok conversation", true, true],
+  ]);
+  // Nothing may offer to resume, rename or delete it: those need the identity the service has not published.
+  assert.equal(fresh[0]?.native, null);
+  assert.equal(fresh[0]?.session, null);
+
+  // Once the service describes a running conversation in that folder, that row IS this conversation. Showing
+  // both would put one conversation on screen twice.
+  const named = conversations(
+    [],
+    providers,
+    [{
+      providerId: "grok",
+      nativeSessionId: "01a0",
+      title: "Simple greeting request",
+      cwd: root,
+      updatedAt: "1700000030000",
+      resume: "available",
+      adoptionToken: "t",
+      live: true,
+    }] as unknown as NativeChatLine[],
+    null,
+    root,
+    new Map(),
+    new Map(),
+    new Set(),
+    new Map(),
+    started,
+  );
+  assert.deepEqual(named.map((row) => row.title), ["Simple greeting request"]);
+});

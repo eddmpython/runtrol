@@ -74,6 +74,24 @@ export type Conversation = {
   readonly blocked: string | null;
 };
 
+/// A conversation runtrol has just opened, before the service has written anything down about it.
+///
+/// The service is what names a conversation and what files it, and neither has happened the moment a person
+/// presses new: the CLI is starting, and it writes its store on its own schedule (measured 2026-08-26: a Grok
+/// conversation with a completed turn was still absent from Grok's own listing). Between those two moments the
+/// person is looking at a list that does not contain the thing they just made, which reads as "it did not work".
+/// So runtrol shows what it started, using what it does know: the service, the folder, and that it is running.
+export type StartedConversation = {
+  /// Distinguishes two conversations started in the same folder with the same service.
+  readonly id: string;
+  readonly providerId: string;
+  readonly workspace: string;
+  /// What the tab is called until the service names the conversation.
+  readonly title: string;
+  /// When runtrol opened it, which is how the row it becomes is recognised.
+  readonly startedAtMs: number;
+};
+
 /// Every conversation on this machine, in the order to show them.
 ///
 /// `projectlessRoot` is the scratch folder conversations without a project run in (null when this surface
@@ -88,6 +106,7 @@ export function conversations(
   isolatedWorkspaceHomes: ReadonlyMap<string, string> = new Map(),
   pinnedKeys: ReadonlySet<string> = new Set(),
   renamedTitles: ReadonlyMap<string, string> = new Map(),
+  started: readonly StartedConversation[] = [],
 ): Conversation[] {
   const nativeByKey = new Map<string, NativeChatLine>();
   for (const chat of nativeChats) {
@@ -122,6 +141,22 @@ export function conversations(
     // contributes its title and timestamp, which the supervised row above has already taken.
     if (claimed.has(key) || chat.alreadyManagedAs) continue;
     rows.push(providerOwned(chat, key, providers, projectlessRoot, pinnedKeys.has(key), renamedTitles.get(key)));
+  }
+  // What runtrol started and the service has not named yet. A placeholder gives way to the row the service
+  // finally wrote for it: same service, same folder, and touched at or after the moment the tab opened. Keeping
+  // both would show one conversation twice, and dropping the placeholder any earlier would empty the list again.
+  const spokenFor = new Map<string, number>();
+  for (const row of rows) {
+    const slot = startedSlot(row.providerId, row.workspace);
+    spokenFor.set(slot, Math.max(spokenFor.get(slot) ?? 0, row.updatedAtMs ?? 0));
+  }
+  for (const pending of started) {
+    const wrote = spokenFor.get(startedSlot(pending.providerId, pending.workspace));
+    // A minute of slack: the service stamps its own store from its own clock, and a row that is this
+    // conversation must not be missed over a second of drift. No row at all is not a match, however old the
+    // placeholder is: that is exactly the gap this stands in.
+    if (wrote !== undefined && wrote >= pending.startedAtMs - SERVICE_CLOCK_SLACK_MS) continue;
+    rows.push(startedRow(pending, providers, projectlessRoot));
   }
   // Pinned rows first, each group then in its own recency order. Pinning is a placement choice, so it sorts
   // ahead of recency rather than pretending the conversation was just touched.
@@ -587,4 +622,50 @@ function instant(value: string | null | undefined): number | null {
 
 function compare(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
+}
+
+/// How far a service's own clock may sit behind this one before a row stops being recognised as the
+/// conversation runtrol just started.
+const SERVICE_CLOCK_SLACK_MS = 60_000;
+
+/// The bucket a started conversation and a service-owned row share when they are the same conversation.
+function startedSlot(providerId: string, workspace: string): string {
+  return `${providerId}|${workspace.trim().toLowerCase()}`;
+}
+
+/// The row for a conversation runtrol opened and the service has not described yet.
+///
+/// It carries no service record, so nothing downstream can offer to resume, rename or delete it: those all need
+/// the identity the service has not published. It is a place in the list, honest about being new.
+function startedRow(
+  pending: StartedConversation,
+  providers: readonly ProviderLine[],
+  projectlessRoot: string | null,
+): Conversation {
+  const projectless = isProjectless(pending.workspace, projectlessRoot);
+  return {
+    key: `started:${encodeURIComponent(pending.id)}`,
+    legacyKey: null,
+    providerId: pending.providerId,
+    serviceName: providerDisplayName(pending.providerId, providers),
+    serviceIcon: providerIcon(pending.providerId, providers),
+    title: pending.title,
+    homeWorkspace: pending.workspace,
+    workspace: pending.workspace,
+    folder: projectless ? "" : workspaceName(pending.workspace),
+    projectless,
+    updatedAtMs: null,
+    // Starting is not working: the service has not been asked anything yet, so claiming it is busy would put a
+    // spinner on a conversation nobody has spoken to.
+    activity: "ready",
+    tool: null,
+    signInNeeded: false,
+    live: true,
+    open: true,
+    pinned: false,
+    session: null,
+    native: null,
+    canOpen: true,
+    blocked: null,
+  };
 }

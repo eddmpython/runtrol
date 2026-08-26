@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 
-import { conversations, type Conversation } from "./conversationList";
+import { conversations, type Conversation, type StartedConversation } from "./conversationList";
 import type {
   NativeChatCatalogue,
   NativeChatLine,
@@ -62,6 +62,8 @@ export class RuntimeState implements vscode.Disposable {
   /// `projectlessRoot` is the scratch folder conversations without a project run in (null when this
   /// surface has none). Held here because every derived row reads it, and one place answering "is this
   /// conversation projectless" keeps the sidebar, the switcher and the tabs in agreement.
+  private started: readonly StartedConversation[] = [];
+
   constructor(readonly projectlessRoot: string | null = null) {}
 
   get sessions(): readonly SessionLine[] {
@@ -125,6 +127,7 @@ export class RuntimeState implements vscode.Disposable {
       this.isolatedWorkspaceHomes,
       this.pinnedKeys,
       this.renamedTitles,
+      this.started,
     );
     return this.conversationRows;
   }
@@ -132,6 +135,16 @@ export class RuntimeState implements vscode.Disposable {
   /// Remember which conversations are pinned, then repaint so the order changes at once.
   setPinnedKeys(keys: ReadonlySet<string>): void {
     this.pinnedKeys = keys;
+    this.conversationRows = null;
+    this.changedEmitter.fire("rows");
+  }
+
+  /// The conversations this window opened that no service has described yet.
+  ///
+  /// Held here rather than in the tree because the switcher and the tabs read the same list: one place decides
+  /// what a conversation is, and a conversation the person just started is one.
+  setStarted(started: readonly StartedConversation[]): void {
+    this.started = started;
     this.conversationRows = null;
     this.changedEmitter.fire("rows");
   }
