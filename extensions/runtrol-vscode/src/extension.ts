@@ -32,6 +32,7 @@ import { providerDisplayName, providerIcon, sessionTitle, workspaceName } from "
 import { RuntimeState } from "./state";
 import { StudioRuntimeClient } from "./runtimeClient";
 import { workspaceCovers, workspaceIdentity } from "./workspaceCollision";
+import type { Conversation } from "./conversationList";
 import { rememberedList, rememberList } from "./listMemory";
 import { UsageView } from "./usageView";
 import { WorkspaceRootFollowing } from "./workspaceRoots";
@@ -624,15 +625,14 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
         progress("cold-watch-and-render");
         const coldResumeMs = performance.now() - resumeStarted;
         const resumed = state.selected;
-        if (
-          !resumed
-          || !resumed.hot
-          || resumed.sessionId !== cold.sessionId
-          || resumed.providerId !== cold.providerId
-          || resumed.nativeSessionId !== cold.nativeSessionId
-          || resumed.workspace !== cold.workspace
-        ) {
-          throw new Error("selecting a cold row did not heat the same Runtime-managed session");
+        // Named one by one. "did not heat" covered six different failures, and every one of them sent the
+        // reader to look at resume when the mismatch might have been the row, the provider or the folder.
+        const openedRow = state.conversations.find(
+          (candidate) => candidate.session?.sessionId === cold.sessionId,
+        );
+        const mismatch = describeResumeMismatch(resumed, cold, openedRow, terminals);
+        if (mismatch) {
+          throw new Error(`selecting a cold row did not heat the same Runtime-managed session: ${mismatch}`);
         }
         const current = state.sessions.filter((session) => expected.has(session.sessionId));
         const hot = current.filter((session) => session.hot);
@@ -656,7 +656,7 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
           coldResumeMs,
           sessionSwitchP95Ms: percentile(samples, 0.95),
           resumedFrom: cold.sessionId,
-          resumedTo: resumed.sessionId,
+          resumedTo: resumed?.sessionId ?? "",
           restoreSession: state.selected?.sessionId ?? "",
           restoreWorkspace: state.selected?.workspace ?? "",
         };
@@ -755,6 +755,37 @@ function updateNotice(running: number): string {
   if (running === 1) return "Update applies when this conversation ends.";
   if (running > 1) return `Update applies when these ${running} conversations end.`;
   return "Update applies as soon as the running conversations end.";
+}
+
+/// Why a cold row that was selected is not the hot session it should now be, or null when it is.
+///
+/// One sentence per way it can be wrong. The single message this replaced covered six failures at once, and each
+/// of them sent the reader to look at resume when the mismatch might have been the row, the service or the folder.
+function describeResumeMismatch(
+  resumed: RuntimeState["selected"],
+  cold: { sessionId: string; providerId: string; nativeSessionId?: string | null; workspace: string },
+  row: Conversation | undefined,
+  terminals: TerminalTabs,
+): string | null {
+  if (!resumed) return "nothing is selected";
+  // What selecting a stored conversation promises is its tab, not a structured resume: this surface opens the
+  // service's own terminal and nothing else (`docs/terminalSurface.md`). The measurement asked for a session
+  // that had turned hot, which is the older model's promise and stopped being made when that model was removed.
+  if (!row) return "the selected session has no row to open";
+  if (!terminals.isOpen(row.key)) return "the selected conversation has no open tab";
+  if (resumed.sessionId !== cold.sessionId) {
+    return `a different session is selected: ${resumed.sessionId} instead of ${cold.sessionId}`;
+  }
+  if (resumed.providerId !== cold.providerId) {
+    return `the selected session changed service: ${resumed.providerId} instead of ${cold.providerId}`;
+  }
+  if (resumed.nativeSessionId !== cold.nativeSessionId) {
+    return "the selected session changed its service-side identity";
+  }
+  if (resumed.workspace !== cold.workspace) {
+    return `the selected session changed folder: ${resumed.workspace} instead of ${cold.workspace}`;
+  }
+  return null;
 }
 
 /// Whether provider discovery has made a stored conversation in this folder visible.

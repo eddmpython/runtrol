@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { rememberedList, rememberList } from "./listMemory";
+import { rememberedList, rememberList, writeRememberedNow } from "./listMemory";
 import type { NativeChatCatalogue } from "./runtimeTypes";
 
 /// A memento that behaves like the editor's: synchronous reads, promised writes.
@@ -35,7 +35,7 @@ function catalogue(providerId: string, count: number): NativeChatCatalogue {
 test("what one window drew is what the next window draws first", async () => {
   const store = memento();
   rememberList(store as never, [catalogue("claude", 2), catalogue("grok", 1)]);
-  await Promise.resolve();
+  await writeRememberedNow();
   const back = rememberedList(store as never);
   assert.deepEqual(back.map((entry) => [entry.providerId, entry.chats.length]), [["claude", 2], ["grok", 1]]);
 });
@@ -58,7 +58,7 @@ test("nothing remembered, and anything unrecognisable, draws no rows instead of 
 test("the remembered list is bounded, so a settings file cannot grow without end", async () => {
   const store = memento();
   rememberList(store as never, [catalogue("claude", 500), catalogue("codex", 500)]);
-  await Promise.resolve();
+  await writeRememberedNow();
   const kept = rememberedList(store as never).reduce((total, entry) => total + entry.chats.length, 0);
   assert.equal(kept, 600);
 });

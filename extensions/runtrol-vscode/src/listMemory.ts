@@ -41,6 +41,19 @@ type Remembered = {
   readonly catalogues: readonly NativeChatCatalogue[];
 };
 
+/// How long a burst of catalogue changes is allowed to collect before one write is made.
+///
+/// Discovery does not arrive once. Each service answers on its own schedule and a busy machine produces a run of
+/// changes in a second or two; writing on every one of them put a settings-file write between the daemon's
+/// events and the panel that was waiting for them. This is a convenience for the *next* window, so it can always
+/// wait for the current one to be quiet.
+const WRITE_AFTER_MS = 2_000;
+
+/// The write this window still owes, when a burst is in progress.
+let pending: ReturnType<typeof setTimeout> | null = null;
+/// What that owed write would store, so it can be forced without waiting out the burst.
+let owed: (() => Promise<void>) | null = null;
+
 /// Remember the catalogues this window is currently drawing.
 ///
 /// Fire and forget: the write is a convenience for the next window, so a failed write must never interrupt this
@@ -58,10 +71,23 @@ export function rememberList(
     trimmed.push({ ...catalogue, chats: catalogue.chats.slice(0, left) });
     left -= catalogue.chats.length;
   }
-  void Promise.resolve(memento.update(KEY, { catalogues: trimmed } satisfies Remembered)).then(
-    () => undefined,
-    () => undefined,
-  );
+  owed = async () => {
+    try {
+      await memento.update(KEY, { catalogues: trimmed } satisfies Remembered);
+    } catch {
+      // ok: the next window waits as it used to, and nobody asked for this write in the first place.
+    }
+  };
+  if (pending) clearTimeout(pending);
+  pending = setTimeout(() => {
+    pending = null;
+    const write = owed;
+    owed = null;
+    if (write) void write();
+  }, WRITE_AFTER_MS);
+  // Never holds the window open: a write owed when the editor is closing is a write the next window can do
+  // without.
+  pending.unref?.();
 }
 
 /// The catalogues the last window drew, or an empty list when there is nothing remembered yet.
@@ -85,4 +111,15 @@ function isCatalogue(value: unknown): value is NativeChatCatalogue {
       const line = chat as Record<string, unknown>;
       return typeof line.providerId === "string" && typeof line.nativeSessionId === "string";
     });
+}
+
+/// Make the owed write happen now. For a test, which cannot wait out a burst it did not create.
+export async function writeRememberedNow(): Promise<void> {
+  if (pending) {
+    clearTimeout(pending);
+    pending = null;
+  }
+  const write = owed;
+  owed = null;
+  if (write) await write();
 }

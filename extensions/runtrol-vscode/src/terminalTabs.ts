@@ -95,6 +95,11 @@ export class TerminalTabs implements vscode.Disposable {
     return terminal;
   }
 
+  /// Whether this conversation already has its tab open here.
+  isOpen(conversationKey: string): boolean {
+    return this.open.has(conversationKey);
+  }
+
   /// The conversations this window opened that no service has described yet.
   startedConversations(): StartedConversation[] {
     return [...this.started.values()];
