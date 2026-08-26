@@ -121,13 +121,18 @@ class CoreTerminal implements vscode.Pseudoterminal {
     private readonly target: Target,
   ) {}
 
+  /// Every failure below leaves the tab standing with the reason written in it.
+  ///
+  /// Closing it wrote the one sentence that explains the failure and took it away in the same frame, so a
+  /// conversation that would not open left no trace at all: a tab flashed and the person was back where they
+  /// started with nothing to read (measured 2026-08-26).
   open(initialDimensions: vscode.TerminalDimensions | undefined): void {
     const cols = initialDimensions?.columns ?? 120;
     const rows = initialDimensions?.rows ?? 40;
     void this.connect(cols, rows).catch((error: unknown) => {
       const message = error instanceof Error ? error.message : String(error);
       this.writeEmitter.fire(`\r\n\x1b[31m${message}\x1b[0m\r\n`);
-      this.end(1);
+      this.detach();
     });
   }
 
@@ -210,11 +215,11 @@ class CoreTerminal implements vscode.Pseudoterminal {
             return;
           case "failed":
             this.writeEmitter.fire(`\r\n\x1b[31m${response.with.message}\x1b[0m\r\n`);
-            this.end(1);
+            this.detach();
             return;
           default:
             this.writeEmitter.fire(`\r\n\x1b[31mthe Core sent ${response.say} on a terminal view\x1b[0m\r\n`);
-            this.end(1);
+            this.detach();
             return;
         }
       }
@@ -222,7 +227,7 @@ class CoreTerminal implements vscode.Pseudoterminal {
       if (this.closed) return;
       const message = error instanceof Error ? error.message : String(error);
       this.writeEmitter.fire(`\r\n\x1b[31mthe terminal view ended: ${message}\x1b[0m\r\n`);
-      this.end(1);
+      this.detach();
     }
   }
 
@@ -235,7 +240,7 @@ class CoreTerminal implements vscode.Pseudoterminal {
       if (this.closed) return;
       const message = error instanceof Error ? error.message : String(error);
       this.writeEmitter.fire(`\r\n\x1b[31mthe terminal view ended: ${message}\x1b[0m\r\n`);
-      this.end(1);
+      this.detach();
     }
   }
 
