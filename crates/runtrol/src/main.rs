@@ -274,33 +274,36 @@ fn serving() -> impl FnOnce(&tokio::runtime::Runtime) -> ExitCode {
 /// The endpoint stays owned by `RuntrolHome` and the generation by the executable's bytes. A native surface asks
 /// this executable once instead of reimplementing platform home selection, canonicalization, Windows
 /// fingerprinting, Unix socket length rules, or the digest.
-/// The control endpoint a client should use: this build's own generation when it is serving, otherwise the
-/// newest generation that is not draining.
+/// The control endpoint to use when this build's own generation is draining.
 ///
 /// A draining generation refuses new conversations on purpose, and a client that keeps its address never
 /// leaves it: the address is derived from the executable's own bytes, so asking again returns the same
 /// draining generation forever. Measured 2026-08-26 on a window that had been open across an update, where
 /// every new conversation was refused with the daemon's own words about generations.
 ///
-/// Preferring this build first is what keeps an update arriving: when this build is not serving yet, nothing
-/// is chosen here and the caller starts it, which makes it the newest.
-fn serving_endpoint(runtime: &tokio::runtime::Runtime, own_address: &str) -> Option<String> {
+/// Only that case redirects. A build whose generation is not running at all still starts it, because that is
+/// how an update arrives: attaching to somebody else's generation instead would leave the new build forever
+/// unstarted and the update forever unapplied.
+fn endpoint_past_a_draining_own(
+    runtime: &tokio::runtime::Runtime,
+    own_address: &str,
+) -> Option<String> {
     // A locator that cannot be read is not a reason to refuse to connect: the caller falls back to its own
     // address, which is what this function existed to improve on rather than depend on.
     let Ok(generations) = runtime.block_on(runtrol_daemon::status(None)) else {
         return None;
     };
-    let usable =
-        |status: &runtrol_daemon::GenerationStatus| status.answering && !status.generation.draining;
-    if generations
-        .iter()
-        .any(|status| usable(status) && status.generation.control_endpoint == own_address)
-    {
+    let own_is_draining = generations.iter().any(|status| {
+        status.generation.control_endpoint == own_address
+            && status.answering
+            && status.generation.draining
+    });
+    if !own_is_draining {
         return None;
     }
     generations
         .iter()
-        .filter(|status| usable(status))
+        .filter(|status| status.answering && !status.generation.draining)
         .max_by_key(|status| status.generation.started_at_ms)
         .map(|status| status.generation.control_endpoint.clone())
 }
@@ -310,7 +313,7 @@ fn endpointing() -> impl FnOnce(&tokio::runtime::Runtime) -> ExitCode {
         let Some((executable, own)) = own_generation() else {
             return ExitCode::FAILURE;
         };
-        let address = serving_endpoint(runtime, &own).unwrap_or(own);
+        let address = endpoint_past_a_draining_own(runtime, &own).unwrap_or(own);
 
         match runtime.block_on(runtrol_cli::reach(&address, &executable)) {
             Ok(connection) => {
