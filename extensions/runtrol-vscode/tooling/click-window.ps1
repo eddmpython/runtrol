@@ -4,6 +4,9 @@ param(
     [Parameter(Mandatory = $true)][string]$TitleMatch,
     [Parameter(Mandatory = $true)][int]$X,
     [Parameter(Mandatory = $true)][int]$Y,
+    # Right for a context menu. The reorder and rename actions live there, which is where a list's own
+    # arrangement belongs rather than as more buttons on every row.
+    [ValidateSet("left", "right")][string]$Button = "left",
     # Two windows can carry the same title when they hold the same folder, and the operator's window is one of
     # them. The process family (a user-data-dir, say) is what tells an isolated window from theirs.
     [string]$CommandLineMatch = ""
@@ -51,7 +54,9 @@ $point.X = $X
 $point.Y = $Y
 [RuntrolClickWin32]::ClientToScreen($handle, [ref]$point) | Out-Null
 [RuntrolClickWin32]::SetCursorPos($point.X, $point.Y) | Out-Null
-# MOUSEEVENTF_LEFTDOWN, then MOUSEEVENTF_LEFTUP.
-[RuntrolClickWin32]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
-[RuntrolClickWin32]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
-Write-Output "clicked client point $X,$Y in '$($window.Title)'"
+# MOUSEEVENTF_LEFTDOWN/UP, or RIGHTDOWN/UP.
+$down = if ($Button -eq "right") { 0x0008 } else { 0x0002 }
+$up = if ($Button -eq "right") { 0x0010 } else { 0x0004 }
+[RuntrolClickWin32]::mouse_event($down, 0, 0, 0, [UIntPtr]::Zero)
+[RuntrolClickWin32]::mouse_event($up, 0, 0, 0, [UIntPtr]::Zero)
+Write-Output "$Button-clicked client point $X,$Y in '$($window.Title)'"
