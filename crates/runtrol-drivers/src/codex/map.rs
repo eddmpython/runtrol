@@ -777,7 +777,7 @@ mod tests {
         // Measured: it comes on every turn for free. That is what makes "you are waiting on a limit" showable
         // instead of a spinner, at the cost of no extra call.
         let quota = params(
-            r#"{"rateLimits":{"primary":{"usedPercent":87,"windowDurationMins":300,"resetsAt":1799999999},"secondary":{"usedPercent":12,"windowDurationMins":10080}}}"#,
+            r#"{"rateLimits":{"limitId":"codex","primary":{"usedPercent":87,"windowDurationMins":300,"resetsAt":1799999999},"secondary":{"usedPercent":12,"windowDurationMins":10080}}}"#,
         );
         match read("account/rateLimits/updated", Some(&quota)).expect("readable") {
             Frame::Body(EventBody::RateLimitUpdate(limit)) => {
@@ -806,7 +806,7 @@ mod tests {
     fn a_limit_that_was_actually_reached_says_so() {
         // The one decision the supervisor takes on this frame: is the account blocked.
         let blocked = params(
-            r#"{"rateLimits":{"primary":{"usedPercent":100},"rateLimitReachedType":"primary"}}"#,
+            r#"{"rateLimits":{"limitId":"codex","primary":{"usedPercent":100},"rateLimitReachedType":"rate_limit_reached"}}"#,
         );
         match read("account/rateLimits/updated", Some(&blocked)).expect("readable") {
             Frame::Body(EventBody::RateLimitUpdate(limit)) => assert!(limit.reached),
