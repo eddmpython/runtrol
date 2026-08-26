@@ -320,10 +320,16 @@ fn window_of(name: &str, window: &RateLimitWindow) -> Option<Window> {
 /// cast or draw a bar longer than its track.
 fn percent_of(fraction: f64) -> u8 {
     let scaled = (fraction * 100.0).round();
-    if scaled.is_nan() {
+    if scaled.is_nan() || scaled <= 0.0 {
         return 0;
     }
-    scaled.clamp(0.0, 100.0) as u8
+    if scaled >= 100.0 {
+        return 100;
+    }
+    // In range and finite by the two guards above, so this cast is exact rather than truncating.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let whole = scaled as u8;
+    whole
 }
 
 /// The account's limit position, from the fields this CLI reports.
@@ -359,16 +365,17 @@ fn rate_limit(line: &Bytes, envelope: &Envelope<'_>) -> RateLimit {
     if windows.is_empty() {
         // Older builds of this CLI reported one governing window at the top level and no `unifiedWindows`. That
         // report is still a real limit position and still draws.
-        if let Some(read) = read.as_ref() {
-            if read.utilization.is_some() || read.resets_at.is_some() {
-                windows.push(Window {
-                    used_percent: read.utilization.map(percent_of),
-                    resets_at: read
-                        .resets_at
-                        .map(|seconds| WallMs::from_millis(seconds.saturating_mul(1_000))),
-                    window_minutes: None,
-                });
-            }
+        if let Some(read) = read
+            .as_ref()
+            .filter(|read| read.utilization.is_some() || read.resets_at.is_some())
+        {
+            windows.push(Window {
+                used_percent: read.utilization.map(percent_of),
+                resets_at: read
+                    .resets_at
+                    .map(|seconds| WallMs::from_millis(seconds.saturating_mul(1_000))),
+                window_minutes: None,
+            });
         }
     }
     let mut windows = windows.into_iter();
