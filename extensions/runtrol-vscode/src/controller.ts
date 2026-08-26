@@ -588,9 +588,14 @@ export class Controller implements vscode.Disposable {
   /// New conversation: pick the service, and its own terminal interface opens in this window's folder (or
   /// the scratch folder when the window has none). The service creates the conversation on its first turn,
   /// with its own composer, model picker and permission prompts; nothing of ours stands in front of it.
+  /// The Conversations section's own button: a conversation that belongs to no project.
+  ///
+  /// Deliberately not the folder this window has open. The panel is the machine's, not this window's
+  /// (`docs/vscodeSurface.md`), and a conversation filed under a folder nobody added would vanish from the
+  /// list the moment somebody looked from another window. Starting one inside a project is the project row's
+  /// own button.
   async startSession(options: { interactive?: boolean } = {}): Promise<void> {
-    const workspace = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? await this.ensureProjectlessRoot();
-    await this.startSessionInWorkspace(workspace, options);
+    await this.startSessionInWorkspace(await this.ensureProjectlessRoot(), options);
   }
 
   /// New conversation inside one project, from its heading: the folder question already answered.
