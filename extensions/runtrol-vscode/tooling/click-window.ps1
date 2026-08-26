@@ -1,14 +1,18 @@
-# Click one client-relative point in one exact titled window. Used by installed-product eye passes where the target
+﻿# Click one client-relative point in one exact titled window. Used by installed-product eye passes where the target
 # is a webview and VS Code does not restore its text caret after the Command Palette closes.
 param(
     [Parameter(Mandatory = $true)][string]$TitleMatch,
     [Parameter(Mandatory = $true)][int]$X,
-    [Parameter(Mandatory = $true)][int]$Y
+    [Parameter(Mandatory = $true)][int]$Y,
+    # Two windows can carry the same title when they hold the same folder, and the operator's window is one of
+    # them. The process family (a user-data-dir, say) is what tells an isolated window from theirs.
+    [string]$CommandLineMatch = ""
 )
 
 $ErrorActionPreference = "Stop"
-# Kept before dot-sourcing: the shared file's own param() block resets this name in this scope.
+# Kept before dot-sourcing: the shared file's own param() block resets these names in this scope.
 $wantedTitle = $TitleMatch
+$wantedFamily = $CommandLineMatch
 . (Join-Path $PSScriptRoot "find-window.ps1")
 Add-Type @"
 using System;
@@ -26,7 +30,7 @@ public class RuntrolClickWin32 {
 }
 "@
 
-$window = Find-RuntrolWindow $wantedTitle ""
+$window = Find-RuntrolWindow $wantedTitle $wantedFamily
 if (-not $window) {
     Write-Error "no window has a title matching '$wantedTitle'"
     exit 2
