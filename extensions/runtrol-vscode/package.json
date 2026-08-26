@@ -576,12 +576,12 @@
         {
           "command": "runtrol.enableAgentTools",
           "group": "inline@3",
-          "when": "view == runtrol.projects && viewItem =~ /^runtrol\\.project/"
+          "when": "view == runtrol.projects && viewItem =~ /^runtrol\\.project\\..*\\.noTools/"
         },
         {
           "command": "runtrol.openProjectWorkspace",
           "group": "inline@2",
-          "when": "view == runtrol.projects && viewItem =~ /^runtrol\\.project\\.(created|open)(\\.pinnable|\\.pinned)?$/"
+          "when": "view == runtrol.projects && viewItem =~ /^runtrol\\.project\\.created/"
         },
         {
           "command": "runtrol.pinProject",
@@ -592,11 +592,6 @@
           "command": "runtrol.unpinProject",
           "group": "inline@4",
           "when": "view == runtrol.projects && viewItem =~ /^runtrol\\.project\\.created.*\\.pinned$/"
-        },
-        {
-          "command": "runtrol.createProjectHere",
-          "group": "1_manage@1",
-          "when": "view == runtrol.projects && viewItem =~ /^runtrol\\.project\\.open/"
         },
         {
           "command": "runtrol.renameProject",
@@ -611,12 +606,12 @@
         {
           "command": "runtrol.disableAgentTools",
           "group": "1_manage@3",
-          "when": "view == runtrol.projects && viewItem =~ /^runtrol\\.project/"
+          "when": "view == runtrol.projects && viewItem =~ /^runtrol\\.project\\..*\\.tools/"
         },
         {
           "command": "runtrol.openProjectWorkspace",
           "group": "2_window@1",
-          "when": "view == runtrol.projects && viewItem =~ /^runtrol\\.project\\.(created|open)(\\.pinnable|\\.pinned)?$/"
+          "when": "view == runtrol.projects && viewItem =~ /^runtrol\\.project\\.created/"
         },
         {
           "command": "runtrol.renameSession",
@@ -645,12 +640,12 @@
         },
         {
           "command": "runtrol.pinConversation",
-          "when": "view =~ /^runtrol\\.(projects|conversations)$/ && viewItem =~ /\\.pinnable/",
+          "when": "view =~ /^runtrol\\.(projects|conversations)$/ && viewItem =~ /^runtrol\\.conversation\\..*\\.pinnable$/",
           "group": "inline@1"
         },
         {
           "command": "runtrol.unpinConversation",
-          "when": "view =~ /^runtrol\\.(projects|conversations)$/ && viewItem =~ /\\.pinned/",
+          "when": "view =~ /^runtrol\\.(projects|conversations)$/ && viewItem =~ /^runtrol\\.conversation\\..*\\.pinned$/",
           "group": "inline@1"
         },
         {

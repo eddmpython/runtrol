@@ -76,7 +76,7 @@ export class ProjectItem extends vscode.TreeItem {
     // only on headings that are not this window: opening the folder you are already in is not a move, and the
     // contract (`docs/vscodeSurface.md`) wants moving to be the one explicit act. Rename, pin and remove belong
     // to added projects; the open folder offers "add this folder as a project" instead.
-    this.contextValue = projectContextValue(group);
+    this.contextValue = projectContextValue(group, agentToolsEnabled);
     // Keep the real folder in the tooltip and command payload, but do not expose it as the tree resource. VS Code's
     // Git decorations would otherwise append an unrelated dirty-file badge to the project heading.
     this.tooltip = agentToolsEnabled
@@ -94,9 +94,13 @@ export class ProjectItem extends vscode.TreeItem {
 /// The context value the menus key on: `runtrol.project.<kind>`, plus `.current` for this window's own folder,
 /// plus `.pinned` or `.pinnable` on an added project so its inline button offers the one of pin and unpin that
 /// applies.
-function projectContextValue(group: ProjectGroup): string {
+function projectContextValue(group: ProjectGroup, agentToolsEnabled: boolean): string {
   const pin = group.kind === "created" ? (group.pinned ? ".pinned" : ".pinnable") : "";
-  return `runtrol.project.${group.kind}${group.current ? ".current" : ""}${pin}`;
+  // The row says whether its tools are on, so the menu offers the one action that applies. Without this the
+  // same folder carried both "enable" and "disable" at once, which asks the reader to know the state the row
+  // was supposed to tell them.
+  const tools = agentToolsEnabled ? ".tools" : ".noTools";
+  return `runtrol.project.${group.kind}${group.current ? ".current" : ""}${tools}${pin}`;
 }
 
 /// One coding service, offered where the person pressed the button.

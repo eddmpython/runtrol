@@ -486,20 +486,6 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
         await afterReady(() => controller.deleteConversation(item));
       }),
     ),
-    vscode.commands.registerCommand(
-      "runtrol.pinConversation",
-      (item: unknown) => run(async () => {
-        if (!(item instanceof ConversationItem)) return;
-        await afterReady(() => controller.togglePin(item));
-      }),
-    ),
-    vscode.commands.registerCommand(
-      "runtrol.unpinConversation",
-      (item: unknown) => run(async () => {
-        if (!(item instanceof ConversationItem)) return;
-        await afterReady(() => controller.togglePin(item));
-      }),
-    ),
     vscode.workspace.onDidChangeConfiguration((event) => {
       if (event.affectsConfiguration("runtrol.corePath")) {
         const previous = lifecycle;
