@@ -78,6 +78,11 @@ COLORTERM = "truecolor"
 # speaks; the CLI keeps its own state under its home directory.
 location = [".grok"]
 format = "protocol"
+# Deleting is not on that protocol, but this CLI publishes its own command for it: `grok sessions delete <ID>`
+# (measured 2026-08-26 from `grok sessions delete --help`, which names one positional session id). Until this
+# was read, the row offered no delete at all and the product said this service could not delete, which was
+# our omission rather than the service's.
+delete = ["sessions", "delete"]
 
 [account]
 # No status command is published; sign-in state is learned over the ACP handshake.
