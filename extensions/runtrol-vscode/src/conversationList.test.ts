@@ -562,15 +562,15 @@ test("a folder that is only whitespace files nowhere", () => {
 
 test("a folder nobody added is never a heading, however many conversations name it", () => {
   // A project is a decision, never a discovery: the panel used to invent a heading for every folder with enough
-  // conversations, and the operator rejected the wall it produced. The open folder stays explicit; every other
-  // conversation is a plain top-level row until its folder is added.
+  // conversations, and the operator rejected the wall it produced. The open folder stays explicit; a folder
+  // nobody added contributes nothing at all until it is added (operator, 2026-08-26).
   const rows = conversations(spread([ALPHA, BETA, GAMMA]), PROVIDERS, [], null);
   const groups = projects([], rows, [ALPHA]);
   assert.equal(groups.length, 1, "only the open folder is a heading");
   assert.equal(groups[0]?.kind, "open");
   assert.equal(groups[0]?.current, true, "the open folder is this window's project");
   assert.equal(groups[0]?.rows.length, 2, "its own conversations file under it");
-  assert.equal(loose(rows, [], [ALPHA]).length, 4, "the other folders' conversations stay loose, not indented");
+  assert.equal(loose(rows).length, 0, "an unadded folder's conversations are not on screen at all");
   assert.equal(projects([], [], []).length, 0, "with nothing added and nothing open, no headings at all");
 });
 
@@ -581,7 +581,7 @@ test("adding a folder lists every conversation the services report inside it", (
   assert.equal(groups.length, 1);
   assert.equal(groups[0]?.kind, "created");
   assert.equal(groups[0]?.rows.length, 3, "the folder's conversations file under it at once");
-  assert.equal(loose(rows, [record(BETA)], []).length, 0);
+  assert.equal(loose(rows).length, 0);
 });
 
 test("pinned projects come first in the order they were added, then the open folder", () => {
@@ -675,14 +675,14 @@ test("a conversation started with no project is loose beneath the headings, neve
   }
   const groups = projects([], rows, []);
   assert.deepEqual(groups.map((group) => group.name), [], "a one-off working directory is not a project");
-  assert.equal(loose(rows, [], []).length, 3, "all one-off conversations are plain rows");
+  assert.equal(loose(rows).length, 2, "only the two with no project of their own, never the filed one");
 });
 
 test("without a scratch folder nothing is projectless", () => {
   const rows = conversations([session({ sessionId: "s", workspace: SCRATCH })], PROVIDERS, [], null, null);
   assert.equal(rows[0]?.projectless, false);
   assert.equal(projects([], rows, []).length, 0, "one folder observation does not invent a project");
-  assert.equal(loose(rows, [], []).length, 1);
+  assert.equal(loose(rows).length, 0, "it names a folder, so it waits for that folder to be added");
 });
 
 test("a created project standing on the open folder draws the one heading", () => {
@@ -730,7 +730,7 @@ test("the current folder is available before its first conversation without proj
   assert.deepEqual(groups.map((group) => group.name), ["alpha"]);
   assert.equal(groups[0]?.current, true);
   assert.equal(groups[0]?.rows.length, 0);
-  assert.equal(loose(rows, [], [ALPHA]).length, 1);
+  assert.equal(loose(rows).length, 0, "the conversation in the unadded folder is not drawn anywhere");
 });
 
 test("a conversation row never repeats the folder its heading already names", () => {

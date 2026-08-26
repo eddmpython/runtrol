@@ -485,8 +485,8 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
       this.extensionUri,
     ));
     const groups = projects(records, rows, openWorkspaces);
-    // Beneath the headings, not under one. A conversation started with no project is still a conversation.
-    const unfiled = loose(rows, records, openWorkspaces).map((row) => new ConversationItem(
+    // Conversations nobody filed anywhere. A folder that is not on the list contributes none of these.
+    const unfiled = loose(rows).map((row) => new ConversationItem(
       row,
       this.state.providerCapabilities(row.providerId),
       this.extensionUri,

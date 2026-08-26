@@ -318,18 +318,15 @@ function projectOf(records: readonly ProjectRecord[], row: Conversation): Projec
 /// Below the headings rather than above them, because a project is a place somebody chose and a loose
 /// conversation is one they did not. Together `projects` and this function split the list with nothing falling
 /// through and nothing drawn twice.
-export function loose(
-  rows: readonly Conversation[],
-  records?: readonly ProjectRecord[],
-  openWorkspaces?: readonly string[],
-): Conversation[] {
-  // Compatibility for projections that only ask the intrinsic question. The sidebar passes the complete
-  // grouping context below, which is what also promotes one-off working directories to plain rows.
-  if (!records || !openWorkspaces) return rows.filter(intrinsicallyLoose);
-  const grouped = new Set(
-    projects(records, rows, openWorkspaces).flatMap((heading) => heading.rows.map((row) => row.key)),
-  );
-  return rows.filter((row) => !grouped.has(row.key));
+/// The conversations that belong to no project: they run in the extension's scratch folder, or name no
+/// folder at all. Their own section, beneath Projects (`memory/MEMORY.md` judgement table).
+///
+/// A conversation discovered in a folder nobody added is NOT one of these. It has a project, that project is
+/// simply not on this person's list, and showing it anyway is what made the sidebar a wall of other people's
+/// work (operator, 2026-08-26: the standard is Paseo, the Claude app and the Codex app, where a folder you
+/// never added is not on screen). Adding the folder is what brings its conversations in, all at once.
+export function loose(rows: readonly Conversation[]): Conversation[] {
+  return rows.filter(intrinsicallyLoose);
 }
 
 /// Pinned projects first in the order they were added, then the current window's project, then the other
