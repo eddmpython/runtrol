@@ -22,12 +22,14 @@
 //! The two ends of that ([`words`] and [`lines`]) touch nothing at all, which is why both are checked here without a
 //! daemon, a socket, or a session.
 
+pub mod administration;
 pub mod ask;
 pub mod lines;
 pub mod link;
 pub mod words;
 
-pub use ask::{Failed, Outcome, ask};
+pub use administration::{AdministrationFailure, administer, is_administration};
+pub use ask::{Failed, Outcome, ask, request};
 pub use lines::{NOT_NAMED_YET, render};
 pub use link::{DAEMON_ARGUMENT, Unreachable, reach};
 pub use words::{Misunderstood, understand};

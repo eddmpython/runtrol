@@ -90,6 +90,35 @@ pub enum Outcome {
     Refused,
 }
 
+/// Ask one private local command and return its exact structured response.
+///
+/// Interactive administration uses this seam because its next request depends on the exact row the daemon returned.
+/// The daemon is still the sole authority and implementation owner; this function only carries its private wire.
+///
+/// # Errors
+///
+/// [`Failed`] when the generation cannot be reached, the wire cannot be agreed, or no readable answer arrives.
+pub async fn request(
+    address: &str,
+    runtrol: &std::path::Path,
+    request: Request,
+) -> Result<Response, Failed> {
+    let mut connection = crate::link::reach(address, runtrol).await?;
+    let welcome = exchange(
+        &mut connection,
+        &Request::Hello {
+            wire: runtrol_ipc::WIRE_VERSION,
+        },
+    )
+    .await?;
+    if let Response::Failed(said) = welcome {
+        return Err(Failed::DifferentBuilds {
+            said: said.message.to_string(),
+        });
+    }
+    exchange(&mut connection, &request).await
+}
+
 /// Ask a daemon one thing, and hand back what a person reads.
 ///
 /// `runtrol` is the executable a daemon is started from when none is running. Named by the caller and never inferred:

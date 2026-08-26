@@ -190,6 +190,12 @@ pub enum Request {
     /// List approved and revoked public Runtime integrations for local administration.
     Integrations,
 
+    /// Show measured installation state and declared user-run help for one provider.
+    ProviderHelp {
+        /// Exact runtime-discovered provider identity.
+        provider_id: Box<str>,
+    },
+
     /// Revoke one integration and retire its current public connections on their next request.
     IntegrationRevoke {
         /// Opaque approved integration identity.
@@ -598,6 +604,9 @@ pub enum Response {
     /// Approved and revoked public Runtime integrations visible only at the machine.
     Integrations(Vec<IntegrationLine>),
 
+    /// Measured provider state and manifest-declared commands safe for local display.
+    ProviderHelp(Box<ProviderHelpLine>),
+
     /// Public Runtime session-forget requests awaiting one local decision.
     RuntimeForgetRequests(Vec<RuntimeForgetLine>),
 
@@ -860,12 +869,35 @@ pub struct IntegrationEnrollmentLine {
     pub client_instance_id: Box<str>,
     /// Short public-key fingerprint for operator comparison.
     pub key_fingerprint: Box<str>,
+    /// Hexadecimal digest of the exact enrollment manifest.
+    pub manifest_digest: Box<str>,
     /// Exact stable requested scopes.
     pub scopes: Vec<Box<str>>,
     /// Exact requested project paths before local canonicalization.
     pub roots: Vec<Box<str>>,
     /// Expiry in Unix milliseconds.
     pub expires_at_ms: u64,
+}
+
+/// One provider's measured local state and declarative setup assistance.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ProviderHelpLine {
+    /// Runtime-discovered provider identity.
+    pub provider_id: Box<str>,
+    /// Provider or manifest supplied display name.
+    pub display_name: Box<str>,
+    /// `usable`, `missing`, or `unavailable`.
+    pub installation_state: Box<str>,
+    /// Provider-owned version text when measured.
+    pub version: Option<Box<str>>,
+    /// Safe structural reason when the provider is not usable.
+    pub why: Option<Box<str>>,
+    /// Provider-declared sign-in command for the operator to run.
+    pub sign_in: Option<Box<str>>,
+    /// Provider-declared diagnosis command for the operator to run.
+    pub diagnose: Option<Box<str>>,
+    /// Provider-declared installation command for the operator to run.
+    pub install: Option<Box<str>>,
 }
 
 /// One durable public Runtime integration grant for local presentation.
@@ -883,6 +915,8 @@ pub struct IntegrationLine {
     pub available_scopes: Vec<Box<str>>,
     /// Canonical current roots.
     pub roots: Vec<Box<str>>,
+    /// Current public-key generation.
+    pub key_generation: u64,
     /// Grant generation changed by narrowing or revocation.
     pub grant_generation: u64,
     /// Whether this grant is revoked.

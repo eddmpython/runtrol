@@ -20,6 +20,7 @@
 //! install first, no second program to keep in step, and an update that replaces one file rather than a set. It is
 //! also what lets a command start a daemon at all, because the program it needs is the one already running.
 
+use std::io::IsTerminal as _;
 use std::process::ExitCode;
 
 /// Which personality this invocation is.
@@ -36,6 +37,8 @@ enum Personality {
     AgentToolsMcp,
     /// Enable or inspect Agent Tools locally.
     AgentToolsCommand(Vec<String>),
+    /// Administer public Runtime integrations from an owner terminal.
+    Administration(Vec<String>),
     /// Ask the daemon something and print the answer.
     Command(Vec<String>),
     /// Say what the words could have been.
@@ -101,6 +104,7 @@ fn main() -> ExitCode {
         Personality::Status { json } => run(status_reporting(json)),
         Personality::AgentToolsMcp => run(agent_tools_serving()),
         Personality::AgentToolsCommand(words) => run(agent_tools_commanding(&words)),
+        Personality::Administration(words) => run(administering(&words)),
         Personality::Command(words) => run(commanding(&words)),
         Personality::Usage(message) => {
             report(&message);
@@ -113,7 +117,7 @@ fn main() -> ExitCode {
 fn choose(words: &[String]) -> Personality {
     match words.first().map(String::as_str) {
         None => Personality::Usage(
-            "runtrol <command>. try: endpoint, status, runtime-locator, tools, list, start, resume, say, answer, stop, watch, close, consult, panic"
+            "runtrol <command>. try: endpoint, status, runtime-locator, integrations, requests, providers, tools, list, start, resume, say, answer, stop, watch, close, consult, panic"
                 .to_owned(),
         ),
         // Spelled as a subcommand rather than inferred from how the program was invoked. Inferring it from the
@@ -131,7 +135,39 @@ fn choose(words: &[String]) -> Personality {
         },
         Some("mcp") => Personality::AgentToolsMcp,
         Some("tools") => Personality::AgentToolsCommand(words.get(1..).unwrap_or_default().to_vec()),
+        Some(_) if runtrol_cli::is_administration(words) => {
+            Personality::Administration(words.to_vec())
+        }
         Some(_) => Personality::Command(words.to_vec()),
+    }
+}
+
+/// Run one owner-only Runtime administration command.
+fn administering(words: &[String]) -> impl FnOnce(&tokio::runtime::Runtime) -> ExitCode {
+    move |runtime| {
+        let Some((executable, address)) = own_generation() else {
+            return ExitCode::FAILURE;
+        };
+        let standard_input = std::io::stdin();
+        let standard_output = std::io::stdout();
+        let interactive = standard_input.is_terminal() && standard_output.is_terminal();
+        let mut input = standard_input.lock();
+        let mut output = standard_output.lock();
+        match runtime.block_on(runtrol_cli::administer(
+            &address,
+            &executable,
+            words,
+            interactive,
+            &mut input,
+            &mut output,
+        )) {
+            Ok(runtrol_cli::Outcome::Carried) => ExitCode::SUCCESS,
+            Ok(runtrol_cli::Outcome::Refused) => ExitCode::FAILURE,
+            Err(error) => {
+                report(&error.to_string());
+                ExitCode::FAILURE
+            }
+        }
     }
 }
 
@@ -571,6 +607,21 @@ mod tests {
                 assert_eq!(words, typed("enable project"));
             }
             _ => panic!("expected the Agent Tools administration personality"),
+        }
+    }
+
+    #[test]
+    fn runtime_administration_is_not_sent_through_the_ordinary_command_parser() {
+        for line in [
+            "integrations list",
+            "integrations review pending",
+            "requests review pending",
+            "providers help provider",
+        ] {
+            assert!(matches!(
+                choose(&typed(line)),
+                Personality::Administration(_)
+            ));
         }
     }
 

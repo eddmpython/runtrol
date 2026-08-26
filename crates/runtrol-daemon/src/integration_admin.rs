@@ -396,6 +396,7 @@ impl IntegrationAdmin {
                 client_version: row.client_version,
                 client_instance_id: row.client_instance_id,
                 key_fingerprint: fingerprint(&row.public_key).into(),
+                manifest_digest: hex(&row.manifest_digest).into(),
                 scopes: row.scopes,
                 roots: row.roots,
                 expires_at_ms: row.expires_at.as_millis(),
@@ -420,6 +421,7 @@ impl IntegrationAdmin {
                     .map(|scope| Box::<str>::from(scope.as_str()))
                     .collect(),
                 roots: row.roots.into_iter().map(|root| root.path).collect(),
+                key_generation: row.key_generation,
                 grant_generation: row.grant_generation,
                 revoked: row.revoked_at.is_some(),
             })
@@ -1039,7 +1041,7 @@ pub(crate) struct AdminError {
 }
 
 impl AdminError {
-    const fn invalid(message: &'static str) -> Self {
+    pub(crate) const fn invalid(message: &'static str) -> Self {
         Self { message }
     }
 

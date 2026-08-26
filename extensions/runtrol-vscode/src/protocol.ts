@@ -25,6 +25,7 @@ export type IntegrationEnrollmentLine = {
   client_version: string;
   client_instance_id: string;
   key_fingerprint: string;
+  manifest_digest: string;
   scopes: string[];
   roots: string[];
   expires_at_ms: number;
@@ -37,6 +38,7 @@ export type IntegrationLine = {
   scopes: string[];
   available_scopes: string[];
   roots: string[];
+  key_generation: number;
   grant_generation: number;
   revoked: boolean;
 };
@@ -276,6 +278,7 @@ export type Request =
   | { ask: "integrationSelfApprove"; with: { pending_id: string; signature: string } }
   | { ask: "integrationEnrollmentDeny"; with: { pending_id: string } }
   | { ask: "integrations" }
+  | { ask: "providerHelp"; with: { provider_id: string } }
   | { ask: "integrationRevoke"; with: { integration_id: string } }
   | {
       ask: "integrationGrantChange";
@@ -418,6 +421,19 @@ export type Response =
     }
   | { say: "integrationApproved"; with: { integration_id: string } }
   | { say: "integrations"; with: IntegrationLine[] }
+  | {
+      say: "providerHelp";
+      with: {
+        provider_id: string;
+        display_name: string;
+        installation_state: string;
+        version: string | null;
+        why: string | null;
+        sign_in: string | null;
+        diagnose: string | null;
+        install: string | null;
+      };
+    }
   | { say: "runtimeForgetRequests"; with: RuntimeForgetLine[] }
   | { say: "runtimeKeyRotationRequests"; with: RuntimeKeyRotationLine[] }
   | { say: "runtimeSharedOpenRequests"; with: RuntimeSharedOpenLine[] }

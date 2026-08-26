@@ -673,6 +673,7 @@ pub(crate) const fn is_integration_admin(request: &Request) -> bool {
             | Request::IntegrationSelfApprove { .. }
             | Request::IntegrationEnrollmentDeny { .. }
             | Request::Integrations
+            | Request::ProviderHelp { .. }
             | Request::IntegrationRevoke { .. }
             | Request::IntegrationGrantChange { .. }
             | Request::RuntimeForgetRequests
@@ -846,6 +847,7 @@ pub(crate) async fn prepare_integration_admin(
         }
         Request::Integrations => crate::integration_admin::IntegrationAdmin::integrations(composed)
             .map(Response::Integrations),
+        Request::ProviderHelp { provider_id } => provider_help(composed, provider_id),
         Request::IntegrationRevoke { integration_id } => {
             crate::integration_admin::IntegrationAdmin::revoke(composed, integration_id)
                 .map(|()| Response::Done)
@@ -870,6 +872,45 @@ pub(crate) async fn prepare_integration_admin(
     }
     .unwrap_or_else(|error| refuse(&error.to_string()));
     Prepared::IntegrationAdmin { response }
+}
+
+fn provider_help(
+    composed: &Composed,
+    provider_id: &str,
+) -> Result<Response, crate::integration_admin::AdminError> {
+    let provider = crate::runtime_inventory::providers(composed)
+        .providers
+        .into_iter()
+        .find(|provider| provider.provider_id.as_str() == provider_id)
+        .ok_or_else(|| {
+            crate::integration_admin::AdminError::invalid(
+                "the provider does not exist in this Runtime",
+            )
+        })?;
+    let state = match provider.installation.state {
+        runtrol_runtime_protocol::InstallationState::Usable => "usable",
+        runtrol_runtime_protocol::InstallationState::Missing => "missing",
+        runtrol_runtime_protocol::InstallationState::Unavailable => "unavailable",
+    };
+    let help = provider
+        .help
+        .unwrap_or(runtrol_runtime_protocol::ProviderHelp {
+            sign_in: None,
+            diagnose: None,
+            install: None,
+        });
+    Ok(Response::ProviderHelp(Box::new(
+        runtrol_ipc::wire::ProviderHelpLine {
+            provider_id: provider.provider_id.as_str().into(),
+            display_name: provider.display_name.into(),
+            installation_state: state.into(),
+            version: provider.installation.version.map(Into::into),
+            why: provider.installation.why.map(Into::into),
+            sign_in: help.sign_in.map(Into::into),
+            diagnose: help.diagnose.map(Into::into),
+            install: help.install.map(Into::into),
+        },
+    )))
 }
 
 /// The public Runtime's queued decisions (session forget, integration key rotation, shared-writer session
@@ -1155,6 +1196,7 @@ pub(crate) fn answer_prepared(
         | Request::IntegrationSelfApprove { .. }
         | Request::IntegrationEnrollmentDeny { .. }
         | Request::Integrations
+        | Request::ProviderHelp { .. }
         | Request::IntegrationRevoke { .. }
         | Request::IntegrationGrantChange { .. }
         | Request::RuntimeForgetRequests

@@ -20,6 +20,7 @@ const INTEGRATION = {
   scopes: ["session.start"],
   available_scopes: ["session.start"],
   roots: [LINE.project],
+  key_generation: 1,
   grant_generation: 4,
   revoked: false,
 };

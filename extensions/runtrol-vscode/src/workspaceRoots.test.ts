@@ -111,6 +111,7 @@ function integration(overrides: Partial<IntegrationLine> = {}): IntegrationLine 
     scopes: ["session.list"],
     available_scopes: ["session.list"],
     roots: [path.resolve("approved")],
+    key_generation: 1,
     grant_generation: 1,
     revoked: false,
     ...overrides,
