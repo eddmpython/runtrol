@@ -96,8 +96,8 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
   // every derived row agrees on which conversations are projectless.
   const state = new RuntimeState(projectlessRoot(context.globalStorageUri.fsPath));
   // Before anything is located, connected to or asked: the list this window drew last time. Reading it is a
-  // synchronous memento lookup, so the panel has rows in its first paint rather than a sentence about connecting
-  // (`memory/MEMORY.md`, section 3: a person who can see the wait is the failure).
+  // synchronous memento lookup, so the panel has rows in its first paint rather than a sentence about
+  // connecting. A person who can see the wait is the failure.
   state.restoreRemembered(rememberedList(context.globalState));
   state.onRemember((catalogues) => rememberList(context.globalState, catalogues));
   const selection = new SelectionStore(context.globalStorageUri.fsPath);

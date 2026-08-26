@@ -153,8 +153,10 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
     } if isinstance(command_entries, list) else set()
     activation_events = package.get("activationEvents")
     activations = set(activation_events) if isinstance(activation_events, list) else set()
-    if "runtrol.discoverServices" not in command_ids or "onCommand:runtrol.discoverServices" not in activations:
-        found.append("the fixed sidebar service catalogue must have one activatable discovery command")
+    # Setting a service up is offered from the usage section's own title, in that section, and nowhere else. It
+    # replaced a catalogue of services this product had never measured, advertised at the foot of the sidebar.
+    if "runtrol.setUpServices" not in command_ids or "onCommand:runtrol.setUpServices" not in activations:
+        found.append("the usage section must have one activatable set-up command")
 
     all_source = "\n".join(sources.values())
     forbidden = {
@@ -256,7 +258,7 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             "selfApproveIntegration(client, pendingId, signature)",
             'initializationStage = "runtime:bootstrap"',
             'executeCommand("runtrol.usage.focus")',
-            '"runtrol.discoverServices"',
+            '"runtrol.setUpServices"',
         ],
         "providerHealth.ts": [
             "the installed executable has not completed a verified probe",
@@ -303,7 +305,7 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             "Usage refresh failed: ${why}. Showing the last report.",
             "usageViewAction(message)",
             "isBroken(provider)",
-            "this.installableCount",
+            "setup: this.setupOpen ? this.setup : []",
             "this.postSnapshot()",
             "enableScripts: true",
             "img-src ${webview.cspSource}",
@@ -316,7 +318,7 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             "bar.value = meter.percent",
             'bar.setAttribute("aria-label"',
             'vscode.postMessage({ type, providerId: row.providerId })',
-            'vscode.postMessage({ type: "discover"',
+            'vscode.postMessage({ type: "setUp", providerId: row.providerId }',
             "usage.replaceChildren",
             ".textContent =",
             'return /^[a-z0-9-]{1,64}$/u.test(value) ? value : "sparkle"',
@@ -340,9 +342,9 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             'detail: `Disconnected · ${usageDetail(gauge, nowMs)}`',
             "export function usageMeters",
             "Math.max(0, Math.min(100",
-            "export function installableProviders",
+            "export function setupRows",
             "icon: providerIcon(providerId, providers)",
-            'provider.installation.state === "missing" && Boolean(provider.help?.install)',
+            "export function usageAbsenceCause",
         ],
         "serializedWatch.ts": [
             "private active: AbortController",
@@ -453,7 +455,7 @@ def selftest() -> int:
     package = {
         "engines": {"vscode": "^1.106.0"},
         "activationEvents": [
-            "onCommand:runtrol.discoverServices",
+            "onCommand:runtrol.setUpServices",
         ],
         "contributes": {
             "viewsContainers": {
@@ -504,7 +506,7 @@ def selftest() -> int:
             "commands": [
                 {"command": "runtrol.scheduleMission"},
                 {"command": "runtrol.cancelMissionSchedule"},
-                {"command": "runtrol.discoverServices"},
+                {"command": "runtrol.setUpServices"},
                 {
                     "command": "runtrol.deleteConversation",
                     "title": "Delete Conversation",
@@ -575,7 +577,7 @@ def selftest() -> int:
             "afterReady selfApproveIntegration(client, pendingId, signature) "
             'initializationStage = "runtime:bootstrap" missionController.startAutoFlights() '
             'executeCommand("runtrol.usage.focus") '
-            '"runtrol.scheduleMission" "runtrol.cancelMissionSchedule" "runtrol.discoverServices"'
+            '"runtrol.setUpServices"'
         ),
         "providerHealth.ts": (
             "the installed executable has not completed a verified probe "
@@ -603,14 +605,14 @@ def selftest() -> int:
             "implements vscode.WebviewViewProvider private gauges: "
             '"Usage refresh failed: ${why}. Showing the last report." '
             "usageRowsEqual(this.rows, next) usageViewAction(message) isBroken(provider) "
-            'this.installableCount this.postSnapshot() enableScripts: true '
+            'setup: this.setupOpen ? this.setup : [] this.postSnapshot() enableScripts: true '
             'img-src ${webview.cspSource} data-icon-base="${iconBase}" '
             '"resources", "provider-icons"'
         ),
         "usageViewWebview.ts": (
             'document.createElement("progress") bar.max = 100 bar.value = meter.percent '
             'bar.setAttribute("aria-label" vscode.postMessage({ type, providerId: row.providerId }) '
-            'vscode.postMessage({ type: "discover" usage.replaceChildren .textContent = '
+            'vscode.postMessage({ type: "setUp", providerId: row.providerId } usage.replaceChildren .textContent = '
             'return /^[a-z0-9-]{1,64}$/u.test(value) ? value : "sparkle" '
             'image.src = `${iconBase}/${iconName(declared)}.svg` '
             'const fallback = `${iconBase}/sparkle.svg`'
@@ -627,7 +629,7 @@ def selftest() -> int:
             'detail: "Checking" detail: "Unavailable · Fix" '
             'detail: `Disconnected · ${usageDetail(gauge, nowMs)}` '
             "export function usageMeters Math.max(0, Math.min(100 "
-            'export function installableProviders icon: providerIcon(providerId, providers) '
+            'export function setupRows export function usageAbsenceCause icon: providerIcon(providerId, providers) '
             'provider.installation.state === "missing" && Boolean(provider.help?.install)'
         ),
         "serializedWatch.ts": (

@@ -10,7 +10,7 @@ import type { NativeChatCatalogue } from "./runtimeTypes";
 /// integration was checked, every service was asked what it had, and only then did a conversation appear. Each of
 /// those is fast on its own and the sum is not, and the person watching has nothing to look at while it happens.
 /// A list that is already there when the panel opens is the whole difference between an editor panel and an app
-/// somebody has to launch (`memory/MEMORY.md`, section 3).
+/// somebody has to launch.
 ///
 /// # Why this is safe to draw
 ///

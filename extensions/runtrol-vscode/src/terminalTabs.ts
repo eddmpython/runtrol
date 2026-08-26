@@ -252,7 +252,7 @@ class CoreTerminal implements vscode.Pseudoterminal {
               this.end(0);
             } else {
               this.writeEmitter.fire(`
-[2m[${this.target.provider} ended with code ${response.with.code}][0m
+\x1b[2m[${this.target.provider} ended with code ${response.with.code}]\x1b[0m
 `);
               this.detach();
             }

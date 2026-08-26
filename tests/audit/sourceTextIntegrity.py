@@ -54,6 +54,14 @@ SOURCE_SUFFIXES = frozenset(
 
 ALLOWED_CONTROL = frozenset({0x09, 0x0A, 0x0D})
 
+# Third-party code this repository carries but did not write.
+#
+# The reason this gate exists is that a raw control byte makes *our* source unreadable and ungreppable, and the
+# answer to that is to write the escape the language provides. Neither half applies to a vendored bundle: it is
+# minified, it is not edited here, and rewriting its bytes would break the digest that makes vendoring honest.
+# The same boundary the silent-failure gate draws (`tests/audit/checkSilentFail.py`).
+VENDORED = ("/vendor/",)
+
 
 def offending(data: bytes) -> list[tuple[int, int]]:
     """Return every (offset, byte) that has no business in a source file."""
@@ -83,7 +91,9 @@ def trackedSources() -> list[Path]:
     return [
         ROOT / name
         for name in names
-        if name and Path(name).suffix.lower() in SOURCE_SUFFIXES
+        if name
+        and Path(name).suffix.lower() in SOURCE_SUFFIXES
+        and not any(marker in f"/{name}" for marker in VENDORED)
     ]
 
 
