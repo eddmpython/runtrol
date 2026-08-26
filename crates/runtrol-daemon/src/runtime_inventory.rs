@@ -70,6 +70,11 @@ impl Default for ProviderInventoryCache {
 }
 
 struct CachedProviderInventory {
+    /// Whether the account reports were readable when this was built.
+    ///
+    /// A snapshot built while the probe held them carries no account on any row, which is a different
+    /// picture from the truth and not one to keep. It is answered once and then thrown away.
+    accounts_read: bool,
     checked_at: Instant,
     stamp: ProviderInventoryStamp,
     resolved_programs: Vec<PathBuf>,
@@ -302,7 +307,9 @@ pub(crate) fn providers(composed: &Composed) -> ProviderList {
 
     let built = build_provider_inventory(composed);
     let list = built.list.clone();
-    if let Some(cache) = inventory_cache.as_mut() {
+    if let Some(cache) = inventory_cache.as_mut()
+        && built.accounts_read
+    {
         cache.current = Some(built);
     }
     list
@@ -343,7 +350,9 @@ pub(crate) async fn providers_in_background(
     if !cache.finish_background_refresh(revision) {
         return Ok(None);
     }
-    cache.current = Some(built);
+    if built.accounts_read {
+        cache.current = Some(built);
+    }
     Ok(Some(list))
 }
 
@@ -388,12 +397,16 @@ fn build_provider_inventory(composed: &Composed) -> CachedProviderInventory {
         .filter_map(|(_, path)| path.clone())
         .collect::<Vec<_>>();
     // Contended only while the probe writes a fresh report, for microseconds; this projection then
-    // reads no account and the next one, after the publish that write triggers, reads them all.
+    // reads no account and answers without one. What it must not do is keep that answer: a snapshot with no
+    // accounts in it looks exactly like a machine where nobody is signed in, and caching one meant a single
+    // unlucky instant took the plan, the sign-in state and the reason a service has no numbers off every row
+    // until the cache aged out. So the miss is carried out of here and the caller declines to store it.
     let held = composed.account_reports.try_lock();
     let accounts: Option<&crate::account_probe::AccountReports> = match &held {
         Ok(reports) => Some(reports),
         Err(_) => None,
     };
+    let accounts_read = accounts.is_some();
     let list = ProviderList {
         providers: registered
             .into_iter()
@@ -416,6 +429,7 @@ fn build_provider_inventory(composed: &Composed) -> CachedProviderInventory {
             .collect(),
     };
     CachedProviderInventory {
+        accounts_read,
         checked_at: Instant::now(),
         stamp: ProviderInventoryStamp::read(composed, &resolved_programs),
         resolved_programs,

@@ -5,7 +5,7 @@
 //! a driver either has a published status surface (`claude auth status --json`, Codex `account/read`)
 //! or says it has none, and the projections repeat exactly that.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -179,6 +179,7 @@ pub(crate) async fn supervise(
     round(&composed, &providers, &usage).await;
     let mut swept_at = WallMs::now();
     let mut asked: BTreeMap<ProviderId, WallMs> = BTreeMap::new();
+    let mut unread: BTreeSet<ProviderId> = BTreeSet::new();
     loop {
         tokio::select! {
             () = tokio::time::sleep(WATCH_TICK) => {}
@@ -192,16 +193,25 @@ pub(crate) async fn supervise(
                     // ok: the previous instant for this service is exactly what is being replaced.
                     asked.insert(*id, now);
                 }
-                ask_all(&composed, &providers, &usage, ids).await;
+                unread = ask_all(&composed, &providers, &usage, ids).await;
                 swept_at = now;
                 continue;
             }
         }
         let now = WallMs::now();
         let mut due = due_now(&composed, &asked, swept_at, now).await;
-        for id in unread(&composed, &asked, now).await {
-            if !due.contains(&id) {
-                due.push(id);
+        // A question that did not come back is the one absence that is runtrol's own, so it is not left to
+        // the slow sweep. Which services those are is what the last round answered, kept here rather than
+        // read back out of the report table: this runs every couple of seconds, and the projection that
+        // builds provider descriptors takes that same table without waiting. Contending with it on a short
+        // clock made it publish descriptors with no account at all, and cache them.
+        for id in &unread {
+            if !due.contains(id)
+                && asked
+                    .get(id)
+                    .is_none_or(|at| at.millis_until(now).unwrap_or(0) >= millis(RETRY_AFTER))
+            {
+                due.push(*id);
             }
         }
         if due.is_empty() {
@@ -214,37 +224,16 @@ pub(crate) async fn supervise(
             // ok: the previous instant for this service is exactly what is being replaced.
             asked.insert(*id, now);
         }
-        ask_all(&composed, &providers, &usage, due).await;
+        let answered = ask_all(&composed, &providers, &usage, due.clone()).await;
+        for id in &due {
+            // ok: the set is the answer, and whether this id was already in it says nothing.
+            if answered.contains(id) {
+                unread.insert(*id);
+            } else {
+                unread.remove(id);
+            }
+        }
     }
-}
-
-/// Services whose last answer was a question that did not come back, and are ready to be asked again.
-///
-/// Told apart from a service that answered and has no numbers, because there is nothing to retry about the
-/// second. That distinction is the reason the report carries a kind rather than a sentence.
-async fn unread(
-    composed: &Composed,
-    asked: &BTreeMap<ProviderId, WallMs>,
-    now: WallMs,
-) -> Vec<ProviderId> {
-    let reports = composed.account_reports.lock().await;
-    usable(composed)
-        .into_iter()
-        .filter(|id| {
-            reports.get(*id).is_some_and(|reported| {
-                reported
-                    .report
-                    .limits_absent
-                    .as_ref()
-                    .is_some_and(runtrol_provider::LimitsAbsent::is_worth_retrying)
-            })
-        })
-        .filter(|id| {
-            asked
-                .get(id)
-                .is_none_or(|asked| asked.millis_until(now).unwrap_or(0) >= millis(RETRY_AFTER))
-        })
-        .collect()
 }
 
 /// Every service this build can actually ask.
@@ -349,9 +338,9 @@ async fn ask_all(
     providers: &watch::Sender<Arc<runtrol_runtime_protocol::ProviderList>>,
     usage: &watch::Sender<Arc<runtrol_runtime_protocol::ProviderUsageList>>,
     ids: Vec<ProviderId>,
-) {
+) -> BTreeSet<ProviderId> {
     if ids.is_empty() {
-        return;
+        return BTreeSet::new();
     }
 
     // All at once, because the services have nothing to do with each other. Asked one after another a round
@@ -375,9 +364,18 @@ async fn ask_all(
 
     let now = WallMs::now();
     let mut changed = false;
+    let mut unread = BTreeSet::new();
     {
         let mut reports = composed.account_reports.lock().await;
         for (id, report) in answers {
+            if report
+                .limits_absent
+                .as_ref()
+                .is_some_and(runtrol_provider::LimitsAbsent::is_worth_retrying)
+            {
+                // ok: the set is the answer, and whether this id was already in it says nothing.
+                unread.insert(id);
+            }
             let same = reports.get(id).is_some_and(|known| known.report == report);
             reports.record(id, report, now);
             changed |= !same;
@@ -388,7 +386,7 @@ async fn ask_all(
     // an otherwise idle daemon leaves the footprint where it found it (the idle memory budget is a contract).
     runtrol_childproc::footprint::release_unused_memory();
     if !changed {
-        return;
+        return unread;
     }
     // The provider descriptors carry the status and the usage list carries the probed windows; both
     // projections read the reports on their own, so publishing is asking each to look again.
@@ -399,6 +397,7 @@ async fn ask_all(
         let merged = crate::runtime_inventory::merge_probed_usage(current.as_ref(), composed);
         *current = Arc::new(merged);
     });
+    unread
 }
 
 /// One service's answer, or nothing when it could not even be prepared, which is an installation
