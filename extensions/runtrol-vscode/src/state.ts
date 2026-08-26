@@ -64,6 +64,7 @@ export class RuntimeState implements vscode.Disposable {
   /// conversation projectless" keeps the sidebar, the switcher and the tabs in agreement.
   private started: readonly StartedConversation[] = [];
   private remember: ((catalogues: readonly NativeChatCatalogue[]) => void) | null = null;
+  private rememberUsage: ((usage: readonly ProviderUsageGauge[]) => void) | null = null;
 
   constructor(readonly projectlessRoot: string | null = null) {}
 
@@ -82,7 +83,23 @@ export class RuntimeState implements vscode.Disposable {
 
   replaceUsage(usage: readonly ProviderUsageGauge[]): void {
     this.usageRows = usage;
+    this.rememberUsage?.(usage);
     this.changedEmitter.fire("usage");
+  }
+
+  /// Draw the strip the last window left, before anything has been asked.
+  ///
+  /// Only ever at the start, and only into an empty strip: once the Core has answered this window, its
+  /// answer is the truth and a remembered reading must not overwrite it.
+  restoreRememberedUsage(usage: readonly ProviderUsageGauge[]): void {
+    if (this.usageRows.length > 0) return;
+    this.usageRows = usage;
+    this.changedEmitter.fire("usage");
+  }
+
+  /// Told what to keep for the next window. Set once, at activation.
+  onRememberUsage(remember: (usage: readonly ProviderUsageGauge[]) => void): void {
+    this.rememberUsage = remember;
   }
 
   get nativeChats(): readonly NativeChatLine[] {

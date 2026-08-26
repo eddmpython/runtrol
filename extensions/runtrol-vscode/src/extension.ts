@@ -34,6 +34,7 @@ import { StudioRuntimeClient } from "./runtimeClient";
 import { workspaceCovers, workspaceIdentity } from "./workspaceCollision";
 import type { Conversation } from "./conversationList";
 import { rememberedList, rememberList } from "./listMemory";
+import { rememberedUsage, rememberUsage } from "./usageMemory";
 import { UsageView } from "./usageView";
 import { WorkspaceRootFollowing } from "./workspaceRoots";
 import { conversationIcon } from "./conversationIcon";
@@ -101,6 +102,10 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
   // connecting. A person who can see the wait is the failure.
   state.restoreRemembered(rememberedList(context.globalState));
   state.onRemember((catalogues) => rememberList(context.globalState, catalogues));
+  // The strip the last window left, so bars are there before anything has been asked. Everything that has
+  // stopped being true is taken out of it first; see `usageMemory`.
+  state.restoreRememberedUsage(rememberedUsage(context.globalState, Date.now()));
+  state.onRememberUsage((usage) => rememberUsage(context.globalState, usage));
   const selection = new SelectionStore(context.globalStorageUri.fsPath);
   let settleReady: ((error?: unknown) => void) | null = null;
   let lifecycle: Promise<void> = new Promise<void>((resolve, reject) => {
