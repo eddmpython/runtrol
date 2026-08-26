@@ -880,7 +880,7 @@ When the implementation and external journey are complete:
 
 1. recut durable behavior from code into the relevant `docs/` owners
 2. update all public README variants from those owners
-3. verify no retained artifact points into `mainPlan/localAgentRuntime`
+3. verify no retained artifact points into this folder
 4. delete this folder in the same completion change
 
 ## Research sources
