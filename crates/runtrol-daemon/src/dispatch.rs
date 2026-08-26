@@ -25,8 +25,7 @@
 use runtrol_core::registry::KindStatus;
 use runtrol_core::session::SessionError;
 use runtrol_core::{
-    ClosingReservation, Lifecycle, OpenReservation, SessionManager, SessionState, SessionView,
-    TakenAgent, Waiting,
+    ClosingReservation, OpenReservation, SessionManager, SessionView, TakenAgent, Waiting,
 };
 use runtrol_ipc::wire::{
     ProviderLine, RemoteConnection, RemoteConnectionStage, RemoteConnectionState, Request,
