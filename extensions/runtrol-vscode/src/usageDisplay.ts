@@ -233,7 +233,11 @@ export function usageAbsenceCause(account: ProviderLine["account"] | null | unde
   // account, and a reader who saw the same word twice would not know which had stalled.
   if (!account) return "Checking usage";
   if (account.status === "signedOut") return "Not signed in · Sign in";
-  return "No usage published";
+  // The service was asked and answered that it has no usage surface at all. Nothing arrives later.
+  if (account.status === "unpublished") return "No usage published";
+  // Signed in, and the number rides on the service's own turn events: it exists, it has simply not been
+  // said yet in this home. Saying "no usage published" here would be wrong the moment somebody typed.
+  return "Usage arrives with the first turn";
 }
 
 /// The plan and sign-in method the service named, in its own tokens, or null when it named none.

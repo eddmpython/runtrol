@@ -210,8 +210,28 @@ test("the account line says what the service said: signed out is an action, a pl
   ]);
   assert.equal(rows[0]?.meters.length, 1, "a reported window is still a bar");
   assert.match(rows[2]?.tooltip ?? "", /publishes no usage or sign-in status/);
-  assert.match(rows[0]?.tooltip ?? "", /max plan via claude\.ai/);
   assert.match(rows[1]?.tooltip ?? "", /Press Enter to sign in/);
+  assert.match(rows[0]?.tooltip ?? "", /max plan via claude\.ai/);
+});
+
+test("a bar-less row names the cause that matches what the service actually said", () => {
+  // Three different absences, three different next steps. Collapsing them once told a signed-in service that
+  // nothing would ever arrive, when its number rides on the next turn it takes.
+  const providers = [
+    { providerId: "unprobed", displayName: "Unprobed", icon: "hubot", installation: { state: "usable" } },
+    { providerId: "out", displayName: "Out", icon: "hubot", installation: { state: "usable" },
+      account: { status: "signedOut", checkedAtMs: NOW } },
+    { providerId: "silent", displayName: "Silent", icon: "hubot", installation: { state: "usable" },
+      account: { status: "unpublished", why: "no status command", checkedAtMs: NOW } },
+    { providerId: "waiting", displayName: "Waiting", icon: "hubot", installation: { state: "usable" },
+      account: { status: "signedIn", plan: "max", checkedAtMs: NOW } },
+  ] as unknown as ProviderLine[];
+  assert.deepEqual(usageRows([], providers, NOW).map((row) => row.detail), [
+    "Checking usage",
+    "Not signed in · Sign in",
+    "No usage published",
+    "Usage arrives with the first turn",
+  ]);
 });
 
 test("a service that publishes its own daily token count shows today's tokens beside the window", () => {
