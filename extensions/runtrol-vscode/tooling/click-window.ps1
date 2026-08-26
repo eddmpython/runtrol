@@ -53,10 +53,20 @@ $point = New-Object RuntrolClickWin32+POINT
 $point.X = $X
 $point.Y = $Y
 [RuntrolClickWin32]::ClientToScreen($handle, [ref]$point) | Out-Null
+# A move, not a jump. SetCursorPos to where the pointer already is produces no mouse-move at all, so a second
+# press on the same control arrives with no hover event in front of it and the editor ignores it (measured
+# 2026-08-26: pressing the usage section's plus twice opened the list and then did nothing).
+[RuntrolClickWin32]::SetCursorPos($point.X + 40, $point.Y + 40) | Out-Null
+Start-Sleep -Milliseconds 120
 [RuntrolClickWin32]::SetCursorPos($point.X, $point.Y) | Out-Null
+# The editor reveals a view's title actions on hover, and the renderer needs a frame to notice the pointer
+# arrived. Pressing in the same instant lands on whatever was drawn before the hover, so the press appears to
+# do nothing while the tool reports success (measured 2026-08-26: the usage section's plus never fired).
+Start-Sleep -Milliseconds 400
 # MOUSEEVENTF_LEFTDOWN/UP, or RIGHTDOWN/UP.
 $down = if ($Button -eq "right") { 0x0008 } else { 0x0002 }
 $up = if ($Button -eq "right") { 0x0010 } else { 0x0004 }
 [RuntrolClickWin32]::mouse_event($down, 0, 0, 0, [UIntPtr]::Zero)
+Start-Sleep -Milliseconds 80
 [RuntrolClickWin32]::mouse_event($up, 0, 0, 0, [UIntPtr]::Zero)
 Write-Output "$Button-clicked client point $X,$Y in '$($window.Title)'"
