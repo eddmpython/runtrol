@@ -103,7 +103,7 @@ export type ChatTreeItem = ConversationItem | ProjectItem;
 
 /// Which half of the sidebar one tree draws.
 ///
-/// The sidebar is two sections in a fixed order (`memory/MEMORY.md` judgement table): Projects, then the
+/// The sidebar is two sections in a fixed order (`docs/vscodeSurface.md`): Projects, then the
 /// conversations that belong to no project. VS Code makes a section a view, so this is one provider stood up
 /// twice rather than two providers that would answer "what conversations exist" separately.
 export type SidebarPart = "projects" | "loose";

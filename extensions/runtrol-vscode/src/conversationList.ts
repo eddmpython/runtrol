@@ -319,7 +319,7 @@ function projectOf(records: readonly ProjectRecord[], row: Conversation): Projec
 /// conversation is one they did not. Together `projects` and this function split the list with nothing falling
 /// through and nothing drawn twice.
 /// The conversations that belong to no project: they run in the extension's scratch folder, or name no
-/// folder at all. Their own section, beneath Projects (`memory/MEMORY.md` judgement table).
+/// folder at all. Their own section, beneath Projects (`docs/vscodeSurface.md`).
 ///
 /// A conversation discovered in a folder nobody added is NOT one of these. It has a project, that project is
 /// simply not on this person's list, and showing it anyway is what made the sidebar a wall of other people's
