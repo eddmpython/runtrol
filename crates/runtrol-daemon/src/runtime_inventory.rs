@@ -219,6 +219,10 @@ pub(crate) fn merge_probed_usage(
                 known
                     .windows
                     .sort_by_key(|window| window.window_minutes.unwrap_or(u32::MAX));
+                // The cap is on what a surface is handed, not on what one reading held. Two readings of one
+                // service are each bounded on their own, so joining them without this published twice the
+                // number the memory-budget contract fixes.
+                known.windows.truncate(runtrol_provider::MAX_LIMIT_WINDOWS);
                 // Only a probe reads a daily token count, so a turn arriving after one would otherwise take
                 // the number off the row until the next round put it back.
                 if known.tokens_today.is_none() {

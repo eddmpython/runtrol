@@ -55,10 +55,16 @@ const GOVERNING: &str = "governing";
 /// by its length and then suffixes a scope (`seven_day`, `seven_day_opus`, `seven_day_sonnet`). A name that
 /// states no length claims none, and the strip then labels that bar with whatever the provider scoped it to.
 fn minutes_of(id: &str) -> Option<u32> {
-    if id.starts_with(FIVE_HOUR) {
+    // The prefix has to end where the name ends or where a suffix begins, or a key this build has never
+    // seen takes a length from a coincidence: `five_hourly` read as five hours.
+    let named = |prefix: &str| {
+        id.strip_prefix(prefix)
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with([':', '_']))
+    };
+    if named(FIVE_HOUR) {
         return Some(300);
     }
-    if id.starts_with(SEVEN_DAY) {
+    if named(SEVEN_DAY) {
         return Some(10_080);
     }
     None
@@ -222,17 +228,37 @@ impl LimitEntry {
     ///
     /// The array names the same two windows the rest of the answer keys as `five_hour` and `seven_day`:
     /// measured, its `session` row carried the same percentage and the same reset instant as `five_hour`,
-    /// and its `weekly_all` row matched `seven_day`. One id per window, so the array's word on which limit
-    /// is governing lands on the window it is about instead of creating a second copy of it.
+    /// and its `weekly_all` row matched `seven_day`. One id per window, so a turn's reading and this one
+    /// replace each other in the gauge instead of drawing two bars for one limit.
+    ///
+    /// A kind this build has never seen keeps its own name, and its scope when it has one. That is not a
+    /// guess about what the limit means: it is the row appearing with whatever the service called it,
+    /// which is the only thing that is true about it here.
     fn window_id(&self) -> Option<Box<str>> {
-        match self.kind.as_deref()? {
-            "session" => Some(FIVE_HOUR.into()),
-            "weekly_all" => Some(SEVEN_DAY.into()),
-            "weekly_scoped" => self
-                .model()
-                .map(|model| format!("{SEVEN_DAY}:{model}").into()),
-            _ => None,
-        }
+        let kind = account_token(self.kind.as_deref())?;
+        let base: Box<str> = match kind.as_ref() {
+            "session" => FIVE_HOUR.into(),
+            "weekly_all" | "weekly_scoped" => SEVEN_DAY.into(),
+            _ => kind,
+        };
+        Some(match self.model() {
+            Some(model) => format!("{base}:{model}").into(),
+            None => base,
+        })
+    }
+
+    /// This row as a window, when it described one.
+    fn window(&self) -> Option<Window> {
+        let id = self.window_id()?;
+        let window = Window {
+            scope: self.model(),
+            used_percent: self.percent.map(percent_of),
+            resets_at: self.resets_at.as_deref().and_then(WallMs::from_iso8601),
+            window_minutes: minutes_of(&id),
+            governing: self.is_active,
+            ..Window::new(&id)
+        };
+        window.is_described().then_some(window)
     }
 }
 
@@ -242,70 +268,46 @@ impl UsageAnswer {
         let Some(limits) = self.rate_limits.as_ref() else {
             return Vec::new();
         };
-        let mut windows: Vec<Window> = [
-            (FIVE_HOUR, None, limits.five_hour.as_ref()),
-            (SEVEN_DAY, None, limits.seven_day.as_ref()),
-            // This CLI's own renderer still reads these two by name, so a plan that reports one keeps its
-            // bar. The scope is the model token out of the key, in the vendor's own spelling: capitalising
-            // it here would be runtrol naming somebody else's model.
+        // The array is this CLI's own answer to "which limits does this account have": its `/usage` screen
+        // is drawn from it, and it is where a window that no key names arrives. Read whole rather than
+        // filtered to the kinds this build recognises, because a kind nobody here has seen is exactly the
+        // one a silent filter would drop, and it would be dropped on the day the vendor added it.
+        let mut windows: Vec<Window> = limits
+            .limits
+            .iter()
+            .filter_map(LimitEntry::window)
+            .collect();
+        // The named keys, for a build that sends no array and for a window the array left out. Same ids, so
+        // an account whose array already described a window keeps the array's reading of it.
+        for (id, scope, reading) in [
+            (FIVE_HOUR.to_owned(), None, limits.five_hour.as_ref()),
+            (SEVEN_DAY.to_owned(), None, limits.seven_day.as_ref()),
+            // This CLI's older per-model keys. They carry the identity the array's `weekly_scoped` rows
+            // carry, because they are one limit said twice: an account reporting both used to grow two
+            // bars for one model's week, and the list keeps the first reading of an identity. The scope is
+            // the model token out of the key in the vendor's own spelling, because capitalising it would
+            // be runtrol naming somebody else's model.
             (
-                "seven_day_opus",
+                format!("{SEVEN_DAY}:opus"),
                 Some("opus"),
                 limits.seven_day_opus.as_ref(),
             ),
             (
-                "seven_day_sonnet",
+                format!("{SEVEN_DAY}:sonnet"),
                 Some("sonnet"),
                 limits.seven_day_sonnet.as_ref(),
             ),
-        ]
-        .into_iter()
-        .filter_map(|(id, scope, reading)| {
-            let reading = reading?;
+        ] {
+            let Some(reading) = reading else { continue };
             let window = Window {
                 scope: scope.map(Into::into),
                 used_percent: reading.utilization.map(percent_of),
                 resets_at: reading.resets_at.as_deref().and_then(WallMs::from_iso8601),
-                window_minutes: minutes_of(id),
-                ..Window::new(id)
-            };
-            window.is_described().then_some(window)
-        })
-        .collect();
-
-        // The model-scoped weeks, which exist only in the array. Its own `weekly_scoped` rows are the
-        // general mechanism the two named keys above predate.
-        for entry in &limits.limits {
-            if entry.kind.as_deref() != Some("weekly_scoped") {
-                continue;
-            }
-            let Some(model) = entry.model() else { continue };
-            let id = format!("{SEVEN_DAY}:{model}");
-            let window = Window {
-                scope: Some(model),
-                used_percent: entry.percent.map(percent_of),
-                resets_at: entry.resets_at.as_deref().and_then(WallMs::from_iso8601),
                 window_minutes: minutes_of(&id),
-                governing: entry.is_active,
                 ..Window::new(&id)
             };
-            if window.is_described() {
+            if window.is_described() && !window.is_known_in(&windows) {
                 windows.push(window);
-            }
-        }
-
-        // The array's word on which limit is binding, applied to whichever window it names.
-        for entry in &limits.limits {
-            if !entry.is_active {
-                continue;
-            }
-            let Some(id) = entry.window_id() else {
-                continue;
-            };
-            for window in &mut windows {
-                if window.id == id {
-                    window.governing = true;
-                }
             }
         }
         windows
@@ -456,6 +458,42 @@ mod tests {
                 window.id
             );
         }
+    }
+
+    #[test]
+    fn a_limit_kind_this_build_has_never_seen_still_draws() {
+        // The array is the service's own list of what this account is limited by, so a filter that kept
+        // only the kinds named in this file would drop exactly the window the vendor added last week. It
+        // arrives under whatever the service called it, which is the only thing true about it here.
+        let answer: UsageAnswer = serde_json::from_str(
+            r#"{"rate_limits":{"limits":[
+                {"kind":"monthly_overage","percent":42,"resets_at":"2026-09-01T00:00:00Z","is_active":false}
+            ]}}"#,
+        )
+        .expect("parses");
+        let windows = answer.windows();
+        assert_eq!(windows.len(), 1);
+        let unknown = windows.first().expect("the one row the array carried");
+        assert_eq!(unknown.id.as_ref(), "monthly_overage");
+        assert_eq!(unknown.used_percent, Some(42));
+        assert_eq!(
+            unknown.window_minutes, None,
+            "its name states no length, so none is claimed"
+        );
+    }
+
+    #[test]
+    fn the_array_and_the_named_keys_never_draw_one_window_twice() {
+        // Both describe `five_hour`. Measured, they agree; either way one bar comes out, and it is the
+        // array's reading because that is the one carrying whether the limit is binding.
+        let windows = measured().windows();
+        assert_eq!(
+            windows
+                .iter()
+                .filter(|window| window.id.as_ref() == "five_hour")
+                .count(),
+            1
+        );
     }
 
     #[test]

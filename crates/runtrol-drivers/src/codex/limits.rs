@@ -172,8 +172,10 @@ fn window_of(id: &str, label: Option<Box<str>>, reported: &LimitWindow) -> Windo
     Window {
         label,
         used_percent: reported.used_percent.map(|percent| {
-            // A percentage past the top of a byte is the provider's own overrun, not a number to wrap.
-            u8::try_from(percent.clamp(0, i64::from(u8::MAX))).unwrap_or(u8::MAX)
+            // Capped at a full window, which is how every other driver here reads a percentage. Letting an
+            // overrun through as 130 drew a full bar beside the digits `130%`, so one row disagreed with
+            // itself; the provider's own overrun stays in the payload for whoever wants it.
+            u8::try_from(percent.clamp(0, 100)).unwrap_or(100)
         }),
         resets_at: reported.resets_at.and_then(|seconds| {
             // A negative reset instant is not a time; absent beats a wrong one.

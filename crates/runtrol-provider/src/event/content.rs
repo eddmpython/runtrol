@@ -203,14 +203,31 @@ impl RateLimit {
 /// judgement about which windows matter: everything past it is dropped whole rather than reordered.
 pub const MAX_LIMIT_WINDOWS: usize = 12;
 
-/// Shortest window first, capped, so a strip draws the one about to bite at the top.
+/// One window per identity, shortest first, capped.
 ///
-/// A window whose length the provider did not state sorts after every stated one rather than at the front,
-/// since an unknown length is not evidence of a short window.
-fn bound_windows(mut windows: Vec<Window>) -> Vec<Window> {
-    windows.sort_by_key(|window| window.window_minutes.unwrap_or(u32::MAX));
-    windows.truncate(MAX_LIMIT_WINDOWS);
-    windows
+/// **One per identity**, because an identity is what a surface keys its row on and what the two readings of
+/// one account are merged by. A provider can describe the same limit twice in one answer: measured, one
+/// names a model's weekly window both under a key of its own and again in its self-describing array, and
+/// another can file two buckets under one id. Both drew one limit as two rows. The first reading of an
+/// identity stays, so a driver puts its better-described reading first and the duplicate falls away here
+/// rather than in each driver.
+///
+/// **Shortest first**, so a strip draws the one about to bite at the top. A window whose length the provider
+/// did not state sorts after every stated one rather than at the front, since an unknown length is not
+/// evidence of a short window.
+fn bound_windows(windows: Vec<Window>) -> Vec<Window> {
+    let mut kept: Vec<Window> = Vec::with_capacity(windows.len().min(MAX_LIMIT_WINDOWS));
+    for window in windows {
+        if kept.iter().any(|known| known.id == window.id) {
+            continue;
+        }
+        kept.push(window);
+        if kept.len() == MAX_LIMIT_WINDOWS {
+            break;
+        }
+    }
+    kept.sort_by_key(|window| window.window_minutes.unwrap_or(u32::MAX));
+    kept
 }
 
 /// One rate limit window, in the provider's own terms.
@@ -259,6 +276,15 @@ impl Window {
             window_minutes: None,
             governing: false,
         }
+    }
+
+    /// Whether one list of windows already describes this identity.
+    ///
+    /// Public because the merge that joins a turn's reading to a probe's answers the same question, and two
+    /// ways of asking it is how the two come to disagree.
+    #[must_use]
+    pub fn is_known_in(&self, windows: &[Self]) -> bool {
+        windows.iter().any(|known| known.id == self.id)
     }
 
     /// Whether this window says anything at all beyond its own name.
