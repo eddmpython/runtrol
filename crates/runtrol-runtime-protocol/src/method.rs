@@ -105,6 +105,39 @@ pub enum RuntimeMethod {
     /// Archive one provider-native conversation through the provider's own surface.
     #[serde(rename = "sessions/archiveNative")]
     SessionsArchiveNative,
+    /// Return the caller-visible live terminals in this Runtime generation.
+    #[serde(rename = "terminals/list")]
+    TerminalsList,
+    /// Watch root-filtered terminal index snapshots.
+    #[serde(rename = "terminals/watchIndex")]
+    TerminalsWatchIndex,
+    /// Open a fresh terminal or resume one authorized native conversation.
+    #[serde(rename = "terminals/open")]
+    TerminalsOpen,
+    /// Attach one connection-bound view at current shared geometry.
+    #[serde(rename = "terminals/attach")]
+    TerminalsAttach,
+    /// Acquire the one renewable terminal write lease.
+    #[serde(rename = "terminals/acquireControl")]
+    TerminalsAcquireControl,
+    /// Renew one exact terminal lease generation.
+    #[serde(rename = "terminals/renewControl")]
+    TerminalsRenewControl,
+    /// Voluntarily release one exact terminal lease generation.
+    #[serde(rename = "terminals/releaseControl")]
+    TerminalsReleaseControl,
+    /// Write exact caller-owned bytes once under the current terminal lease.
+    #[serde(rename = "terminals/write")]
+    TerminalsWrite,
+    /// Set bounded shared PTY geometry under the current terminal lease.
+    #[serde(rename = "terminals/resize")]
+    TerminalsResize,
+    /// Detach only one connection-bound terminal view.
+    #[serde(rename = "terminals/detach")]
+    TerminalsDetach,
+    /// Stop one hosted provider CLI process under the current terminal lease.
+    #[serde(rename = "terminals/stop")]
+    TerminalsStop,
     /// Read pending structured provider approvals for one controlled session.
     #[serde(rename = "approvals/listPending")]
     ApprovalsListPending,
@@ -132,6 +165,21 @@ pub enum RuntimeMethod {
     /// A bounded subscription was retired after lagging.
     #[serde(rename = "sessions/lagged")]
     SessionsLagged,
+    /// One changed root-filtered terminal index snapshot.
+    #[serde(rename = "terminals/indexChanged")]
+    TerminalsIndexChanged,
+    /// Final terminal index subscription reason.
+    #[serde(rename = "terminals/indexEnded")]
+    TerminalsIndexEnded,
+    /// One bounded exact output chunk for a terminal view.
+    #[serde(rename = "terminals/output")]
+    TerminalsOutput,
+    /// Explicit lost-byte boundary with a replacement screen snapshot.
+    #[serde(rename = "terminals/lagged")]
+    TerminalsLagged,
+    /// Provider process exit after preceding output drained.
+    #[serde(rename = "terminals/exited")]
+    TerminalsExited,
     /// Stop every supervised process in the safe direction.
     #[serde(rename = "runtime/panicStop")]
     PanicStop,
@@ -174,6 +222,17 @@ impl RuntimeMethod {
             Self::SessionsForget => "sessions/forget",
             Self::SessionsDeleteNative => "sessions/deleteNative",
             Self::SessionsArchiveNative => "sessions/archiveNative",
+            Self::TerminalsList => "terminals/list",
+            Self::TerminalsWatchIndex => "terminals/watchIndex",
+            Self::TerminalsOpen => "terminals/open",
+            Self::TerminalsAttach => "terminals/attach",
+            Self::TerminalsAcquireControl => "terminals/acquireControl",
+            Self::TerminalsRenewControl => "terminals/renewControl",
+            Self::TerminalsReleaseControl => "terminals/releaseControl",
+            Self::TerminalsWrite => "terminals/write",
+            Self::TerminalsResize => "terminals/resize",
+            Self::TerminalsDetach => "terminals/detach",
+            Self::TerminalsStop => "terminals/stop",
             Self::ApprovalsListPending => "approvals/listPending",
             Self::ApprovalsRespond => "approvals/respond",
             Self::SessionsIndexChanged => "sessions/indexChanged",
@@ -183,6 +242,11 @@ impl RuntimeMethod {
             Self::ProvidersUsageChanged => "providers/usageChanged",
             Self::SessionsEvent => "sessions/event",
             Self::SessionsLagged => "sessions/lagged",
+            Self::TerminalsIndexChanged => "terminals/indexChanged",
+            Self::TerminalsIndexEnded => "terminals/indexEnded",
+            Self::TerminalsOutput => "terminals/output",
+            Self::TerminalsLagged => "terminals/lagged",
+            Self::TerminalsExited => "terminals/exited",
             Self::PanicStop => "runtime/panicStop",
         }
     }
@@ -231,6 +295,17 @@ impl FromStr for RuntimeMethod {
             "sessions/forget" => Ok(Self::SessionsForget),
             "sessions/deleteNative" => Ok(Self::SessionsDeleteNative),
             "sessions/archiveNative" => Ok(Self::SessionsArchiveNative),
+            "terminals/list" => Ok(Self::TerminalsList),
+            "terminals/watchIndex" => Ok(Self::TerminalsWatchIndex),
+            "terminals/open" => Ok(Self::TerminalsOpen),
+            "terminals/attach" => Ok(Self::TerminalsAttach),
+            "terminals/acquireControl" => Ok(Self::TerminalsAcquireControl),
+            "terminals/renewControl" => Ok(Self::TerminalsRenewControl),
+            "terminals/releaseControl" => Ok(Self::TerminalsReleaseControl),
+            "terminals/write" => Ok(Self::TerminalsWrite),
+            "terminals/resize" => Ok(Self::TerminalsResize),
+            "terminals/detach" => Ok(Self::TerminalsDetach),
+            "terminals/stop" => Ok(Self::TerminalsStop),
             "approvals/listPending" => Ok(Self::ApprovalsListPending),
             "approvals/respond" => Ok(Self::ApprovalsRespond),
             "sessions/indexChanged" => Ok(Self::SessionsIndexChanged),
@@ -240,6 +315,11 @@ impl FromStr for RuntimeMethod {
             "providers/usageChanged" => Ok(Self::ProvidersUsageChanged),
             "sessions/event" => Ok(Self::SessionsEvent),
             "sessions/lagged" => Ok(Self::SessionsLagged),
+            "terminals/indexChanged" => Ok(Self::TerminalsIndexChanged),
+            "terminals/indexEnded" => Ok(Self::TerminalsIndexEnded),
+            "terminals/output" => Ok(Self::TerminalsOutput),
+            "terminals/lagged" => Ok(Self::TerminalsLagged),
+            "terminals/exited" => Ok(Self::TerminalsExited),
             "runtime/panicStop" => Ok(Self::PanicStop),
             _ => Err(UnknownMethod(value.to_owned())),
         }
@@ -289,6 +369,17 @@ mod tests {
             RuntimeMethod::SessionsForget,
             RuntimeMethod::SessionsDeleteNative,
             RuntimeMethod::SessionsArchiveNative,
+            RuntimeMethod::TerminalsList,
+            RuntimeMethod::TerminalsWatchIndex,
+            RuntimeMethod::TerminalsOpen,
+            RuntimeMethod::TerminalsAttach,
+            RuntimeMethod::TerminalsAcquireControl,
+            RuntimeMethod::TerminalsRenewControl,
+            RuntimeMethod::TerminalsReleaseControl,
+            RuntimeMethod::TerminalsWrite,
+            RuntimeMethod::TerminalsResize,
+            RuntimeMethod::TerminalsDetach,
+            RuntimeMethod::TerminalsStop,
             RuntimeMethod::ApprovalsListPending,
             RuntimeMethod::ApprovalsRespond,
             RuntimeMethod::SessionsIndexChanged,
@@ -298,6 +389,11 @@ mod tests {
             RuntimeMethod::ProvidersUsageChanged,
             RuntimeMethod::SessionsEvent,
             RuntimeMethod::SessionsLagged,
+            RuntimeMethod::TerminalsIndexChanged,
+            RuntimeMethod::TerminalsIndexEnded,
+            RuntimeMethod::TerminalsOutput,
+            RuntimeMethod::TerminalsLagged,
+            RuntimeMethod::TerminalsExited,
             RuntimeMethod::PanicStop,
         ] {
             assert_eq!(method.as_str().parse(), Ok(method));

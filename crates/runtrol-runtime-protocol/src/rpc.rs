@@ -166,6 +166,9 @@ pub struct RuntimeCapabilities {
     pub session_control: bool,
     /// Bounded replay followed by live normalized events is implemented.
     pub session_events: bool,
+    /// Provider-faithful public terminal sessions are implemented for this generation.
+    #[serde(default)]
+    pub terminal_surface: bool,
 }
 
 /// Numeric public bounds advertised during initialization.
@@ -214,6 +217,27 @@ pub struct RuntimeLimits {
     pub max_idempotency_records: u16,
     /// Lifetime of native catalogue cursors and adoption observations.
     pub native_cursor_lifetime_ms: u64,
+    /// Maximum decoded exact bytes accepted by one terminal write.
+    #[serde(default)]
+    pub max_terminal_write_bytes: usize,
+    /// Maximum decoded exact bytes in one terminal output notification.
+    #[serde(default)]
+    pub max_terminal_output_bytes: usize,
+    /// Maximum decoded bytes in one terminal screen snapshot.
+    #[serde(default)]
+    pub max_terminal_screen_bytes: usize,
+    /// Maximum shared PTY columns.
+    #[serde(default)]
+    pub max_terminal_columns: u16,
+    /// Maximum shared PTY rows.
+    #[serde(default)]
+    pub max_terminal_rows: u16,
+    /// Maximum terminal descriptors returned by one generation.
+    #[serde(default)]
+    pub max_terminal_index_items: u16,
+    /// Maximum queued output chunks per terminal view before an explicit lag boundary.
+    #[serde(default)]
+    pub max_terminal_view_queue_chunks: u16,
 }
 
 impl Default for RuntimeLimits {
@@ -238,6 +262,13 @@ impl Default for RuntimeLimits {
             idempotency_window_ms: crate::IDEMPOTENCY_WINDOW_MS,
             max_idempotency_records: crate::MAX_IDEMPOTENCY_RECORDS,
             native_cursor_lifetime_ms: crate::NATIVE_CURSOR_LIFETIME_MS,
+            max_terminal_write_bytes: crate::MAX_TERMINAL_WRITE_BYTES,
+            max_terminal_output_bytes: crate::MAX_TERMINAL_OUTPUT_BYTES,
+            max_terminal_screen_bytes: crate::MAX_TERMINAL_SCREEN_BYTES,
+            max_terminal_columns: crate::MAX_TERMINAL_COLUMNS,
+            max_terminal_rows: crate::MAX_TERMINAL_ROWS,
+            max_terminal_index_items: crate::MAX_TERMINAL_INDEX_ITEMS,
+            max_terminal_view_queue_chunks: crate::MAX_TERMINAL_VIEW_QUEUE_CHUNKS,
         }
     }
 }
@@ -323,6 +354,20 @@ mod tests {
             limits.native_cursor_lifetime_ms,
             crate::NATIVE_CURSOR_LIFETIME_MS
         );
+        assert_eq!(
+            limits.max_terminal_write_bytes,
+            crate::MAX_TERMINAL_WRITE_BYTES
+        );
+        assert_eq!(
+            limits.max_terminal_output_bytes,
+            crate::MAX_TERMINAL_OUTPUT_BYTES
+        );
+        assert_eq!(
+            limits.max_terminal_screen_bytes,
+            crate::MAX_TERMINAL_SCREEN_BYTES
+        );
+        assert_eq!(limits.max_terminal_columns, crate::MAX_TERMINAL_COLUMNS);
+        assert_eq!(limits.max_terminal_rows, crate::MAX_TERMINAL_ROWS);
     }
 
     #[test]

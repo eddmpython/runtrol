@@ -1088,6 +1088,11 @@
       ],
       "type": "object"
     },
+    "ListTerminalsParams": {
+      "additionalProperties": false,
+      "description": "Read the visible terminal index in the connected Runtime generation.",
+      "type": "object"
+    },
     "ManagedSessionList": {
       "additionalProperties": false,
       "description": "A bounded Runtime-managed session snapshot.",
@@ -2183,6 +2188,11 @@
         "sessionEvents": {
           "description": "Bounded replay followed by live normalized events is implemented.",
           "type": "boolean"
+        },
+        "terminalSurface": {
+          "default": false,
+          "description": "Provider-faithful public terminal sessions are implemented for this generation.",
+          "type": "boolean"
         }
       },
       "required": [
@@ -2328,6 +2338,41 @@
         {
           "const": "sessionNotFound",
           "description": "The Runtime session does not exist in the caller's grant.",
+          "type": "string"
+        },
+        {
+          "const": "terminalNotFound",
+          "description": "The terminal does not exist in the connected Runtime generation.",
+          "type": "string"
+        },
+        {
+          "const": "terminalGenerationUnavailable",
+          "description": "The descriptor's recorded Runtime generation is absent or cannot be queried.",
+          "type": "string"
+        },
+        {
+          "const": "terminalGone",
+          "description": "The recorded Runtime generation answered but the terminal has ended.",
+          "type": "string"
+        },
+        {
+          "const": "terminalAlreadyLive",
+          "description": "The provider-native conversation is already live as a terminal in another generation.",
+          "type": "string"
+        },
+        {
+          "const": "terminalWorkspaceConflict",
+          "description": "The provider-native terminal is already live in another canonical workspace.",
+          "type": "string"
+        },
+        {
+          "const": "nativeConversationBusy",
+          "description": "The provider-native conversation is already live on the structured session surface.",
+          "type": "string"
+        },
+        {
+          "const": "legacyGenerationBusy",
+          "description": "A pre-public draining generation may still own an unexportable native conversation.",
           "type": "string"
         },
         {
@@ -2644,6 +2689,59 @@
           "minimum": 0,
           "type": "integer"
         },
+        "maxTerminalColumns": {
+          "default": 0,
+          "description": "Maximum shared PTY columns.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "maxTerminalIndexItems": {
+          "default": 0,
+          "description": "Maximum terminal descriptors returned by one generation.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "maxTerminalOutputBytes": {
+          "default": 0,
+          "description": "Maximum decoded exact bytes in one terminal output notification.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "maxTerminalRows": {
+          "default": 0,
+          "description": "Maximum shared PTY rows.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "maxTerminalScreenBytes": {
+          "default": 0,
+          "description": "Maximum decoded bytes in one terminal screen snapshot.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "maxTerminalViewQueueChunks": {
+          "default": 0,
+          "description": "Maximum queued output chunks per terminal view before an explicit lag boundary.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "maxTerminalWriteBytes": {
+          "default": 0,
+          "description": "Maximum decoded exact bytes accepted by one terminal write.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
         "nativeCursorLifetimeMs": {
           "description": "Lifetime of native catalogue cursors and adoption observations.",
           "format": "uint64",
@@ -2864,6 +2962,61 @@
           "type": "string"
         },
         {
+          "const": "terminals/list",
+          "description": "Return the caller-visible live terminals in this Runtime generation.",
+          "type": "string"
+        },
+        {
+          "const": "terminals/watchIndex",
+          "description": "Watch root-filtered terminal index snapshots.",
+          "type": "string"
+        },
+        {
+          "const": "terminals/open",
+          "description": "Open a fresh terminal or resume one authorized native conversation.",
+          "type": "string"
+        },
+        {
+          "const": "terminals/attach",
+          "description": "Attach one connection-bound view at current shared geometry.",
+          "type": "string"
+        },
+        {
+          "const": "terminals/acquireControl",
+          "description": "Acquire the one renewable terminal write lease.",
+          "type": "string"
+        },
+        {
+          "const": "terminals/renewControl",
+          "description": "Renew one exact terminal lease generation.",
+          "type": "string"
+        },
+        {
+          "const": "terminals/releaseControl",
+          "description": "Voluntarily release one exact terminal lease generation.",
+          "type": "string"
+        },
+        {
+          "const": "terminals/write",
+          "description": "Write exact caller-owned bytes once under the current terminal lease.",
+          "type": "string"
+        },
+        {
+          "const": "terminals/resize",
+          "description": "Set bounded shared PTY geometry under the current terminal lease.",
+          "type": "string"
+        },
+        {
+          "const": "terminals/detach",
+          "description": "Detach only one connection-bound terminal view.",
+          "type": "string"
+        },
+        {
+          "const": "terminals/stop",
+          "description": "Stop one hosted provider CLI process under the current terminal lease.",
+          "type": "string"
+        },
+        {
           "const": "approvals/listPending",
           "description": "Read pending structured provider approvals for one controlled session.",
           "type": "string"
@@ -2906,6 +3059,31 @@
         {
           "const": "sessions/lagged",
           "description": "A bounded subscription was retired after lagging.",
+          "type": "string"
+        },
+        {
+          "const": "terminals/indexChanged",
+          "description": "One changed root-filtered terminal index snapshot.",
+          "type": "string"
+        },
+        {
+          "const": "terminals/indexEnded",
+          "description": "Final terminal index subscription reason.",
+          "type": "string"
+        },
+        {
+          "const": "terminals/output",
+          "description": "One bounded exact output chunk for a terminal view.",
+          "type": "string"
+        },
+        {
+          "const": "terminals/lagged",
+          "description": "Explicit lost-byte boundary with a replacement screen snapshot.",
+          "type": "string"
+        },
+        {
+          "const": "terminals/exited",
+          "description": "Provider process exit after preceding output drained.",
           "type": "string"
         },
         {
@@ -3214,6 +3392,14 @@
     },
     "RuntimeSessionId": {
       "description": "A stable Runtime-managed session identity.",
+      "type": "string"
+    },
+    "RuntimeTerminalId": {
+      "description": "One hosted provider TUI process in one Runtime generation.",
+      "type": "string"
+    },
+    "RuntimeTerminalViewId": {
+      "description": "One connection-bound terminal output subscription.",
       "type": "string"
     },
     "ServerChallenge": {
@@ -3642,6 +3828,613 @@
       ],
       "type": "object"
     },
+    "TerminalAcquireControlParams": {
+      "additionalProperties": false,
+      "description": "Acquire control only from one exact observed live incarnation.",
+      "properties": {
+        "expectedTerminalGeneration": {
+          "description": "Process incarnation visible when the user chose the action.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "requestId": {
+          "$ref": "#/$defs/MutationRequestId",
+          "description": "Caller-minted mutation identity."
+        },
+        "terminalId": {
+          "$ref": "#/$defs/RuntimeTerminalId",
+          "description": "Exact terminal in the connected Runtime generation."
+        }
+      },
+      "required": [
+        "requestId",
+        "terminalId",
+        "expectedTerminalGeneration"
+      ],
+      "type": "object"
+    },
+    "TerminalAttachParams": {
+      "additionalProperties": false,
+      "description": "Attach one new view at the terminal's current shared geometry.",
+      "properties": {
+        "terminalId": {
+          "$ref": "#/$defs/RuntimeTerminalId",
+          "description": "Exact terminal in the connected Runtime generation."
+        }
+      },
+      "required": [
+        "terminalId"
+      ],
+      "type": "object"
+    },
+    "TerminalControlLease": {
+      "additionalProperties": false,
+      "description": "One renewable write authority for one exact terminal process incarnation.",
+      "properties": {
+        "expiresAtMs": {
+          "description": "Wall-clock expiry in Unix milliseconds.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "leaseGeneration": {
+          "description": "Monotonic lease generation required on renewal and mutations.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "leaseId": {
+          "description": "Opaque unguessable lease identity.",
+          "type": "string"
+        },
+        "terminalGeneration": {
+          "description": "Process incarnation observed at acquisition.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "terminalId": {
+          "$ref": "#/$defs/RuntimeTerminalId",
+          "description": "Exact controlled terminal."
+        }
+      },
+      "required": [
+        "leaseId",
+        "terminalId",
+        "terminalGeneration",
+        "leaseGeneration",
+        "expiresAtMs"
+      ],
+      "type": "object"
+    },
+    "TerminalControlParams": {
+      "additionalProperties": false,
+      "description": "Renew or release one exact terminal control lease generation.",
+      "properties": {
+        "leaseGeneration": {
+          "description": "Exact current lease generation.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "leaseId": {
+          "description": "Opaque lease identity returned on acquisition.",
+          "type": "string"
+        },
+        "requestId": {
+          "$ref": "#/$defs/MutationRequestId",
+          "description": "Caller-minted mutation identity."
+        },
+        "terminalId": {
+          "$ref": "#/$defs/RuntimeTerminalId",
+          "description": "Exact controlled terminal."
+        }
+      },
+      "required": [
+        "requestId",
+        "terminalId",
+        "leaseId",
+        "leaseGeneration"
+      ],
+      "type": "object"
+    },
+    "TerminalDescriptor": {
+      "additionalProperties": false,
+      "description": "One live terminal descriptor visible through an approved root.",
+      "properties": {
+        "geometry": {
+          "$ref": "#/$defs/TerminalGeometry",
+          "description": "Current shared PTY geometry."
+        },
+        "nativeSessionId": {
+          "description": "Provider-owned durable identity only when it was known before the terminal opened.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "openedAtMs": {
+          "description": "Runtime wall time when the process was opened, in Unix milliseconds.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "processState": {
+          "$ref": "#/$defs/TerminalProcessState",
+          "description": "Structural live process state."
+        },
+        "providerId": {
+          "$ref": "#/$defs/ProviderId",
+          "description": "Opaque provider identity returned by Runtime inventory."
+        },
+        "runtimeGeneration": {
+          "description": "SHA-256 digest of the Runtime generation that owns the process.",
+          "type": "string"
+        },
+        "terminalGeneration": {
+          "description": "Monotonic process incarnation used to reject stale control acquisition.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "terminalId": {
+          "$ref": "#/$defs/RuntimeTerminalId",
+          "description": "Runtime-local terminal identity."
+        },
+        "workspace": {
+          "description": "Exact canonical workspace already filtered through the caller's grant.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "terminalId",
+        "runtimeGeneration",
+        "providerId",
+        "workspace",
+        "processState",
+        "openedAtMs",
+        "terminalGeneration",
+        "geometry"
+      ],
+      "type": "object"
+    },
+    "TerminalDetachParams": {
+      "additionalProperties": false,
+      "description": "Detach only one connection-bound view without stopping the provider process.",
+      "properties": {
+        "terminalId": {
+          "$ref": "#/$defs/RuntimeTerminalId",
+          "description": "Exact terminal."
+        },
+        "viewId": {
+          "$ref": "#/$defs/RuntimeTerminalViewId",
+          "description": "Exact view created on this connection."
+        }
+      },
+      "required": [
+        "terminalId",
+        "viewId"
+      ],
+      "type": "object"
+    },
+    "TerminalExitedNotification": {
+      "additionalProperties": false,
+      "description": "Provider process exit delivered after preceding output has drained.",
+      "properties": {
+        "exitCode": {
+          "description": "Provider process exit code as reported by the terminal host.",
+          "format": "int32",
+          "type": "integer"
+        },
+        "viewId": {
+          "$ref": "#/$defs/RuntimeTerminalViewId",
+          "description": "Exact connection-bound view."
+        }
+      },
+      "required": [
+        "viewId",
+        "exitCode"
+      ],
+      "type": "object"
+    },
+    "TerminalGeometry": {
+      "additionalProperties": false,
+      "description": "Shared PTY geometry visible to every attached viewer.",
+      "properties": {
+        "columns": {
+          "description": "PTY columns.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "rows": {
+          "description": "PTY rows.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "columns",
+        "rows"
+      ],
+      "type": "object"
+    },
+    "TerminalIndexChangedNotification": {
+      "additionalProperties": false,
+      "description": "Replace one connection's complete visible terminal index snapshot.",
+      "properties": {
+        "snapshot": {
+          "$ref": "#/$defs/TerminalIndexSnapshot",
+          "description": "Complete new root-filtered snapshot."
+        },
+        "subscriptionId": {
+          "description": "Opaque connection-local subscription identity.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "subscriptionId",
+        "snapshot"
+      ],
+      "type": "object"
+    },
+    "TerminalIndexEndReason": {
+      "description": "Why a terminal index subscription ended.",
+      "oneOf": [
+        {
+          "const": "integrationRevoked",
+          "description": "The integration grant was revoked.",
+          "type": "string"
+        },
+        {
+          "const": "authorityChanged",
+          "description": "Scope, root, key, or grant generation changed and requires reconnect.",
+          "type": "string"
+        },
+        {
+          "const": "runtimeUnavailable",
+          "description": "The Runtime generation stopped publishing the index.",
+          "type": "string"
+        }
+      ]
+    },
+    "TerminalIndexEndedNotification": {
+      "additionalProperties": false,
+      "description": "Final typed reason for retiring a terminal index subscription.",
+      "properties": {
+        "reason": {
+          "$ref": "#/$defs/TerminalIndexEndReason",
+          "description": "Structural end reason."
+        },
+        "subscriptionId": {
+          "description": "Opaque connection-local subscription identity.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "subscriptionId",
+        "reason"
+      ],
+      "type": "object"
+    },
+    "TerminalIndexSnapshot": {
+      "additionalProperties": false,
+      "description": "One root-filtered snapshot from one Runtime generation.",
+      "properties": {
+        "terminals": {
+          "description": "Live descriptors in stable terminal identity order.",
+          "items": {
+            "$ref": "#/$defs/TerminalDescriptor"
+          },
+          "type": "array"
+        },
+        "warnings": {
+          "description": "Safe structural omissions without unauthorized paths or terminal content.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "terminals",
+        "warnings"
+      ],
+      "type": "object"
+    },
+    "TerminalLaggedNotification": {
+      "additionalProperties": false,
+      "description": "Explicit loss boundary followed atomically by one replacement screen snapshot.",
+      "properties": {
+        "lostChunks": {
+          "description": "Number of broadcast chunks skipped before the replacement snapshot.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "nextSequence": {
+          "description": "Sequence assigned to the next live output chunk.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "screenBase64": {
+          "description": "Base64 of the bounded replacement screen.",
+          "type": "string"
+        },
+        "viewId": {
+          "$ref": "#/$defs/RuntimeTerminalViewId",
+          "description": "Exact connection-bound view."
+        }
+      },
+      "required": [
+        "viewId",
+        "lostChunks",
+        "screenBase64",
+        "nextSequence"
+      ],
+      "type": "object"
+    },
+    "TerminalOpenParams": {
+      "additionalProperties": false,
+      "description": "Open a fresh terminal or resume one authorized native conversation.",
+      "properties": {
+        "geometry": {
+          "$ref": "#/$defs/TerminalGeometry",
+          "description": "Initial bounded PTY geometry."
+        },
+        "providerId": {
+          "$ref": "#/$defs/ProviderId",
+          "description": "Opaque provider identity returned by Runtime inventory."
+        },
+        "requestId": {
+          "$ref": "#/$defs/MutationRequestId",
+          "description": "Caller-minted mutation identity retained across outcome queries, never automatic retries."
+        },
+        "target": {
+          "$ref": "#/$defs/TerminalOpenTarget",
+          "description": "Fresh or exact authorized native resume intent."
+        },
+        "workspace": {
+          "description": "Exact workspace path under a current approved root.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "requestId",
+        "providerId",
+        "workspace",
+        "target",
+        "geometry"
+      ],
+      "type": "object"
+    },
+    "TerminalOpenTarget": {
+      "description": "Which provider-owned terminal conversation Runtime should host.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Start a fresh provider TUI without inventing a durable native identity.",
+          "properties": {
+            "kind": {
+              "const": "fresh",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Resume one exact provider-native conversation from Runtime's authorized catalogue.",
+          "properties": {
+            "adoptionToken": {
+              "description": "Short-lived Runtime proof for this exact authorized catalogue observation.",
+              "type": "string"
+            },
+            "kind": {
+              "const": "native",
+              "type": "string"
+            },
+            "nativeSessionId": {
+              "description": "Provider-owned opaque conversation identity.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "nativeSessionId",
+            "adoptionToken"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "TerminalOutputNotification": {
+      "additionalProperties": false,
+      "description": "One bounded exact output chunk for a terminal view.",
+      "properties": {
+        "bytesBase64": {
+          "description": "Base64 of exact provider CLI output bytes.",
+          "type": "string"
+        },
+        "sequence": {
+          "description": "Monotonic sequence within this view, starting at one after its snapshot.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "viewId": {
+          "$ref": "#/$defs/RuntimeTerminalViewId",
+          "description": "Exact connection-bound view."
+        }
+      },
+      "required": [
+        "viewId",
+        "sequence",
+        "bytesBase64"
+      ],
+      "type": "object"
+    },
+    "TerminalProcessState": {
+      "description": "Structural process state without terminal content.",
+      "oneOf": [
+        {
+          "const": "running",
+          "description": "The provider CLI process is live.",
+          "type": "string"
+        },
+        {
+          "const": "stopping",
+          "description": "Runtime accepted a stop request and is waiting for process exit.",
+          "type": "string"
+        }
+      ]
+    },
+    "TerminalResizeParams": {
+      "additionalProperties": false,
+      "description": "Set shared PTY geometry under one current terminal control lease.",
+      "properties": {
+        "geometry": {
+          "$ref": "#/$defs/TerminalGeometry",
+          "description": "New bounded shared geometry."
+        },
+        "leaseGeneration": {
+          "description": "Exact current lease generation.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "leaseId": {
+          "description": "Opaque lease identity returned on acquisition.",
+          "type": "string"
+        },
+        "requestId": {
+          "$ref": "#/$defs/MutationRequestId",
+          "description": "Caller-minted mutation identity."
+        },
+        "terminalId": {
+          "$ref": "#/$defs/RuntimeTerminalId",
+          "description": "Exact controlled terminal."
+        }
+      },
+      "required": [
+        "requestId",
+        "terminalId",
+        "leaseId",
+        "leaseGeneration",
+        "geometry"
+      ],
+      "type": "object"
+    },
+    "TerminalStopParams": {
+      "additionalProperties": false,
+      "description": "Stop one hosted provider CLI under the exact current lease.",
+      "properties": {
+        "leaseGeneration": {
+          "description": "Exact current lease generation.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "leaseId": {
+          "description": "Opaque lease identity returned on acquisition.",
+          "type": "string"
+        },
+        "requestId": {
+          "$ref": "#/$defs/MutationRequestId",
+          "description": "Caller-minted idempotency identity."
+        },
+        "terminalId": {
+          "$ref": "#/$defs/RuntimeTerminalId",
+          "description": "Exact controlled terminal."
+        }
+      },
+      "required": [
+        "requestId",
+        "terminalId",
+        "leaseId",
+        "leaseGeneration"
+      ],
+      "type": "object"
+    },
+    "TerminalViewOpened": {
+      "additionalProperties": false,
+      "description": "A view starts with one bounded screen snapshot, then receives live output notifications.",
+      "properties": {
+        "controlLease": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TerminalControlLease"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Initial write authority only when `open` was authorized for input."
+        },
+        "screenBase64": {
+          "description": "Base64 of the current bounded terminal screen, delivered before live bytes.",
+          "type": "string"
+        },
+        "terminal": {
+          "$ref": "#/$defs/TerminalDescriptor",
+          "description": "Current root-authorized terminal descriptor."
+        },
+        "viewId": {
+          "$ref": "#/$defs/RuntimeTerminalViewId",
+          "description": "Connection-bound output view."
+        }
+      },
+      "required": [
+        "terminal",
+        "viewId",
+        "screenBase64"
+      ],
+      "type": "object"
+    },
+    "TerminalWriteParams": {
+      "additionalProperties": false,
+      "description": "Send exact caller-owned bytes once under one current terminal control lease.",
+      "properties": {
+        "bytesBase64": {
+          "description": "Base64 of exact caller-owned bytes.",
+          "type": "string"
+        },
+        "leaseGeneration": {
+          "description": "Exact current lease generation.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "leaseId": {
+          "description": "Opaque lease identity returned on acquisition.",
+          "type": "string"
+        },
+        "requestId": {
+          "$ref": "#/$defs/MutationRequestId",
+          "description": "Caller-minted idempotency identity. SDKs never resubmit terminal bytes automatically."
+        },
+        "terminalId": {
+          "$ref": "#/$defs/RuntimeTerminalId",
+          "description": "Exact controlled terminal."
+        }
+      },
+      "required": [
+        "requestId",
+        "terminalId",
+        "leaseId",
+        "leaseGeneration",
+        "bytesBase64"
+      ],
+      "type": "object"
+    },
     "WaitingOn": {
       "description": "What a running turn is waiting for, when it is waiting for anybody.\n\nStructural, and deliberately only two values. A surface listing eight running sessions needs to answer one\nquestion without opening any of them: which of these stopped for me? An approval identifier or the provider's\nown wording would be conversation detail, which this protocol does not carry.",
       "oneOf": [
@@ -3783,6 +4576,30 @@
         "snapshot"
       ],
       "type": "object"
+    },
+    "WatchTerminalIndexParams": {
+      "additionalProperties": false,
+      "description": "Install one bounded terminal index subscription.",
+      "type": "object"
+    },
+    "WatchTerminalIndexResult": {
+      "additionalProperties": false,
+      "description": "Initial terminal index and the connection-local subscription identity.",
+      "properties": {
+        "snapshot": {
+          "$ref": "#/$defs/TerminalIndexSnapshot",
+          "description": "Initial root-filtered snapshot."
+        },
+        "subscriptionId": {
+          "description": "Opaque connection-local subscription identity.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "subscriptionId",
+        "snapshot"
+      ],
+      "type": "object"
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -3848,6 +4665,9 @@
     "list_pending_approvals": {
       "$ref": "#/$defs/ListPendingApprovalsParams"
     },
+    "list_terminals": {
+      "$ref": "#/$defs/ListTerminalsParams"
+    },
     "managed_session_list": {
       "$ref": "#/$defs/ManagedSessionList"
     },
@@ -3908,6 +4728,12 @@
     "runtime_locator": {
       "$ref": "#/$defs/RuntimeLocatorRecord"
     },
+    "runtime_terminal_id": {
+      "$ref": "#/$defs/RuntimeTerminalId"
+    },
+    "runtime_terminal_view_id": {
+      "$ref": "#/$defs/RuntimeTerminalViewId"
+    },
     "session_descriptor": {
       "$ref": "#/$defs/SessionDescriptor"
     },
@@ -3935,6 +4761,57 @@
     "submit_input": {
       "$ref": "#/$defs/SubmitInputParams"
     },
+    "terminal_acquire_control": {
+      "$ref": "#/$defs/TerminalAcquireControlParams"
+    },
+    "terminal_attach": {
+      "$ref": "#/$defs/TerminalAttachParams"
+    },
+    "terminal_control": {
+      "$ref": "#/$defs/TerminalControlParams"
+    },
+    "terminal_control_lease": {
+      "$ref": "#/$defs/TerminalControlLease"
+    },
+    "terminal_descriptor": {
+      "$ref": "#/$defs/TerminalDescriptor"
+    },
+    "terminal_detach": {
+      "$ref": "#/$defs/TerminalDetachParams"
+    },
+    "terminal_exited": {
+      "$ref": "#/$defs/TerminalExitedNotification"
+    },
+    "terminal_index": {
+      "$ref": "#/$defs/TerminalIndexSnapshot"
+    },
+    "terminal_index_changed": {
+      "$ref": "#/$defs/TerminalIndexChangedNotification"
+    },
+    "terminal_index_ended": {
+      "$ref": "#/$defs/TerminalIndexEndedNotification"
+    },
+    "terminal_lagged": {
+      "$ref": "#/$defs/TerminalLaggedNotification"
+    },
+    "terminal_open": {
+      "$ref": "#/$defs/TerminalOpenParams"
+    },
+    "terminal_output": {
+      "$ref": "#/$defs/TerminalOutputNotification"
+    },
+    "terminal_resize": {
+      "$ref": "#/$defs/TerminalResizeParams"
+    },
+    "terminal_stop": {
+      "$ref": "#/$defs/TerminalStopParams"
+    },
+    "terminal_view_opened": {
+      "$ref": "#/$defs/TerminalViewOpened"
+    },
+    "terminal_write": {
+      "$ref": "#/$defs/TerminalWriteParams"
+    },
     "watch_enrollment": {
       "$ref": "#/$defs/WatchEnrollmentParams"
     },
@@ -3955,6 +4832,12 @@
     },
     "watch_session_index_result": {
       "$ref": "#/$defs/WatchSessionIndexResult"
+    },
+    "watch_terminal_index": {
+      "$ref": "#/$defs/WatchTerminalIndexParams"
+    },
+    "watch_terminal_index_result": {
+      "$ref": "#/$defs/WatchTerminalIndexResult"
     }
   },
   "required": [
@@ -4013,11 +4896,34 @@
     "watch_providers_result",
     "providers_changed",
     "providers_usage_changed",
-    "provider_watch_ended"
+    "provider_watch_ended",
+    "runtime_terminal_id",
+    "runtime_terminal_view_id",
+    "list_terminals",
+    "terminal_index",
+    "terminal_descriptor",
+    "watch_terminal_index",
+    "watch_terminal_index_result",
+    "terminal_open",
+    "terminal_attach",
+    "terminal_view_opened",
+    "terminal_control_lease",
+    "terminal_acquire_control",
+    "terminal_control",
+    "terminal_write",
+    "terminal_resize",
+    "terminal_detach",
+    "terminal_stop",
+    "terminal_index_changed",
+    "terminal_index_ended",
+    "terminal_output",
+    "terminal_lagged",
+    "terminal_exited"
   ],
   "title": "PublicProtocolSchema",
   "type": "object",
   "x-runtrol-finalized-revisions": [
+    "2026-08-27",
     "2026-08-13"
   ],
   "x-runtrol-limits": {
@@ -4039,6 +4945,13 @@
     "maxReasoningSelectionBytes": 4096,
     "maxRevisionOffers": 16,
     "maxSubscriptions": 32,
+    "maxTerminalColumns": 500,
+    "maxTerminalIndexItems": 256,
+    "maxTerminalOutputBytes": 4096,
+    "maxTerminalRows": 200,
+    "maxTerminalScreenBytes": 1048576,
+    "maxTerminalViewQueueChunks": 128,
+    "maxTerminalWriteBytes": 65536,
     "nativeCursorLifetimeMs": 300000
   }
 }

@@ -367,7 +367,7 @@ test("initialization signing canonicalizes Runtime challenge field order", async
   };
   assert.equal(
     request.params.authentication.signature,
-    "cBrwv1dkWz6oG-YszAimU6leDfkNriZSKxUNSGYttRiH2dD0RJQsTklzpjzW3_qSIZYwrPeSPLHnCyW5fJ5sBQ",
+    "76vuXq3Hzt5zh5NEBMPflZYx3f0Q5jFkkmIhQfy8DKUL5njriRErOvnMgOMSC3tap1TLT1xZZvAy4WqMjeQMBA",
   );
   runtime.close();
 });

@@ -40,6 +40,20 @@ pub enum RuntimeErrorKind {
     NativeCatalogueUnsupported,
     /// The Runtime session does not exist in the caller's grant.
     SessionNotFound,
+    /// The terminal does not exist in the connected Runtime generation.
+    TerminalNotFound,
+    /// The descriptor's recorded Runtime generation is absent or cannot be queried.
+    TerminalGenerationUnavailable,
+    /// The recorded Runtime generation answered but the terminal has ended.
+    TerminalGone,
+    /// The provider-native conversation is already live as a terminal in another generation.
+    TerminalAlreadyLive,
+    /// The provider-native terminal is already live in another canonical workspace.
+    TerminalWorkspaceConflict,
+    /// The provider-native conversation is already live on the structured session surface.
+    NativeConversationBusy,
+    /// A pre-public draining generation may still own an unexportable native conversation.
+    LegacyGenerationBusy,
     /// The requested lifecycle transition conflicts with current state.
     SessionConflict,
     /// Another integration controls the session.
@@ -91,6 +105,13 @@ impl RuntimeErrorKind {
             Self::ModelUnavailable => "modelUnavailable",
             Self::NativeCatalogueUnsupported => "nativeCatalogueUnsupported",
             Self::SessionNotFound => "sessionNotFound",
+            Self::TerminalNotFound => "terminalNotFound",
+            Self::TerminalGenerationUnavailable => "terminalGenerationUnavailable",
+            Self::TerminalGone => "terminalGone",
+            Self::TerminalAlreadyLive => "terminalAlreadyLive",
+            Self::TerminalWorkspaceConflict => "terminalWorkspaceConflict",
+            Self::NativeConversationBusy => "nativeConversationBusy",
+            Self::LegacyGenerationBusy => "legacyGenerationBusy",
             Self::SessionConflict => "sessionConflict",
             Self::ControlConflict => "controlConflict",
             Self::LeaseExpired => "leaseExpired",

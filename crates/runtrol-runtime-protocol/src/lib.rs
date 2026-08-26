@@ -17,6 +17,7 @@ mod rpc;
 mod schema;
 mod session;
 mod session_open;
+mod terminal;
 
 pub use approval::{
     ListPendingApprovalsParams, PendingApproval, PendingApprovalList, RespondApprovalParams,
@@ -58,7 +59,8 @@ pub use native_sessions::{
     NativeSessionCatalogue, NativeSessionDescriptor,
 };
 pub use revision::{
-    FINALIZED_REVISIONS, ProtocolRevision, REVISION_2026_08_13, RevisionError, negotiate,
+    FINALIZED_REVISIONS, ProtocolRevision, REVISION_2026_08_13, REVISION_2026_08_27, RevisionError,
+    negotiate,
 };
 pub use rpc::{
     ClientCapabilities, ClientInfo, ErrorResponse, InitializeParams, InitializeResult, JsonRpcId,
@@ -78,6 +80,18 @@ pub use session_open::{
     AdoptNativeSessionParams, ArchiveNativeSessionParams, DeleteNativeSessionParams,
     MAX_MODEL_SELECTION_BYTES, MAX_PERMISSION_SELECTION_BYTES, MAX_REASONING_SELECTION_BYTES,
     ResumeSessionParams, SessionOpenResult, SessionWorkspaceAccess, StartSessionParams,
+};
+pub use terminal::{
+    ListTerminalsParams, MAX_TERMINAL_COLUMNS, MAX_TERMINAL_INDEX_ITEMS, MAX_TERMINAL_OUTPUT_BYTES,
+    MAX_TERMINAL_ROWS, MAX_TERMINAL_SCREEN_BYTES, MAX_TERMINAL_VIEW_QUEUE_CHUNKS,
+    MAX_TERMINAL_WRITE_BYTES, RuntimeTerminalId, RuntimeTerminalViewId,
+    TerminalAcquireControlParams, TerminalAttachParams, TerminalControlLease,
+    TerminalControlParams, TerminalDescriptor, TerminalDetachParams, TerminalExitedNotification,
+    TerminalGeometry, TerminalIdError, TerminalIndexChangedNotification, TerminalIndexEndReason,
+    TerminalIndexEndedNotification, TerminalIndexSnapshot, TerminalLaggedNotification,
+    TerminalOpenParams, TerminalOpenTarget, TerminalOutputNotification, TerminalProcessState,
+    TerminalResizeParams, TerminalStopParams, TerminalViewOpened, TerminalWriteParams,
+    WatchTerminalIndexParams, WatchTerminalIndexResult,
 };
 
 /// Maximum JSON payload bytes in one public Runtime frame.

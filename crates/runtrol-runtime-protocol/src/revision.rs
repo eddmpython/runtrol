@@ -9,8 +9,11 @@ use serde::{Deserialize, Serialize};
 /// The first finalized public Runtime contract.
 pub const REVISION_2026_08_13: ProtocolRevision = ProtocolRevision::new(2026, 8, 13);
 
+/// The public terminal session and independent Runtime administration contract.
+pub const REVISION_2026_08_27: ProtocolRevision = ProtocolRevision::new(2026, 8, 27);
+
 /// Every finalized revision implemented by this package, newest first.
-pub const FINALIZED_REVISIONS: [ProtocolRevision; 1] = [REVISION_2026_08_13];
+pub const FINALIZED_REVISIONS: [ProtocolRevision; 2] = [REVISION_2026_08_27, REVISION_2026_08_13];
 
 /// A finalized public Runtime contract date.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, JsonSchema)]
@@ -134,6 +137,16 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&revision).expect("serializable"),
             r#""2026-08-13""#
+        );
+    }
+
+    #[test]
+    fn finalized_revisions_are_newest_first() {
+        assert_eq!(FINALIZED_REVISIONS.first(), Some(&REVISION_2026_08_27));
+        assert!(
+            FINALIZED_REVISIONS
+                .windows(2)
+                .all(|pair| matches!(pair, [newer, older] if newer > older))
         );
     }
 

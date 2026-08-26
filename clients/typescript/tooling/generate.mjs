@@ -107,6 +107,17 @@ function compactValidationNode(node) {
   return Object.fromEntries(
     Object.entries(node)
       .filter(([key]) => validationKeywords.has(key))
+      .filter(([key, value]) => {
+        // The validator infers an object from its closed object keywords, and a constant already proves
+        // its JSON type. Omitting those redundant type words keeps the complete checked projection inside
+        // the existing activation memory budget as the public contract grows.
+        if (key !== "type") return true;
+        if (Object.hasOwn(node, "const")) return false;
+        if (value !== "object") return true;
+        return !Object.hasOwn(node, "properties")
+          && !Object.hasOwn(node, "required")
+          && !Object.hasOwn(node, "additionalProperties");
+      })
       .map(([key, value]) => {
         if (key === "properties") {
           return [

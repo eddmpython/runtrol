@@ -1,6 +1,6 @@
 // Generated from crates/runtrol-runtime-protocol/schema/runtime.schema.json. Do not edit.
 
-export const FINALIZED_REVISIONS = ["2026-08-13"] as const;
+export const FINALIZED_REVISIONS = ["2026-08-27","2026-08-13"] as const;
 export const PUBLIC_LIMITS = {
   "challengeLifetimeMs": 60000,
   "controlLeaseLifetimeMs": 30000,
@@ -20,6 +20,13 @@ export const PUBLIC_LIMITS = {
   "maxReasoningSelectionBytes": 4096,
   "maxRevisionOffers": 16,
   "maxSubscriptions": 32,
+  "maxTerminalColumns": 500,
+  "maxTerminalIndexItems": 256,
+  "maxTerminalOutputBytes": 4096,
+  "maxTerminalRows": 200,
+  "maxTerminalScreenBytes": 1048576,
+  "maxTerminalViewQueueChunks": 128,
+  "maxTerminalWriteBytes": 65536,
   "nativeCursorLifetimeMs": 300000
 } as const;
 
@@ -144,6 +151,9 @@ export interface ListNativeSessionsParams { readonly cursor?: string | null; rea
 
 /** Current control lease required to inspect pending approvals for one session. */
 export interface ListPendingApprovalsParams { readonly leaseGeneration: number; readonly leaseId: string; readonly sessionId: RuntimeSessionId; }
+
+/** Read the visible terminal index in the connected Runtime generation. */
+export type ListTerminalsParams = Readonly<Record<string, never>>;
 
 /** A bounded Runtime-managed session snapshot. */
 export interface ManagedSessionList { readonly sessions: ReadonlyArray<SessionDescriptor>; readonly warnings: ReadonlyArray<string>; }
@@ -288,7 +298,7 @@ export type RuntimeApprovalOptionKind = "allowOnce" | "allowAlways" | "rejectOnc
 export type RuntimeApprovalRisk = "low" | "high";
 
 /** Public product capabilities for the selected revision. */
-export interface RuntimeCapabilities { readonly integrationEnrollment: boolean; readonly managedSessionList: boolean; readonly modelDiscovery: boolean; readonly nativeSessionCatalogue: boolean; readonly providerInventory: boolean; readonly sessionControl: boolean; readonly sessionEvents: boolean; }
+export interface RuntimeCapabilities { readonly integrationEnrollment: boolean; readonly managedSessionList: boolean; readonly modelDiscovery: boolean; readonly nativeSessionCatalogue: boolean; readonly providerInventory: boolean; readonly sessionControl: boolean; readonly sessionEvents: boolean; readonly terminalSurface?: boolean; }
 
 /** Local transport kind named by the platform locator. */
 export type RuntimeEndpointKind = "namedPipe" | "unixSocket";
@@ -297,7 +307,7 @@ export type RuntimeEndpointKind = "namedPipe" | "unixSocket";
 export interface RuntimeError { readonly code: RuntimeErrorKind; readonly correlationId: string; readonly message: string; readonly operatorAction?: string | null; readonly retryable: boolean; }
 
 /** A stable public failure category. Clients never branch on prose. */
-export type RuntimeErrorKind = "runtimeNotInstalled" | "runtimeUnavailable" | "protocolIncompatible" | "notInitialized" | "unauthenticated" | "enrollmentPending" | "enrollmentDenied" | "integrationRevoked" | "scopeDenied" | "presenceRequired" | "rootDenied" | "providerUnavailable" | "capabilityUnavailable" | "modelUnavailable" | "nativeCatalogueUnsupported" | "sessionNotFound" | "sessionConflict" | "controlConflict" | "leaseExpired" | "workspaceConflict" | "approvalExpired" | "approvalOptionInvalid" | "idempotencyConflict" | "outcomeUnknown" | "resourceExhausted" | "rateLimited" | "gap" | "invalidRequest" | "methodNotFound" | "internal";
+export type RuntimeErrorKind = "runtimeNotInstalled" | "runtimeUnavailable" | "protocolIncompatible" | "notInitialized" | "unauthenticated" | "enrollmentPending" | "enrollmentDenied" | "integrationRevoked" | "scopeDenied" | "presenceRequired" | "rootDenied" | "providerUnavailable" | "capabilityUnavailable" | "modelUnavailable" | "nativeCatalogueUnsupported" | "sessionNotFound" | "terminalNotFound" | "terminalGenerationUnavailable" | "terminalGone" | "terminalAlreadyLive" | "terminalWorkspaceConflict" | "nativeConversationBusy" | "legacyGenerationBusy" | "sessionConflict" | "controlConflict" | "leaseExpired" | "workspaceConflict" | "approvalExpired" | "approvalOptionInvalid" | "idempotencyConflict" | "outcomeUnknown" | "resourceExhausted" | "rateLimited" | "gap" | "invalidRequest" | "methodNotFound" | "internal";
 
 /** One provider-neutral normalized event notification. */
 export interface RuntimeEventNotification { readonly event: unknown; readonly eventRevision: ProtocolRevision; readonly nextExpected: EventCursor; readonly sessionId: RuntimeSessionId; readonly subscriptionId: string; }
@@ -309,13 +319,13 @@ export interface RuntimeGeneration { readonly controlEndpoint: string; readonly 
 export interface RuntimeInstance { readonly buildDigest?: string | null; readonly instanceId: string; readonly platform: string; readonly version: string; }
 
 /** Numeric public bounds advertised during initialization. */
-export interface RuntimeLimits { readonly challengeLifetimeMs: number; readonly controlLeaseLifetimeMs: number; readonly enrollmentLifetimeMs: number; readonly idempotencyWindowMs: number; readonly maxAttachmentBase64Bytes?: number; readonly maxFrameBytes: number; readonly maxIdempotencyRecords: number; readonly maxInputBlocks?: number; readonly maxInputBytes: number; readonly maxInputImages?: number; readonly maxModelSelectionBytes: number; readonly maxNativeAdoptionTokenBytes: number; readonly maxNativePublicCursorBytes: number; readonly maxPageItems: number; readonly maxPendingEnrollments: number; readonly maxReasoningSelectionBytes: number; readonly maxRevisionOffers: number; readonly maxSubscriptions: number; readonly nativeCursorLifetimeMs: number; }
+export interface RuntimeLimits { readonly challengeLifetimeMs: number; readonly controlLeaseLifetimeMs: number; readonly enrollmentLifetimeMs: number; readonly idempotencyWindowMs: number; readonly maxAttachmentBase64Bytes?: number; readonly maxFrameBytes: number; readonly maxIdempotencyRecords: number; readonly maxInputBlocks?: number; readonly maxInputBytes: number; readonly maxInputImages?: number; readonly maxModelSelectionBytes: number; readonly maxNativeAdoptionTokenBytes: number; readonly maxNativePublicCursorBytes: number; readonly maxPageItems: number; readonly maxPendingEnrollments: number; readonly maxReasoningSelectionBytes: number; readonly maxRevisionOffers: number; readonly maxSubscriptions: number; readonly maxTerminalColumns?: number; readonly maxTerminalIndexItems?: number; readonly maxTerminalOutputBytes?: number; readonly maxTerminalRows?: number; readonly maxTerminalScreenBytes?: number; readonly maxTerminalViewQueueChunks?: number; readonly maxTerminalWriteBytes?: number; readonly nativeCursorLifetimeMs: number; }
 
 /** Operational bootstrap data published only after each generation's public endpoint is ready. */
 export interface RuntimeLocatorRecord { readonly generations: ReadonlyArray<RuntimeGeneration>; readonly instanceId: string; readonly schema: number; }
 
 /** A public Runtime method implemented by the initial read-only boundary. */
-export type RuntimeMethod = "runtime/initialize" | "runtime/initialized" | "runtime/challenge" | "integrations/requestEnrollment" | "integrations/watchEnrollment" | "integrations/getGrant" | "integrations/rotateKey" | "providers/usage" | "providers/list" | "providers/watch" | "providers/getCapabilities" | "providers/listModels" | "providers/listNativeSessions" | "sessions/list" | "sessions/watchIndex" | "sessions/get" | "sessions/start" | "sessions/adoptNative" | "sessions/resume" | "sessions/acquireControl" | "sessions/renewControl" | "sessions/releaseControl" | "sessions/submitInput" | "sessions/submitBlocks" | "sessions/setModel" | "sessions/setMode" | "sessions/watchEvents" | "sessions/interrupt" | "sessions/cool" | "sessions/forget" | "sessions/deleteNative" | "sessions/archiveNative" | "approvals/listPending" | "approvals/respond" | "sessions/indexChanged" | "sessions/indexEnded" | "providers/changed" | "providers/watchEnded" | "providers/usageChanged" | "sessions/event" | "sessions/lagged" | "runtime/panicStop";
+export type RuntimeMethod = "runtime/initialize" | "runtime/initialized" | "runtime/challenge" | "integrations/requestEnrollment" | "integrations/watchEnrollment" | "integrations/getGrant" | "integrations/rotateKey" | "providers/usage" | "providers/list" | "providers/watch" | "providers/getCapabilities" | "providers/listModels" | "providers/listNativeSessions" | "sessions/list" | "sessions/watchIndex" | "sessions/get" | "sessions/start" | "sessions/adoptNative" | "sessions/resume" | "sessions/acquireControl" | "sessions/renewControl" | "sessions/releaseControl" | "sessions/submitInput" | "sessions/submitBlocks" | "sessions/setModel" | "sessions/setMode" | "sessions/watchEvents" | "sessions/interrupt" | "sessions/cool" | "sessions/forget" | "sessions/deleteNative" | "sessions/archiveNative" | "terminals/list" | "terminals/watchIndex" | "terminals/open" | "terminals/attach" | "terminals/acquireControl" | "terminals/renewControl" | "terminals/releaseControl" | "terminals/write" | "terminals/resize" | "terminals/detach" | "terminals/stop" | "approvals/listPending" | "approvals/respond" | "sessions/indexChanged" | "sessions/indexEnded" | "providers/changed" | "providers/watchEnded" | "providers/usageChanged" | "sessions/event" | "sessions/lagged" | "terminals/indexChanged" | "terminals/indexEnded" | "terminals/output" | "terminals/lagged" | "terminals/exited" | "runtime/panicStop";
 
 /** The current model information Runtime can truthfully expose. */
 export type RuntimeModelCatalog = { readonly coverage: "known"; readonly models: ReadonlyArray<RuntimeModelChoice>; } | { readonly aliases: ReadonlyArray<string>; readonly coverage: "aliases"; readonly reasoningEfforts: ReadonlyArray<RuntimeReasoningChoice>; readonly why: string; } | { readonly aliases: ReadonlyArray<string>; readonly coverage: "partial"; readonly models: ReadonlyArray<RuntimeModelChoice>; readonly reasoningEfforts: ReadonlyArray<RuntimeReasoningChoice>; readonly why: string; } | { readonly coverage: "unknown"; readonly why: string; } | { readonly coverage: "unsupported"; readonly why: string; };
@@ -331,6 +341,12 @@ export interface RuntimeReasoningChoice { readonly description: string; readonly
 
 /** A stable Runtime-managed session identity. */
 export type RuntimeSessionId = string;
+
+/** One hosted provider TUI process in one Runtime generation. */
+export type RuntimeTerminalId = string;
+
+/** One connection-bound terminal output subscription. */
+export type RuntimeTerminalViewId = string;
 
 /** One connection-bound challenge sent before initialization. */
 export interface ServerChallenge { readonly expiresAtMs: number; readonly instanceId: string; readonly nonce: string; readonly nonceId: string; }
@@ -381,6 +397,69 @@ export interface SubmitInputParams { readonly input: string; readonly leaseGener
 /** Successful JSON-RPC response. */
 export interface SuccessResponse { readonly id: JsonRpcId; readonly jsonrpc: string; readonly result: unknown; }
 
+/** Acquire control only from one exact observed live incarnation. */
+export interface TerminalAcquireControlParams { readonly expectedTerminalGeneration: number; readonly requestId: MutationRequestId; readonly terminalId: RuntimeTerminalId; }
+
+/** Attach one new view at the terminal's current shared geometry. */
+export interface TerminalAttachParams { readonly terminalId: RuntimeTerminalId; }
+
+/** One renewable write authority for one exact terminal process incarnation. */
+export interface TerminalControlLease { readonly expiresAtMs: number; readonly leaseGeneration: number; readonly leaseId: string; readonly terminalGeneration: number; readonly terminalId: RuntimeTerminalId; }
+
+/** Renew or release one exact terminal control lease generation. */
+export interface TerminalControlParams { readonly leaseGeneration: number; readonly leaseId: string; readonly requestId: MutationRequestId; readonly terminalId: RuntimeTerminalId; }
+
+/** One live terminal descriptor visible through an approved root. */
+export interface TerminalDescriptor { readonly geometry: TerminalGeometry; readonly nativeSessionId?: string | null; readonly openedAtMs: number; readonly processState: TerminalProcessState; readonly providerId: ProviderId; readonly runtimeGeneration: string; readonly terminalGeneration: number; readonly terminalId: RuntimeTerminalId; readonly workspace: string; }
+
+/** Detach only one connection-bound view without stopping the provider process. */
+export interface TerminalDetachParams { readonly terminalId: RuntimeTerminalId; readonly viewId: RuntimeTerminalViewId; }
+
+/** Provider process exit delivered after preceding output has drained. */
+export interface TerminalExitedNotification { readonly exitCode: number; readonly viewId: RuntimeTerminalViewId; }
+
+/** Shared PTY geometry visible to every attached viewer. */
+export interface TerminalGeometry { readonly columns: number; readonly rows: number; }
+
+/** Replace one connection's complete visible terminal index snapshot. */
+export interface TerminalIndexChangedNotification { readonly snapshot: TerminalIndexSnapshot; readonly subscriptionId: string; }
+
+/** Why a terminal index subscription ended. */
+export type TerminalIndexEndReason = "integrationRevoked" | "authorityChanged" | "runtimeUnavailable";
+
+/** Final typed reason for retiring a terminal index subscription. */
+export interface TerminalIndexEndedNotification { readonly reason: TerminalIndexEndReason; readonly subscriptionId: string; }
+
+/** One root-filtered snapshot from one Runtime generation. */
+export interface TerminalIndexSnapshot { readonly terminals: ReadonlyArray<TerminalDescriptor>; readonly warnings: ReadonlyArray<string>; }
+
+/** Explicit loss boundary followed atomically by one replacement screen snapshot. */
+export interface TerminalLaggedNotification { readonly lostChunks: number; readonly nextSequence: number; readonly screenBase64: string; readonly viewId: RuntimeTerminalViewId; }
+
+/** Open a fresh terminal or resume one authorized native conversation. */
+export interface TerminalOpenParams { readonly geometry: TerminalGeometry; readonly providerId: ProviderId; readonly requestId: MutationRequestId; readonly target: TerminalOpenTarget; readonly workspace: string; }
+
+/** Which provider-owned terminal conversation Runtime should host. */
+export type TerminalOpenTarget = { readonly kind: "fresh"; } | { readonly adoptionToken: string; readonly kind: "native"; readonly nativeSessionId: string; };
+
+/** One bounded exact output chunk for a terminal view. */
+export interface TerminalOutputNotification { readonly bytesBase64: string; readonly sequence: number; readonly viewId: RuntimeTerminalViewId; }
+
+/** Structural process state without terminal content. */
+export type TerminalProcessState = "running" | "stopping";
+
+/** Set shared PTY geometry under one current terminal control lease. */
+export interface TerminalResizeParams { readonly geometry: TerminalGeometry; readonly leaseGeneration: number; readonly leaseId: string; readonly requestId: MutationRequestId; readonly terminalId: RuntimeTerminalId; }
+
+/** Stop one hosted provider CLI under the exact current lease. */
+export interface TerminalStopParams { readonly leaseGeneration: number; readonly leaseId: string; readonly requestId: MutationRequestId; readonly terminalId: RuntimeTerminalId; }
+
+/** A view starts with one bounded screen snapshot, then receives live output notifications. */
+export interface TerminalViewOpened { readonly controlLease?: TerminalControlLease | null; readonly screenBase64: string; readonly terminal: TerminalDescriptor; readonly viewId: RuntimeTerminalViewId; }
+
+/** Send exact caller-owned bytes once under one current terminal control lease. */
+export interface TerminalWriteParams { readonly bytesBase64: string; readonly leaseGeneration: number; readonly leaseId: string; readonly requestId: MutationRequestId; readonly terminalId: RuntimeTerminalId; }
+
 /** What a running turn is waiting for, when it is waiting for anybody.
 
 Structural, and deliberately only two values. A surface listing eight running sessions needs to answer one
@@ -408,3 +487,9 @@ export type WatchSessionIndexParams = Readonly<Record<string, never>>;
 
 /** Initial authorized snapshot and connection-local subscription identity. */
 export interface WatchSessionIndexResult { readonly snapshot: ManagedSessionList; readonly subscriptionId: string; }
+
+/** Install one bounded terminal index subscription. */
+export type WatchTerminalIndexParams = Readonly<Record<string, never>>;
+
+/** Initial terminal index and the connection-local subscription identity. */
+export interface WatchTerminalIndexResult { readonly snapshot: TerminalIndexSnapshot; readonly subscriptionId: string; }

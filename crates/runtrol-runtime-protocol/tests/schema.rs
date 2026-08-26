@@ -24,7 +24,7 @@ fn schema_carries_the_revision_and_limit_inventory_used_by_generated_sdks() {
     let schema = public_schema().expect("generate public schema");
     assert_eq!(
         schema.get("x-runtrol-finalized-revisions"),
-        Some(&serde_json::json!(["2026-08-13"]))
+        Some(&serde_json::json!(["2026-08-27", "2026-08-13"]))
     );
     assert_eq!(
         schema

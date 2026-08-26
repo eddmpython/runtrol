@@ -530,6 +530,21 @@ async fn dispatch_public(
                 mutate_native_session(state, composed, discovering, sessions, method, id, params)
                     .await
             }
+            RuntimeMethod::TerminalsList
+            | RuntimeMethod::TerminalsWatchIndex
+            | RuntimeMethod::TerminalsOpen
+            | RuntimeMethod::TerminalsAttach
+            | RuntimeMethod::TerminalsAcquireControl
+            | RuntimeMethod::TerminalsRenewControl
+            | RuntimeMethod::TerminalsReleaseControl
+            | RuntimeMethod::TerminalsWrite
+            | RuntimeMethod::TerminalsResize
+            | RuntimeMethod::TerminalsDetach
+            | RuntimeMethod::TerminalsStop => Answer::plain(
+                id,
+                RuntimeErrorKind::CapabilityUnavailable,
+                "the public terminal surface is not available in this Runtime generation",
+            ),
             RuntimeMethod::Initialized
             | RuntimeMethod::Challenge
             | RuntimeMethod::ProvidersChanged
@@ -538,7 +553,12 @@ async fn dispatch_public(
             | RuntimeMethod::SessionsEvent
             | RuntimeMethod::SessionsLagged
             | RuntimeMethod::SessionsIndexChanged
-            | RuntimeMethod::SessionsIndexEnded => Answer::plain(
+            | RuntimeMethod::SessionsIndexEnded
+            | RuntimeMethod::TerminalsIndexChanged
+            | RuntimeMethod::TerminalsIndexEnded
+            | RuntimeMethod::TerminalsOutput
+            | RuntimeMethod::TerminalsLagged
+            | RuntimeMethod::TerminalsExited => Answer::plain(
                 id,
                 RuntimeErrorKind::InvalidRequest,
                 "the method is not a client request in the current state",
@@ -562,7 +582,9 @@ fn required_scope(method: RuntimeMethod) -> Option<AppScope> {
         RuntimeMethod::ProvidersListNativeSessions => Some(AppScope::SessionNativeDiscover),
         RuntimeMethod::SessionsList
         | RuntimeMethod::SessionsWatchIndex
-        | RuntimeMethod::SessionsGet => Some(AppScope::SessionList),
+        | RuntimeMethod::SessionsGet
+        | RuntimeMethod::TerminalsList
+        | RuntimeMethod::TerminalsWatchIndex => Some(AppScope::SessionList),
         RuntimeMethod::SessionsStart => Some(AppScope::SessionStart),
         RuntimeMethod::SessionsAdoptNative | RuntimeMethod::SessionsResume => {
             Some(AppScope::SessionResume)
@@ -571,10 +593,18 @@ fn required_scope(method: RuntimeMethod) -> Option<AppScope> {
         | RuntimeMethod::SessionsSubmitInput
         | RuntimeMethod::SessionsSubmitBlocks
         | RuntimeMethod::SessionsSetModel
-        | RuntimeMethod::SessionsSetMode => Some(AppScope::SessionInputWrite),
-        RuntimeMethod::SessionsWatchEvents | RuntimeMethod::ApprovalsListPending => {
-            Some(AppScope::SessionOutputRead)
-        }
+        | RuntimeMethod::SessionsSetMode
+        | RuntimeMethod::TerminalsAcquireControl
+        | RuntimeMethod::TerminalsRenewControl
+        | RuntimeMethod::TerminalsReleaseControl
+        | RuntimeMethod::TerminalsWrite
+        | RuntimeMethod::TerminalsResize
+        | RuntimeMethod::TerminalsStop => Some(AppScope::SessionInputWrite),
+        RuntimeMethod::SessionsWatchEvents
+        | RuntimeMethod::ApprovalsListPending
+        | RuntimeMethod::TerminalsOpen
+        | RuntimeMethod::TerminalsAttach
+        | RuntimeMethod::TerminalsDetach => Some(AppScope::SessionOutputRead),
         RuntimeMethod::SessionsInterrupt | RuntimeMethod::SessionsCool => {
             Some(AppScope::SessionStop)
         }
@@ -598,6 +628,11 @@ fn required_scope(method: RuntimeMethod) -> Option<AppScope> {
         | RuntimeMethod::SessionsLagged
         | RuntimeMethod::SessionsIndexChanged
         | RuntimeMethod::SessionsIndexEnded
+        | RuntimeMethod::TerminalsIndexChanged
+        | RuntimeMethod::TerminalsIndexEnded
+        | RuntimeMethod::TerminalsOutput
+        | RuntimeMethod::TerminalsLagged
+        | RuntimeMethod::TerminalsExited
         | RuntimeMethod::PanicStop => None,
     }
 }
@@ -706,6 +741,7 @@ fn initialize(
             native_session_catalogue: true,
             session_control: true,
             session_events: true,
+            terminal_surface: false,
         },
         limits: RuntimeLimits::default(),
         grant: granted,
@@ -2913,6 +2949,22 @@ fn parse_session_operation(
         | RuntimeMethod::SessionsForget
         | RuntimeMethod::SessionsDeleteNative
         | RuntimeMethod::SessionsArchiveNative
+        | RuntimeMethod::TerminalsList
+        | RuntimeMethod::TerminalsWatchIndex
+        | RuntimeMethod::TerminalsOpen
+        | RuntimeMethod::TerminalsAttach
+        | RuntimeMethod::TerminalsAcquireControl
+        | RuntimeMethod::TerminalsRenewControl
+        | RuntimeMethod::TerminalsReleaseControl
+        | RuntimeMethod::TerminalsWrite
+        | RuntimeMethod::TerminalsResize
+        | RuntimeMethod::TerminalsDetach
+        | RuntimeMethod::TerminalsStop
+        | RuntimeMethod::TerminalsIndexChanged
+        | RuntimeMethod::TerminalsIndexEnded
+        | RuntimeMethod::TerminalsOutput
+        | RuntimeMethod::TerminalsLagged
+        | RuntimeMethod::TerminalsExited
         | RuntimeMethod::SessionsEvent
         | RuntimeMethod::SessionsLagged
         | RuntimeMethod::SessionsIndexChanged

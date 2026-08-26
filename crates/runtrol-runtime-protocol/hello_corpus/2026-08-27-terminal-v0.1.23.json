@@ -1,0 +1,47 @@
+{
+  "limits": {
+    "challengeLifetimeMs": 60000,
+    "controlLeaseLifetimeMs": 30000,
+    "enrollmentLifetimeMs": 600000,
+    "idempotencyWindowMs": 86400000,
+    "maxAttachmentBase64Bytes": 4194304,
+    "maxFrameBytes": 16842752,
+    "maxIdempotencyRecords": 2048,
+    "maxInputBlocks": 16,
+    "maxInputBytes": 1048576,
+    "maxInputImages": 8,
+    "maxModelSelectionBytes": 4096,
+    "maxNativeAdoptionTokenBytes": 2048,
+    "maxNativePublicCursorBytes": 8192,
+    "maxPageItems": 100,
+    "maxPendingEnrollments": 64,
+    "maxReasoningSelectionBytes": 4096,
+    "maxRevisionOffers": 16,
+    "maxSubscriptions": 32,
+    "maxTerminalColumns": 500,
+    "maxTerminalIndexItems": 256,
+    "maxTerminalOutputBytes": 4096,
+    "maxTerminalRows": 200,
+    "maxTerminalScreenBytes": 1048576,
+    "maxTerminalViewQueueChunks": 128,
+    "maxTerminalWriteBytes": 65536,
+    "nativeCursorLifetimeMs": 300000
+  },
+  "runtime": {
+    "buildDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "instanceId": "rtm_0f3a9c2e7b1d4a58c6e2f0a9b8d7c6e5",
+    "platform": "win32-x64",
+    "version": "0.1.23"
+  },
+  "selectedRevision": "2026-08-27",
+  "serverCapabilities": {
+    "integrationEnrollment": true,
+    "managedSessionList": true,
+    "modelDiscovery": true,
+    "nativeSessionCatalogue": true,
+    "providerInventory": true,
+    "sessionControl": true,
+    "sessionEvents": true,
+    "terminalSurface": true
+  }
+}

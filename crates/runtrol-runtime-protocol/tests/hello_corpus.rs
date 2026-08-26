@@ -7,7 +7,7 @@
 //! failed the new client's schema at hello. These tests are that incident, made permanent.
 
 use runtrol_runtime_protocol::{
-    InitializeResult, REVISION_2026_08_13, RuntimeCapabilities, RuntimeInstance, RuntimeLimits,
+    InitializeResult, REVISION_2026_08_27, RuntimeCapabilities, RuntimeInstance, RuntimeLimits,
 };
 
 #[expect(
@@ -71,7 +71,7 @@ fn every_shipped_hello_still_deserializes() {
 #[test]
 fn the_current_hello_shape_is_in_the_corpus() {
     let current = InitializeResult {
-        selected_revision: REVISION_2026_08_13,
+        selected_revision: REVISION_2026_08_27,
         runtime: RuntimeInstance {
             instance_id: "rtm_fixture".to_owned(),
             version: env!("CARGO_PKG_VERSION").to_owned(),
@@ -86,6 +86,7 @@ fn the_current_hello_shape_is_in_the_corpus() {
             native_session_catalogue: true,
             session_control: true,
             session_events: true,
+            terminal_surface: true,
         },
         limits: RuntimeLimits::default(),
         grant: None,

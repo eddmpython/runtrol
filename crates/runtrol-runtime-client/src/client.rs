@@ -1689,46 +1689,7 @@ async fn receive_session_notification(
             )?;
             Ok(SessionNotification::Lagged(lagged))
         }
-        RuntimeMethod::Initialize
-        | RuntimeMethod::Initialized
-        | RuntimeMethod::Challenge
-        | RuntimeMethod::IntegrationsRequestEnrollment
-        | RuntimeMethod::IntegrationsWatchEnrollment
-        | RuntimeMethod::IntegrationsGetGrant
-        | RuntimeMethod::IntegrationsRotateKey
-        | RuntimeMethod::ProvidersList
-        | RuntimeMethod::ProvidersUsage
-        | RuntimeMethod::ProvidersWatch
-        | RuntimeMethod::ProvidersGetCapabilities
-        | RuntimeMethod::ProvidersListModels
-        | RuntimeMethod::ProvidersListNativeSessions
-        | RuntimeMethod::SessionsList
-        | RuntimeMethod::SessionsWatchIndex
-        | RuntimeMethod::SessionsGet
-        | RuntimeMethod::SessionsStart
-        | RuntimeMethod::SessionsAdoptNative
-        | RuntimeMethod::SessionsResume
-        | RuntimeMethod::SessionsAcquireControl
-        | RuntimeMethod::SessionsRenewControl
-        | RuntimeMethod::SessionsReleaseControl
-        | RuntimeMethod::SessionsSubmitInput
-        | RuntimeMethod::SessionsSubmitBlocks
-        | RuntimeMethod::SessionsSetModel
-        | RuntimeMethod::SessionsSetMode
-        | RuntimeMethod::SessionsWatchEvents
-        | RuntimeMethod::SessionsInterrupt
-        | RuntimeMethod::SessionsCool
-        | RuntimeMethod::SessionsForget
-        | RuntimeMethod::SessionsDeleteNative
-        | RuntimeMethod::SessionsArchiveNative
-        | RuntimeMethod::ApprovalsListPending
-        | RuntimeMethod::ApprovalsRespond
-        | RuntimeMethod::SessionsIndexChanged
-        | RuntimeMethod::SessionsIndexEnded
-        | RuntimeMethod::ProvidersChanged
-        | RuntimeMethod::ProvidersWatchEnded
-        | RuntimeMethod::ProvidersUsageChanged
-        | RuntimeMethod::PanicStop => Err(ClientError::Protocol(
+        _ => Err(ClientError::Protocol(
             "the dedicated session stream received a non-event method".to_owned(),
         )),
     }
@@ -2156,6 +2117,7 @@ mod tests {
                 native_session_catalogue: true,
                 session_control: true,
                 session_events: true,
+                terminal_surface: false,
             },
             limits: runtrol_runtime_protocol::RuntimeLimits::default(),
             grant: None,
@@ -2225,6 +2187,7 @@ mod tests {
                 native_session_catalogue: true,
                 session_control: true,
                 session_events: true,
+                terminal_surface: false,
             },
             limits: runtrol_runtime_protocol::RuntimeLimits::default(),
             grant: None,

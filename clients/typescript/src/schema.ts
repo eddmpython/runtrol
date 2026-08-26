@@ -58,7 +58,11 @@ function validationFailure(schema: JsonSchema, value: unknown, path: string): st
     && !schema.anyOf.some((candidate) => !validationFailure(candidate, value, path))) {
     return `${path} does not match any allowed shape`;
   }
-  const expectedTypes = typeof schema.type === "string" ? [schema.type] : schema.type;
+  const declaredTypes = typeof schema.type === "string" ? [schema.type] : schema.type;
+  const objectIsImplied = schema.properties !== undefined
+    || schema.required !== undefined
+    || schema.additionalProperties !== undefined;
+  const expectedTypes = declaredTypes ?? (objectIsImplied ? ["object"] : undefined);
   if (expectedTypes && !expectedTypes.some((type) => matchesType(value, type))) {
     return `${path} has the wrong JSON type`;
   }
@@ -116,6 +120,9 @@ function matchesNumberFormat(value: number, format: string): boolean {
   // A real number: any finite value, sign and fraction included. A money amount is written this way, and
   // reading one as an unsigned integer is what rejected every cost report the services sent.
   if (format === "double" || format === "float") return Number.isFinite(value);
+  if (format === "int32") {
+    return Number.isSafeInteger(value) && value >= -0x8000_0000 && value <= 0x7fff_ffff;
+  }
   if (!Number.isSafeInteger(value) || value < 0) return false;
   if (format === "uint8") return value <= 0xff;
   if (format === "uint16") return value <= 0xffff;
