@@ -32,8 +32,18 @@ NOISE = re.compile(
 )
 
 
+# The two shapes the whole-file walk has to recognise on their own, kept beside the single-line pattern so
+# the two readings of "this is not code" cannot drift apart.
+RAW_OPENER = re.compile(r'r(#*)"')
+CHAR_LITERAL = re.compile(r"'(?:\\.|[^'\\])'")
+
+
 def withoutNoise(line: str) -> str:
-    """One line with its strings, character literals and trailing comment removed."""
+    """One line with its strings, character literals and trailing comment removed.
+
+    For a caller holding one line and nothing else. A caller that has the whole file uses
+    [`withoutNoiseAcross`], which is the only one of the two that can see a string spanning lines.
+    """
     return NOISE.sub("", line)
 
 
@@ -68,12 +78,96 @@ def withoutComments(line: str) -> str:
     return line
 
 
+def withoutNoiseAcross(lines: list[str]) -> list[str]:
+    """Every line with its strings, character literals and comments taken out, reading the file as one text.
+
+    [`withoutNoise`] reads one line at a time, and a string that spans lines is invisible to it: the opening
+    line has no closing quote to match, so the ordinary-string pattern eats whatever pairs of quotes it can
+    find inside and leaves the rest as code. A test fixture written as
+
+        r#"{"rate_limits":{"limits":[
+            {"kind":"monthly_overage","percent":42}
+        ]}}"#
+
+    lost two of its opening braces that way and kept both of its closing ones, which closed the enclosing
+    `#[cfg(test)]` block twenty lines early and reported the tests after it as production panic paths. The
+    same miscount runs the other way too: a multi-line string with a spare opening brace stretches a test
+    region over the production code below it, and that direction hides real findings instead of inventing
+    them.
+
+    So this walks the whole file with the state a string carries between lines. Still not a Rust parser: it
+    knows line comments, block comments, ordinary strings, raw strings with any number of hashes, and
+    character literals, which is every construct that has put a brace where brace counting could see it.
+    """
+    cleaned: list[str] = []
+    rawHashes: int | None = None
+    inString = False
+    inBlockComment = False
+    for line in lines:
+        kept: list[str] = []
+        index = 0
+        while index < len(line):
+            rest = line[index:]
+            if rawHashes is not None:
+                closing = '"' + "#" * rawHashes
+                at = rest.find(closing)
+                if at == -1:
+                    break
+                index += at + len(closing)
+                rawHashes = None
+                continue
+            if inString:
+                if rest.startswith("\\\\"):
+                    index += 2
+                    continue
+                if rest.startswith('\\"'):
+                    index += 2
+                    continue
+                if rest.startswith('"'):
+                    inString = False
+                index += 1
+                continue
+            if inBlockComment:
+                at = rest.find("*/")
+                if at == -1:
+                    break
+                index += at + 2
+                inBlockComment = False
+                continue
+            if rest.startswith("//"):
+                break
+            if rest.startswith("/*"):
+                inBlockComment = True
+                index += 2
+                continue
+            opener = RAW_OPENER.match(rest)
+            if opener:
+                rawHashes = len(opener.group(1))
+                index += opener.end()
+                continue
+            if rest.startswith('"'):
+                inString = True
+                index += 1
+                continue
+            character = CHAR_LITERAL.match(rest)
+            if character:
+                index += character.end()
+                continue
+            kept.append(line[index])
+            index += 1
+        cleaned.append("".join(kept))
+    return cleaned
+
+
 def testRegions(lines: list[str]) -> list[tuple[int, int]]:
     """The (first, last) line index of every `#[cfg(test)]` block.
 
-    The end is found by brace depth over lines the noise has been taken out of. When the next item arrives before
-    any opening brace does (the attribute was on a single function), that one item is the region.
+    The end is found by brace depth over lines the noise has been taken out of, and the noise is taken out
+    across the whole file rather than line by line, because a string that spans lines has to be one string.
+    When the next item arrives before any opening brace does (the attribute was on a single function), that
+    one item is the region.
     """
+    cleanedLines = withoutNoiseAcross(lines)
     regions: list[tuple[int, int]] = []
     i = 0
     while i < len(lines):
@@ -84,7 +178,7 @@ def testRegions(lines: list[str]) -> list[tuple[int, int]]:
         opened = False
         j = i
         while j < len(lines):
-            cleaned = withoutNoise(lines[j])
+            cleaned = cleanedLines[j]
             depth += cleaned.count("{") - cleaned.count("}")
             if cleaned.count("{"):
                 opened = True
@@ -132,6 +226,47 @@ def selftest() -> int:
         problems.append("a cfg(test) attribute on one function did not cover its body")
     if inRegions(4, regions):
         problems.append("the item after a cfg(test) function was read as test code")
+
+    # **The defect this walk exists for.** A raw string spanning lines is invisible one line at a time: the
+    # opening line keeps braces the string owns and the closing line keeps its own, so the region closes
+    # early and the tests after it are reported as production code.
+    source = (
+        "#[cfg(test)]\n"
+        "mod tests {\n"
+        "    #[test]\n"
+        "    fn t() {\n"
+        '        let frame = r#"{"a":{"b":[\n'
+        '            {"c":1}\n'
+        '        ]}}"#;\n'
+        "        let v = maybe().unwrap();\n"
+        "    }\n"
+        "}\n"
+        "fn production() {}\n"
+    )
+    lines = source.splitlines()
+    regions = testRegions(lines)
+    if not inRegions(7, regions):
+        problems.append("a raw string spanning lines ended the test region early")
+    if inRegions(10, regions):
+        problems.append("production code after a multi-line raw string was read as test code")
+
+    # And the same miscount the other way, which hides findings instead of inventing them.
+    source = (
+        "#[cfg(test)]\n"
+        "mod tests {\n"
+        '    const S: &str = "a {\n'
+        'b";\n'
+        "    #[test]\n    fn t() {}\n"
+        "}\n"
+        "fn production() -> u32 {\n    maybe().unwrap()\n}\n"
+    )
+    lines = source.splitlines()
+    if inRegions(8, testRegions(lines)):
+        problems.append("a brace inside a multi-line ordinary string stretched the test region")
+
+    # A block comment is not code either.
+    if withoutNoiseAcross(["    /* { */ let x = 1;"])[0].count("{"):
+        problems.append("a brace inside a block comment was counted as code")
 
     # A character literal is one brace long.
     if withoutNoise("    let brace = '{';").count("{"):
