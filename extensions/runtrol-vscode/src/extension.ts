@@ -500,7 +500,14 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
   );
   // Before the Runtime integration speaks: proving the daemon that answered is the installed generation
   // is what lets everything past the hello assume the daemon and this extension are the same build.
-  const runtimeInitialization = superviseCoreCurrency(client, locator).then(() => runtime.initialize());
+  const runtimeInitialization = superviseCoreCurrency(client, locator, (updating) => {
+    // Under the usage strip, where it stays. The count is what this window can see running: those are the
+    // conversations the older generation is still holding, and when the last one ends the installed build takes
+    // over. Saying it without a number would leave the reader with no idea whether this is seconds or an hour.
+    usage.setUpdateNotice(updating
+      ? updateNotice(state.sessions.length)
+      : null);
+  }).then(() => runtime.initialize());
   const controllerInitialization = runtimeInitialization.then(async () => {
     initializationStage = "controller";
     await controller.initialize();
@@ -741,6 +748,13 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
       )
       : undefined,
   };
+}
+
+/// What the sidebar says while an older Core generation is still serving this window.
+function updateNotice(running: number): string {
+  if (running === 1) return "Update applies when this conversation ends.";
+  if (running > 1) return `Update applies when these ${running} conversations end.`;
+  return "Update applies as soon as the running conversations end.";
 }
 
 /// Whether provider discovery has made a stored conversation in this folder visible.

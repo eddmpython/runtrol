@@ -29,11 +29,16 @@ test("a snapshot the host would actually send survives its own validator", () =>
     type: "snapshot",
     rows: [],
     setup: [{ providerId: "grok", name: "Grok", icon: "grok", state: "missing", detail: "Not installed", actionable: false }],
+    notice: null,
     error: null,
   };
   assert.deepEqual(usageSnapshot(JSON.parse(JSON.stringify(sent))), sent);
   assert.equal(usageSnapshot({ ...sent, setup: undefined }), null);
   assert.equal(usageSnapshot({ ...sent, rows: undefined }), null);
   assert.equal(usageSnapshot({ ...sent, error: 7 }), null);
+  // The update line is part of the shape, so a host that forgot it cannot silently blank the strip.
+  assert.equal(usageSnapshot({ ...sent, notice: undefined }), null);
+  assert.deepEqual(usageSnapshot({ ...sent, notice: "Update applies when this conversation ends." })?.notice,
+    "Update applies when this conversation ends.");
   assert.equal(usageSnapshot("snapshot"), null);
 });

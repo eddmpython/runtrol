@@ -6,6 +6,8 @@ export type UsageViewSnapshot = {
   readonly rows: readonly UsageRow[];
   /// Every service this build serves and what each still needs, drawn only while the set-up list is open.
   readonly setup: readonly SetupRow[];
+  /// One sentence under the strip while an older Core generation is still serving this window.
+  readonly notice: string | null;
   readonly error: string | null;
 };
 
@@ -46,6 +48,7 @@ export function usageSnapshot(value: unknown): UsageViewSnapshot | null {
     record.type !== "snapshot"
     || !Array.isArray(record.rows)
     || !Array.isArray(record.setup)
+    || !(typeof record.notice === "string" || record.notice === null)
     || !(typeof record.error === "string" || record.error === null)
   ) return null;
   return value as UsageViewSnapshot;

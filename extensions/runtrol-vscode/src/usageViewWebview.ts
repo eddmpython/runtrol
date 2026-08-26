@@ -16,6 +16,7 @@ const iconBase = usage.dataset.iconBase ?? "";
 const empty = element<HTMLParagraphElement>("empty");
 const error = element<HTMLParagraphElement>("error");
 const setup = element<HTMLElement>("setup");
+const notice = element<HTMLParagraphElement>("notice");
 
 window.addEventListener("message", (event: MessageEvent<unknown>) => {
   const snapshot = usageSnapshot(event.data);
@@ -31,6 +32,8 @@ function render(snapshot: UsageViewSnapshot): void {
   error.hidden = snapshot.error === null;
   setup.replaceChildren(...snapshot.setup.map(setupRow));
   setup.hidden = snapshot.setup.length === 0;
+  notice.textContent = snapshot.notice ?? "";
+  notice.hidden = snapshot.notice === null;
 }
 
 /// One service in the set-up list: its glyph, its name, and the one thing it still needs.

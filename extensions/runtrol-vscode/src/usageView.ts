@@ -18,6 +18,7 @@ export class UsageView implements vscode.WebviewViewProvider, vscode.Disposable 
   /// redraw does not close it under the reader's hand.
   private setupOpen = false;
   private error: string | null = null;
+  private notice: string | null = null;
   private view: vscode.WebviewView | null = null;
   private viewSubscriptions: vscode.Disposable[] = [];
   private fetching = false;
@@ -134,6 +135,13 @@ export class UsageView implements vscode.WebviewViewProvider, vscode.Disposable 
     if (changed || force) this.postSnapshot();
   }
 
+  /// Say, or stop saying, that an older Core generation is still serving this window.
+  setUpdateNotice(notice: string | null): void {
+    if (notice === this.notice) return;
+    this.notice = notice;
+    this.postSnapshot();
+  }
+
   private setError(error: string | null): void {
     if (error === this.error) return;
     this.error = error;
@@ -145,6 +153,7 @@ export class UsageView implements vscode.WebviewViewProvider, vscode.Disposable 
       type: "snapshot",
       rows: this.rows,
       setup: this.setupOpen ? this.setup : [],
+      notice: this.notice,
       error: this.error,
     };
     void this.view?.webview.postMessage(message);
@@ -201,6 +210,7 @@ export class UsageView implements vscode.WebviewViewProvider, vscode.Disposable 
   <main id="usage" aria-live="polite" data-icon-base="${iconBase}"></main>
   <p id="empty" class="empty" hidden>No connected CLI.</p>
   <p id="error" class="error" role="status" hidden></p>
+  <p id="notice" class="notice" role="status" hidden></p>
   <section id="setup" class="setup" hidden></section>
   <script nonce="${nonce}" src="${script}"></script>
 </body>

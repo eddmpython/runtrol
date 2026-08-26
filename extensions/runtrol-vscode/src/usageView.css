@@ -175,8 +175,14 @@ button.setup-row:hover {
 }
 
 .empty,
-.error {
+.error,
+.notice {
   margin: 7px;
+}
+
+.notice {
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
 }
 
 .error {
