@@ -1553,7 +1553,6 @@ dependencies = [
  "cargo_metadata",
  "runtrol-childproc",
  "runtrol-core",
- "runtrol-ledger",
  "runtrol-provider",
  "runtrol-security",
  "runtrol-store",
@@ -1624,10 +1623,7 @@ dependencies = [
  "runtrol-childproc",
  "runtrol-core",
  "runtrol-drivers",
- "runtrol-growth",
  "runtrol-ipc",
- "runtrol-ledger",
- "runtrol-orchestrator",
  "runtrol-provider",
  "runtrol-runtime-client",
  "runtrol-runtime-protocol",
@@ -1663,17 +1659,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "runtrol-growth"
-version = "0.1.1"
-dependencies = [
- "runtrol-provider",
- "serde",
- "sha2 0.10.9",
- "thiserror 2.0.19",
- "toml",
-]
-
-[[package]]
 name = "runtrol-ipc"
 version = "0.1.1"
 dependencies = [
@@ -1685,33 +1670,6 @@ dependencies = [
  "thiserror 2.0.19",
  "tokio",
  "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "runtrol-ledger"
-version = "0.1.1"
-dependencies = [
- "redb",
- "runtrol-provider",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "thiserror 2.0.19",
- "uuid",
-]
-
-[[package]]
-name = "runtrol-orchestrator"
-version = "0.1.1"
-dependencies = [
- "runtrol-core",
- "runtrol-ledger",
- "runtrol-provider",
- "runtrol-security",
- "serde",
- "sha2 0.10.9",
- "thiserror 2.0.19",
- "toml",
 ]
 
 [[package]]
