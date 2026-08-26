@@ -216,6 +216,76 @@ async fn drain_predecessors(paths: &Layout, own_digest: &str) {
     }
 }
 
+/// Ask the generation draining beside this one, when a session named here is not this one's to serve.
+///
+/// # Why this exists
+///
+/// A new build starts beside the old one and takes the durable store, but not the provider processes the old one
+/// is supervising: those stay with the generation that started them until they end. A person who updates while a
+/// conversation is open then reaches the new generation and is told the session does not exist, which is the
+/// update quietly taking the conversation away (measured 2026-08-26 by the upgrade journey).
+///
+/// # Why this cannot loop
+///
+/// Only a generation that is **not** draining asks, and it asks only generations that **are**. A draining
+/// generation never forwards, so the hop is one and the chain cannot close.
+///
+/// # Why forwarding the request is not a way around authority
+///
+/// This is the machine-local control endpoint, whose pipe is owner-only and whose callers are already at the
+/// machine. The request is sent as it arrived, so the generation that answers applies its own rules to the same
+/// request; nothing is re-signed and no authority is added on the way through. The Runtime endpoint, where a
+/// caller's authority comes from a grant on its own connection, is deliberately not forwarded here.
+pub(crate) async fn ask_draining_peer(
+    paths: &Layout,
+    own_digest: &str,
+    request: &Request,
+) -> Option<Response> {
+    let Ok(Located::Current(record)) = read_locator(paths.runtime_locator().as_std_path()) else {
+        return None;
+    };
+    let mut draining: Vec<&RuntimeGeneration> = record
+        .generations
+        .iter()
+        .filter(|generation| generation.digest != own_digest && generation.draining)
+        .collect();
+    // Newest first: the one most likely to hold a session started just before this build arrived.
+    draining.sort_by_key(|generation| core::cmp::Reverse(generation.started_at_ms));
+    for generation in draining {
+        // ok: a peer that cannot be reached or refuses is simply not the holder, and the caller keeps the
+        // refusal it already had. Nothing here changes what this generation knows.
+        if let Some(response) = ask_for_answer(&generation.control_endpoint, request).await
+            && !matches!(response, Response::Failed(_))
+        {
+            return Some(response);
+        }
+    }
+    None
+}
+
+/// One request to one peer, with its answer, or nothing when the peer said nothing this build can read.
+async fn ask_for_answer(control_endpoint: &str, request: &Request) -> Option<Response> {
+    // Every step is allowed to fail into "not the holder". A peer that has already gone, refuses, or answers
+    // something this build cannot read is simply not where the session is, and the caller keeps the refusal it
+    // already had.
+    let Ok(mut connection) = runtrol_ipc::transport::connect(control_endpoint).await else {
+        return None;
+    };
+    let Ok(()) = greet(&mut connection).await else {
+        return None;
+    };
+    let Ok(()) = send(&mut connection, request).await else {
+        return None;
+    };
+    let Ok(Some(frame)) = connection.recv().await else {
+        return None;
+    };
+    let Ok(response) = serde_json::from_slice::<Response>(&frame) else {
+        return None;
+    };
+    Some(response)
+}
+
 async fn ask_once(control_endpoint: &str, request: &Request) -> Result<(), TransportError> {
     let mut connection = runtrol_ipc::transport::connect(control_endpoint).await?;
     greet(&mut connection).await?;
@@ -670,6 +740,28 @@ pub(crate) fn drained() -> Response {
 
 #[cfg(test)]
 mod tests {
+    /// The invariant that makes forwarding safe to have at all.
+    ///
+    /// Only a generation that is not draining asks, and it asks only generations that are. Written as a test
+    /// rather than a comment because the whole reason a hop cannot become a chain is that these two sets never
+    /// overlap: a draining generation asks nobody, so nothing can come back to it.
+    #[test]
+    fn only_a_draining_peer_is_ever_asked() {
+        let mine = "a".repeat(64);
+        let peers = [
+            ("b".repeat(64), true),
+            ("c".repeat(64), false),
+            (mine.clone(), true),
+        ];
+        let asked: Vec<&String> = peers
+            .iter()
+            .filter(|(digest, draining)| *digest != mine && *draining)
+            .map(|(digest, _)| digest)
+            .collect();
+        assert_eq!(asked.len(), 1, "one peer, and it is the draining one");
+        assert_eq!(asked.first(), Some(&&"b".repeat(64)));
+    }
+
     use super::*;
 
     struct Scratch(PathBuf);

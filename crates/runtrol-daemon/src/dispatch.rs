@@ -51,6 +51,12 @@ pub(crate) enum Reply {
     Watching(Box<SessionView>),
     /// The caller is now watching the current session index.
     WatchingSessions,
+    /// The session named is real but not this generation's to serve.
+    ///
+    /// A separate shape because the answer is the same refusal either way and the difference is what the
+    /// connection may still try: a generation that replaced another can ask the one draining beside it, which is
+    /// the only place a session started before the update still lives. Every other refusal is final here.
+    NotHere(Response),
     /// A successor generation asked this daemon to drain.
     ///
     /// A separate shape because the session owner acts on it, not the connection: it releases the
@@ -368,7 +374,7 @@ async fn answer(
         let session = SessionId::now();
         match sessions.reserve_open_for_tests(session) {
             Ok(reserved) => Some(reserved),
-            Err(error) => return Reply::One(from_session_error(&error)),
+            Err(error) => return reply_from_session_error(&error),
         }
     } else {
         None
@@ -1102,7 +1108,7 @@ pub(crate) fn answer_prepared(
                     provider,
                     reservation,
                 },
-                Err(error) => Reply::One(from_session_error(&error)),
+                Err(error) => reply_from_session_error(&error),
             }
         }
 
@@ -1228,7 +1234,7 @@ pub(crate) fn answer_prepared(
             subject_digest,
         ) {
             Ok((taken, command)) => Reply::Sending { taken, command },
-            Err(error) => Reply::One(from_session_error(&error)),
+            Err(error) => reply_from_session_error(&error),
         },
 
         Request::Watch { session, after } => match sessions.subscribe(session, after) {
@@ -1263,10 +1269,10 @@ pub(crate) fn answer_prepared(
                 },
                 Err(SessionError::NotLive { .. }) => match composed.store.remove_session(session) {
                     Ok(true) => Reply::One(Response::Done),
-                    Ok(false) => Reply::One(from_session_error(&SessionError::NotLive { session })),
+                    Ok(false) => reply_from_session_error(&SessionError::NotLive { session }),
                     Err(error) => Reply::One(refuse(&error.to_string())),
                 },
-                Err(error) => Reply::One(from_session_error(&error)),
+                Err(error) => reply_from_session_error(&error),
             }
         }
 
@@ -1621,7 +1627,7 @@ fn checked_flags(
 fn send(sessions: &mut SessionManager, session: SessionId, command: AgentCommand) -> Reply {
     match sessions.take_agent(session) {
         Ok(taken) => Reply::Sending { taken, command },
-        Err(error) => Reply::One(from_session_error(&error)),
+        Err(error) => reply_from_session_error(&error),
     }
 }
 
@@ -1843,6 +1849,18 @@ fn from_session_error(error: &SessionError) -> Response {
     match error {
         SessionError::Provider(provider) => Response::Failed(WireError::from_provider(provider)),
         other => refuse(&other.to_string()),
+    }
+}
+
+/// One session failure as the connection should see it.
+///
+/// Only one variant is ever worth trying elsewhere, so only that one is distinguished. Reading the variant
+/// rather than the rendered sentence is what keeps this from breaking the first time the wording changes.
+fn reply_from_session_error(error: &SessionError) -> Reply {
+    let response = from_session_error(error);
+    match error {
+        SessionError::NotLive { .. } => Reply::NotHere(response),
+        _ => Reply::One(response),
     }
 }
 
@@ -2476,7 +2494,12 @@ mod tests {
             },
         ] {
             match answer(&mut conversation, &composed, &mut sessions, request).await {
-                Reply::One(Response::Failed(failure)) => {
+                // Refused either way. Some of these requests reach the session table and are marked as the one
+                // refusal a connection may still try elsewhere (a session this generation does not hold may be
+                // held by the one draining beside it); others are refused before they get that far. What this
+                // test is about is that the refusal names the session, which both shapes must do.
+                Reply::One(Response::Failed(failure))
+                | Reply::NotHere(Response::Failed(failure)) => {
                     assert!(
                         failure.message.contains(&absent.to_string()),
                         "the refusal has to name the session: {}",
@@ -2995,6 +3018,7 @@ mod tests {
     fn shape(reply: &Reply) -> String {
         match reply {
             Reply::One(response) => format!("{response:?}"),
+            Reply::NotHere(response) => format!("not this generation: {response:?}"),
             Reply::Watching(_) | Reply::WatchingSessions => "a subscription".to_owned(),
             Reply::Draining => "a drain".to_owned(),
             Reply::Stopping { how, .. } => format!("a process still stopping, {how:?}"),

@@ -1766,7 +1766,11 @@ fn abandon_reply(
             drop(cancelling.send(ReservationAsked::ReleaseProviderUpdate(reservation)));
             false
         }
-        Reply::One(_) | Reply::Watching(_) | Reply::WatchingSessions | Reply::Draining => false,
+        Reply::One(_)
+        | Reply::NotHere(_)
+        | Reply::Watching(_)
+        | Reply::WatchingSessions
+        | Reply::Draining => false,
     }
 }
 
@@ -2157,6 +2161,8 @@ async fn converse_inner(
         };
         drop(preparation_gate);
         let (answered, hearing) = oneshot::channel();
+        // Kept for the one answer that can still be tried elsewhere: a session this generation does not hold.
+        let asked_for = request.clone();
         let ask = Asked {
             conversation,
             request,
@@ -2177,6 +2183,33 @@ async fn converse_inner(
         match back.reply {
             Reply::One(response) => {
                 if write(&mut connection, &response).await.is_err() {
+                    return;
+                }
+            }
+
+            // The session is real and belongs to the generation draining beside this one, which is where a
+            // conversation opened before an update still lives. Asked once, there; a draining generation never
+            // asks anyone, so this cannot go round.
+            Reply::NotHere(refusal) => {
+                let elsewhere = if composed.draining.load(std::sync::atomic::Ordering::Acquire) {
+                    None
+                } else {
+                    match crate::build_identity::build_digest() {
+                        Some(own) => {
+                            crate::generations::ask_draining_peer(
+                                composed.home.paths(),
+                                own,
+                                &asked_for,
+                            )
+                            .await
+                        }
+                        // A build that cannot name itself cannot tell its own entry from a peer's, and asking
+                        // blind could send the request back to this very generation.
+                        None => None,
+                    }
+                };
+                let answer = elsewhere.unwrap_or(refusal);
+                if write(&mut connection, &answer).await.is_err() {
                     return;
                 }
             }
