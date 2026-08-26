@@ -373,7 +373,9 @@ function windowName(window) {
     else if (minutes % 1440 === 0) length = `${minutes / 1440}d`;
     else length = `${minutes}m`;
   }
-  if (named && length) return `${named} ${length}`;
+  // Length first, the same order the sidebar uses. One service meters the same model over a short window
+  // and a long one, and with the model first both labels clipped to the same text on a narrow screen.
+  if (named && length) return `${length} ${named}`;
   return named ?? length;
 }
 

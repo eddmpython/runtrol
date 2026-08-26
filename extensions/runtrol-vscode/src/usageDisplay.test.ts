@@ -122,6 +122,20 @@ test("a percentage past the top of the track is drawn at the top of the track", 
   assert.equal(meters[0]?.percent, 100);
 });
 
+test("the line, the bar and the hover never disagree about one number", () => {
+  // A service can report past a full window. The bar cannot draw past its track, so a line that printed the
+  // raw number sat beside a full bar saying something else.
+  const over = gauge({
+    providerId: "codex",
+    windows: [window("codex.primary", { usedPercent: 250, windowMinutes: 10_080 })],
+  });
+  assert.equal(usageMeters(over, NOW)[0]?.percent, 100);
+  assert.equal(usageDetail(over, NOW), "7d 100%");
+  const row = usageRows([over], PROVIDERS, NOW).find((line) => line.providerId === "codex");
+  assert.ok(row?.tooltip.includes("100% used"), row?.tooltip);
+  assert.ok(!row?.tooltip.includes("250"), row?.tooltip);
+});
+
 test("a reset without a reported percentage does not invent an empty progress bar", () => {
   assert.deepEqual(
     usageMeters(gauge({ windows: [window("billing_period", { resetsAtMs: NOW + 60_000 })] }), NOW),

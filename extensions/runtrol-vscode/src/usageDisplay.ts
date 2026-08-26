@@ -285,8 +285,8 @@ export function accountAbsence(name: string, account: ProviderLine["account"] | 
 /// not say how much of that window was used.
 export function usageMeters(gauge: ProviderUsageGauge, nowMs: number): UsageMeter[] {
   return (gauge.windows ?? []).flatMap((window) => {
-    if (typeof window.usedPercent !== "number" || !Number.isFinite(window.usedPercent)) return [];
-    const percent = Math.max(0, Math.min(100, Math.round(window.usedPercent)));
+    const percent = boundedPercent(window.usedPercent);
+    if (percent === null) return [];
     const resets = resetsIn(window, nowMs);
     return [{
       key: window.id,
@@ -296,6 +296,17 @@ export function usageMeters(gauge: ProviderUsageGauge, nowMs: number): UsageMete
       governing: window.governing === true,
     }];
   });
+}
+
+/// One reported percentage as a proportion a bar can draw, or null when the service reported none.
+///
+/// The one place a percentage is bounded, so every surface that shows the same window shows the same
+/// number. A value outside nought to a hundred is the provider's own overrun and stays in its payload; a
+/// bar cannot be longer than its track and digits that disagree with the bar beside them are worse than
+/// either alone.
+export function boundedPercent(percent: number | null | undefined): number | null {
+  if (typeof percent !== "number" || !Number.isFinite(percent)) return null;
+  return Math.max(0, Math.min(100, Math.round(percent)));
 }
 
 /// What one bar is a bar of, in the service's own words.
@@ -361,8 +372,10 @@ export function usageDetail(gauge: ProviderUsageGauge, nowMs: number): string {
   if (gauge.reached) parts.push("limit reached");
   const window = governingWindow(gauge);
   const named = window ? windowName(window) : null;
-  const percent = window?.usedPercent;
-  if (typeof percent === "number") {
+  // The same bounding the bar does, because the line and the bar are two readings of one number and a row
+  // that said `250%` beside a bar drawn at full disagreed with itself.
+  const percent = window ? boundedPercent(window.usedPercent) : null;
+  if (percent !== null) {
     parts.push(named ? `${named} ${percent}%` : `${percent}%`);
   } else if (named) {
     // No percentage, so the line names the window itself. Measured: a service that publishes its usage
@@ -391,8 +404,8 @@ export function governingWindow(gauge: ProviderUsageGauge): ProviderUsageWindow 
   if (declared) return declared;
   let fullest: ProviderUsageWindow | null = null;
   for (const window of windows) {
-    if (typeof window.usedPercent !== "number" || !Number.isFinite(window.usedPercent)) continue;
-    if (!fullest || window.usedPercent > (fullest.usedPercent ?? -1)) fullest = window;
+    if (boundedPercent(window.usedPercent) === null) continue;
+    if (!fullest || (window.usedPercent ?? 0) > (fullest.usedPercent ?? -1)) fullest = window;
   }
   return fullest ?? windows[0] ?? null;
 }
@@ -425,7 +438,8 @@ function usageTooltip(name: string, gauge: ProviderUsageGauge, nowMs: number): s
   const lines = [`${name}: ${gauge.reached ? "a limit is blocking right now" : "within limits"}`];
   for (const window of gauge.windows ?? []) {
     const pieces: string[] = [];
-    if (typeof window.usedPercent === "number") pieces.push(`${window.usedPercent}% used`);
+    const percent = boundedPercent(window.usedPercent);
+    if (percent !== null) pieces.push(`${percent}% used`);
     if (typeof window.windowMinutes === "number") {
       pieces.push(`${window.windowMinutes} minute window`);
     }
