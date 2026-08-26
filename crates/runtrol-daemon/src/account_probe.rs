@@ -87,6 +87,11 @@ impl AccountReports {
             plan: reported.report.plan.as_ref().map(ToString::to_string),
             method: reported.report.method.as_ref().map(ToString::to_string),
             why,
+            limits_unread: reported
+                .report
+                .limits_unread
+                .as_ref()
+                .map(ToString::to_string),
             checked_at_ms: reported.at.as_millis(),
         })
     }
@@ -100,8 +105,7 @@ impl AccountReports {
                 Some(runtrol_core::ProviderGauge {
                     provider: *provider,
                     reached: limit.reached,
-                    primary: limit.primary,
-                    secondary: limit.secondary,
+                    windows: limit.windows,
                     cost: None,
                     tokens_today: reported.report.tokens_today,
                     at: reported.at,

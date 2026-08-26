@@ -4909,8 +4909,7 @@ listen = "stdio"
                 providers: vec![runtrol_runtime_protocol::ProviderUsageGauge {
                     provider_id: runtrol_runtime_protocol::ProviderId::new("native-fixture"),
                     reached: false,
-                    primary: None,
-                    secondary: None,
+                    windows: Vec::new(),
                     cost: None,
                     tokens_today: Some(1234),
                     at_ms: 1,

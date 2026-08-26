@@ -35,10 +35,8 @@ pub struct ProviderGauge {
     pub provider: ProviderId,
     /// A limit is blocking right now, by the provider's own word.
     pub reached: bool,
-    /// The shorter window, when the provider reports one.
-    pub primary: Option<Window>,
-    /// The longer window, when the provider reports one.
-    pub secondary: Option<Window>,
+    /// Every window the provider described in its newest report, shortest first.
+    pub windows: Vec<Window>,
     /// The latest running cost the provider stated, in its own currency, when it states one.
     ///
     /// The newest report wins, the same rule the windows follow: this answers "the most recent turn's spend",
@@ -56,8 +54,7 @@ impl ProviderGauge {
         Self {
             provider,
             reached: false,
-            primary: None,
-            secondary: None,
+            windows: Vec::new(),
             cost: None,
             tokens_today: None,
             at,
@@ -89,8 +86,7 @@ impl AccountGauges {
             .entry(provider)
             .or_insert_with(|| ProviderGauge::blank(provider, at));
         gauge.reached = limit.reached;
-        gauge.primary = limit.primary;
-        gauge.secondary = limit.secondary;
+        gauge.windows.clone_from(&limit.windows);
         gauge.at = at;
     }
 
@@ -122,16 +118,15 @@ mod tests {
     }
 
     fn report(reached: bool, percent: Option<u8>) -> RateLimit {
-        RateLimit {
-            primary: Some(Window {
+        RateLimit::new(
+            vec![Window {
                 used_percent: percent,
                 resets_at: Some(WallMs::from_millis(1_787_131_200_000)),
-                window_minutes: None,
-            }),
-            secondary: None,
+                ..Window::new("five_hour")
+            }],
             reached,
-            detail: Opaque::owned(r#"{"verbatim":"payload"}"#.to_owned()),
-        }
+            Opaque::owned(r#"{"verbatim":"payload"}"#.to_owned()),
+        )
     }
 
     #[test]
@@ -154,7 +149,7 @@ mod tests {
         let gauge = snapshot.first().expect("one provider");
         assert!(gauge.reached);
         assert_eq!(
-            gauge.primary.and_then(|window| window.used_percent),
+            gauge.windows.first().and_then(|window| window.used_percent),
             Some(97)
         );
         assert_eq!(gauge.at, WallMs::from_millis(2));
@@ -210,7 +205,7 @@ mod tests {
         let gauge = snapshot.first().expect("one provider");
         assert!(gauge.reached, "the limit survived the cost report");
         assert_eq!(
-            gauge.primary.and_then(|window| window.used_percent),
+            gauge.windows.first().and_then(|window| window.used_percent),
             Some(42)
         );
         let cost = gauge.cost.as_ref().expect("the cost was recorded");

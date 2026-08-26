@@ -53,19 +53,20 @@ pub use command::{
 pub use error::ProviderError;
 pub use event::{
     AgentEvent, ApprovalKind, ApprovalOption, ApprovalRequest, Attached, BlockedOn, CapabilitySet,
-    Chunk, Cost, Declarant, DetachReason, Detached, EventBody, Level, Notice, NoticeCode,
-    OfferedOption, Opaque, PermissionOptionKind, RateLimit, RiskClass, StopReason, ToolCallFrame,
-    ToolCallStatus, ToolKind, TurnEvent, Unmapped, Usage, WatchCursor, WatchGap, Window,
-    WithdrawnReason,
+    Chunk, Cost, Declarant, DetachReason, Detached, EventBody, Level, MAX_LIMIT_WINDOWS, Notice,
+    NoticeCode, OfferedOption, Opaque, PermissionOptionKind, RateLimit, RiskClass, StopReason,
+    ToolCallFrame, ToolCallStatus, ToolKind, TurnEvent, Unmapped, Usage, WatchCursor, WatchGap,
+    Window, WithdrawnReason,
 };
 pub use id::{
     ApprovalId, IdError, MessageId, NativeSessionId, OptionId, ProviderId, SessionId, StreamId,
     TerminalId, ToolCallId, TurnId,
 };
 pub use manifest::{
-    AccountSpec, BinSpec, EventsSpec, FallbackSpec, FlagProbe, HelpCommands, Kind, MANIFEST_SCHEMA,
-    Manifest, ManifestError, ModelAliases, ProbeSpec, SecretPaths, StoreSpec, TransportSpec,
-    TuiSpec, UpdateHint, UpdateSpec, VersionParse, VersionProbe,
+    AccountIdentitySpec, AccountSpec, AccountWindowSpec, BinSpec, EventsSpec, FallbackSpec,
+    FlagProbe, HelpCommands, Kind, MANIFEST_SCHEMA, Manifest, ManifestError, ModelAliases,
+    ProbeSpec, SecretPaths, StoreSpec, TransportSpec, TuiSpec, UpdateHint, UpdateSpec,
+    VersionParse, VersionProbe,
 };
 pub use native_catalogue::{
     MAX_NATIVE_ADDITIONAL_DIRECTORIES, MAX_NATIVE_CURSOR_BYTES, MAX_NATIVE_SESSION_ITEMS,

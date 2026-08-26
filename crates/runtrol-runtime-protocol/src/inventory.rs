@@ -178,6 +178,14 @@ pub struct ProviderAccount {
     /// Why nothing can be asked, in the service's own terms, for an unpublished status.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub why: Option<String>,
+    /// Why this signed-in account has no limit windows, when the service has a limits surface that did not
+    /// answer.
+    ///
+    /// The one absence that is runtrol's own problem rather than the service's. Without it a surface has to
+    /// choose between saying the service publishes nothing (untrue) and saying a number is coming (also
+    /// untrue), and both send the reader somewhere useless.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limits_unread: Option<String>,
     /// When the service answered, in unix milliseconds, which is how a surface says how stale it is.
     pub checked_at_ms: u64,
 }
@@ -211,12 +219,13 @@ pub struct ProviderUsageGauge {
     pub provider_id: ProviderId,
     /// A limit is blocking right now, by the provider's own word.
     pub reached: bool,
-    /// The shorter window, when the provider reports one.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub primary: Option<ProviderUsageWindow>,
-    /// The longer window, when the provider reports one.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub secondary: Option<ProviderUsageWindow>,
+    /// Every limit window the provider described, shortest first.
+    ///
+    /// A list, because a plan is not two windows: measured, one service publishes a five-hour window, a
+    /// whole-account week and a week scoped to one model, and another publishes a short and a long window for
+    /// each metered model. A surface draws them all rather than being handed the two a driver chose.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub windows: Vec<ProviderUsageWindow>,
     /// The latest running spend the provider stated, when it states one.
     ///
     /// Absent for a provider that reports only limits. The newest report wins, so this is the most recent
@@ -258,9 +267,25 @@ pub struct ProviderUsageCost {
 }
 
 /// One rate limit window, as far as the provider described it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProviderUsageWindow {
+    /// Stable identity within one provider's report, as that provider names the window.
+    ///
+    /// A surface keys its row on this, so a window keeps its place when a later report adds a sibling.
+    pub id: String,
+    /// What the provider calls this window for a person to read, when it names one.
+    ///
+    /// The provider's own label and nothing composed here. Absent when it named none, and a surface then
+    /// says the window's length instead of inventing a name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    /// What this limit is scoped to, when the provider scopes it (one model, one surface).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
+    /// The provider says this window is the one governing right now.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub governing: bool,
     /// How much of the window is used, as a percentage, when the provider reports one.
     ///
     /// Optional because it is not universal: measured, one provider reports which window governs and when it

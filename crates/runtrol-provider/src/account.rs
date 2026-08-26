@@ -39,19 +39,36 @@ pub struct AccountReport {
     pub method: Option<Box<str>>,
     /// The limit windows the service reports on request, outside any turn, when it has such a surface.
     pub limits: Option<AccountLimits>,
+    /// Why no windows are here, when the service has a limits surface and the reading of it failed.
+    ///
+    /// Three different silences look identical without this. A service that publishes no limits surface at
+    /// all is one, a signed-out account is another, and a surface that was asked and did not answer is the
+    /// third, which is the only one that is runtrol's own problem to retry. Absent whenever windows are
+    /// present, and absent when nothing was asked.
+    pub limits_unread: Option<Box<str>>,
     /// Tokens spent today by the service's own daily count, when it publishes one.
     pub tokens_today: Option<u64>,
 }
 
-/// Limit windows read on request. The same two windows a turn reports, without the turn.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+/// Limit windows read on request. The same windows a turn reports, without the turn.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct AccountLimits {
-    /// The shorter window, when the service reports one.
-    pub primary: Option<Window>,
-    /// The longer window, when the service reports one.
-    pub secondary: Option<Window>,
+    /// Every window the service described, shortest first.
+    pub windows: Vec<Window>,
     /// A limit is blocking right now, by the service's own word.
     pub reached: bool,
+}
+
+impl AccountLimits {
+    /// One probe's limit reading, with the window list bounded the same way a turn's is.
+    #[must_use]
+    pub fn new(windows: Vec<Window>, reached: bool) -> Self {
+        let limit = RateLimit::new(windows, reached, crate::Opaque::none());
+        Self {
+            windows: limit.windows,
+            reached,
+        }
+    }
 }
 
 impl AccountReport {
@@ -63,6 +80,7 @@ impl AccountReport {
             plan: None,
             method: None,
             limits: None,
+            limits_unread: None,
             tokens_today: None,
         }
     }
@@ -70,13 +88,12 @@ impl AccountReport {
     /// The limits as a turn would have reported them, for the one gauge both paths fill.
     #[must_use]
     pub fn as_rate_limit(&self) -> Option<RateLimit> {
-        let limits = self.limits?;
-        Some(RateLimit {
-            primary: limits.primary,
-            secondary: limits.secondary,
-            reached: limits.reached,
-            detail: crate::Opaque::none(),
-        })
+        let limits = self.limits.as_ref()?;
+        Some(RateLimit::new(
+            limits.windows.clone(),
+            limits.reached,
+            crate::Opaque::none(),
+        ))
     }
 }
 

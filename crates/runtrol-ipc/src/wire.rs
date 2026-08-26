@@ -1089,12 +1089,9 @@ pub struct UsageLine {
     pub provider: Box<str>,
     /// A limit is blocking right now, by the service's own word.
     pub reached: bool,
-    /// The shorter window, when the service reports one.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub primary: Option<UsageWindowLine>,
-    /// The longer window, when the service reports one.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub secondary: Option<UsageWindowLine>,
+    /// Every limit window the service described, shortest first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub windows: Vec<UsageWindowLine>,
     /// Tokens spent today by the service's own daily count, when it publishes one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tokens_today: Option<u64>,
@@ -1103,8 +1100,19 @@ pub struct UsageLine {
 }
 
 /// One limit window, as far as the service described it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub struct UsageWindowLine {
+    /// Stable identity within one service's report, as that service names the window.
+    pub id: Box<str>,
+    /// What the service calls this window for a person to read, when it names one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<Box<str>>,
+    /// What this limit is scoped to, when the service scopes it to one model or surface.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<Box<str>>,
+    /// The service says this window is the one governing right now.
+    #[serde(default, skip_serializing_if = "core::ops::Not::not")]
+    pub governing: bool,
     /// How full the window is, as a percentage, when the service says.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub used_percent: Option<u8>,

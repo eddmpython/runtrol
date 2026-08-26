@@ -45,7 +45,10 @@ pub use approval::{
     WithdrawnReason,
 };
 pub use attach::{Attached, CapabilitySet, DetachReason, Detached};
-pub use content::{Chunk, Cost, RateLimit, ToolCallFrame, ToolCallStatus, ToolKind, Usage, Window};
+pub use content::{
+    Chunk, Cost, MAX_LIMIT_WINDOWS, RateLimit, ToolCallFrame, ToolCallStatus, ToolKind, Usage,
+    Window,
+};
 pub use notice::{Level, Notice, NoticeCode};
 pub use opaque::Opaque;
 pub use turn::{BlockedOn, Declarant, StopReason, TurnEvent};

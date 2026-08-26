@@ -207,13 +207,18 @@ pub(crate) fn merge_probed_usage(
             .find(|known| known.provider_id == gauge.provider_id)
         {
             Some(known) if known.at_ms >= gauge.at_ms => {
-                // The turn's report is newer; a probe only fills windows the turn left empty.
-                if known.primary.is_none() {
-                    known.primary = gauge.primary;
+                // The turn's report is newer, so it owns every window it named. A probe fills only the
+                // windows that report never mentioned, which is how a service whose turn frame carries one
+                // bucket still shows the buckets only its account surface publishes.
+                for window in gauge.windows {
+                    if known.windows.iter().any(|kept| kept.id == window.id) {
+                        continue;
+                    }
+                    known.windows.push(window);
                 }
-                if known.secondary.is_none() {
-                    known.secondary = gauge.secondary;
-                }
+                known
+                    .windows
+                    .sort_by_key(|window| window.window_minutes.unwrap_or(u32::MAX));
             }
             Some(known) => {
                 let cost = known.cost.take();
@@ -232,19 +237,23 @@ pub(crate) fn merge_probed_usage(
 pub(crate) fn provider_usage(
     gauges: &[runtrol_core::ProviderGauge],
 ) -> runtrol_runtime_protocol::ProviderUsageList {
-    let window = |window: runtrol_provider::Window| runtrol_runtime_protocol::ProviderUsageWindow {
-        used_percent: window.used_percent,
-        resets_at_ms: window.resets_at.map(runtrol_provider::WallMs::as_millis),
-        window_minutes: window.window_minutes,
-    };
+    let window =
+        |window: &runtrol_provider::Window| runtrol_runtime_protocol::ProviderUsageWindow {
+            id: window.id.to_string(),
+            label: window.label.as_ref().map(ToString::to_string),
+            scope: window.scope.as_ref().map(ToString::to_string),
+            governing: window.governing,
+            used_percent: window.used_percent,
+            resets_at_ms: window.resets_at.map(runtrol_provider::WallMs::as_millis),
+            window_minutes: window.window_minutes,
+        };
     runtrol_runtime_protocol::ProviderUsageList {
         providers: gauges
             .iter()
             .map(|gauge| runtrol_runtime_protocol::ProviderUsageGauge {
                 provider_id: ProviderId::new(gauge.provider.as_str()),
                 reached: gauge.reached,
-                primary: gauge.primary.map(window),
-                secondary: gauge.secondary.map(window),
+                windows: gauge.windows.iter().map(window).collect(),
                 cost: gauge
                     .cost
                     .as_ref()

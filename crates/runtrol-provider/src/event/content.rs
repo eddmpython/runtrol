@@ -170,19 +170,65 @@ pub struct Cost {
 /// was invisible. With this frame it reads as "waiting on a limit" instead of a spinner.
 #[derive(Debug, Clone, Serialize)]
 pub struct RateLimit {
-    /// The shorter window, when the provider reports one.
-    pub primary: Option<Window>,
-    /// The longer window, when the provider reports one.
-    pub secondary: Option<Window>,
+    /// Every window the provider described, shortest first.
+    ///
+    /// A list rather than two named slots, because a plan is not two windows. Measured 2026-08-26 across the
+    /// three services this build serves: one reports a five-hour window, a whole-account week and a third
+    /// scoped to a single model; another reports one bucket per metered model, each with its own short and
+    /// long window. Two slots forced every driver to pick which two of those a person was allowed to see,
+    /// and the one a person is actually blocked by was routinely the one dropped.
+    pub windows: Vec<Window>,
     /// A limit is blocking right now.
     pub reached: bool,
     /// The provider's own limit report, verbatim.
     pub detail: Opaque,
 }
 
-/// One rate limit window.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+impl RateLimit {
+    /// One turn's limit report, with the window list bounded.
+    #[must_use]
+    pub fn new(windows: Vec<Window>, reached: bool, detail: Opaque) -> Self {
+        Self {
+            windows: bound_windows(windows),
+            reached,
+            detail,
+        }
+    }
+}
+
+/// The most windows one provider's report may carry into memory a supervisor holds for the whole process.
+///
+/// Measured need is three (one service's five-hour, weekly and per-model windows) and four (another's two
+/// metered buckets with a short and a long window each). The cap is the memory-budget contract's, not a
+/// judgement about which windows matter: everything past it is dropped whole rather than reordered.
+pub const MAX_LIMIT_WINDOWS: usize = 12;
+
+/// Shortest window first, capped, so a strip draws the one about to bite at the top.
+///
+/// A window whose length the provider did not state sorts after every stated one rather than at the front,
+/// since an unknown length is not evidence of a short window.
+fn bound_windows(mut windows: Vec<Window>) -> Vec<Window> {
+    windows.sort_by_key(|window| window.window_minutes.unwrap_or(u32::MAX));
+    windows.truncate(MAX_LIMIT_WINDOWS);
+    windows
+}
+
+/// One rate limit window, in the provider's own terms.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Window {
+    /// Stable identity within one provider's report, as that provider names the window.
+    ///
+    /// Identity rather than position, so a strip keeps a row in place when a later report adds or drops a
+    /// sibling window. Never invented: a provider that names nothing gets the surface it was read from.
+    pub id: Box<str>,
+    /// What the provider calls this window for a person to read, when it names it.
+    ///
+    /// The provider's own label, never a phrase runtrol composed. Measured: one service returns
+    /// `GPT-5.3-Codex-Spark` for a model bucket and another returns `Fable`; guessing either from an
+    /// opaque key would put a wrong name on a real number.
+    pub label: Option<Box<str>>,
+    /// What this limit is scoped to, when the provider scopes it (one model, one surface).
+    pub scope: Option<Box<str>>,
     /// How much of the window is used, as a percentage, when the provider reports one.
     ///
     /// Optional because it is not universal. Measured on a real turn: one CLI reports which window governs and
@@ -193,6 +239,36 @@ pub struct Window {
     pub resets_at: Option<WallMs>,
     /// How long the window is, in minutes.
     pub window_minutes: Option<u32>,
+    /// The provider says this window is the one governing right now.
+    ///
+    /// Its own word, never runtrol picking the fullest bar: measured, one service marks a window active while
+    /// a fuller one sits beside it, because the two meter different things.
+    pub governing: bool,
+}
+
+impl Window {
+    /// A window identified but not yet described, which is every window before its provider's numbers land.
+    #[must_use]
+    pub fn new(id: &str) -> Self {
+        Self {
+            id: id.into(),
+            label: None,
+            scope: None,
+            used_percent: None,
+            resets_at: None,
+            window_minutes: None,
+            governing: false,
+        }
+    }
+
+    /// Whether this window says anything at all beyond its own name.
+    ///
+    /// A window with neither a number nor a reset is not a quiet window, it is an empty one, and drawing it
+    /// would claim the provider reported something it did not.
+    #[must_use]
+    pub fn is_described(&self) -> bool {
+        self.used_percent.is_some() || self.resets_at.is_some()
+    }
 }
 
 #[cfg(test)]

@@ -1677,6 +1677,10 @@ fn usage_lines(
     );
     let window = |window: runtrol_runtime_protocol::ProviderUsageWindow| {
         runtrol_ipc::wire::UsageWindowLine {
+            id: window.id.into(),
+            label: window.label.map(Into::into),
+            scope: window.scope.map(Into::into),
+            governing: window.governing,
             used_percent: window.used_percent,
             resets_at_ms: window.resets_at_ms,
             window_minutes: window.window_minutes,
@@ -1688,8 +1692,7 @@ fn usage_lines(
         .map(|gauge| runtrol_ipc::wire::UsageLine {
             provider: gauge.provider_id.as_str().into(),
             reached: gauge.reached,
-            primary: gauge.primary.map(window),
-            secondary: gauge.secondary.map(window),
+            windows: gauge.windows.into_iter().map(window).collect(),
             tokens_today: gauge.tokens_today,
             at_ms: gauge.at_ms,
         })
