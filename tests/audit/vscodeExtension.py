@@ -61,21 +61,22 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
         )
     welcome_entries = contributes.get("viewsWelcome") if isinstance(contributes, dict) else None
     welcomes = welcome_entries if isinstance(welcome_entries, list) else []
-    has_ready_welcome = any(
-        isinstance(entry, dict)
-        and entry.get("view") == "runtrol.sessions"
-        and entry.get("when") == "runtrol.hasUsableProvider"
-        and "command:runtrol.startSession" in str(entry.get("contents", ""))
-        for entry in welcomes
-    )
-    def welcome_for(when: str, token: str) -> bool:
+    def welcome_for(when: str, token: str, view: str = "runtrol.projects") -> bool:
         return any(
             isinstance(entry, dict)
-            and entry.get("view") == "runtrol.sessions"
+            and entry.get("view") == view
             and entry.get("when") == when
             and token in str(entry.get("contents", ""))
             for entry in welcomes
         )
+
+    # Each section says its own empty state: Projects invites adding one, Conversations invites starting one
+    # that belongs nowhere.
+    has_ready_welcome = welcome_for(
+        "runtrol.hasUsableProvider", "command:runtrol.createProject"
+    ) and welcome_for(
+        "runtrol.hasUsableProvider", "command:runtrol.startSession", "runtrol.conversations"
+    )
 
     # An empty list has more than one reason and each needs its own sentence. Measured 2026-08-26 on the
     # operator's window: a Core this window could not reach was drawn as "No coding-agent CLI was found on
@@ -101,15 +102,22 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
         )
     menus = contributes.get("menus") if isinstance(contributes, dict) else None
     title_entries = menus.get("view/title") if isinstance(menus, dict) else None
-    title_commands = {
-        entry.get("command")
-        for entry in title_entries
-        if isinstance(entry, dict)
-        and "view == runtrol.sessions" in str(entry.get("when", ""))
-        and str(entry.get("group", "")).startswith("navigation")
-    } if isinstance(title_entries, list) else set()
-    if title_commands != {"runtrol.startSession", "runtrol.createProject", "runtrol.switchSession"}:
-        found.append("the Conversations title bar must keep exactly its three frequent actions visible")
+    def title_navigation(view: str) -> set[str]:
+        return {
+            entry.get("command")
+            for entry in title_entries
+            if isinstance(entry, dict)
+            and f"view == {view}" in str(entry.get("when", ""))
+            and str(entry.get("group", "")).startswith("navigation")
+        } if isinstance(title_entries, list) else set()
+
+    # Two sections, and each keeps only the actions that belong to it. Projects adds a project and switches
+    # to a conversation; Conversations starts one that belongs to no project. Everything else is overflow,
+    # because a title bar that grows stops being readable at the width people actually keep the sidebar.
+    if title_navigation("runtrol.projects") != {"runtrol.createProject", "runtrol.switchSession"}:
+        found.append("the Projects title bar must keep exactly add-project and switch visible")
+    if title_navigation("runtrol.conversations") != {"runtrol.startSession"}:
+        found.append("the Conversations title bar must keep exactly the new-conversation action visible")
     item_context = menus.get("view/item/context") if isinstance(menus, dict) else None
     winner_entries = item_context if isinstance(item_context, list) else []
     # The guard is the contract: deletion is offered only where the provider reported a deletion surface, and it
@@ -118,7 +126,7 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
     delete_entry = any(
         isinstance(entry, dict)
         and entry.get("command") == "runtrol.deleteConversation"
-        and entry.get("when") == "view == runtrol.sessions && viewItem =~ /\\.delete/"
+        and entry.get("when") == "view =~ /^runtrol\\.(projects|conversations)$/ && viewItem =~ /\\.delete/"
         and str(entry.get("group", "")).startswith("inline")
         for entry in winner_entries
     )
@@ -134,7 +142,7 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             "runtrol.deleteConversation",
         }
         and str(entry.get("group", "")).startswith("inline")
-        and "view == runtrol.sessions" in str(entry.get("when", ""))
+        and "conversations" in str(entry.get("when", ""))
     ]
     if conversation_inline != ["runtrol.deleteConversation"]:
         found.append("a conversation row must expose one inline X for real deletion and no other buttons")
@@ -461,27 +469,32 @@ def selftest() -> int:
             },
             "viewsWelcome": [
                 {
-                    "view": "runtrol.sessions",
+                    "view": "runtrol.projects",
                     "contents": "Cannot reach the Runtrol Core. (command:runtrol.refresh)",
                     "when": "runtrol.coreReach == unreachable",
                 },
                 {
-                    "view": "runtrol.sessions",
+                    "view": "runtrol.projects",
                     "contents": "Connecting to the Runtrol Core...",
                     "when": "runtrol.coreReach == connecting",
                 },
                 {
-                    "view": "runtrol.sessions",
+                    "view": "runtrol.projects",
                     "contents": "Look again (command:runtrol.refresh)",
                     "when": "runtrol.coreReach == reached && !runtrol.hasUsableProvider && !runtrol.isVerifyingProvider",
                 },
                 {
-                    "view": "runtrol.sessions",
+                    "view": "runtrol.projects",
                     "contents": "Checking",
                     "when": "runtrol.coreReach == reached && runtrol.isVerifyingProvider",
                 },
                 {
-                    "view": "runtrol.sessions",
+                    "view": "runtrol.projects",
+                    "contents": "Add Project (command:runtrol.createProject)",
+                    "when": "runtrol.hasUsableProvider",
+                },
+                {
+                    "view": "runtrol.conversations",
                     "contents": "New Conversation (command:runtrol.startSession)",
                     "when": "runtrol.hasUsableProvider",
                 },
@@ -500,50 +513,45 @@ def selftest() -> int:
                 "view/title": [
                     {
                         "command": "runtrol.startSession",
-                        "when": "view == runtrol.sessions",
+                        "when": "view == runtrol.conversations",
                         "group": "navigation@0",
                     },
                     {
                         "command": "runtrol.createProject",
-                        "when": "view == runtrol.sessions",
+                        "when": "view == runtrol.projects",
                         "group": "navigation@1",
                     },
                     {
                         "command": "runtrol.switchSession",
-                        "when": "view == runtrol.sessions",
+                        "when": "view == runtrol.projects",
                         "group": "navigation@2",
                     },
                 ],
                 "view/item/context": [
                     {
                         "command": "runtrol.reviewMissionLanding",
-                        "when": "view == runtrol.missions && viewItem == runtrol.mission.integrating.chooseOne",
                     },
                     {
                         "command": "runtrol.reviewMissionLanding",
                         "when": (
-                            "view == runtrol.missions && viewItem =~ "
                             "/^runtrol\\.missionTask\\.passed(\\.session)?\\.chooseOne\\.integrating$/"
                         ),
                     },
                     {
                         "command": "runtrol.recoverInterruptedMission",
                         "when": (
-                            "view == runtrol.missions && viewItem =~ "
                             "/^runtrol\\.mission\\.blocked(\\.chooseOne)?(\\.autoFlight)?$/"
                         ),
                     },
                     {
                         "command": "runtrol.scheduleMission",
-                        "when": "view == runtrol.missions && viewItem =~ /^runtrol\\.mission\\.validated/",
                     },
                     {
                         "command": "runtrol.cancelMissionSchedule",
-                        "when": "view == runtrol.missions && viewItem =~ /schedulePending/",
                     },
                     {
                         "command": "runtrol.deleteConversation",
-                        "when": "view == runtrol.sessions && viewItem =~ /\\.delete/",
+                        "when": "view =~ /^runtrol\\.(projects|conversations)$/ && viewItem =~ /\\.delete/",
                         "group": "inline@1",
                     },
                 ]
@@ -674,24 +682,24 @@ def selftest() -> int:
     cluttered_toolbar = json.loads(json.dumps(package))
     cluttered_toolbar["contributes"]["menus"]["view/title"].append({
         "command": "runtrol.arrangeConversationGrid",
-        "when": "view == runtrol.sessions",
+        "when": "view == runtrol.projects",
         "group": "navigation@3",
     })
     merged_welcomes = json.loads(json.dumps(package))
     merged_welcomes["contributes"]["viewsWelcome"] = [
         {
-            "view": "runtrol.sessions",
+            "view": "runtrol.projects",
             "contents": "No coding-agent CLI was found. (command:runtrol.refresh)",
         }
     ]
     broad_delete = json.loads(json.dumps(package))
     for entry in broad_delete["contributes"]["menus"]["view/item/context"]:
         if entry.get("command") == "runtrol.deleteConversation":
-            entry["when"] = "view == runtrol.sessions"
+            entry["when"] = "view =~ /^runtrol\.(projects|conversations)$/"
     cluttered_conversation = json.loads(json.dumps(package))
     cluttered_conversation["contributes"]["menus"]["view/item/context"].append({
         "command": "runtrol.closeSession",
-        "when": "view == runtrol.sessions && viewItem =~ /^runtrol\\.conversation\\.live/",
+        "when": "view =~ /^runtrol\\.(projects|conversations)$/ && viewItem =~ /^runtrol\\.conversation\\.live/",
         "group": "inline@2",
     })
     mutations = [

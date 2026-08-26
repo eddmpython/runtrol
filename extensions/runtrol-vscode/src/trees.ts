@@ -101,6 +101,19 @@ function projectContextValue(group: ProjectGroup): string {
 
 export type ChatTreeItem = ConversationItem | ProjectItem;
 
+/// Which half of the sidebar one tree draws.
+///
+/// The sidebar is two sections in a fixed order (`memory/MEMORY.md` judgement table): Projects, then the
+/// conversations that belong to no project. VS Code makes a section a view, so this is one provider stood up
+/// twice rather than two providers that would answer "what conversations exist" separately.
+export type SidebarPart = "projects" | "loose";
+
+/// Pinned conversations first, in the order the list already had. Pinning is the person's own placement, so
+/// it lifts a row inside its own section and never out of it.
+function pinnedFirst(rows: readonly Conversation[]): Conversation[] {
+  return [...rows.filter((row) => row.pinned), ...rows.filter((row) => !row.pinned)];
+}
+
 /// Where the tree learns which projects the operator has created, without owning their storage.
 export type ProjectsPort = {
   all(): readonly ProjectRecord[];
@@ -223,6 +236,7 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
   private revealedCurrentProject: string | null = null;
 
   constructor(
+    private readonly part: SidebarPart,
     private readonly state: RuntimeState,
     private readonly projectRecords: ProjectsPort,
     private readonly agentTools: AgentToolsPort | null = null,
@@ -478,54 +492,38 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
     // Pinned conversations lead the whole panel, above every heading. Pinning says "keep this where I can see
     // it", and a pinned row that sorts only within its own section is below thirty headings, which is not what
     // the person asked for. They keep their heading too, so the project still counts and lists them.
-    const pinnedRows = rows.filter((row) => row.pinned);
-    const pinned = pinnedRows.map((row) => new ConversationItem(
-      row,
-      this.state.providerCapabilities(row.providerId),
-      this.extensionUri,
-    ));
-    const groups = projects(records, rows, openWorkspaces);
-    // Conversations nobody filed anywhere. A folder that is not on the list contributes none of these.
-    const unfiled = loose(rows).map((row) => new ConversationItem(
-      row,
-      this.state.providerCapabilities(row.providerId),
-      this.extensionUri,
-    ));
     const parents = new Map<string, ProjectItem>();
     const grouped = new Map<string, readonly Conversation[]>();
 
-    if (groups.length === 0 && unfiled.length === 0 && pinned.length === 0) {
-      // No conversations at all, filed or otherwise. The welcome content covers that case.
-      this.items = [];
-      this.flat = [];
+    if (this.part === "loose") {
+      // Conversations that belong to no project. A folder nobody added contributes none of these, so this
+      // section is only ever what the person started without choosing a place (`loose`).
+      this.items = pinnedFirst(loose(rows)).map((row) => new ConversationItem(
+        row,
+        this.state.providerCapabilities(row.providerId),
+        this.extensionUri,
+      ));
+      this.flat = this.items as ConversationItem[];
       this.parents = parents;
       this.grouped = grouped;
       return;
     }
 
-    const pinnedKeys = new Set(pinnedRows.map((row) => row.key));
+    const groups = projects(records, rows, openWorkspaces);
     const headings: ProjectItem[] = [];
     for (const group of groups) {
       const heading = new ProjectItem(group, this.agentTools?.enabled(group.workspace) ?? false);
       headings.push(heading);
-      // A pinned conversation is lifted to the top of the panel, so its heading does not draw it a second time.
-      // Two items for one conversation would carry the same identity, which a tree refuses, and would show the
-      // same conversation twice to the reader. The heading still counts it, because it still belongs to that
-      // project; it is only drawn somewhere else.
-      grouped.set(group.key, group.rows.filter((row) => !pinnedKeys.has(row.key)));
+      // Pinned conversations lead their own project rather than the whole panel. With the sidebar split in
+      // two, lifting a row above every heading would take it out of the place it belongs to, and one
+      // conversation drawn in two places carries the same identity, which a tree refuses.
+      grouped.set(group.key, pinnedFirst(group.rows));
       // The parent map is the cheap half and reveal needs it immediately, so it is built now. The rows
       // themselves wait until something asks to draw them.
-      for (const row of group.rows) {
-        // A pinned row is a top-level item, so it has no parent to resolve against.
-        if (pinnedKeys.has(row.key)) continue;
-        parents.set(row.key, heading);
-      }
+      for (const row of group.rows) parents.set(row.key, heading);
     }
-    // A pinned row that has no project is already at the top, so it is not repeated among the loose rows.
-    const looseUnpinned = unfiled.filter((item) => !pinnedKeys.has(item.conversation.key));
-    this.items = [...pinned, ...headings, ...looseUnpinned];
-    // The top-level rows are these exact objects, so revealing one resolves against them.
-    this.flat = [...pinned, ...looseUnpinned];
+    this.items = headings;
+    this.flat = [];
     this.parents = parents;
     this.grouped = grouped;
   }

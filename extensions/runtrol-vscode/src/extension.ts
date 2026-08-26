@@ -139,7 +139,10 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     openFolders: () => (vscode.workspace.workspaceFolders ?? []).map((folder) => folder.uri.fsPath),
     warn: (message) => void vscode.window.showWarningMessage(message),
   });
-  const conversations = new ConversationsTree(state, projectStore, agentTools, context.extensionUri);
+  // The sidebar is two sections in a fixed order: the projects a person added, then the conversations that
+  // belong to no project. One provider stood up twice, so both halves answer from the same list.
+  const projectsTree = new ConversationsTree("projects", state, projectStore, agentTools, context.extensionUri);
+  const conversations = new ConversationsTree("loose", state, projectStore, agentTools, context.extensionUri);
   const usage = new UsageView(context.extensionUri, {
     usage: () => runtime.providersUsage(),
     providers: () => state.providers,
@@ -156,6 +159,7 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     state,
     controller,
     agentTools,
+    projectsTree,
     conversations,
     usage,
     vscode.window.registerFileDecorationProvider(conversations.decorations),
@@ -255,38 +259,6 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
       (item: unknown) => run(async () => {
         if (!(item instanceof ProjectItem)) return;
         await projectStore.create(item.group.workspace);
-      }),
-    ),
-    vscode.commands.registerCommand(
-      "runtrol.newProjectFolder",
-      // Something from nothing: a folder that does not exist yet is created on disk and added as a project in
-      // one step. The path is typed rather than picked, because a picker can only choose what already exists.
-      () => run(async () => {
-        // Pre-filled with the open folder's parent, so typing a bare name makes a sibling project (projects are
-        // top-level places, not folders inside each other). A full path pasted over the selection works too.
-        const open = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-        const parent = open ? path.dirname(open) : "";
-        const prefill = parent && !parent.endsWith(path.sep) ? parent + path.sep : parent;
-        const typed = await vscode.window.showInputBox({
-          prompt: "Folder for the new project (created if it does not exist)",
-          value: prefill,
-          valueSelection: [prefill.length, prefill.length],
-          validateInput: (value) => {
-            const folder = value.trim();
-            if (!folder) return null;
-            if (!path.isAbsolute(folder)) return "Type a full path, like the one pre-filled";
-            // A second drive root inside the string means a full Windows path was typed after the pre-fill
-            // instead of over it; mkdir would refuse it with a code (EINVAL, measured), this says it in words.
-            if (/^[A-Za-z]:[\\/]/u.test(folder) && /[\\/][A-Za-z]:[\\/]/u.test(folder)) {
-              return "One path only: select the pre-filled part before typing a full path";
-            }
-            return null;
-          },
-        });
-        if (!typed || !typed.trim()) return;
-        const folder = typed.trim();
-        await vscode.workspace.fs.createDirectory(vscode.Uri.file(folder));
-        await projectStore.create(folder);
       }),
     ),
     vscode.commands.registerCommand(
@@ -551,7 +523,11 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
   );
   context.subscriptions.push(
   );
-  const conversationsView = vscode.window.createTreeView("runtrol.sessions", {
+  const projectsView = vscode.window.createTreeView("runtrol.projects", {
+    treeDataProvider: projectsTree,
+  });
+  projectsTree.bindView(projectsView);
+  const conversationsView = vscode.window.createTreeView("runtrol.conversations", {
     treeDataProvider: conversations,
   });
   conversations.bindView(conversationsView);
@@ -560,17 +536,20 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
   });
   let revealingUsage = false;
   const ensureUsageVisible = async (): Promise<void> => {
-    if (usage.visible || revealingUsage || !conversationsView.visible) return;
+    if (usage.visible || revealingUsage || !(projectsView.visible || conversationsView.visible)) return;
     revealingUsage = true;
     try {
       await vscode.commands.executeCommand("runtrol.usage.focus");
-      await vscode.commands.executeCommand("runtrol.sessions.focus");
+      await vscode.commands.executeCommand("runtrol.projects.focus");
     } finally {
       revealingUsage = false;
     }
   };
   context.subscriptions.push(
     usageRegistration,
+    projectsView.onDidChangeVisibility((event) => {
+      if (event.visible) void ensureUsageVisible();
+    }),
     conversationsView.onDidChangeVisibility((event) => {
       if (event.visible) void ensureUsageVisible();
     }),
@@ -579,12 +558,8 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
       if (change === "usage") usage.usageChanged(state.usage);
     }),
   );
-  if (conversationsView.visible) void ensureUsageVisible();
-  if (conversationsView.visible) {
-  }
-  context.subscriptions.push(
-    conversationsView,
-  );
+  if (projectsView.visible || conversationsView.visible) void ensureUsageVisible();
+  context.subscriptions.push(projectsView, conversationsView);
   void run(() => lifecycle);
   void run(async () => {
     await lifecycle;
