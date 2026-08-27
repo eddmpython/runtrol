@@ -1,4 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
+import { openSync, readFileSync } from "node:fs";
 import { cp, mkdtemp, mkdir, readdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -100,7 +101,16 @@ coreEnvironment.RUNTROL_ACP_FIXTURE_UNIQUE_SESSIONS = "1";
 coreEnvironment.RUNTROL_CLOSE_TRACE = "1";
 coreEnvironment[pathKey] = `${path.dirname(fixture)}${path.delimiter}${process.env[pathKey] ?? ""}`;
 let daemon = null;
-let daemonStderr = "";
+const daemonStderrPath = path.join(temporary, "core-stderr.log");
+// Everything the daemon has written so far, read back from its spool.
+function daemonStderrText() {
+  try {
+    return readFileSync(daemonStderrPath, "utf8");
+  } catch {
+    // ok: a daemon that never started wrote nothing, and the caller's own message says what failed.
+    return "";
+  }
+}
 const managedSessions = [];
 // Core spawns one provider fixture per session as its own child. Those children outlive a kill of
 // the daemon root, so the tree is captured while it is alive and terminated from the snapshot.
@@ -161,17 +171,19 @@ listen = "stdio"
     }),
     "utf8",
   );
+  // The daemon's stderr goes to a file, never a pipe: this harness waits on CLI commands with spawnSync,
+  // during which nothing drains a pipe, and a daemon whose diagnostics fill 64 KiB then blocks on its next
+  // write and can answer nobody (measured 2026-08-28 on the Linux host: the heartbeat stopped mid-run and
+  // the stall handler could not print either, because the thread was inside the blocked write).
+  const daemonStderrFd = openSync(daemonStderrPath, "a");
   daemon = spawn(core, ["daemon"], {
     env: coreEnvironment,
-    stdio: ["ignore", "ignore", "pipe"],
+    stdio: ["ignore", "ignore", daemonStderrFd],
     windowsHide: true,
-  });
-  daemon.stderr.setEncoding("utf8").on("data", (chunk) => {
-    daemonStderr += chunk;
   });
   await delay(500);
   if (daemon.exitCode !== null) {
-    throw new Error(`test Core stopped during startup:\n${daemonStderr}`);
+    throw new Error(`test Core stopped during startup:\n${daemonStderrText()}`);
   }
   const reached = spawnSync(core, ["endpoint"], {
     env: coreEnvironment,
@@ -297,7 +309,7 @@ listen = "stdio"
     throw new Error(`the VS Code host run failed after a Core crash:\n${crash}`, { cause: hostError });
   }
   if (daemonStderr) {
-    throw new Error(`the VS Code host run failed and Core reported:\n${daemonStderr}`, { cause: hostError });
+    throw new Error(`the VS Code host run failed and Core reported:\n${daemonStderrText()}`, { cause: hostError });
   }
   throw hostError;
 } finally {
@@ -338,7 +350,7 @@ listen = "stdio"
   if (cleanupFailures.length > 0) {
     // The daemon's own words go with the failure: a close that times out is diagnosed from what the Core said
     // while it was closing, and nothing else in this harness sees that stream.
-    throw new Error(`hot-session cleanup failed:\n${cleanupFailures.join("\n")}\nCore stderr:\n${daemonStderr}`);
+    throw new Error(`hot-session cleanup failed:\n${cleanupFailures.join("\n")}\nCore stderr:\n${daemonStderrText()}`);
   }
 }
 
@@ -370,7 +382,7 @@ function startManagedSession(workspace) {
     // evidence of where it stopped answering (measured 2026-08-27 on the Linux host harness).
     const why = started.error ? String(started.error.code ?? started.error.message) : "";
     throw new Error(
-      `cannot start a hot ACP fixture session: ${why}\n${started.stdout}${started.stderr}\nCore stderr:\n${daemonStderr}`,
+      `cannot start a hot ACP fixture session: ${why}\n${started.stdout}${started.stderr}\nCore stderr:\n${daemonStderrText()}`,
     );
   }
   managedSessions.push(session);
