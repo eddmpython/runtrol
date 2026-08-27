@@ -78,6 +78,14 @@ pub(crate) async fn prepared_driver(
         ));
     };
 
+    // Single-flight per provider: concurrent preparations of one provider serialize here, so only the
+    // first pays the probe and the rest hit the cache it saved.
+    let preparing = {
+        let mut map = composed.provider_preparing.lock().await;
+        std::sync::Arc::clone(map.entry(id).or_default())
+    };
+    let _preparing = preparing.lock().await;
+
     let mut cache = runtrol_core::ProbeCache::open(composed.home.paths().probe_cache());
     let bound_flags = entry.flags.iter().map(|flag| flag.flag).collect::<Vec<_>>();
     // Resolution belongs to the probe, and the returned value is the exact program handed to the driver. Resolving

@@ -317,6 +317,13 @@ pub struct Composed {
     /// Held for milliseconds around each save, never across a probe. Lives here because the cache file is
     /// this home's, and every saver already holds a `Composed`.
     pub(crate) probe_cache_writing: tokio::sync::Mutex<()>,
+    /// One in-flight preparation per provider: the first arrival probes and warms the cache, and everyone
+    /// who arrived meanwhile reuses the warmed cache instead of running an identical probe (measured
+    /// 2026-08-27: thirty concurrent first starts each probed, and the serialized tail pushed a start past
+    /// the command timeout while the daemon stayed healthy).
+    pub(crate) provider_preparing: tokio::sync::Mutex<
+        std::collections::HashMap<ProviderId, std::sync::Arc<tokio::sync::Mutex<()>>>,
+    >,
     /// Fast structural provider inventory keyed to the local executable search surface.
     ///
     /// Provider list requests arrive in pairs around an operation and explicit Studio refreshes may arrive in a
@@ -436,6 +443,7 @@ impl Composed {
             registry,
             device_authority: DeviceAuthority::new(granted, paired_devices),
             probe_cache_writing: tokio::sync::Mutex::new(()),
+            provider_preparing: tokio::sync::Mutex::new(std::collections::HashMap::new()),
             account_reports: tokio::sync::Mutex::new(
                 crate::account_probe::AccountReports::default(),
             ),
@@ -495,6 +503,7 @@ impl Composed {
             registry,
             device_authority: DeviceAuthority::new(granted, paired_devices),
             probe_cache_writing: tokio::sync::Mutex::new(()),
+            provider_preparing: tokio::sync::Mutex::new(std::collections::HashMap::new()),
             account_reports: tokio::sync::Mutex::new(
                 crate::account_probe::AccountReports::default(),
             ),
