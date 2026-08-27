@@ -182,7 +182,11 @@ def startDaemon(binary: Path, env: dict[str, str], home: Path) -> subprocess.Pop
             return daemon
         time.sleep(0.025)
     stopDaemon(daemon)
-    raise Failed("the isolated daemon did not become ready")
+    # The daemon's own words are the only evidence of why it never bound (measured 2026-08-27: two macOS
+    # release-runner failures said nothing but "did not become ready").
+    said_out, said_err = daemon.communicate()
+    said = (said_err or said_out or "").strip()[-2000:]
+    raise Failed(f"the isolated daemon did not become ready; it said:\n{said or '(nothing)'}")
 
 
 def stopDaemon(daemon: subprocess.Popen[str]) -> None:
