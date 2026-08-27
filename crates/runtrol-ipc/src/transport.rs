@@ -974,15 +974,39 @@ mod platform {
                     },
                 )?;
             }
-            // A socket file left by a daemon that is gone would refuse the bind. Removed first, and a failure to remove
-            // is not reported here: the bind below is what decides, and it names the address either way.
-            if std::path::Path::new(address).exists() {
-                drop(std::fs::remove_file(address));
-            }
-            let inner = UnixListener::bind(address).map_err(|error| TransportError::Bind {
-                address: address.to_owned(),
-                detail: error.to_string(),
-            })?;
+            // A socket file left by a daemon that is gone refuses the bind, but the file alone cannot say
+            // whether its daemon is gone. Removing it blindly let a duplicate daemon unlink a LIVE listener
+            // and take its address (measured 2026-08-27 on the CI hosts: one transiently refused connect made
+            // a command start a second same-generation daemon, which stole the socket, could not take the
+            // exclusive store, and sat unaccepting for the whole handover deadline while every new client
+            // connected into its backlog and was never greeted). The bind is tried as-is first; only an
+            // address that is in use AND answers nobody is a leftover, and only that is removed.
+            let inner = match UnixListener::bind(address) {
+                Ok(inner) => inner,
+                Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {
+                    match std::os::unix::net::UnixStream::connect(address) {
+                        Ok(_live) => {
+                            return Err(TransportError::Bind {
+                                address: address.to_owned(),
+                                detail: "another daemon is already serving this address".to_owned(),
+                            });
+                        }
+                        Err(_refused) => {
+                            drop(std::fs::remove_file(address));
+                            UnixListener::bind(address).map_err(|error| TransportError::Bind {
+                                address: address.to_owned(),
+                                detail: error.to_string(),
+                            })?
+                        }
+                    }
+                }
+                Err(error) => {
+                    return Err(TransportError::Bind {
+                        address: address.to_owned(),
+                        detail: error.to_string(),
+                    });
+                }
+            };
             if owner_only {
                 std::fs::set_permissions(address, std::fs::Permissions::from_mode(0o600)).map_err(
                     |error| TransportError::Bind {
