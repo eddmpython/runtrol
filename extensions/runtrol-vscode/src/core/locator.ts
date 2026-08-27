@@ -153,7 +153,11 @@ function probeEndpoint(executable: string): Promise<string> {
       { encoding: "utf8", timeout: 12_000, windowsHide: true },
       (error, stdout, stderr) => {
         if (error) {
-          reject(new Error(stderr.trim() || error.message));
+          // Both halves, always: the exec error says how the probe ended (exit code, timeout kill) and the
+          // core's stderr says what it was doing. One without the other read as silence on the CI hosts
+          // (measured 2026-08-27: "Command failed: ... endpoint" with the cause invisible).
+          const said = stderr.trim();
+          reject(new Error(said ? `${error.message.trim()}: ${said}` : error.message));
           return;
         }
         const endpoint = stdout.trim();

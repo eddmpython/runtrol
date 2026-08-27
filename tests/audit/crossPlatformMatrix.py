@@ -254,7 +254,12 @@ def exercise(archive: Path) -> None:
         if xvfb is None:
             raise Failed("xvfb-run is required to test the installed VSIX without a Linux display")
         program = [xvfb, "-a", *program]
-    output = command(program, timeout=240.0)
+    # The switch flows from this host through the extension to the core CLI and daemon it starts, so a
+    # probe that dies inside the window carries its trace steps out (measured 2026-08-27: an endpoint
+    # probe timed out with empty stderr and the failure said nothing).
+    environment = dict(os.environ)
+    environment["RUNTROL_CLOSE_TRACE"] = "1"
+    output = command(program, environment, timeout=240.0)
     target = nativeTarget()
     evidence = readEvidence(output)
     problems = evidenceProblems(evidence, target)

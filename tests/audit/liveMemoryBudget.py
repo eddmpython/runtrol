@@ -338,6 +338,9 @@ def exerciseHotSet(binary: Path, fixture: Path) -> Evidence:
         home = Path(raw_home)
         manifest(home, fixture, REPLY_BYTES)
         environment = acp.environment(home, fixture)
+        # The daemon narrates its boot and close steps under this switch; a "did not become ready"
+        # then carries the last step reached instead of silence (measured 2026-08-27 on macOS).
+        environment["RUNTROL_CLOSE_TRACE"] = "1"
         daemon = acp.startDaemon(binary, environment, home)
         sessions: list[str] = []
         try:
@@ -406,6 +409,9 @@ def exerciseCase(
         workspace.mkdir()
         manifest(home, fixture, reply_bytes)
         environment = acp.environment(home, fixture)
+        # The daemon narrates its boot and close steps under this switch; a "did not become ready"
+        # then carries the last step reached instead of silence (measured 2026-08-27 on macOS).
+        environment["RUNTROL_CLOSE_TRACE"] = "1"
         daemon = acp.startDaemon(binary, environment, home)
         watchers: list[subprocess.Popen[str]] = []
         outputPaths: list[Path] = []
