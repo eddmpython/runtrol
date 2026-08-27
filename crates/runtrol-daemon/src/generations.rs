@@ -19,7 +19,7 @@
 //! for long.
 
 use core::time::Duration;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -247,9 +247,21 @@ async fn drain_predecessors(paths: &Layout, own_digest: &str) {
 const PEER_ANSWER_WITHIN: Duration = Duration::from_millis(400);
 const GENERATION_RELAY_INTERVAL: Duration = Duration::from_secs(1);
 
+/// How many relay rounds a draining peer may fail to prove the handoff before it stops blocking native opens.
+///
+/// The barrier exists so a successor never admits a native conversation it cannot check against a draining
+/// peer's live claims. A peer that speaks the handoff proves itself on the first round; one that predates the
+/// handoff protocol can never prove itself, and holding the barrier for it would block every native open on
+/// the machine for as long as that old daemon lives (measured 2026-08-27: an operator's day-old daemon kept
+/// `legacyGenerationBusy` on screen indefinitely). After this many silent rounds the peer is treated as it was
+/// treated by every build before the relay existed: unknown, and not a reason to refuse the person's own
+/// conversation. A peer that proves itself later rejoins the import path and full protection resumes.
+const GENERATION_PROOF_PATIENCE: u32 = 8;
+
 /// Keep every draining generation beneath this successor's current authority and import its live claims.
 pub(crate) async fn relay_generation_state(composed: Arc<Composed>, own_digest: String) {
     let mut compatible = BTreeSet::<String>::new();
+    let mut misses = BTreeMap::<String, u32>::new();
     loop {
         let peers = match read_locator(composed.home.paths().runtime_locator().as_std_path()) {
             Ok(Located::Current(record)) => record
@@ -263,6 +275,7 @@ pub(crate) async fn relay_generation_state(composed: Arc<Composed>, own_digest: 
             .native_claims
             .retain_remote(peers.iter().map(|generation| generation.digest.as_str()));
         compatible.retain(|digest| peers.iter().any(|peer| peer.digest == *digest));
+        misses.retain(|digest, _| peers.iter().any(|peer| peer.digest == *digest));
         if let Ok(authorities) =
             crate::generation_authority::GenerationAuthorityRelay::snapshot(&composed.store)
         {
@@ -288,17 +301,30 @@ pub(crate) async fn relay_generation_state(composed: Arc<Composed>, own_digest: 
                 {
                     composed.native_claims.replace_remote(&peer.digest, claims);
                     compatible.insert(peer.digest.clone());
+                    misses.remove(&peer.digest);
+                } else {
+                    *misses.entry(peer.digest.clone()).or_insert(0) += 1;
                 }
             }
         }
         composed.native_claims.replace_legacy_generations(
             peers
                 .iter()
-                .filter(|peer| !compatible.contains(&peer.digest))
+                .filter(|peer| still_blocking(&peer.digest, &compatible, &misses))
                 .map(|peer| peer.digest.as_str()),
         );
         tokio::time::sleep(GENERATION_RELAY_INTERVAL).await;
     }
+}
+
+/// Whether one draining peer still holds the native-open barrier: it has not proven the handoff, and it has
+/// not yet used up the patience an unprovable build is given (`GENERATION_PROOF_PATIENCE`).
+fn still_blocking(
+    peer: &str,
+    compatible: &BTreeSet<String>,
+    misses: &BTreeMap<String, u32>,
+) -> bool {
+    !compatible.contains(peer) && misses.get(peer).copied().unwrap_or(0) < GENERATION_PROOF_PATIENCE
 }
 
 /// Mark every currently draining peer incompatible until its private handoff proves otherwise.
@@ -824,6 +850,26 @@ pub(crate) fn drained() -> Response {
 
 #[cfg(test)]
 mod tests {
+    /// The barrier is strong while a peer might still prove itself, and bounded when it cannot.
+    ///
+    /// Three peers, three fates: one that proved the handoff never blocks, one that just appeared blocks
+    /// while its proof is pending, and one that failed every round of the patience stops blocking, because
+    /// a build that cannot speak the handoff would otherwise hold every native open on the machine for as
+    /// long as it lives.
+    #[test]
+    fn an_unprovable_peer_stops_blocking_after_the_patience() {
+        let mut compatible = std::collections::BTreeSet::new();
+        compatible.insert("proved".to_string());
+        let mut misses = std::collections::BTreeMap::new();
+        misses.insert("silent".to_string(), super::GENERATION_PROOF_PATIENCE);
+        misses.insert("slow".to_string(), super::GENERATION_PROOF_PATIENCE - 1);
+
+        assert!(!super::still_blocking("proved", &compatible, &misses));
+        assert!(super::still_blocking("fresh", &compatible, &misses));
+        assert!(super::still_blocking("slow", &compatible, &misses));
+        assert!(!super::still_blocking("silent", &compatible, &misses));
+    }
+
     /// The invariant that makes forwarding safe to have at all.
     ///
     /// Only a generation that is not draining asks, and it asks only generations that are. Written as a test
