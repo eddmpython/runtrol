@@ -741,6 +741,10 @@ impl Agent for AcpAgent {
         }
     }
 
+    fn pid(&self) -> Option<u32> {
+        self.child.id()
+    }
+
     async fn close(mut self: Box<Self>, how: CloseMode) -> Result<(), ProviderError> {
         drop(self.stdin.take());
         let grace = match how {

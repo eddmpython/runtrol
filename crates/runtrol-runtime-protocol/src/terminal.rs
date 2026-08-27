@@ -183,6 +183,11 @@ pub struct TerminalDescriptor {
     pub terminal_generation: u64,
     /// Current shared PTY geometry.
     pub geometry: TerminalGeometry,
+    /// Resident memory of the hosted process in bytes, as the operating system reports it at listing time.
+    ///
+    /// Present only while the process runs and the operating system answered; absent means not measured.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory_bytes: Option<u64>,
 }
 
 /// One root-filtered snapshot from one Runtime generation.
@@ -472,6 +477,7 @@ mod tests {
                 columns: 80,
                 rows: 24,
             },
+            memory_bytes: None,
         };
         let value = serde_json::to_value(descriptor).expect("serializable");
         for forbidden in ["title", "prompt", "reply", "transcript", "screenBase64"] {

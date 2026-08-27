@@ -233,6 +233,9 @@ impl ApprovalAuthority {
 struct Live {
     /// The driver.
     agent: Option<Box<dyn Agent>>,
+    /// The process the driver owns, read when it attached. Kept here rather than asked of the agent, because
+    /// the agent is taken out of this map for the length of every turn and the listing must not go blank then.
+    pid: Option<u32>,
     /// Where its events are numbered and fanned out.
     hub: SessionHub,
     /// Its two names.
@@ -883,10 +886,12 @@ impl SessionManager {
         drop(state.observe(Observed::Attaching, now));
         drop(state.observe(Observed::Attached, now));
 
+        let pid = agent.pid();
         self.live.insert(
             session,
             Live {
                 agent: Some(agent),
+                pid,
                 hub: SessionHub::new(session),
                 identity,
                 workspace,
@@ -1563,6 +1568,7 @@ impl SessionManager {
             native: live.identity.native().map(AsRef::as_ref),
             workspace: &live.workspace,
             tier: Tier::Hot,
+            pid: live.pid,
             state: &live.state,
             stream: live.hub.live_at().stream,
         })
@@ -1586,6 +1592,7 @@ impl SessionManager {
             native: live.identity.native().map(AsRef::as_ref),
             workspace: &live.workspace,
             tier: Tier::Hot,
+            pid: live.pid,
             state: &live.state,
             stream: live.hub.live_at().stream,
         })
@@ -1640,6 +1647,8 @@ pub struct LiveSession<'manager> {
     pub workspace: &'manager AbsPath,
     /// How much of it exists. Always the hot tier here, by definition.
     pub tier: Tier,
+    /// The provider process behind it, when the driver owns one.
+    pub pid: Option<u32>,
     /// What it is doing.
     pub state: &'manager SessionState,
     /// Volatile process incarnation used to invalidate authority across close and reopen.

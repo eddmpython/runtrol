@@ -185,6 +185,8 @@ pub struct Connection {
     child_guard: Mutex<ChildGuard>,
     /// The child, held so that an explicit stop can reap the process.
     child: Mutex<TrackedChild>,
+    /// The process identifier, read once at spawn so a synchronous caller never waits on the child lock.
+    pid: Option<u32>,
     /// The stdout reader, owned rather than detached so cancellation cannot leave a task behind.
     reader: tokio::task::JoinHandle<()>,
 }
@@ -215,6 +217,11 @@ async fn initialize_connection<I: InitializationIo>(
 }
 
 impl Connection {
+    /// The shared codex process, when it is still known to be running.
+    pub fn pid(&self) -> Option<u32> {
+        self.pid
+    }
+
     /// Start the daemon and complete its handshake.
     ///
     /// Returns once the provider has answered [`HANDSHAKE`] and runtrol has sent the required
@@ -233,6 +240,7 @@ impl Connection {
         version: &str,
     ) -> Result<Self, ProviderError> {
         let (child, child_guard, stdin, stdout) = spawn(provider, program, contained_by)?;
+        let pid = child.id();
 
         let stdin = Arc::new(Mutex::new(stdin));
         let pending = Arc::new(Mutex::new(Pending::new()));
@@ -256,6 +264,7 @@ impl Connection {
             routes,
             unreadable,
             child: Mutex::new(child),
+            pid,
             child_guard: Mutex::new(child_guard),
             reader,
         };

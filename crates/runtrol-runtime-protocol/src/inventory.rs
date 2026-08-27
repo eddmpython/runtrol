@@ -425,6 +425,14 @@ pub struct SessionDescriptor {
     /// Operator-owned label, never derived from conversation content.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
+    /// Resident memory of the provider process behind this session, in bytes, as the operating system reports
+    /// it at listing time.
+    ///
+    /// Present only while Runtime owns a process for the session and the operating system answered. A driver
+    /// that shares one process among sessions reports that process for each of them. Never estimated and never
+    /// zero-filled: absent means not measured.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory_bytes: Option<u64>,
 }
 
 /// A bounded Runtime-managed session snapshot.

@@ -866,6 +866,11 @@ fn descriptor(
             columns: size.cols,
             rows: size.rows,
         },
+        memory_bytes: if hosted.stopping {
+            None
+        } else {
+            crate::runtime_inventory::resident_bytes_now(hosted.terminal.pid())
+        },
     })
 }
 

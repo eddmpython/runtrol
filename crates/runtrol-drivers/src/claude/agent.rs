@@ -1059,6 +1059,10 @@ impl Agent for ClaudeAgent {
         }
     }
 
+    fn pid(&self) -> Option<u32> {
+        self.child.id()
+    }
+
     async fn close(mut self: Box<Self>, how: CloseMode) -> Result<(), ProviderError> {
         for native in self.approvals.rejections() {
             self.write_answer(&native, "declining an approval while closing")

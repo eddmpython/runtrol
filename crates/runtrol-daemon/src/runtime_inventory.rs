@@ -524,6 +524,24 @@ fn installation(
     (observation, resolved)
 }
 
+/// What a provider process holds in memory right now, or `None` when the operating system will not say.
+///
+/// Absence is the honest answer, not a failure to report: the process may have ended between the listing and
+/// the question, or the platform may refuse the question for a process this daemon may not open. Either way
+/// a surface draws no number, never a zero.
+#[expect(
+    clippy::manual_ok_err,
+    reason = "`Result::ok` is disallowed workspace-wide so that a dropped error is always written out; here the absent number is the answer, and the arm says so"
+)]
+pub(crate) fn resident_bytes_now(pid: u32) -> Option<u64> {
+    match runtrol_childproc::footprint::resident_bytes(pid) {
+        Ok(bytes) => Some(bytes),
+        // A process that ended between the listing and the question, or one this daemon may not open, has no
+        // number to report, and the descriptor says so by leaving the field absent.
+        Err(_gone_or_refused) => None,
+    }
+}
+
 /// Read the one session owner into an immutable public projection.
 pub(crate) fn sessions(
     composed: &Composed,
@@ -549,6 +567,7 @@ pub(crate) fn sessions(
                     waiting_on: session.waiting.map(public_waiting),
                     session_generation: session.generation,
                     label: session.label.map(Into::into),
+                    memory_bytes: session.pid.and_then(resident_bytes_now),
                 },
                 workspace: session.workspace,
             })
@@ -591,6 +610,7 @@ impl RuntimeSessionCatalogue {
                     waiting_on: None,
                     session_generation: 0,
                     label: None,
+                    memory_bytes: None,
                 },
                 workspace: workspace.as_str().into(),
             }],
@@ -883,6 +903,7 @@ mod tests {
                     waiting_on: None,
                     session_generation: 0,
                     label: None,
+                    memory_bytes: None,
                 },
                 workspace: project.as_str().into(),
             }],

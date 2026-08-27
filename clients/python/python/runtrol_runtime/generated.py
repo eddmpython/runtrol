@@ -6,7 +6,7 @@ from typing import ForwardRef, Literal, NotRequired, Required, TypeAlias, TypedD
 
 JsonValue: TypeAlias = None | bool | int | float | str | list["JsonValue"] | dict[str, "JsonValue"]
 JsonObject: TypeAlias = dict[str, JsonValue]
-SCHEMA_SHA256 = '4cd274c3687cb0434201d2c4b9716d00a71562e4df7958ad506306bab0d8d1ec'
+SCHEMA_SHA256 = '1f368c487be7e151286405565a2637b88038364779b68e733e0317975261ff83'
 
 AcquireControlParams = TypedDict('AcquireControlParams', {
     'expectedLifecycle': Required[ForwardRef('LifecycleState')],
@@ -438,6 +438,7 @@ SessionDescriptor = TypedDict('SessionDescriptor', {
     'label': NotRequired[str | None],
     'lifecycle': Required[ForwardRef('LifecycleState')],
     'looksStuck': Required[bool],
+    'memoryBytes': NotRequired[int | None],
     'nativeSessionId': NotRequired[str | None],
     'providerId': Required[ForwardRef('ProviderId')],
     'sessionGeneration': Required[int],
@@ -525,6 +526,7 @@ TerminalControlParams = TypedDict('TerminalControlParams', {
 })
 TerminalDescriptor = TypedDict('TerminalDescriptor', {
     'geometry': Required[ForwardRef('TerminalGeometry')],
+    'memoryBytes': NotRequired[int | None],
     'nativeSessionId': NotRequired[str | None],
     'openedAtMs': Required[int],
     'processState': Required[ForwardRef('TerminalProcessState')],

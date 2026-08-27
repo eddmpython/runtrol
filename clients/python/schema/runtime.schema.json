@@ -3456,6 +3456,15 @@
           "description": "Structural stalled-turn hint derived by Core without interpreting conversation content.",
           "type": "boolean"
         },
+        "memoryBytes": {
+          "description": "Resident memory of the provider process behind this session, in bytes, as the operating system reports\nit at listing time.\n\nPresent only while Runtime owns a process for the session and the operating system answered. A driver\nthat shares one process among sessions reports that process for each of them. Never estimated and never\nzero-filled: absent means not measured.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "nativeSessionId": {
           "description": "Provider-owned resume identity when the official live or stored pointer exposes one.",
           "type": [
@@ -3946,6 +3955,15 @@
         "geometry": {
           "$ref": "#/$defs/TerminalGeometry",
           "description": "Current shared PTY geometry."
+        },
+        "memoryBytes": {
+          "description": "Resident memory of the hosted process in bytes, as the operating system reports it at listing time.\n\nPresent only while the process runs and the operating system answered; absent means not measured.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "nativeSessionId": {
           "description": "Provider-owned durable identity only when it was known before the terminal opened.",

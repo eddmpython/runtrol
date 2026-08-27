@@ -942,6 +942,11 @@ impl Agent for CodexAgent {
         }
     }
 
+    fn pid(&self) -> Option<u32> {
+        // One codex process serves every session on this daemon, so every session names that one process.
+        self.conn.pid()
+    }
+
     async fn close(mut self: Box<Self>, how: CloseMode) -> Result<(), ProviderError> {
         let grace = match how {
             CloseMode::Kill => Duration::ZERO,

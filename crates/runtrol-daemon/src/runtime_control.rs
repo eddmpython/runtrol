@@ -581,6 +581,9 @@ impl RuntimeControl {
                 waiting_on: live.state.waiting().map(public_waiting),
                 session_generation: live.state.generation(),
                 label: None,
+                memory_bytes: live
+                    .pid
+                    .and_then(crate::runtime_inventory::resident_bytes_now),
             },
             control,
         };

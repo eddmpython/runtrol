@@ -240,6 +240,15 @@ pub trait Agent: Send + Sync {
     /// nothing when it is abandoned, and everything read before that must already be somewhere that survives.
     async fn next(&mut self) -> Option<Result<Produced, ProviderError>>;
 
+    /// The operating-system process this agent owns, when it owns one.
+    ///
+    /// Structural, never conversational: it lets a surface ask the operating system what a session costs in
+    /// memory. A driver that shares one process among its sessions answers with that shared process, and a
+    /// driver with no process of its own answers `None`.
+    fn pid(&self) -> Option<u32> {
+        None
+    }
+
     /// End the session.
     ///
     /// Takes ownership, so nothing can be sent afterwards.
