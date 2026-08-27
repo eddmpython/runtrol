@@ -167,7 +167,7 @@ def startDaemon(binary: Path, env: dict[str, str], home: Path) -> subprocess.Pop
         encoding="utf-8",
         errors="replace",
     )
-    ready = home / ("runtrol.redb" if sys.platform == "win32" else "runtrol.sock")
+    ready = home / ("runtrol.redb" if sys.platform == "win32" else "runtime.locator.json")
     deadline = time.monotonic() + TURN_WAIT_S
     while time.monotonic() < deadline:
         if daemon.poll() is not None:

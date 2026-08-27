@@ -325,7 +325,7 @@ def startDaemon(
     except OSError as error:
         raise Failed(f"could not start the isolated daemon process: {error}") from error
 
-    marker = ready_marker or home / ("runtrol.redb" if sys.platform == "win32" else "runtrol.sock")
+    marker = ready_marker or home / ("runtrol.redb" if sys.platform == "win32" else "runtime.locator.json")
     deadline = time.monotonic() + timeout_s
     try:
         while not marker.exists():

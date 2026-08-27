@@ -698,7 +698,7 @@ def startDaemon(binary: Path, env: dict[str, str], home: Path) -> subprocess.Pop
     except BaseException:
         diagnostics.close()
         raise
-    ready = home / ("runtrol.redb" if sys.platform == "win32" else "runtrol.sock")
+    ready = home / ("runtrol.redb" if sys.platform == "win32" else "runtime.locator.json")
     deadline = time.monotonic() + 10.0
     while time.monotonic() < deadline:
         if daemon.poll() is not None:
