@@ -77,14 +77,34 @@ pub enum Unreachable {
 /// never answered by starting a daemon: launching a second one on top of a broken endpoint would replace a
 /// diagnosable failure with two.
 pub async fn reach(address: &str, runtrol: &Path) -> Result<Connection, Unreachable> {
+    trace("cli: connecting");
     match runtrol_ipc::transport::connect(address).await {
-        Ok(connection) => return Ok(connection),
-        Err(error) if error.means_no_daemon() => {}
+        Ok(connection) => {
+            trace("cli: connected");
+            return Ok(connection);
+        }
+        Err(error) if error.means_no_daemon() => trace("cli: nothing listening; starting a daemon"),
         Err(error) => return Err(Unreachable::Transport(error)),
     }
 
     start(runtrol)?;
+    trace("cli: daemon spawned; waiting for it to answer");
     wait_for_it(address).await
+}
+
+/// One step of reaching the daemon, on stderr, only when `RUNTROL_CLOSE_TRACE=1` asks for it.
+///
+/// The CI harness is the audience: a command that hangs to its timeout with no output cannot say whether it
+/// was connecting, starting a daemon, or waiting on one (measured 2026-08-27: `start` and `close --now` hit
+/// 15 s on the Unix hosts while the daemon's own trace stayed silent, which places the stall on this side).
+#[expect(
+    clippy::print_stderr,
+    reason = "the breadcrumb exists to reach the harness's captured stderr, and only when RUNTROL_CLOSE_TRACE=1 asks for it"
+)]
+pub(crate) fn trace(step: &str) {
+    if std::env::var_os("RUNTROL_CLOSE_TRACE").is_some_and(|value| value == "1") {
+        eprintln!("runtrol {step}");
+    }
 }
 
 /// Start a daemon, detached from this command.

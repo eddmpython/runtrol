@@ -153,6 +153,7 @@ where
         },
     )
     .await?;
+    crate::link::trace("cli: greeted");
     if let Response::Failed(said) = &welcome {
         return Err(Failed::DifferentBuilds {
             said: said.message.to_string(),
@@ -162,6 +163,7 @@ where
     let watching = matches!(request, Request::Watch { .. });
     let stopping_everything = matches!(request, Request::StopEverything);
 
+    crate::link::trace("cli: request sent");
     let answer = match exchange(&mut connection, &request).await {
         Ok(answer) => answer,
         // The daemon went away without answering. For every other request that is a fact about the daemon; for
