@@ -45,6 +45,12 @@ export type UsageRow = {
   readonly providerId: string;
   /// The whole position for the hover, sentence by sentence.
   readonly tooltip: string;
+  /// Where the account stands, in one short clause. Never an instruction.
+  readonly position: string;
+  /// The plan the service named in its own tokens, or null when it named none.
+  readonly plan: string | null;
+  /// How old the last report is, or null when there is none.
+  readonly age: string | null;
 };
 
 /// Whether publishing the next snapshot would change anything visible or actionable in the tree.
@@ -142,6 +148,9 @@ export function usageRows(
         providerId,
         cost: null,
         tooltip: `${name}: checking the installed CLI`,
+        position: "Checking",
+        plan: null,
+        age: null,
       };
     }
     if (provider && isBroken(provider)) {
@@ -156,7 +165,10 @@ export function usageRows(
         state: "unavailable",
         providerId,
         cost: null,
-        tooltip: `${why}\n\nPress Enter for this service's fixes.`,
+        tooltip: why,
+        position: why,
+        plan: null,
+        age: null,
       };
     }
     if (!provider && gauge) {
@@ -171,6 +183,9 @@ export function usageRows(
         providerId,
         cost: usageCost(gauge),
         tooltip: `${name}: disconnected; this is the last report\n${usageTooltip(name, gauge, nowMs)}`,
+        position: "Disconnected; this is the last report",
+        plan: null,
+        age: reportAge(gauge, nowMs),
       };
     }
     const account = provider?.account ?? null;
@@ -186,7 +201,10 @@ export function usageRows(
         state: "signedOut",
         providerId,
         cost: gauge ? usageCost(gauge) : null,
-        tooltip: `${name} says nobody is signed in.\n\nPress Enter to sign in with this service's own command.`,
+        tooltip: `${name}: not signed in`,
+        position: "Not signed in",
+        plan: null,
+        age: gauge ? reportAge(gauge, nowMs) : null,
       };
     }
     const plan = accountLine(account);
@@ -209,6 +227,9 @@ export function usageRows(
         tooltip: plan
           ? `${name}: ${plan}. ${accountAbsence(name, account)}`
           : `${name}: ${accountAbsence(name, account)}`,
+        position: usageAbsenceCause(account).replace(" · Sign in", ""),
+        plan,
+        age: null,
       };
     }
     return {
@@ -224,6 +245,9 @@ export function usageRows(
       providerId,
       cost: usageCost(gauge),
       tooltip: plan ? `${name}: ${plan}\n${usageTooltip(name, gauge, nowMs)}` : usageTooltip(name, gauge, nowMs),
+      position: gauge.reached ? "A limit is blocking right now" : "Within limits",
+      plan,
+      age: reportAge(gauge, nowMs),
     };
   });
 }
@@ -479,6 +503,12 @@ function resetsIn(window: ProviderUsageWindow | null | undefined, nowMs: number)
   const hours = Math.round(minutes / 60);
   if (hours < 48) return `resets in ${hours}h`;
   return `resets in ${Math.round(hours / 24)}d`;
+}
+
+/// How old the last report is, in words a person plans around.
+export function reportAge(gauge: ProviderUsageGauge, nowMs: number): string {
+  const age = Math.max(0, Math.round((nowMs - gauge.atMs) / 60_000));
+  return age < 1 ? "Reported just now" : `Reported ${age}m ago`;
 }
 
 /// The hover: every window the service described, spelled out.

@@ -324,7 +324,9 @@ test("the fixed area includes checking and broken installed CLIs but omits missi
     ["Grok", "Unavailable · Fix", "unavailable"],
   ]);
   assert.equal(rows[2]?.providerId, "grok");
-  assert.match(rows[2]?.tooltip ?? "", /Press Enter/);
+  // The cause is the position; the fix is a button, never a sentence telling somebody to press a key.
+  assert.equal(rows[2]?.position, "the installed CLI exited during its probe");
+  assert.doesNotMatch(rows[2]?.tooltip ?? "", /Press Enter/);
 });
 
 test("a last report never disguises a disconnected CLI as available", () => {
@@ -405,7 +407,10 @@ test("the account line says what the service said: signed out is an action, a pl
   ]);
   assert.equal(rows[0]?.meters.length, 1, "a reported window is still a bar");
   assert.match(rows[2]?.tooltip ?? "", /publishes no usage or sign-in status/);
-  assert.match(rows[1]?.tooltip ?? "", /Press Enter to sign in/);
+  assert.equal(rows[1]?.position, "Not signed in");
+  assert.doesNotMatch(rows[1]?.tooltip ?? "", /Press Enter/);
+  assert.equal(rows[0]?.plan, "max plan via claude.ai");
+  assert.equal(rows[0]?.position, "Within limits");
   assert.match(rows[0]?.tooltip ?? "", /max plan via claude\.ai/);
 });
 

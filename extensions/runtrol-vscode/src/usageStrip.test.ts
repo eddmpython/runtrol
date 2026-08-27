@@ -16,6 +16,9 @@ function row(overrides: Partial<UsageRow>): UsageRow {
     state: "available",
     providerId: "codex",
     tooltip: "Codex: within limits\nReported 2m ago",
+    position: "Within limits",
+    plan: null,
+    age: "Reported 2m ago",
     ...overrides,
   };
 }
@@ -41,7 +44,7 @@ test("a chip's ring is the whole-account week and its caption is that number", (
 
 test("a row without a number keeps an empty ring and names its cause under it", () => {
   const chips = usageChips([
-    row({ state: "signedOut", tooltip: "Grok says nobody is signed in." }),
+    row({ state: "signedOut", position: "Not signed in", age: null }),
     row({ state: "unavailable" }),
     row({ state: "checking" }),
   ]);
@@ -55,6 +58,7 @@ test("a row without a number keeps an empty ring and names its cause under it", 
 test("the page draws one bar per reported window and escapes what the service said", () => {
   const html = usageStripHtml(usageChips([row({
     name: "Codex <pro>",
+    plan: "pro plan via chatgpt",
     meters: [
       { key: "7d", label: "7d", percent: 76, detail: "76% used, resets in 6d", governing: true },
       { key: "7d:GPT", label: "7d GPT-5.3", percent: 0, detail: "0% used", governing: false },
@@ -66,7 +70,9 @@ test("the page draws one bar per reported window and escapes what the service sa
   assert.ok(!html.includes("Codex <pro>"));
   assert.ok(html.includes('src="https://icons/codex.svg"'));
   assert.ok(html.includes("Reported 2m ago"));
-  assert.ok(html.includes('<p class="position">within limits</p>'));
+  assert.ok(html.includes('<p class="position">Within limits</p>'));
+  assert.ok(html.includes('<span class="plan">pro plan via chatgpt</span>'));
+  assert.ok(!html.includes("Press Enter"));
   assert.ok(html.includes(`nonce="${assets.nonce}"`));
   assert.ok(html.includes("script-src 'nonce-n0nce'"));
 });
@@ -74,12 +80,20 @@ test("the page draws one bar per reported window and escapes what the service sa
 test("a blocking limit colours the chip and the panel", () => {
   const html = usageStripHtml(usageChips([row({
     reached: true,
+    position: "A limit is blocking right now",
     meters: [{ key: "5h", label: "5h", percent: 100, detail: "100% used, resets in 1h", governing: true }],
     tooltip: "Codex: a limit is blocking right now\n5h: 100% used, governing now\nReported just now",
   })]), assets);
   assert.ok(html.includes('class="chip reached"'));
   assert.ok(html.includes(">100%<"));
   assert.ok(html.includes('class="position reached"'));
+});
+
+test("a signed-out chip answers a click with the sign-in action and says so in its hover", () => {
+  const html = usageStripHtml(usageChips([row({ state: "signedOut", position: "Not signed in", age: null })]), assets);
+  assert.ok(html.includes('data-action="signIn" data-provider="codex"'));
+  assert.ok(html.includes('title="Codex: Not signed in"'));
+  assert.ok(!html.includes("Press Enter"));
 });
 
 test("no installed service says so instead of drawing nothing", () => {

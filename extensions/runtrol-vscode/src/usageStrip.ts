@@ -29,8 +29,12 @@ export type UsageChip = {
   /// A limit is blocking right now, which colours the ring.
   readonly reached: boolean;
   readonly state: UsageState;
-  /// The panel's lines, in order: the position sentence, one bar per window, the report age.
-  readonly lines: readonly string[];
+  /// Where the account stands, in one short clause. Never an instruction: actions are buttons.
+  readonly position: string;
+  /// The plan the service named, or null.
+  readonly plan: string | null;
+  /// How old the last report is, or null.
+  readonly age: string | null;
   readonly meters: readonly UsageMeter[];
   /// The one action the panel offers, or null when the row is only information.
   readonly action: "signIn" | "fix" | null;
@@ -53,7 +57,9 @@ export function usageChips(rows: readonly UsageRow[]): UsageChip[] {
       caption: shown ? `${shown.percent}%` : shortCaption(row),
       reached: row.reached,
       state: row.state,
-      lines: row.tooltip.split("\n").filter((line) => line.length > 0),
+      position: row.position,
+      plan: row.plan,
+      age: row.age,
       meters: row.meters,
       action: row.state === "signedOut" ? "signIn" : row.state === "unavailable" ? "fix" : null,
     };
@@ -84,7 +90,7 @@ export type UsageStripAssets = {
   readonly iconUris: ReadonlyMap<string, string>;
 };
 
-const RING_RADIUS = 15;
+const RING_RADIUS = 11;
 const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
 
 /// The whole page. Static markup for the chips and panels; the script only toggles which panel is open.
@@ -115,13 +121,19 @@ function chipHtml(chip: UsageChip, index: number, assets: UsageStripAssets): str
     ? `${chip.name}: ${chip.caption}`
     : `${chip.name}: seven day usage ${chip.percent} percent${chip.reached ? ", a limit is blocking" : ""}`;
   // The hover preview is the browser's own tooltip: it floats outside the view's box, so it is readable however
-  // short the view is, and it carries every line the panel does. The panel is the same facts with bars.
-  const preview = [...chip.lines.slice(0, 1), ...chip.meters.map((meter) => `${meter.label}: ${meter.detail}`), ...chip.lines.slice(1 + chip.meters.length)];
-  return `<button class="chip${chip.reached ? " reached" : ""}${chip.percent === null ? " bare" : ""}" type="button" role="listitem" data-index="${index}" aria-label="${escapeHtml(spoken)}" aria-expanded="false" aria-controls="panel-${index}" title="${escapeHtml(preview.join("\n"))}">
+  // short the view is, and it carries every fact the panel does. The panel is the same facts with bars.
+  const preview = [
+    `${chip.name}: ${chip.position}`,
+    ...(chip.plan ? [chip.plan] : []),
+    ...chip.meters.map((meter) => `${meter.label}: ${meter.detail}`),
+    ...(chip.age ? [chip.age] : []),
+  ];
+  const direct = chip.action ? ` data-action="${chip.action}" data-provider="${escapeHtml(chip.providerId)}"` : "";
+  return `<button class="chip${chip.reached ? " reached" : ""}${chip.percent === null ? " bare" : ""}" type="button" role="listitem" data-index="${index}"${direct} aria-label="${escapeHtml(spoken)}" aria-expanded="false" aria-controls="panel-${index}" title="${escapeHtml(preview.join("\n"))}">
 <span class="ring">
-<svg viewBox="0 0 36 36" aria-hidden="true">
-<circle class="track" cx="18" cy="18" r="${RING_RADIUS}"></circle>
-<circle class="fill" cx="18" cy="18" r="${RING_RADIUS}" stroke-dasharray="${filled.toFixed(2)} ${RING_CIRCUMFERENCE.toFixed(2)}"></circle>
+<svg viewBox="0 0 26 26" aria-hidden="true">
+<circle class="track" cx="13" cy="13" r="${RING_RADIUS}"></circle>
+<circle class="fill" cx="13" cy="13" r="${RING_RADIUS}" stroke-dasharray="${filled.toFixed(2)} ${RING_CIRCUMFERENCE.toFixed(2)}"></circle>
 </svg>
 <img class="icon" src="${escapeHtml(iconUri)}" alt="" draggable="false">
 </span>
@@ -130,31 +142,17 @@ function chipHtml(chip: UsageChip, index: number, assets: UsageStripAssets): str
 }
 
 function panelHtml(chip: UsageChip, index: number): string {
-  // The heading already says the name; a sentence that starts with it again says nothing new.
-  const [position, ...rest] = chip.lines.map((line) => line.startsWith(`${chip.name}: `) ? line.slice(chip.name.length + 2) : line);
-  const age = rest.length > 0 && rest[rest.length - 1]!.startsWith("Reported ") ? rest.pop() : null;
   const bars = chip.meters.map((meter) => `<div class="meter${meter.governing ? " governing" : ""}">
 <span class="label">${escapeHtml(meter.label)}</span>
 <span class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${meter.percent}" aria-label="${escapeHtml(`${meter.label} ${meter.percent} percent`)}"><span class="value" style="width:${meter.percent}%"></span></span>
 <span class="percent">${meter.percent}%</span>
 <span class="detail">${escapeHtml(meter.detail)}</span>
 </div>`).join("");
-  // Lines the bars already say (one per window) are not repeated as sentences; what remains is the plan and
-  // any window the service named without a number.
-  const spokenWindows = new Set(chip.meters.map((meter) => meter.label));
-  const sentences = rest.filter((line) => !spokenWindows.has(line.split(":")[0] ?? ""));
-  const action = chip.action === "signIn"
-    ? `<button class="action" type="button" data-action="signIn" data-provider="${escapeHtml(chip.providerId)}">Sign in</button>`
-    : chip.action === "fix"
-      ? `<button class="action" type="button" data-action="fix" data-provider="${escapeHtml(chip.providerId)}">Fix</button>`
-      : "";
   return `<section class="panel" id="panel-${index}" hidden>
-<h2>${escapeHtml(chip.name)}</h2>
-<p class="position${chip.reached ? " reached" : ""}">${escapeHtml(position ?? "")}</p>
-${sentences.map((line) => `<p>${escapeHtml(line)}</p>`).join("")}
+<h2>${escapeHtml(chip.name)}${chip.plan ? ` <span class="plan">${escapeHtml(chip.plan)}</span>` : ""}</h2>
+<p class="position${chip.reached ? " reached" : ""}">${escapeHtml(chip.position)}</p>
 ${bars}
-${age ? `<p class="age">${escapeHtml(age)}</p>` : ""}
-${action}
+${chip.age ? `<p class="age">${escapeHtml(chip.age)}</p>` : ""}
 </section>`;
 }
 
@@ -170,30 +168,31 @@ export function escapeHtml(text: string): string {
 const STYLE = `
 body { margin: 0; padding: 6px 8px; color: var(--vscode-foreground); font: var(--vscode-font-size) var(--vscode-font-family); background: transparent; }
 .empty { margin: 0; opacity: 0.8; }
-.chips { display: flex; flex-wrap: wrap; gap: 4px 10px; }
-.chip { display: flex; flex-direction: column; align-items: center; gap: 1px; width: 52px; padding: 2px 0; border: 1px solid transparent; border-radius: 6px; background: transparent; color: inherit; cursor: pointer; }
+.chips { display: flex; flex-wrap: wrap; gap: 2px 6px; }
+.chip { display: flex; flex-direction: column; align-items: center; gap: 0; width: 38px; padding: 2px 0 1px; border: 1px solid transparent; border-radius: 5px; background: transparent; color: inherit; cursor: pointer; }
 .chip:hover, .chip[aria-expanded="true"] { background: var(--vscode-list-hoverBackground); }
 .chip:focus-visible { outline: none; border-color: var(--vscode-focusBorder); }
-.ring { position: relative; width: 36px; height: 36px; }
-.ring svg { width: 36px; height: 36px; transform: rotate(-90deg); }
-.ring .track { fill: none; stroke: var(--vscode-widget-border, rgba(128,128,128,0.35)); stroke-width: 3; }
-.ring .fill { fill: none; stroke: var(--vscode-progressBar-background); stroke-width: 3; stroke-linecap: round; }
+.ring { position: relative; width: 26px; height: 26px; }
+.ring svg { width: 26px; height: 26px; transform: rotate(-90deg); }
+.ring .track { fill: none; stroke: var(--vscode-widget-border, rgba(128,128,128,0.35)); stroke-width: 2.5; }
+.ring .fill { fill: none; stroke: var(--vscode-progressBar-background); stroke-width: 2.5; stroke-linecap: round; }
 .chip.reached .fill { stroke: var(--vscode-errorForeground); }
 .chip.bare .fill { display: none; }
-.ring .icon { position: absolute; left: 10px; top: 10px; width: 16px; height: 16px; }
-.caption { font-size: 11px; line-height: 13px; opacity: 0.9; white-space: nowrap; }
+.ring .icon { position: absolute; left: 7px; top: 7px; width: 12px; height: 12px; }
+.caption { font-size: 10px; line-height: 12px; opacity: 0.9; white-space: nowrap; }
 .chip.reached .caption { color: var(--vscode-errorForeground); }
 .panels { margin-top: 4px; }
 .panel { padding: 6px 4px 2px; border-top: 1px solid var(--vscode-widget-border, rgba(128,128,128,0.35)); }
 .panel h2 { margin: 0 0 2px; font-size: var(--vscode-font-size); font-weight: 600; }
+.panel .plan { font-weight: 400; opacity: 0.75; }
 .panel p { margin: 0 0 4px; opacity: 0.9; }
 .panel .position.reached { color: var(--vscode-errorForeground); opacity: 1; }
-.meter { display: grid; grid-template-columns: minmax(48px, auto) 1fr auto; gap: 2px 8px; align-items: center; margin: 4px 0; }
-.meter .label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.meter { display: grid; grid-template-columns: 72px minmax(0, 1fr) 34px; gap: 2px 6px; align-items: center; margin: 3px 0; }
+.meter .label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 11px; }
 .meter.governing .label { font-weight: 600; }
 .meter .bar { display: block; height: 4px; border-radius: 2px; background: var(--vscode-widget-border, rgba(128,128,128,0.35)); overflow: hidden; }
 .meter .value { display: block; height: 100%; border-radius: 2px; background: var(--vscode-progressBar-background); }
-.meter .percent { font-variant-numeric: tabular-nums; }
+.meter .percent { font-variant-numeric: tabular-nums; text-align: right; font-size: 11px; }
 .meter .detail { grid-column: 1 / -1; font-size: 11px; opacity: 0.75; }
 .panel .age { font-size: 11px; opacity: 0.7; }
 .action { margin: 2px 0 4px; padding: 2px 10px; border: 1px solid var(--vscode-button-border, transparent); border-radius: 2px; background: var(--vscode-button-background); color: var(--vscode-button-foreground); cursor: pointer; }
@@ -207,21 +206,29 @@ const SCRIPT = `
   var chips = Array.prototype.slice.call(document.querySelectorAll(".chip"));
   var panels = Array.prototype.slice.call(document.querySelectorAll(".panel"));
   var pinned = null;
-  // The view is short, so an opened panel scrolls itself into the box and a closed one gives the chips back.
-  function show(index) {
+  // A hover preview must not move anything: scrolling the panel into view moved the chip out from under the
+  // pointer, which closed the panel, which scrolled back and reopened it, and the strip flickered (2026-08-27).
+  // Only a pinned panel (a click, or keyboard focus) is brought into the short view.
+  function show(index, settle) {
     chips.forEach(function (chip, at) { chip.setAttribute("aria-expanded", at === index ? "true" : "false"); });
     panels.forEach(function (panel, at) { panel.hidden = at !== index; });
+    if (!settle) return;
     if (index === null) { window.scrollTo(0, 0); return; }
     var open = panels[index];
-    if (open) open.scrollIntoView({ block: "start" });
+    if (open) open.scrollIntoView({ block: "nearest" });
   }
-  function settle() { show(pinned); }
+  function settle() { show(pinned, true); }
   chips.forEach(function (chip, index) {
-    chip.addEventListener("mouseenter", function () { if (pinned === null) show(index); });
-    chip.addEventListener("focus", function () { if (pinned === null) show(index); });
-    chip.addEventListener("click", function () { pinned = pinned === index ? null : index; show(pinned === null ? index : pinned); });
+    chip.addEventListener("mouseenter", function () { if (pinned === null) show(index, false); });
+    chip.addEventListener("focus", function () { if (pinned === null) show(index, true); });
+    chip.addEventListener("click", function () {
+      var direct = chip.dataset.action;
+      if (direct) { vscode.postMessage({ type: "action", action: direct, providerId: chip.dataset.provider }); return; }
+      pinned = pinned === index ? null : index;
+      show(pinned, true);
+    });
     chip.addEventListener("keydown", function (event) {
-      if (event.key === "Escape") { pinned = null; show(null); }
+      if (event.key === "Escape") { pinned = null; show(null, true); }
     });
   });
   var strip = document.querySelector(".chips");
@@ -230,7 +237,7 @@ const SCRIPT = `
     if (!event.relatedTarget || !document.body.contains(event.relatedTarget)) settle();
   });
   document.addEventListener("keydown", function (event) {
-    if (event.key === "Escape") { pinned = null; show(null); }
+    if (event.key === "Escape") { pinned = null; show(null, true); }
   });
   Array.prototype.slice.call(document.querySelectorAll(".action")).forEach(function (button) {
     button.addEventListener("click", function () {
