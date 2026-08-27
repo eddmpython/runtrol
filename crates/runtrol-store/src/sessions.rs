@@ -2,8 +2,11 @@
 //!
 //! # Two durability settings, and the reason there are two
 //!
-//! Session rows are written durably. Losing one loses a session the operator can no longer find, and no other
-//! copy exists anywhere.
+//! Session rows are group-durable: each write commits atomically without its own fsync, and the daemon's
+//! group flush makes everything durable on a short clock from a blocking thread. One fsync per row held the
+//! daemon's only async thread for 0.6 to 13 seconds on contended disks (measured 2026-08-27), and the cost
+//! of the bounded window is one power-cut losing at most the last few hundred milliseconds of pointer
+//! changes, each rediscoverable from the provider's own catalogue.
 //!
 //! Source checkpoints are written without durability. They are advisory progress metadata and are not the
 //! `WatchCursor` used for bounded reconnect. Losing one loses no session pointer or conversation content, and runtrol
@@ -77,7 +80,10 @@ impl Store {
                     source: Box::new(error.into()),
                 })?;
         }
-        commit_timed(write, "committing a session")
+        commit_timed(write, "committing a session")?;
+        self.relaxed_commits
+            .fetch_add(1, std::sync::atomic::Ordering::Release);
+        Ok(())
     }
 
     /// Read one session row.
@@ -282,6 +288,8 @@ impl Store {
             })?;
         }
         commit_timed(write, "committing a removal")?;
+        self.relaxed_commits
+            .fetch_add(1, std::sync::atomic::Ordering::Release);
         Ok(removed)
     }
 
@@ -396,8 +404,23 @@ impl Store {
     ///
     /// [`StoreError::Engine`] when the flush commit fails.
     pub fn flush_durably(&self) -> Result<(), StoreError> {
+        // Skip entirely when nothing relaxed has landed since the last flush: an idle daemon must not run
+        // an fsync clock (the flusher calls this every few hundred milliseconds for the whole daemon life).
+        let seen = self
+            .relaxed_commits
+            .load(std::sync::atomic::Ordering::Acquire);
+        if seen
+            == self
+                .flushed_commits
+                .load(std::sync::atomic::Ordering::Acquire)
+        {
+            return Ok(());
+        }
         let write = self.begin_durable_write("flushing prior commits")?;
-        commit_timed(write, "flushing prior commits")
+        commit_timed(write, "flushing prior commits")?;
+        self.flushed_commits
+            .store(seen, std::sync::atomic::Ordering::Release);
+        Ok(())
     }
 
     pub(crate) fn begin_durable_write(

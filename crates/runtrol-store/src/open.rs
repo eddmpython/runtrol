@@ -5,6 +5,7 @@
 //! takes an exclusive lock, measured on all three platforms, so a second opener is not something to work
 //! around and [`StoreError::AlreadyOpen`] is a first-class outcome rather than a surprise.
 
+use std::sync::atomic::AtomicU64;
 use std::sync::{PoisonError, RwLock, RwLockReadGuard};
 
 use redb::{Database, DatabaseError, Durability, ReadableDatabase as _};
@@ -40,6 +41,11 @@ pub struct Store {
     db: RwLock<Option<Database>>,
     /// Where the file is, kept for error messages that have to name it.
     path: AbsPath,
+    /// How many relaxed (non-fsync) commits have landed; the group flush compares this against
+    /// `flushed_commits` and skips its fsync entirely when nothing changed, so an idle daemon stays silent.
+    pub(crate) relaxed_commits: AtomicU64,
+    /// The `relaxed_commits` value the last group flush made durable.
+    pub(crate) flushed_commits: AtomicU64,
 }
 
 /// The engine handle for one synchronous operation.
@@ -96,6 +102,8 @@ impl Store {
         let store = Self {
             db: RwLock::new(Some(db)),
             path: path.clone(),
+            relaxed_commits: AtomicU64::new(0),
+            flushed_commits: AtomicU64::new(0),
         };
         store.check_version()?;
         Ok(store)
