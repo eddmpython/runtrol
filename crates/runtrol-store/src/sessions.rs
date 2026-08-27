@@ -371,9 +371,18 @@ impl Store {
         &self,
         doing: &'static str,
     ) -> Result<redb::WriteTransaction, StoreError> {
-        let write = self
+        let mut write = self
             .db()?
             .begin_write()
+            .map_err(|error| StoreError::Engine {
+                doing,
+                source: Box::new(error.into()),
+            })?;
+        // Explicit, because the engine's default is a durable (fsyncing) commit: without this line the
+        // "relaxed" write would still pay the fsync this helper exists to avoid. `None` skips only the
+        // fsync; the commit stays atomic, and the next durable commit (the group flush) persists it.
+        write
+            .set_durability(Durability::None)
             .map_err(|error| StoreError::Engine {
                 doing,
                 source: Box::new(error.into()),
