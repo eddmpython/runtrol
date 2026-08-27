@@ -10,6 +10,30 @@ and refactoring that no user can observe do not belong here.
 
 ## [Unreleased]
 
+### Changed
+
+- The sidebar is one page Studio draws itself, with three zones that have visible edges: projects, conversations
+  outside every project, and usage. The title bar keeps `Add Project` and `New Conversation`; every other action
+  appears on the row it belongs to when the row is hovered, or behind the vertical dots at the top of the page.
+  There is no second view and no second "Runtrol" header any more.
+
+- Each project's colour now marks its own conversation rows and the terminal tabs those conversations open in, so
+  the tab and the row say the same project at a glance. Projects reorder by drag.
+
+- A conversation named by its first prompt (Codex does this when a thread has no name) wraps to two lines instead
+  of being cut short.
+
+### Added
+
+- Every conversation row shows what its provider process holds in memory right now (`412 MB`), read from the
+  Runtime every five seconds. The public Runtime contract carries it as `memoryBytes` on session and terminal
+  descriptors, measured from the operating system and never estimated.
+
+### Fixed
+
+- Opening a conversation right after a Runtime update no longer fails with "the native catalogue observation
+  expired": Studio reads the provider's catalogue again and opens with the proof it hands back now.
+
 ## [0.1.23] - 2026-08-27
 
 ### Added

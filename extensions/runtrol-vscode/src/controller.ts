@@ -39,7 +39,7 @@ import {
 import { SelectionStore } from "./selectionStore";
 import { providerDisplayName, sessionTitle, workspaceName } from "./sessionDisplay";
 import { RuntimeState } from "./state";
-import { ConversationItem } from "./trees";
+import { ConversationItem } from "./sidebarTargets";
 import { StudioRuntimeClient } from "./runtimeClient";
 import { sessionStateLabel } from "./runtimeProjection";
 import type { ModelOption } from "./sessionConfiguration";
@@ -1212,6 +1212,41 @@ export class Controller implements vscode.Disposable {
     const abort = new AbortController();
     this.indexAbort = abort;
     void this.sessionIndexLoop(abort.signal);
+    void this.memoryLoop(abort.signal);
+  }
+
+  /// Ask the Runtime every few seconds what each conversation's process holds in memory.
+  ///
+  /// A poll rather than a watch, on purpose: the watches carry structural changes, and a memory figure moves
+  /// while nothing structural does. One listing pair every five seconds costs the Runtime two local calls,
+  /// and a failed round is simply the next round's problem; the watch loop is what reports reachability.
+  private async memoryLoop(signal: AbortSignal): Promise<void> {
+    while (!signal.aborted && !this.disposed) {
+      await abortableDelay(MEMORY_POLL_MS, signal);
+      if (signal.aborted || this.state.coreReach !== "reached") continue;
+      try {
+        const [sessions, terminals] = await Promise.all([
+          this.runtime.listSessionsNow(),
+          this.runtime.listTerminals(),
+        ]);
+        const bySession = new Map<string, number>();
+        for (const session of sessions.sessions) {
+          if (typeof session.memoryBytes === "number") bySession.set(session.sessionId, session.memoryBytes);
+        }
+        const byNative = new Map<string, number>();
+        for (const terminal of terminals.terminals) {
+          if (typeof terminal.memoryBytes === "number" && terminal.nativeSessionId) {
+            byNative.set(`${terminal.providerId}:${terminal.nativeSessionId}`, terminal.memoryBytes);
+          }
+        }
+        this.state.setMemory(bySession, byNative);
+      } catch (error) {
+        // Reported nowhere on purpose: the index watch owns the reachability verdict and says so in its own
+        // words; a missed memory round changes no row and the next round asks again.
+        if (signal.aborted) return;
+        void error;
+      }
+    }
   }
 
   private async refreshAfterReconnect(): Promise<void> {
@@ -1765,6 +1800,8 @@ function normalizePath(value: string): string {
   const normalized = path.resolve(value);
   return process.platform === "win32" ? normalized.toLocaleLowerCase("en-US") : normalized;
 }
+
+const MEMORY_POLL_MS = 5_000;
 
 function abortableDelay(milliseconds: number, signal: AbortSignal): Promise<void> {
   if (signal.aborted) {

@@ -25,6 +25,7 @@ import {
   type SessionWorkspaceAccess,
   type TerminalOpenParams,
   type TerminalDescriptor,
+  type TerminalIndexSnapshot,
   type TerminalView,
   type ValidatedLocator,
 } from "@runtrol/runtime-client";
@@ -272,6 +273,17 @@ export class StudioRuntimeClient implements vscode.Disposable {
       if (this.sessionWatch) this.sessionSnapshot = nextSessions;
       return { providers: nextProviders, sessions: nextSessions };
     });
+  }
+
+  /// Every hosted terminal the Runtime lists right now, with what each process holds in memory.
+  async listTerminals(): Promise<TerminalIndexSnapshot> {
+    return this.read((runtime) => runtime.terminals().list());
+  }
+
+  /// The managed sessions as the Runtime lists them right now, memory figures included. The watch delivers
+  /// structural changes; a figure that moves without a structural change needs to be asked for.
+  async listSessionsNow(): Promise<ManagedSessionList> {
+    return this.read((runtime) => runtime.sessions().list());
   }
 
   async models(providerId: string): Promise<RuntimeModelCatalog> {

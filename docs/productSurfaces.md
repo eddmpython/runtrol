@@ -36,12 +36,11 @@ Studio is the distributed desktop GUI. There is no separately distributed deskto
 desktop shell, workspace model, keyboard and accessibility conventions, editor tabs, and signed extension update
 channel. Runtime and its SDKs remain usable without Studio, including independent command-line administration.
 
-Studio contributes one native sidebar tree named `Runtrol`, not separate Projects, Conversations, and Agent Usage
-views. Added projects are expandable rows, their conversations are children, projectless conversations are top-level
-rows, and projects open by default so no conversation hides behind a chevron (VS Code remembers each heading the
-person closes). First-run actions occupy ordinary rows in the same tree. Under the list, the `runtrol.usage` strip
-draws every installed provider as an icon inside a ring gauge with its seven-day percentage, and opens that
-provider's windows as thin bars on hover, focus, or Enter.
+Studio contributes one sidebar view, `runtrol.sidebar`, drawn as a webview page with three zones: projects (added
+folders, collapsible, each with its own colour that also marks its conversation rows and terminal tabs), the
+conversations outside every project, and one usage chip per installed provider (icon inside a ring gauge with the
+seven-day percentage). Row actions appear on hover; the rare actions sit behind the vertical dots at the top of the
+page; the title bar keeps the two starting actions.
 
 Each usage row makes the actual seven-day window the single primary line when the provider publishes one. Hover and
 the keyboard-accessible vertical-menu action disclose every provider-reported window, plan, reset, report age, and

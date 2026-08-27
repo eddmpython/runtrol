@@ -39,8 +39,8 @@ import { setupRows } from "./usageDisplay";
 import { WorkspaceRootFollowing } from "./workspaceRoots";
 import { conversationIcon } from "./conversationIcon";
 import { TerminalTabs } from "./terminalTabs";
-import { ConversationItem, ConversationsTree, ProjectItem, ServiceChoiceItem, icon } from "./trees";
-import { USAGE_VIEW_ID, UsageStripView } from "./usageStripView";
+import { ConversationItem, ProjectItem, ServiceChoiceItem, icon } from "./sidebarTargets";
+import { SIDEBAR_VIEW_ID, SidebarView } from "./sidebarView";
 
 declare const RUNTROL_INCLUDE_TEST_JOURNEY: boolean;
 
@@ -151,6 +151,10 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     (row) => icon(row, context.extensionUri),
     (providerId) => conversationIcon(context.extensionUri, providerIcon(providerId, state.providers)),
     () => state.setStarted(terminals.startedConversations()),
+    async (key) => {
+      await controller.refreshChats();
+      return state.conversations.find((candidate) => candidate.key === key) ?? null;
+    },
   );
   context.subscriptions.push(terminals);
   controller = new Controller(context, client, runtime, state, selection, projectStore, terminals);
@@ -169,16 +173,14 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     openFolders: () => (vscode.workspace.workspaceFolders ?? []).map((folder) => folder.uri.fsPath),
     warn: (message) => void vscode.window.showWarningMessage(message),
   });
-  // One native list owns the whole sidebar. Projects remain real parents, loose conversations sit beside them,
-  // and each installed CLI contributes only its seven-day usage line at the bottom.
-  const sidebar = new ConversationsTree("all", state, projectStore, agentTools, context.extensionUri);
-  // Under the list, pinned: every installed service as an icon with a ring gauge, and its windows on hover.
+  // One page owns the whole sidebar: projects with their conversations, the conversations outside every project,
+  // and one usage chip per installed service, in that order and with visible edges (`docs/vscodeSurface.md`).
   const providerNamed = (providerId: string) => {
     const provider = state.providers.find((candidate) => candidate.providerId === providerId);
     if (!provider) throw new Error(`${providerId} is not an installed service`);
     return provider;
   };
-  const usageStrip = new UsageStripView(state, context.extensionUri, {
+  const sidebar = new SidebarView(context, state, projectStore, agentTools, {
     signIn: (providerId) => afterReady(async () => {
       await controller.signInProvider(providerNamed(providerId));
     }),
@@ -192,9 +194,9 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     controller,
     agentTools,
     sidebar,
-    usageStrip,
-    vscode.window.registerWebviewViewProvider(USAGE_VIEW_ID, usageStrip),
-    vscode.window.registerFileDecorationProvider(sidebar.decorations),
+    vscode.window.registerWebviewViewProvider(SIDEBAR_VIEW_ID, sidebar, {
+      webviewOptions: { retainContextWhenHidden: true },
+    }),
     vscode.commands.registerCommand(
       "runtrol.refresh",
       () => run(() => afterReady(() => controller.refreshChats())),
@@ -580,10 +582,6 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     sidebar.chooseService(workspace);
     void vscode.commands.executeCommand("runtrol.sidebar.focus");
   };
-  const sidebarView = vscode.window.createTreeView("runtrol.sidebar", {
-    treeDataProvider: sidebar,
-  });
-  sidebar.bindView(sidebarView);
   // Whether this window knows the views this build declares.
   //
   // The editor reads a container's set of views when the window opens and keeps it: a view this build
@@ -596,7 +594,6 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
       "This window opened before the unified Runtrol sidebar was registered. Open a new window to use it.",
     );
   });
-  context.subscriptions.push(sidebarView);
   void run(() => lifecycle);
   void run(async () => {
     await lifecycle;
@@ -756,7 +753,7 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
         context.extensionMode,
         (sessionId) => sidebar.revealSession(sessionId),
         (key) => sidebar.revealConversation(key),
-        () => sidebar.treeItemIdsForJourney(),
+        () => sidebar.treeItemIds(),
       )
       : undefined,
   };

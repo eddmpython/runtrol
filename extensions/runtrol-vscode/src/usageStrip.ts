@@ -24,6 +24,9 @@ export type UsageChip = {
   /// The ring's value: the whole-account week when the service published one, else the governing window,
   /// else null and the ring is empty.
   readonly percent: number | null;
+  /// The gauge's layers, outermost first: the week, then the five-hour window, then the first model-scoped
+  /// window. Each is a concentric ring; hover says which is which (the operator's 2026-08-27 instruction).
+  readonly rings: ReadonlyArray<{ readonly label: string; readonly percent: number }>;
   /// The word under the ring when there is no number, in as few characters as name a cause.
   readonly caption: string;
   /// A limit is blocking right now, which colours the ring.
@@ -49,11 +52,18 @@ export function usageChips(rows: readonly UsageRow[]): UsageChip[] {
       ?? row.meters.find((meter) => meter.governing)
       ?? row.meters[0]
       ?? null;
+    const week = primarySevenDayMeter(row.meters);
+    const fiveHour = row.meters.find((meter) => meter.label === "5h" || meter.label.startsWith("5h "));
+    const modelScoped = row.meters.find((meter) => meter !== week && meter !== fiveHour && meter.label.includes(" "));
+    const rings = [week, fiveHour, modelScoped]
+      .filter((meter): meter is UsageMeter => meter !== null && meter !== undefined)
+      .map((meter) => ({ label: meter.label, percent: meter.percent }));
     return {
       providerId: row.providerId,
       name: row.name,
       icon: row.icon,
       percent: shown ? shown.percent : null,
+      rings: rings.length > 0 ? rings : shown ? [{ label: shown.label, percent: shown.percent }] : [],
       caption: shown ? `${shown.percent}%` : shortCaption(row),
       reached: row.reached,
       state: row.state,
@@ -90,32 +100,39 @@ export type UsageStripAssets = {
   readonly iconUris: ReadonlyMap<string, string>;
 };
 
-const RING_RADIUS = 11;
-const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
+/// Outermost first. Three layers at most: the week, the five-hour window, a model-scoped window.
+const RING_RADII = [11, 8, 5] as const;
 
-/// The whole page. Static markup for the chips and panels; the script only toggles which panel is open.
+/// The chips, as markup the sidebar page places in its usage zone.
+export function usageChipsMarkup(chips: readonly UsageChip[], assets: UsageStripAssets): string {
+  if (chips.length === 0) return `<p class="empty">No coding service is installed yet.</p>`;
+  return `<div class="chips" role="list">${chips.map((chip, index) => chipHtml(chip, index, assets)).join("")}</div>`;
+}
+
+/// The panels behind the chips, one per chip, hidden until a chip is hovered, focused or pressed.
+export function usagePanelsMarkup(chips: readonly UsageChip[]): string {
+  return `<div class="panels">${chips.map((chip, index) => panelHtml(chip, index)).join("")}</div>`;
+}
+
+/// The whole strip as a standalone page, which is what the unit tests render.
 export function usageStripHtml(chips: readonly UsageChip[], assets: UsageStripAssets): string {
-  const body = chips.length === 0
-    ? `<p class="empty">No coding service is installed yet.</p>`
-    : `<div class="chips" role="list">${chips.map((chip, index) => chipHtml(chip, index, assets)).join("")}</div>
-<div class="panels">${chips.map((chip, index) => panelHtml(chip, index)).join("")}</div>`;
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${assets.cspSource}; style-src 'nonce-${assets.nonce}'; script-src 'nonce-${assets.nonce}'">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<style nonce="${assets.nonce}">${STYLE}</style>
+<style nonce="${assets.nonce}">${USAGE_STYLE}</style>
 </head>
 <body>
-${body}
-<script nonce="${assets.nonce}">${SCRIPT}</script>
+${usageChipsMarkup(chips, assets)}
+${chips.length === 0 ? "" : usagePanelsMarkup(chips)}
+<script nonce="${assets.nonce}">${USAGE_SCRIPT}</script>
 </body>
 </html>`;
 }
 
 function chipHtml(chip: UsageChip, index: number, assets: UsageStripAssets): string {
-  const filled = chip.percent === null ? 0 : (chip.percent / 100) * RING_CIRCUMFERENCE;
   const iconUri = assets.iconUris.get(chip.icon) ?? "";
   const spoken = chip.percent === null
     ? `${chip.name}: ${chip.caption}`
@@ -124,6 +141,7 @@ function chipHtml(chip: UsageChip, index: number, assets: UsageStripAssets): str
   // short the view is, and it carries every fact the panel does. The panel is the same facts with bars.
   const preview = [
     `${chip.name}: ${chip.position}`,
+    ...(chip.rings.length > 1 ? [`rings, outermost first: ${chip.rings.map((ring) => `${ring.label} ${ring.percent}%`).join(", ")}`] : []),
     ...(chip.plan ? [chip.plan] : []),
     ...chip.meters.map((meter) => `${meter.label}: ${meter.detail}`),
     ...(chip.age ? [chip.age] : []),
@@ -132,8 +150,14 @@ function chipHtml(chip: UsageChip, index: number, assets: UsageStripAssets): str
   return `<button class="chip${chip.reached ? " reached" : ""}${chip.percent === null ? " bare" : ""}" type="button" role="listitem" data-index="${index}"${direct} aria-label="${escapeHtml(spoken)}" aria-expanded="false" aria-controls="panel-${index}" title="${escapeHtml(preview.join("\n"))}">
 <span class="ring">
 <svg viewBox="0 0 26 26" aria-hidden="true">
-<circle class="track" cx="13" cy="13" r="${RING_RADIUS}"></circle>
-<circle class="fill" cx="13" cy="13" r="${RING_RADIUS}" stroke-dasharray="${filled.toFixed(2)} ${RING_CIRCUMFERENCE.toFixed(2)}"></circle>
+${chip.rings.slice(0, RING_RADII.length).map((ring, at) => {
+    const radius = RING_RADII[at]!;
+    const around = 2 * Math.PI * radius;
+    const filled = (ring.percent / 100) * around;
+    return `<circle class="track" cx="13" cy="13" r="${radius}"></circle>
+<circle class="fill" cx="13" cy="13" r="${radius}" stroke-dasharray="${filled.toFixed(2)} ${around.toFixed(2)}"></circle>`;
+  }).join("")}
+${chip.rings.length === 0 ? `<circle class="track" cx="13" cy="13" r="${RING_RADII[0]}"></circle>` : ""}
 </svg>
 <img class="icon" src="${escapeHtml(iconUri)}" alt="" draggable="false">
 </span>
@@ -165,7 +189,7 @@ export function escapeHtml(text: string): string {
     .replaceAll("'", "&#39;");
 }
 
-const STYLE = `
+export const USAGE_STYLE = `
 body { margin: 0; padding: 6px 8px; color: var(--vscode-foreground); font: var(--vscode-font-size) var(--vscode-font-family); background: transparent; }
 .empty { margin: 0; opacity: 0.8; }
 .chips { display: flex; flex-wrap: wrap; gap: 2px 6px; }
@@ -174,11 +198,11 @@ body { margin: 0; padding: 6px 8px; color: var(--vscode-foreground); font: var(-
 .chip:focus-visible { outline: none; border-color: var(--vscode-focusBorder); }
 .ring { position: relative; width: 26px; height: 26px; }
 .ring svg { width: 26px; height: 26px; transform: rotate(-90deg); }
-.ring .track { fill: none; stroke: var(--vscode-widget-border, rgba(128,128,128,0.35)); stroke-width: 2.5; }
-.ring .fill { fill: none; stroke: var(--vscode-progressBar-background); stroke-width: 2.5; stroke-linecap: round; }
+.ring .track { fill: none; stroke: var(--vscode-widget-border, rgba(128,128,128,0.35)); stroke-width: 2; }
+.ring .fill { fill: none; stroke: var(--vscode-progressBar-background); stroke-width: 2; stroke-linecap: round; }
 .chip.reached .fill { stroke: var(--vscode-errorForeground); }
 .chip.bare .fill { display: none; }
-.ring .icon { position: absolute; left: 7px; top: 7px; width: 12px; height: 12px; }
+.ring .icon { position: absolute; left: 8.5px; top: 8.5px; width: 9px; height: 9px; }
 .caption { font-size: 10px; line-height: 12px; opacity: 0.9; white-space: nowrap; }
 .chip.reached .caption { color: var(--vscode-errorForeground); }
 .panels { margin-top: 4px; }
@@ -200,9 +224,9 @@ body { margin: 0; padding: 6px 8px; color: var(--vscode-foreground); font: var(-
 `;
 
 // Hover previews, focus previews, Enter or click pins, Escape and a second press close. One panel at a time.
-const SCRIPT = `
+export const USAGE_SCRIPT = `
 (function () {
-  var vscode = acquireVsCodeApi();
+  var vscode = window.__runtrolVsCodeApi || (window.__runtrolVsCodeApi = acquireVsCodeApi());
   var chips = Array.prototype.slice.call(document.querySelectorAll(".chip"));
   var panels = Array.prototype.slice.call(document.querySelectorAll(".panel"));
   var pinned = null;

@@ -40,6 +40,25 @@ test("a chip's ring is the whole-account week and its caption is that number", (
   assert.equal(chip!.percent, 76);
   assert.equal(chip!.caption, "76%");
   assert.equal(chip!.action, null);
+  // The gauge's layers, outermost first: the week, then the five-hour window, then the model-scoped window.
+  assert.deepEqual(chip!.rings, [
+    { label: "7d", percent: 76 },
+    { label: "5h", percent: 12 },
+    { label: "7d GPT-5.3", percent: 0 },
+  ]);
+});
+
+test("the chip draws one concentric ring per layer and the hover names them outermost first", () => {
+  const html = usageStripHtml(usageChips([row({
+    meters: [
+      { key: "5h", label: "5h", percent: 12, detail: "12% used", governing: false },
+      { key: "7d", label: "7d", percent: 76, detail: "76% used", governing: true },
+    ],
+  })]), assets);
+  assert.equal((html.match(/class="fill"/g) ?? []).length, 2);
+  assert.ok(html.includes('r="11"'));
+  assert.ok(html.includes('r="8"'));
+  assert.ok(html.includes("rings, outermost first: 7d 76%, 5h 12%"));
 });
 
 test("a row without a number keeps an empty ring and names its cause under it", () => {

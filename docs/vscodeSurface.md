@@ -34,48 +34,49 @@ The bundled Runtime is copied by streaming digest into a stable extension-global
 mapped Windows image before replacement. Extension Host restart, VSIX upgrade, and rollback reconnect to the same
 Runtime generations and provider processes.
 
-## One native sidebar
+## One sidebar page
 
-Studio contributes one native view, `runtrol.sidebar`, named `Runtrol`. It does not contribute separate Projects,
-Conversations, or Agent Usage views.
+Studio contributes exactly one view in the Runtrol container, `runtrol.sidebar`, and draws it itself as a webview.
+One view, deliberately: VS Code draws a collapsible section header for every view in a container as soon as there
+are two, and moves the title actions into those headers. With one view the container's title bar keeps the two
+actions that start things (`Add Project`, `New Conversation`) and the page below draws everything else. A native
+tree cannot draw the edges between zones, the gauges, or the row density this page has.
 
-The tree order is:
+The page has three zones with visible edges, in this order:
 
-1. first-run or contextual action rows when needed;
-2. added project rows with provider-neutral conversation children;
-3. conversations whose workspace is not represented by an added project;
-4. one compact usage row for each installed provider.
+- **Projects**: one row per folder the operator added (or has open in this window). A project row collapses,
+  shows its conversation count, its attention and running counts, and on hover its actions: new conversation
+  here, Agent Tools on or off, pin, open in a window, remove from the sidebar (the folder on disk stays). Projects
+  reorder by drag. Each project has a colour; that colour is the bar at the left of the project row, of every
+  conversation row under it, and of the terminal tab a conversation opens in, so the tab and the row say the same
+  project without reading either.
+- **Conversations**: the conversations that belong to no project, as plain rows.
+- **Usage**: one chip per installed service, its icon inside a ring gauge with the seven-day percentage; see below.
 
-A project is an operator-added folder, never a provider grouping. Adding a folder asks every discovered provider for
-its native conversations and groups matching rows under that project. Conversations elsewhere remain top-level rows.
-Provider identity is an icon on a conversation, not a heading. Adding a provider extends Runtime inventory and the
-same tree without a Studio or Core edit.
+A conversation row is the service glyph, the title (wrapped to two lines when a service names a conversation by
+its first prompt, never cut short), a state dot, and the memory the provider process holds right now (`412 MB`,
+from the Runtime's `memoryBytes`, asked for every five seconds). On hover the row shows its actions: pin, rename,
+stop when running, archive and delete when the service reports those surfaces, allow and decline when a turn
+waits for the person. Rows are reached with Tab and the arrow keys; Enter opens the conversation's terminal tab.
 
-Conversation rows keep one actual title and provider icon. The icon spins while that conversation is working. Quiet
-rows do not repeat provider, project, `Ready`, or elapsed-time text. Pin, rename, archive, close, native delete,
-provider remedy, and approval actions exist only when Runtime reports the matching capability or state.
+Everything rare lives behind the vertical dots at the top of the page: switching, refreshing, service set-up and
+updates, phone pairing, Runtime integrations and requests, restarting the Extension Host. The empty list says
+which of four things is true (connecting, unreachable, verifying the installed CLI, no CLI installed), each with
+its own next step, and a first run offers the two starting actions as rows.
 
-The title toolbar keeps **Add Project** and **New Conversation** visible. Less frequent navigation and administration
-remain in the overflow menu and Command Palette. All inline actions have command and keyboard-accessible equivalents.
+## Usage zone
 
-## Usage strip
+Each installed provider is one chip: the provider's icon inside a ring gauge, the number under it. No provider
+name is drawn; the icon is the label, so a chip's width never depends on a name and the zone reads the same with
+three providers or ten. The ring is the seven-day window when the provider publishes one, otherwise the window the
+provider says governs, otherwise an empty ring with a one-word cause (`No report`, `Sign in`, `Fix`, `Checking`,
+`Offline`). A blocking limit turns the ring and the number the theme's error colour.
 
-Under the list, pinned in the same container, the `runtrol.usage` view draws one chip per installed provider: the
-provider's icon inside a ring gauge, with the number under it. No provider name is drawn; the icon is the label, so
-a chip's width never depends on a name and the strip reads the same with three providers or ten. The ring is the
-seven-day window when the provider publishes one, otherwise the window the provider says governs, otherwise an empty
-ring with a one-word cause (`No report`, `Sign in`, `Fix`, `Checking`, `Offline`). A blocking limit turns the ring
-and the number the theme's error colour.
-
-Hovering or focusing a chip (chips are buttons, reached with Tab) opens that provider's panel under the strip; Enter
-pins it and Escape closes it. The panel lists the plan the provider named, one thin bar per reported window with its
-own name (`5h`, `7d`, `7d GPT-5.3-Codex`), each bar's reset and governing note, the report age, and the one action a
-state offers (`Sign in`, `Fix`). This strip is the only webview Studio contributes; it renders host-built markup under
-a nonce Content Security Policy and posts back nothing but the pressed action. Studio never converts a missing
-percentage into zero or derives account capacity from terminal text.
-
-Usage is pushed on the provider subscription and remembered briefly only as bounded operational telemetry so a new
-window does not flash an empty strip. Expired, future-dated, or old-schema reports are refused.
+Hovering a chip shows the browser's own tooltip with every fact; focusing it (chips are buttons) opens that
+provider's panel under the chips; Enter pins the panel and Escape closes it. The panel lists the plan the provider
+named, one thin bar per reported window with its own name (`5h`, `7d`, `7d GPT-5.3-Codex`) and reset, and the
+report age. A chip whose state has one action (`Sign in`, `Fix`) performs it on click. Studio never converts a
+missing percentage into zero or derives account capacity from terminal text.
 
 ## Terminal tabs
 

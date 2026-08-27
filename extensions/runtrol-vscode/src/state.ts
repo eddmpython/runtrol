@@ -63,6 +63,8 @@ export class RuntimeState implements vscode.Disposable {
   /// surface has none). Held here because every derived row reads it, and one place answering "is this
   /// conversation projectless" keeps the sidebar, the switcher and the tabs in agreement.
   private started: readonly StartedConversation[] = [];
+  private memoryBySession: ReadonlyMap<string, number> = new Map();
+  private memoryByNative: ReadonlyMap<string, number> = new Map();
   private remember: ((catalogues: readonly NativeChatCatalogue[]) => void) | null = null;
   private rememberUsage: ((usage: readonly ProviderUsageGauge[]) => void) | null = null;
 
@@ -148,6 +150,27 @@ export class RuntimeState implements vscode.Disposable {
       this.started,
     );
     return this.conversationRows;
+  }
+
+  /// What the provider process behind `row` holds in memory right now, or null when nothing measured it.
+  ///
+  /// A structured session is keyed by its session id; a hosted terminal by provider and native conversation.
+  /// Both figures come from the memory poll, which asks the Runtime on a short clock because a figure moves
+  /// without any structural change the watches would carry.
+  memoryFor(row: Conversation): number | null {
+    const session = row.session ? this.memoryBySession.get(row.session.sessionId) : undefined;
+    if (session !== undefined) return session;
+    const native = row.native?.nativeSessionId;
+    if (!native) return null;
+    return this.memoryByNative.get(`${row.providerId}:${native}`) ?? null;
+  }
+
+  /// The memory poll's latest figures. Repaints only when a figure actually changed.
+  setMemory(bySession: ReadonlyMap<string, number>, byNative: ReadonlyMap<string, number>): void {
+    if (sameEntries(bySession, this.memoryBySession) && sameEntries(byNative, this.memoryByNative)) return;
+    this.memoryBySession = bySession;
+    this.memoryByNative = byNative;
+    this.changedEmitter.fire("rows");
   }
 
   /// Remember which conversations are pinned, then repaint so the order changes at once.
@@ -330,4 +353,12 @@ export class RuntimeState implements vscode.Disposable {
     this.capabilityRows.clear();
     this.changedEmitter.dispose();
   }
+}
+
+function sameEntries(left: ReadonlyMap<string, number>, right: ReadonlyMap<string, number>): boolean {
+  if (left.size !== right.size) return false;
+  for (const [key, value] of left) {
+    if (right.get(key) !== value) return false;
+  }
+  return true;
 }

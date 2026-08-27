@@ -42,51 +42,20 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
     views = contributes.get("views") if isinstance(contributes, dict) else None
     view_containers = contributes.get("viewsContainers") if isinstance(contributes, dict) else None
     runtrol_views = views.get("runtrol") if isinstance(views, dict) else None
-    # Two views and only two: the native list, then the usage strip pinned under it. The strip is a webview
-    # because a native tree cannot draw a ring gauge (2026-08-27); it is the only webview this product draws.
+    # One view and only one, and it is the page Studio draws itself. VS Code draws a collapsible section header
+    # for every view in a container as soon as there are two and moves the title actions into those headers
+    # (measured 2026-08-27: "Runtrol" twice, the add buttons gone from the title bar). One webview view keeps the
+    # title bar's two starting actions and lets the page draw zones, gauges and row density a tree cannot.
     if (
         not isinstance(runtrol_views, list)
-        or len(runtrol_views) != 2
+        or len(runtrol_views) != 1
         or not isinstance(runtrol_views[0], dict)
         or runtrol_views[0].get("id") != "runtrol.sidebar"
-        or runtrol_views[0].get("type") == "webview"
-        or not isinstance(runtrol_views[1], dict)
-        or runtrol_views[1].get("id") != "runtrol.usage"
-        or runtrol_views[1].get("type") != "webview"
+        or runtrol_views[0].get("type") != "webview"
     ):
-        found.append("Runtrol must contribute one native sidebar list followed by the usage strip webview")
-    welcome_entries = contributes.get("viewsWelcome") if isinstance(contributes, dict) else None
-    welcomes = welcome_entries if isinstance(welcome_entries, list) else []
-    def welcome_for(when: str, token: str, view: str = "runtrol.sidebar") -> bool:
-        return any(
-            isinstance(entry, dict)
-            and entry.get("view") == view
-            and entry.get("when") == when
-            and token in str(entry.get("contents", ""))
-            for entry in welcomes
-        )
-
-    # An empty list has more than one reason and each needs its own sentence. Measured 2026-08-26 on the
-    # operator's window: a Core this window could not reach was drawn as "No coding-agent CLI was found on
-    # this machine", which is a lie about their machine rather than a report about ours.
-    has_unreachable_welcome = welcome_for("runtrol.coreReach == unreachable", "command:runtrol.refresh")
-    has_connecting_welcome = welcome_for("runtrol.coreReach == connecting", "Connecting")
-    has_missing_welcome = welcome_for(
-        "runtrol.coreReach == reached && !runtrol.hasUsableProvider && !runtrol.isVerifyingProvider",
-        "command:runtrol.refresh",
-    )
-    has_verifying_welcome = welcome_for(
-        "runtrol.coreReach == reached && runtrol.isVerifyingProvider", "Checking"
-    )
-    if not (
-        has_missing_welcome
-        and has_verifying_welcome
-        and has_unreachable_welcome
-        and has_connecting_welcome
-    ):
-        found.append(
-            "the empty sidebar must say which of connecting, unreachable, verifying and absent it is"
-        )
+        found.append("Runtrol must contribute exactly one sidebar view, runtrol.sidebar, as a webview")
+    if contributes.get("viewsWelcome") if isinstance(contributes, dict) else None:
+        found.append("a webview sidebar draws its own empty states; viewsWelcome entries would never show")
     menus = contributes.get("menus") if isinstance(contributes, dict) else None
     title_entries = menus.get("view/title") if isinstance(menus, dict) else None
     def title_navigation(view: str) -> set[str]:
@@ -102,33 +71,8 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
     if title_navigation("runtrol.sidebar") != {"runtrol.createProject", "runtrol.startSession"}:
         found.append("the unified sidebar title must keep exactly project and conversation creation visible")
     item_context = menus.get("view/item/context") if isinstance(menus, dict) else None
-    winner_entries = item_context if isinstance(item_context, list) else []
-    # The guard is the contract: deletion is offered only where the provider reported a deletion surface, and it
-    # is offered on the row itself. Which inline slot it takes is a matter of button order, and pinning that here
-    # would make adding a neighbouring action look like a broken invariant.
-    delete_entry = any(
-        isinstance(entry, dict)
-        and entry.get("command") == "runtrol.deleteConversation"
-        and entry.get("when") == "view == runtrol.sidebar && viewItem =~ /\\.delete/"
-        and str(entry.get("group", "")).startswith("inline")
-        for entry in winner_entries
-    )
-    if not delete_entry:
-        found.append("conversation deletion must appear only on rows whose provider reports deletion available")
-    conversation_inline = [
-        entry.get("command")
-        for entry in winner_entries
-        if isinstance(entry, dict)
-        and entry.get("command") in {
-            "runtrol.archiveConversation",
-            "runtrol.closeSession",
-            "runtrol.deleteConversation",
-        }
-        and str(entry.get("group", "")).startswith("inline")
-        and "runtrol.sidebar" in str(entry.get("when", ""))
-    ]
-    if conversation_inline != ["runtrol.deleteConversation"]:
-        found.append("a conversation row must expose one inline X for real deletion and no other buttons")
+    if item_context:
+        found.append("row actions are drawn by the sidebar page on hover; the manifest contributes no view/item/context menus")
     command_entries = contributes.get("commands") if isinstance(contributes, dict) else None
     command_ids = {
         entry.get("command")
@@ -224,8 +168,8 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             found.append(f"no chat container may be contributed to the {container_kind}; the conversation is a terminal tab")
     for view_group, entries in (views.items() if isinstance(views, dict) else []):
         for entry in entries if isinstance(entries, list) else []:
-            if isinstance(entry, dict) and entry.get("type") == "webview" and entry.get("id") != "runtrol.usage":
-                found.append(f"{view_group} contributes a webview view {entry.get('id')}; the only webview is the usage strip")
+            if isinstance(entry, dict) and entry.get("type") == "webview" and entry.get("id") != "runtrol.sidebar":
+                found.append(f"{view_group} contributes a webview view {entry.get('id')}; the only webview is the sidebar page")
 
     required = {
         "core/framing.ts": [
@@ -247,7 +191,7 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             'initializationStage = "runtime:bootstrap"',
             'executeCommand("runtrol.sidebar.focus")',
             '"runtrol.setUpServices"',
-            "registerWebviewViewProvider(USAGE_VIEW_ID, usageStrip)",
+            "registerWebviewViewProvider(SIDEBAR_VIEW_ID, sidebar",
             "await controller.signInProvider(provider)",
             "await controller.fixService(provider)",
         ],
@@ -272,25 +216,40 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             'names(partial, "partial for")',
             'names(unavailable, "unavailable for")',
         ],
-        "trees.ts": [
-            "conversation.serviceName",
-            "this.description = undefined",
-            'canDelete(conversation, capabilities)',
-            # Identity comes from the shipped mark, which exists for every service the build knows, rather
-            # than from the editor's icon font, which carries a glyph for some services and none for others.
-            # Motion while running is the editor's own spinner, because only its glyphs can spin.
-            "conversationIcon(extensionUri, conversation.serviceIcon)",
-            'new vscode.ThemeIcon("sync~spin")',
-            "this.revealCurrentProject()",
-            "this.state.incompleteDiscovery",
-            "this.state.coreReach",
+        "sidebarPage.ts": [
+            # The three zones, each with its own title, in the operator's order.
+            'aria-label="Projects"',
+            'aria-label="Conversations"',
+            'aria-label="Usage"',
+            # A project's colour reaches its heading and every conversation under it.
+            "themeColorVar(project.color)",
+            "themeColorVar(row.color)",
+            # Row actions appear on hover, and deletion only where the provider reports it.
+            ".row:hover .actions",
+            'row.canDelete ? action("runtrol.deleteConversation"',
+            # The rare actions live behind the vertical dots, never in a second view.
+            "ci-kebab-vertical",
+            # Long names wrap rather than vanish; memory rides the row.
+            "-webkit-line-clamp: 2",
+            'class="memory"',
+            "Content-Security-Policy",
+            "script-src 'nonce-",
+        ],
+        "sidebarView.ts": [
+            "enableScripts: true",
+            "localResourceRoots",
+            "usageRows(this.state.usage",
+            # The empty list has four different reasons and the page says which.
             "Cannot reach the Runtrol Core.",
+            "Connecting to the Runtrol Core...",
+            "Checking the installed coding-agent CLI...",
+            "No coding-agent CLI was found on this machine.",
             '"runtrol.hasUsableProvider"',
             '"runtrol.isVerifyingProvider"',
             "awaitsVerification",
-            'new vscode.ThemeColor("runtrol.accent")',
-            'if (this.part === "all")',
-            "this.items = [...choices, ...actions, ...headings, ...looseRows]",
+            "this.state.incompleteDiscovery",
+            "projectColorId(group.workspace)",
+            "canDelete(row, capabilities)",
         ],
         "usageStrip.ts": [
             "export function usageChips",
@@ -300,11 +259,6 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             "script-src 'nonce-",
             'aria-expanded="false"',
             "export function escapeHtml",
-        ],
-        "usageStripView.ts": [
-            "enableScripts: true",
-            "localResourceRoots",
-            "usageRows(this.state.usage",
         ],
         "usageDisplay.ts": [
             'provider.installation.state !== "missing"',
@@ -432,32 +386,7 @@ def selftest() -> int:
         "activationEvents": ["onView:runtrol.sidebar", "onCommand:runtrol.setUpServices"],
         "contributes": {
             "viewsContainers": {"activitybar": [{"id": "runtrol", "title": "Runtrol"}]},
-            "views": {"runtrol": [
-                {"id": "runtrol.sidebar", "name": "Runtrol"},
-                {"id": "runtrol.usage", "name": "Usage", "type": "webview"},
-            ]},
-            "viewsWelcome": [
-                {
-                    "view": "runtrol.sidebar",
-                    "contents": "Cannot reach the Runtrol Core. (command:runtrol.refresh)",
-                    "when": "runtrol.coreReach == unreachable",
-                },
-                {
-                    "view": "runtrol.sidebar",
-                    "contents": "Connecting to the Runtrol Core...",
-                    "when": "runtrol.coreReach == connecting",
-                },
-                {
-                    "view": "runtrol.sidebar",
-                    "contents": "Look again (command:runtrol.refresh)",
-                    "when": "runtrol.coreReach == reached && !runtrol.hasUsableProvider && !runtrol.isVerifyingProvider",
-                },
-                {
-                    "view": "runtrol.sidebar",
-                    "contents": "Checking",
-                    "when": "runtrol.coreReach == reached && runtrol.isVerifyingProvider",
-                },
-            ],
+            "views": {"runtrol": [{"id": "runtrol.sidebar", "name": "Runtrol", "type": "webview"}]},
             "commands": [
                 {"command": "runtrol.setUpServices"},
                 {"command": "runtrol.deleteConversation", "icon": "$(close)"},
@@ -480,13 +409,6 @@ def selftest() -> int:
                         "group": "1_attention@3",
                     },
                 ],
-                "view/item/context": [
-                    {
-                        "command": "runtrol.deleteConversation",
-                        "when": "view == runtrol.sidebar && viewItem =~ /\\.delete/",
-                        "group": "inline@1",
-                    },
-                ],
             },
             "colors": [{"id": "runtrol.accent"}],
         },
@@ -506,7 +428,7 @@ def selftest() -> int:
             "afterReady selfApproveIntegration(client, pendingId, signature) "
             'initializationStage = "runtime:bootstrap" missionController.startAutoFlights() '
             'executeCommand("runtrol.sidebar.focus") '
-            '"runtrol.setUpServices" registerWebviewViewProvider(USAGE_VIEW_ID, usageStrip) '
+            '"runtrol.setUpServices" registerWebviewViewProvider(SIDEBAR_VIEW_ID, sidebar '
             "await controller.signInProvider(provider) await controller.fixService(provider)"
         ),
         "providerHealth.ts": (
@@ -523,22 +445,24 @@ def selftest() -> int:
             'export function discoveryNotice names(partial, "partial for") '
             'names(unavailable, "unavailable for")'
         ),
-        "trees.ts": (
-            'conversation.serviceName this.description = undefined '
-            'conversationIcon(extensionUri, conversation.serviceIcon) new vscode.ThemeIcon("sync~spin") '
-            'canDelete(conversation, capabilities) '
-            'this.revealCurrentProject() '
-            'this.state.incompleteDiscovery this.state.coreReach Cannot reach the Runtrol Core. '
+        "sidebarPage.ts": (
+            'aria-label="Projects" aria-label="Conversations" aria-label="Usage" '
+            "themeColorVar(project.color) themeColorVar(row.color) .row:hover .actions "
+            'row.canDelete ? action("runtrol.deleteConversation" ci-kebab-vertical -webkit-line-clamp: 2 '
+            'class="memory" Content-Security-Policy script-src \'nonce-'
+        ),
+        "sidebarView.ts": (
+            "enableScripts: true localResourceRoots usageRows(this.state.usage "
+            "Cannot reach the Runtrol Core. Connecting to the Runtrol Core... "
+            "Checking the installed coding-agent CLI... No coding-agent CLI was found on this machine. "
             '"runtrol.hasUsableProvider" "runtrol.isVerifyingProvider" awaitsVerification '
-            'new vscode.ThemeColor("runtrol.accent") if (this.part === "all") '
-            'this.items = [...choices, ...actions, ...headings, ...looseRows]'
+            "this.state.incompleteDiscovery projectColorId(group.workspace) canDelete(row, capabilities)"
         ),
         "usageStrip.ts": (
             "export function usageChips primarySevenDayMeter(row.meters) "
             "role=\"progressbar\" Content-Security-Policy script-src 'nonce- aria-expanded=\"false\" "
             "export function escapeHtml"
         ),
-        "usageStripView.ts": "enableScripts: true localResourceRoots usageRows(this.state.usage",
         "usageDisplay.ts": (
             'provider.installation.state !== "missing" detail: "Not signed in · Sign in" '
             'detail: "Checking" detail: "Unavailable · Fix" '
@@ -592,14 +516,14 @@ def selftest() -> int:
         print("[vscodeExtension --selftest] FAIL. the green fixture was rejected.", file=sys.stderr)
         return 2
 
-    split_view = json.loads(json.dumps(package))
-    split_view["contributes"]["views"]["runtrol"].append({"id": "runtrol.missions", "name": "Missions"})
-    native_strip = json.loads(json.dumps(package))
-    del native_strip["contributes"]["views"]["runtrol"][1]["type"]
-    no_strip = json.loads(json.dumps(package))
-    no_strip["contributes"]["views"]["runtrol"].pop()
-    webview_sidebar = json.loads(json.dumps(package))
-    webview_sidebar["contributes"]["views"]["runtrol"][0]["type"] = "webview"
+    second_view = json.loads(json.dumps(package))
+    second_view["contributes"]["views"]["runtrol"].append({"id": "runtrol.usage", "name": "Usage", "type": "webview"})
+    native_sidebar = json.loads(json.dumps(package))
+    del native_sidebar["contributes"]["views"]["runtrol"][0]["type"]
+    welcome_back = json.loads(json.dumps(package))
+    welcome_back["contributes"]["viewsWelcome"] = [{"view": "runtrol.sidebar", "contents": "Connecting"}]
+    row_menus = json.loads(json.dumps(package))
+    row_menus["contributes"]["menus"]["view/item/context"] = [{"command": "runtrol.deleteConversation", "when": "view == runtrol.sidebar"}]
     chat_container = json.loads(json.dumps(package))
     chat_container["contributes"]["viewsContainers"]["panel"] = [{"id": "runtrolPanel", "title": "Chat"}]
     cluttered_toolbar = json.loads(json.dumps(package))
@@ -608,32 +532,14 @@ def selftest() -> int:
         "when": "view == runtrol.sidebar",
         "group": "navigation@3",
     })
-    merged_welcomes = json.loads(json.dumps(package))
-    merged_welcomes["contributes"]["viewsWelcome"] = [
-        {
-            "view": "runtrol.sidebar",
-            "contents": "No coding-agent CLI was found. (command:runtrol.refresh)",
-        }
-    ]
-    broad_delete = json.loads(json.dumps(package))
-    for entry in broad_delete["contributes"]["menus"]["view/item/context"]:
-        if entry.get("command") == "runtrol.deleteConversation":
-            entry["when"] = "view == runtrol.sidebar"
-    cluttered_conversation = json.loads(json.dumps(package))
-    cluttered_conversation["contributes"]["menus"]["view/item/context"].append({
-        "command": "runtrol.closeSession",
-        "when": "view == runtrol.sidebar && viewItem =~ /^runtrol\\.conversation\\.live/",
-        "group": "inline@2",
-    })
     mutations = [
         ({**package, "dependencies": {"some-runtime": "1"}}, sources),
-        (split_view, sources),
-        (webview_sidebar, sources),
+        (second_view, sources),
+        (native_sidebar, sources),
+        (welcome_back, sources),
+        (row_menus, sources),
         (chat_container, sources),
         (cluttered_toolbar, sources),
-        (merged_welcomes, sources),
-        (broad_delete, sources),
-        (cluttered_conversation, sources),
         ({**package, "activationEvents": []}, sources),
         ({**package, "contributes": {"viewsContainers": {"activitybar": []}}}, sources),
         ({"engines": {"vscode": "^1.100.0"}, "contributes": {"viewsContainers": {"activitybar": [], "secondarySidebar": []}}}, sources),
@@ -652,25 +558,13 @@ def selftest() -> int:
         (package, {**sources, "conversationList.ts": sources["conversationList.ts"] + " `Chat ${identity}`"}),
         (package, {**sources, "usageStrip.ts": sources["usageStrip.ts"].replace('role="progressbar"', "")}),
         (package, {**sources, "usageStrip.ts": sources["usageStrip.ts"].replace("Content-Security-Policy", "")}),
-        (native_strip, sources),
-        (no_strip, sources),
-        (package, {**sources, "usageStripView.ts": sources["usageStripView.ts"].replace("usageRows(this.state.usage", "")}),
+        (package, {**sources, "sidebarView.ts": sources["sidebarView.ts"].replace("usageRows(this.state.usage", "")}),
+        (package, {**sources, "sidebarView.ts": sources["sidebarView.ts"].replace("Cannot reach the Runtrol Core.", "")}),
+        (package, {**sources, "sidebarPage.ts": sources["sidebarPage.ts"].replace('row.canDelete ? action("runtrol.deleteConversation"', "")}),
+        (package, {**sources, "sidebarPage.ts": sources["sidebarPage.ts"].replace("themeColorVar(row.color)", "")}),
+        (package, {**sources, "sidebarPage.ts": sources["sidebarPage.ts"].replace("ci-kebab-vertical", "")}),
         (package, {**sources, "extension.ts": sources["extension.ts"].replace('executeCommand("runtrol.sidebar.focus")', "")}),
         (package, {**sources, "stateRows.ts": sources["stateRows.ts"].replace("discoveryNotice", "")}),
-        (package, {**sources, "trees.ts": sources["trees.ts"].replace("conversationIcon(extensionUri, conversation.serviceIcon)", "")}),
-        (package, {**sources, "trees.ts": sources["trees.ts"].replace('new vscode.ThemeIcon("sync~spin")', "")}),
-        (package, {**sources, "trees.ts": sources["trees.ts"] + " view.description"}),
-        (package, {**sources, "trees.ts": sources["trees.ts"] + " conversationDetail"}),
-        (package, {**sources, "trees.ts": sources["trees.ts"].replace("this.description = undefined", "")}),
-        (
-            package,
-            {
-                **sources,
-                "trees.ts": sources["trees.ts"].replace(
-                    'canDelete(conversation, capabilities)', ""
-                ),
-            },
-        ),
         (
             package,
             {

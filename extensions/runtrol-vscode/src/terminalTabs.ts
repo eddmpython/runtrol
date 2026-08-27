@@ -34,6 +34,10 @@ export class TerminalTabs implements vscode.Disposable {
     private readonly iconForProvider: (providerId: string) => vscode.ThemeIcon | vscode.Uri,
     /// Told whenever the set of not-yet-described conversations changes, so the list redraws at once.
     private readonly startedChanged: () => void = () => undefined,
+    /// The same conversation after the provider catalogue was read again, or null when it is gone. A row's
+    /// resume proof is signed by one Runtime generation; after an update the proof the row still holds is
+    /// refused, and the honest answer is to look again rather than to tell the person to reload.
+    private readonly refreshed: (conversationKey: string) => Promise<Conversation | null> = async () => null,
   ) {
     this.closing = vscode.window.onDidCloseTerminal((terminal) => {
       for (const [key, open] of this.open) {
@@ -52,19 +56,9 @@ export class TerminalTabs implements vscode.Disposable {
       existing.show(preserveFocus);
       return existing;
     }
-    const native = conversation.native?.adoptionToken
-      ? {
-          nativeSessionId: conversation.native.nativeSessionId,
-          adoptionToken: conversation.native.adoptionToken,
-        }
-      : null;
-    const pty = new RuntimeTerminal(this.runtime, {
-      provider: conversation.providerId,
-      native,
-      workspace: conversation.workspace,
-      blocked: conversation.session?.nativeSessionId && !native
-        ? "This conversation has no current provider resume proof for the public Runtime terminal."
-        : null,
+    const pty = new RuntimeTerminal(this.runtime, targetOf(conversation), async () => {
+      const again = await this.refreshed(conversation.key);
+      return again ? targetOf(again) : null;
     });
     // The tab is named for the conversation and coloured for its project. The name answers "which conversation",
     // the colour answers "whose project", and the two together fit in the width a tab actually has.
@@ -86,12 +80,13 @@ export class TerminalTabs implements vscode.Disposable {
   /// conversation to reopen, and the service creates one. The tab is named for the folder until the
   /// service's own listing gives the conversation a title (the sidebar shows it once the store does).
   showFresh(providerId: string, workspace: string, name: string, projectless = false): vscode.Terminal {
+    // A fresh conversation carries no resume proof, so there is nothing to refresh if the open is refused.
     const pty = new RuntimeTerminal(this.runtime, {
       provider: providerId,
       native: null,
       workspace,
       blocked: null,
-    });
+    }, async () => null);
     const colour = projectless ? null : projectColorId(workspace);
     const terminal = vscode.window.createTerminal({
       name,
@@ -151,6 +146,26 @@ type Target = {
   blocked: string | null;
 };
 
+function targetOf(conversation: Conversation): Target {
+  const native = conversation.native?.adoptionToken
+    ? {
+        nativeSessionId: conversation.native.nativeSessionId,
+        adoptionToken: conversation.native.adoptionToken,
+      }
+    : null;
+  return {
+    provider: conversation.providerId,
+    native,
+    workspace: conversation.workspace,
+    blocked: conversation.session?.nativeSessionId && !native
+      ? "This conversation has no current provider resume proof for the public Runtime terminal."
+      : null,
+  };
+}
+
+/// The Runtime's own words when a row's resume proof no longer verifies (`runtime_terminal.rs`).
+const STALE_PROOF = "native catalogue observation expired";
+
 /// A VS Code pseudoterminal whose other end is the Core's hosted terminal.
 ///
 /// Output is decoded as streaming UTF-8 (a multi-byte character may straddle two chunks). Input is sent as
@@ -174,7 +189,8 @@ class RuntimeTerminal implements vscode.Pseudoterminal {
 
   constructor(
     private readonly runtime: StudioRuntimeClient,
-    private readonly target: Target,
+    private target: Target,
+    private readonly refreshTarget: () => Promise<Target | null>,
   ) {}
 
   /// Every failure below leaves the tab standing with the reason written in it.
@@ -234,14 +250,14 @@ class RuntimeTerminal implements vscode.Pseudoterminal {
   private async connect(): Promise<void> {
     if (this.target.blocked) throw new Error(this.target.blocked);
     const geometry = this.dimensions;
-    const view = await this.runtime.openTerminal({
-      requestId: newMutationRequestId(),
-      providerId: this.target.provider,
-      workspace: this.target.workspace,
-      target: this.target.native
-        ? { kind: "native", ...this.target.native }
-        : { kind: "fresh" },
-      geometry,
+    const view = await this.openOnce(geometry).catch(async (error: unknown) => {
+      // A resume proof signed by an earlier Runtime generation. Read the catalogue again and try once with the
+      // proof it hands back now; anything else, or a second refusal, is reported as it came.
+      if (!(error instanceof Error) || !error.message.includes(STALE_PROOF)) throw error;
+      const fresh = await this.refreshTarget();
+      if (!fresh?.native) throw error;
+      this.target = fresh;
+      return this.openOnce(geometry);
     });
     if (this.closed) {
       view.close();
@@ -275,6 +291,18 @@ class RuntimeTerminal implements vscode.Pseudoterminal {
 
   /// Read the view until the service ends. A transport break reattaches only to the exact recorded generation and
   /// starts again from its replacement screen snapshot. It never repeats terminal input or redirects the identity.
+  private openOnce(geometry: { columns: number; rows: number }): Promise<TerminalView> {
+    return this.runtime.openTerminal({
+      requestId: newMutationRequestId(),
+      providerId: this.target.provider,
+      workspace: this.target.workspace,
+      target: this.target.native
+        ? { kind: "native", ...this.target.native }
+        : { kind: "fresh" },
+      geometry,
+    });
+  }
+
   private async pump(initialView: TerminalView): Promise<void> {
     let view = initialView;
     for (;;) {
