@@ -529,11 +529,39 @@ fn installation(
 /// Absence is the honest answer, not a failure to report: the process may have ended between the listing and
 /// the question, or the platform may refuse the question for a process this daemon may not open. Either way
 /// a surface draws no number, never a zero.
+///
+/// Sampled at most once every two seconds per process. A listing asks for every live process at once, the
+/// surfaces list on a short clock, and on Windows each sample opens a process handle: paying that on every
+/// listing lifted the measured refresh p95 from 50 ms to 65 to 146 ms (2026-08-28). A figure a couple of
+/// seconds old is still the figure a person reads.
+pub(crate) fn resident_bytes_now(pid: u32) -> Option<u64> {
+    type ResidentSamples = std::collections::HashMap<u32, (std::time::Instant, Option<u64>)>;
+    static SAMPLES: std::sync::LazyLock<tokio::sync::Mutex<ResidentSamples>> =
+        std::sync::LazyLock::new(|| tokio::sync::Mutex::new(ResidentSamples::new()));
+    const FRESH_FOR: std::time::Duration = std::time::Duration::from_secs(2);
+
+    let now = std::time::Instant::now();
+    // Never waits: a contended cache is simply bypassed with a direct sample, so this stays a plain
+    // synchronous call on the runtime thread without blocking it.
+    let Ok(mut samples) = SAMPLES.try_lock() else {
+        return sample_resident_bytes(pid);
+    };
+    if let Some((taken, bytes)) = samples.get(&pid)
+        && now.duration_since(*taken) < FRESH_FOR
+    {
+        return *bytes;
+    }
+    let bytes = sample_resident_bytes(pid);
+    samples.retain(|_, (taken, _)| now.duration_since(*taken) < FRESH_FOR);
+    samples.insert(pid, (now, bytes));
+    bytes
+}
+
 #[expect(
     clippy::manual_ok_err,
     reason = "`Result::ok` is disallowed workspace-wide so that a dropped error is always written out; here the absent number is the answer, and the arm says so"
 )]
-pub(crate) fn resident_bytes_now(pid: u32) -> Option<u64> {
+fn sample_resident_bytes(pid: u32) -> Option<u64> {
     match runtrol_childproc::footprint::resident_bytes(pid) {
         Ok(bytes) => Some(bytes),
         // A process that ended between the listing and the question, or one this daemon may not open, has no
