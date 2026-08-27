@@ -10,7 +10,6 @@ authors.workspace = true
 publish = false
 
 [dependencies]
-libc = { workspace = true }
 runtrol-provider = { workspace = true }
 runtrol-security = { workspace = true }
 runtrol-childproc = { workspace = true }

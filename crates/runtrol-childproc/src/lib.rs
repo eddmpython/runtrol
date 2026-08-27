@@ -45,6 +45,7 @@ pub mod handoff;
 pub mod pty;
 pub mod resolve;
 pub mod run;
+pub mod stall;
 
 pub use argv::{MAX_ARGUMENT_LEN, check_all, check_one};
 pub use console_window::hide_console_window;
@@ -58,3 +59,4 @@ pub use handoff::keep_handles_to_ourselves;
 pub use pty::{PtyChild, PtySize, PtySpawn};
 pub use resolve::{LauncherKept, Program, ProgramKind, resolve};
 pub use run::{MAX_OUTPUT_BYTES, Output, capture, capture_in, capture_with_input};
+pub use stall::arm_stall_backtrace;
