@@ -107,6 +107,7 @@ pub fn needed(request: &Request) -> Needed {
         | Request::Integrations
         | Request::IntegrationRevoke { .. }
         | Request::IntegrationGrantChange { .. }
+        | Request::ProviderHelp { .. }
         | Request::RuntimeForgetRequests
         | Request::RuntimeForgetConfirm { .. }
         | Request::RuntimeKeyRotationRequests
@@ -548,6 +549,28 @@ mod tests {
         };
         assert!(matches!(
             allowed(&phone, &Request::Drain, &ledger),
+            Err(WallRefusal::NeverRemote { .. })
+        ));
+    }
+
+    #[test]
+    fn provider_help_is_owner_local_administration() {
+        let request = Request::ProviderHelp {
+            provider_id: "example".into(),
+        };
+        assert_eq!(
+            needed(&request),
+            Needed::AtTheMachine(LocalScope::IntegrationAdmin)
+        );
+        assert!(allowed(&Caller::AtTheMachine, &request, &GrantLedger::new()).is_ok());
+        assert!(matches!(
+            allowed(
+                &Caller::Device {
+                    device: DeviceId::now()
+                },
+                &request,
+                &GrantLedger::new()
+            ),
             Err(WallRefusal::NeverRemote { .. })
         ));
     }
