@@ -7,6 +7,7 @@ import {
   RuntimeConnector,
   RuntimeLocator,
   RuntimeRequestError,
+  TerminalClient,
   newMutationRequestId,
   type AppScope,
   type ClientOptions,
@@ -23,6 +24,7 @@ import {
   type SessionDescriptor,
   type SessionWorkspaceAccess,
   type TerminalOpenParams,
+  type TerminalDescriptor,
   type TerminalView,
   type ValidatedLocator,
 } from "@runtrol/runtime-client";
@@ -149,13 +151,72 @@ export class StudioRuntimeClient implements vscode.Disposable {
 
   /// Open one provider-faithful terminal on its own public Runtime connection.
   async openTerminal(params: TerminalOpenParams): Promise<TerminalView> {
-    const dedicated = await this.connectCommand();
+    await this.commandClient();
+    const dedicated = await this.withRuntimeLocator((locator) => this.connector.connectWithRetry(
+      locator,
+      this.requireOptions(),
+    ));
     try {
       return await dedicated.terminals().open(params);
     } catch (error) {
       dedicated.close();
+      if (
+        params.target.kind === "native"
+        && error instanceof RuntimeRequestError
+        && error.failure.code === "terminalAlreadyLive"
+      ) {
+        const existing = await this.findTerminal(
+          params.providerId,
+          params.target.nativeSessionId,
+          params.workspace,
+        );
+        if (existing) {
+          return this.attachTerminal(existing.runtimeGeneration, existing.terminalId);
+        }
+      }
       throw error;
     }
+  }
+
+  /// Reattach one view to the exact generation that owns an already live terminal.
+  async attachTerminal(runtimeGeneration: string, terminalId: string): Promise<TerminalView> {
+    await this.commandClient();
+    return TerminalClient.attachInGeneration(
+      this.connector,
+      this.runtimeLocator(),
+      this.requireOptions(),
+      runtimeGeneration,
+      terminalId,
+    );
+  }
+
+  private async findTerminal(
+    providerId: string,
+    nativeSessionId: string,
+    workspace: string,
+  ): Promise<TerminalDescriptor | null> {
+    const fleet = await TerminalClient.listAllGenerations(
+      this.connector,
+      this.runtimeLocator(),
+      this.requireOptions(),
+    );
+    const matches = fleet.flatMap((entry) => entry.outcome.kind === "listed"
+      ? entry.outcome.snapshot.terminals.filter((terminal) => (
+        terminal.providerId === providerId
+        && terminal.nativeSessionId === nativeSessionId
+        && terminal.workspace === workspace
+      ))
+      : []);
+    return matches.length === 1 ? matches[0]! : null;
+  }
+
+  private runtimeLocator(): RuntimeLocator {
+    return RuntimeLocator.system({
+      ...(process.platform === "win32" && this.runtimeExecutable && isAbsolute(this.runtimeExecutable)
+        ? { runtimeExecutable: this.runtimeExecutable }
+        : {}),
+      ...(this.preferDigest ? { preferDigest: this.preferDigest } : {}),
+    });
   }
 
   /// The Studio's own integration identity, or null before enrollment has ever succeeded.

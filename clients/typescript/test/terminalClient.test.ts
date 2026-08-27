@@ -5,6 +5,9 @@ import {
   FINALIZED_REVISIONS,
   PUBLIC_LIMITS,
   RuntimeConnector,
+  RuntimeLocator,
+  RuntimeRequestError,
+  TerminalClient,
   newMutationRequestId,
 } from "../src/index.js";
 import {
@@ -111,4 +114,96 @@ test("terminal control preserves output that arrives before its response", async
     assert.equal(Buffer.from(output.bytes).toString(), "exact bytes");
   }
   view.close();
+});
+
+test("generation-pinned attach reaches the recorded draining Runtime", async () => {
+  const instanceId = `rtm_${"7".repeat(32)}`;
+  const generation = "8".repeat(64);
+  const terminalId = "019c2b97-5f29-7b00-8000-000000000011";
+  const viewId = "019c2b97-5f29-7b00-8000-000000000012";
+  const transport = new ScriptedRuntimeTransport([
+    {
+      jsonrpc: "2.0",
+      method: "runtime/challenge",
+      params: {
+        instanceId,
+        nonceId: `nonce_${"1".repeat(32)}`,
+        nonce: Buffer.alloc(32, 1).toString("base64url"),
+        expiresAtMs: Date.now() + 30_000,
+      },
+    },
+    {
+      jsonrpc: "2.0",
+      id: 1,
+      result: {
+        selectedRevision: FINALIZED_REVISIONS[0],
+        runtime: { instanceId, version: "0.1.1", platform: "fixture", buildDigest: generation },
+        serverCapabilities: {
+          integrationEnrollment: true,
+          providerInventory: true,
+          managedSessionList: true,
+          modelDiscovery: true,
+          nativeSessionCatalogue: true,
+          sessionControl: true,
+          sessionEvents: true,
+          terminalSurface: true,
+        },
+        limits: PUBLIC_LIMITS,
+      },
+    },
+    {
+      jsonrpc: "2.0",
+      id: 2,
+      result: {
+        terminal: {
+          terminalId,
+          runtimeGeneration: generation,
+          providerId: "example",
+          workspace: "C:\\work",
+          processState: "running",
+          openedAtMs: Date.now(),
+          terminalGeneration: 1,
+          geometry: { columns: 100, rows: 30 },
+        },
+        viewId,
+        screenBase64: Buffer.from("restored screen").toString("base64"),
+      },
+    },
+  ]);
+  const exact = validatedLocator(instanceId, "draining-endpoint", "0.1.1", generation, true);
+  const locator = {
+    inspectAll: async () => [exact],
+  } as unknown as RuntimeLocator;
+  const connector = new RuntimeConnector(async (endpoint) => {
+    assert.equal(endpoint, "draining-endpoint");
+    return transport;
+  });
+
+  const view = await TerminalClient.attachInGeneration(
+    connector,
+    locator,
+    { name: "terminal-fixture", version: "1.0.0" },
+    generation,
+    terminalId,
+  );
+  assert.equal(Buffer.from(view.initialScreen).toString(), "restored screen");
+  assert.equal(view.opened.terminal.runtimeGeneration, generation);
+  view.close();
+});
+
+test("generation-pinned attach never redirects a vanished terminal", async () => {
+  const locator = {
+    inspectAll: async () => [],
+  } as unknown as RuntimeLocator;
+  await assert.rejects(
+    TerminalClient.attachInGeneration(
+      new RuntimeConnector(),
+      locator,
+      { name: "terminal-fixture", version: "1.0.0" },
+      "7".repeat(64),
+      "019c2b97-5f29-7b00-8000-000000000021",
+    ),
+    (error: unknown) => error instanceof RuntimeRequestError
+      && error.failure.code === "terminalGenerationUnavailable",
+  );
 });

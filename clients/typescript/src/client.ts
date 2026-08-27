@@ -654,6 +654,47 @@ export class TerminalClient {
     }
     return entries;
   }
+
+  /** Attach to one terminal only through the exact Runtime generation recorded on its descriptor.
+   *
+   * The locator is re-read for every call. A vanished generation is a typed boundary and is never redirected to
+   * the current generation, because terminal identities are generation-local process identities.
+   */
+  public static async attachInGeneration(
+    connector: RuntimeConnector,
+    locator: RuntimeLocator,
+    options: ClientOptions,
+    runtimeGeneration: string,
+    terminalId: TerminalAttachParams["terminalId"],
+    signal?: AbortSignal,
+  ): Promise<TerminalView> {
+    const generation = (await locator.inspectAll()).find(
+      (candidate) => candidate.digest === runtimeGeneration,
+    );
+    if (!generation) {
+      throw new RuntimeRequestError({
+        code: "terminalGenerationUnavailable",
+        message: "the Runtime generation that owns this terminal is no longer listed",
+        retryable: false,
+        correlationId: runtimeGeneration,
+      });
+    }
+    const runtime = await connector.connect(generation, options, signal);
+    try {
+      if (!runtime.initialization.serverCapabilities.terminalSurface) {
+        throw new RuntimeRequestError({
+          code: "protocolIncompatible",
+          message: "the recorded Runtime generation has no public terminal surface",
+          retryable: false,
+          correlationId: runtimeGeneration,
+        });
+      }
+      return await runtime.terminals().attach({ terminalId });
+    } catch (error) {
+      runtime.close();
+      throw error;
+    }
+  }
 }
 
 export type TerminalIndexNotification =

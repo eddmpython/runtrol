@@ -273,10 +273,12 @@ class RuntimeTerminal implements vscode.Pseudoterminal {
     await this.pump(view);
   }
 
-  /// Read the view until the service ends or the connection does.
-  private async pump(view: TerminalView): Promise<void> {
-    try {
-      for (;;) {
+  /// Read the view until the service ends. A transport break reattaches only to the exact recorded generation and
+  /// starts again from its replacement screen snapshot. It never repeats terminal input or redirects the identity.
+  private async pump(initialView: TerminalView): Promise<void> {
+    let view = initialView;
+    for (;;) {
+      try {
         const notification = await view.next();
         switch (notification.kind) {
           case "output":
@@ -303,10 +305,23 @@ class RuntimeTerminal implements vscode.Pseudoterminal {
             }
             return;
         }
+      } catch {
+        if (this.closed) return;
+        view.close();
+        view = await this.runtime.attachTerminal(
+          view.opened.terminal.runtimeGeneration,
+          view.opened.terminal.terminalId,
+        );
+        if (this.closed) {
+          view.close();
+          return;
+        }
+        this.view = view;
+        this.lease = null;
+        this.decoder = new TextDecoder("utf-8");
+        this.writeEmitter.fire("\x1b[2J\x1b[H");
+        this.writeEmitter.fire(this.decoder.decode(view.initialScreen, { stream: true }));
       }
-    } catch (error) {
-      if (this.closed) return;
-      this.fail(error);
     }
   }
 
