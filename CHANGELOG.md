@@ -10,6 +10,8 @@ and refactoring that no user can observe do not belong here.
 
 ## [Unreleased]
 
+## [0.1.23] - 2026-08-27
+
 ### Added
 
 - Applications can now open, list, watch, attach, control, resize, write, detach, and stop provider terminal
@@ -28,8 +30,15 @@ and refactoring that no user can observe do not belong here.
 
 - Studio now uses one native `Runtrol` sidebar instead of separate Projects, Conversations, and Agent Usage
   view headers. Projects contain their conversations, projectless conversations remain top-level rows, and
-  every installed service contributes one compact seven-day usage line at the bottom. Hover and the vertical
-  menu action disclose every provider-reported window, plan, reset, report age, and blocking limit.
+  under the list a pinned usage strip draws every installed service as its icon inside a ring gauge with the
+  seven-day percentage, so the account's position stays in view however long the list grows and the strip reads
+  the same with three services or ten. Projects open by default so no conversation hides behind a chevron.
+  Hovering, focusing, or pressing a chip opens that service's windows as thin bars (five-hour, weekly, and
+  per-model), with plan, reset, report age, and any blocking limit.
+
+- Studio activates faster. When the Runtime is already running, Studio reads its control endpoint from the
+  Runtime locator it has just verified instead of starting a second Core process to ask, and it approves its
+  own Runtime enrollment at once instead of waiting a quarter second for someone else to.
 
 - Runtime now holds one atomic native-conversation claim across structured sessions, hosted terminals, and
   draining generations. Typed ownership failures prevent a second process or a newer Runtime generation from
