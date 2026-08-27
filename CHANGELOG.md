@@ -10,6 +10,14 @@ and refactoring that no user can observe do not belong here.
 
 ## [Unreleased]
 
+## [0.1.28] - 2026-08-28
+
+### Fixed
+
+- Each project's colour band is visible again beside its heading and its conversations. The colour was written
+  onto the element, which the sidebar page's security policy drops, so the band was laid out at full width and
+  painted nothing. The page's own stylesheet paints it now.
+
 ## [0.1.27] - 2026-08-28
 
 ### Fixed
