@@ -464,6 +464,92 @@ pub(crate) fn close_trace(step: &str) {
     }
 }
 
+/// Names the line that holds the runtime thread when the heartbeat stops, harness-only.
+///
+/// The heartbeat proved the thread wedges for 13 seconds at a time on the Linux CI hosts and every
+/// breadcrumb placed by hand missed the culprit (2026-08-27). A watchdog thread that sees three
+/// missed beats signals the runtime thread, and the handler prints that thread's backtrace to stderr.
+/// The handler allocates, which a signal handler must not in general; under the harness switch, on a
+/// thread that is already stuck, the worst case is a daemon the harness was about to fail anyway.
+mod stall_watchdog {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static LAST_BEAT_MS: AtomicU64 = AtomicU64::new(0);
+
+    fn now_ms() -> u64 {
+        static BEGAN: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+        u64::try_from(
+            BEGAN
+                .get_or_init(std::time::Instant::now)
+                .elapsed()
+                .as_millis(),
+        )
+        .unwrap_or(u64::MAX)
+    }
+
+    pub(super) fn beat() {
+        LAST_BEAT_MS.store(now_ms(), Ordering::Release);
+    }
+
+    #[cfg(not(unix))]
+    pub(super) fn arm() {}
+
+    #[cfg(unix)]
+    static RUNTIME_THREAD: AtomicU64 = AtomicU64::new(0);
+
+    #[cfg(unix)]
+    #[expect(
+        clippy::print_stderr,
+        reason = "the backtrace exists to reach the harness's captured stderr, and only when RUNTROL_CLOSE_TRACE=1 asks for it"
+    )]
+    extern "C" fn print_runtime_backtrace(_signal: libc::c_int) {
+        eprintln!(
+            "runtrol close trace: STALL BACKTRACE
+{}",
+            std::backtrace::Backtrace::force_capture()
+        );
+    }
+
+    /// Called on the runtime thread, once, before serving.
+    #[cfg(unix)]
+    #[expect(
+        unsafe_code,
+        reason = "recording the runtime thread and installing a signal handler are libc calls; both run once, on the runtime thread, before any child exists"
+    )]
+    pub(super) fn arm() {
+        if !std::env::var_os("RUNTROL_CLOSE_TRACE").is_some_and(|value| value == "1") {
+            return;
+        }
+        // SAFETY: `pthread_self` has no preconditions, and `signal` installs a plain `extern "C"` handler for a
+        // signal nothing else in this process uses.
+        unsafe {
+            RUNTIME_THREAD.store(libc::pthread_self() as u64, Ordering::Release);
+            libc::signal(
+                libc::SIGUSR1,
+                print_runtime_backtrace as extern "C" fn(libc::c_int) as libc::sighandler_t,
+            );
+        }
+        beat();
+        std::thread::spawn(|| {
+            let mut last_signalled = 0_u64;
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(1));
+                let last = LAST_BEAT_MS.load(Ordering::Acquire);
+                let now = now_ms();
+                if now.saturating_sub(last) > 3_000 && last != last_signalled {
+                    last_signalled = last;
+                    let thread = RUNTIME_THREAD.load(Ordering::Acquire);
+                    // SAFETY: the thread id was recorded by the runtime thread itself and that thread lives
+                    // as long as the daemon; SIGUSR1 has the handler installed above.
+                    unsafe {
+                        libc::pthread_kill(thread as libc::pthread_t, libc::SIGUSR1);
+                    }
+                }
+            }
+        });
+    }
+}
+
 struct ReservationGuard {
     reservation: Option<CleanupReservation>,
     cancelling: mpsc::UnboundedSender<ReservationAsked>,
@@ -910,9 +996,11 @@ async fn serve_surfaces(
     // the direct picture of the runtime thread being wedged, which no per-request breadcrumb can draw (the CI
     // Unix hosts show connected clients whose greeting is never answered while the daemon says nothing).
     if std::env::var_os("RUNTROL_CLOSE_TRACE").is_some_and(|value| value == "1") {
+        stall_watchdog::arm();
         connections.spawn(async {
             loop {
                 close_trace("heartbeat");
+                stall_watchdog::beat();
                 tokio::time::sleep(std::time::Duration::from_secs(1)).await;
             }
         });
