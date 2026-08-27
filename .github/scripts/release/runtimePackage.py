@@ -20,6 +20,14 @@ STORE_SCHEMA_PATH = ROOT / "crates" / "runtrol-store" / "src" / "schema.rs"
 ZIP_TIME = (1980, 1, 1, 0, 0, 0)
 SEMVER = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
 HASH = re.compile(r"^[0-9a-f]{64}$")
+PYTHON_WHEEL_GLOBS = {
+    "darwin-arm64": "runtrol_runtime_client-*-cp311-abi3-*macosx*arm64.whl",
+    "darwin-x64": "runtrol_runtime_client-*-cp311-abi3-*macosx*x86_64.whl",
+    "linux-arm64": "runtrol_runtime_client-*-cp311-abi3-*manylinux*aarch64.whl",
+    "linux-x64": "runtrol_runtime_client-*-cp311-abi3-*manylinux*x86_64.whl",
+    "win32-arm64": "runtrol_runtime_client-*-cp311-abi3-*win_arm64.whl",
+    "win32-x64": "runtrol_runtime_client-*-cp311-abi3-*win_amd64.whl",
+}
 
 
 def workspaceVersion() -> str:
@@ -365,6 +373,35 @@ def releaseManifest(directory: Path) -> dict[str, object]:
         path = directory / name
         body = path.read_bytes()
         sdkArtifacts.append({"package": package, "file": name, "sha256": sha256(body), "bytes": len(body)})
+    pythonArtifacts = []
+    selectedWheels: set[Path] = set()
+    expectedPrefix = f"runtrol_runtime_client-{version}-cp311-abi3-"
+    for target, pattern in sorted(PYTHON_WHEEL_GLOBS.items()):
+        matched = list(directory.glob(pattern))
+        if len(matched) != 1:
+            raise FileNotFoundError(
+                f"Python wheel target {target} matched {len(matched)} files instead of one"
+            )
+        path = matched[0]
+        if not path.name.startswith(expectedPrefix):
+            raise ValueError(f"Python wheel {path.name} differs from Runtime version {version}")
+        body = path.read_bytes()
+        selectedWheels.add(path)
+        pythonArtifacts.append(
+            {
+                "package": "python-client",
+                "target": target,
+                "file": path.name,
+                "sha256": sha256(body),
+                "bytes": len(body),
+            }
+        )
+    allWheels = set(directory.glob("runtrol_runtime_client-*.whl"))
+    if allWheels != selectedWheels:
+        extras = sorted(path.name for path in allWheels - selectedWheels)
+        raise ValueError(f"release contains unclassified Python wheels: {extras}")
+    if any(directory.glob("runtrol_runtime_client-*.tar.gz")):
+        raise ValueError("release contains a forbidden Python source distribution")
     return {
         "schema": 1,
         "product": "runtrol-runtime",
@@ -373,6 +410,7 @@ def releaseManifest(directory: Path) -> dict[str, object]:
         "rollbackSafeStoreSchema": storeSchema(),
         "artifacts": artifacts,
         "sdkArtifacts": sdkArtifacts,
+        "pythonArtifacts": pythonArtifacts,
         "signature": "GitHub Sigstore artifact attestation",
     }
 

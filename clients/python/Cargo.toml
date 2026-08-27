@@ -1,0 +1,27 @@
+# Native Python binding over the two Apache public Runtime crates. This package never links Core or the daemon.
+[package]
+name = "runtrol-runtime-python"
+description = "Python bindings for one shared local Runtrol Runtime."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "Apache-2.0"
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[lib]
+name = "runtrol_runtime_native"
+crate-type = ["cdylib"]
+
+[dependencies]
+runtrol-runtime-client = { workspace = true }
+runtrol-runtime-protocol = { workspace = true }
+serde = { workspace = true, features = ["std", "derive"] }
+serde_json = { workspace = true, features = ["std"] }
+pyo3 = { workspace = true, features = ["abi3-py311", "extension-module", "macros"] }
+pyo3-async-runtimes = { workspace = true, features = ["tokio-runtime"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync"] }
+
+[lints]
+workspace = true

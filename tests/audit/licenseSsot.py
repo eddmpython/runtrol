@@ -1,8 +1,8 @@
 """Gate: one license policy, and every surface that states it says the same thing.
 
-The license is not decoration here. The product is copyleft so that a fork cannot be closed, and three
+The license is not decoration here. The product is copyleft so that a fork cannot be closed, and four
 packages are deliberately permissive so that other programs can link against them. That split is stated
-in a Cargo table, two crate manifests, an npm manifest, two lockfiles, four READMEs, `NOTICE`, and
+in a Cargo table, three client manifests, an npm manifest, two lockfiles, four READMEs, `NOTICE`, and
 `CONTRIBUTING.md`. No build fails when one of them drifts, and within an hour of the move to AGPL four
 of them had: a lockfile still said MIT, a manifest comment pointed at a section that had been deleted,
 and the contributor grant named its grantee by pointing at a file that named nobody.
@@ -39,6 +39,7 @@ HOLDER = "eddmpython"
 SOURCE_URL = "https://github.com/eddmpython/runtrol"
 PUBLISHED = ("crates/runtrol-runtime-protocol", "crates/runtrol-runtime-client")
 NPM_PACKAGE = "clients/typescript"
+PYTHON_PACKAGE = "clients/python"
 READMES = ("README.md", "README_EN.md", "README_JA.md", "README_ZH.md")
 
 AGPL_TITLE = "GNU AFFERO GENERAL PUBLIC LICENSE"
@@ -58,6 +59,7 @@ class Surfaces:
     noticeText: str = ""
     contributing: str = ""
     npmLicense: str | None = None
+    pythonLicense: str | None = None
     lockLicenses: dict[str, str | None] = field(default_factory=dict)
     publishedLicenseFiles: dict[str, str] = field(default_factory=dict)
     readmes: dict[str, str] = field(default_factory=dict)
@@ -72,9 +74,9 @@ def problems(surfaces: Surfaces) -> list[str]:
     if sorted(surfaces.published) != sorted(PUBLISHED):
         found.append(f"the published members are {sorted(surfaces.published)}, not {sorted(PUBLISHED)}")
     for member, declared in sorted(surfaces.members.items()):
-        if member in surfaces.published:
+        if member in surfaces.published or member == PYTHON_PACKAGE:
             if declared != PERMISSIVE:
-                found.append(f"{member} is published and must declare {PERMISSIVE}, not {declared!r}")
+                found.append(f"{member} is a public client and must declare {PERMISSIVE}, not {declared!r}")
         elif declared is not None:
             found.append(f"{member} is not published yet overrides the workspace license with {declared!r}")
 
@@ -105,6 +107,8 @@ def problems(surfaces: Surfaces) -> list[str]:
 
     if surfaces.npmLicense != PERMISSIVE:
         found.append(f"the npm client declares {surfaces.npmLicense!r} instead of {PERMISSIVE}")
+    if surfaces.pythonLicense != PERMISSIVE:
+        found.append(f"the Python client declares {surfaces.pythonLicense!r} instead of {PERMISSIVE}")
     for lock, declared in sorted(surfaces.lockLicenses.items()):
         if declared != PERMISSIVE:
             found.append(f"{lock} still records {declared!r} for the npm client")
@@ -142,6 +146,7 @@ def readSurfaces() -> Surfaces:
         lockLicenses[lock] = packages.get(key, {}).get("license")
 
     npm = json.loads((ROOT / NPM_PACKAGE / "package.json").read_text(encoding="utf-8"))
+    python = tomllib.loads((ROOT / PYTHON_PACKAGE / "pyproject.toml").read_text(encoding="utf-8"))
     return Surfaces(
         workspaceLicense=workspace["workspace"]["package"].get("license"),
         members=members,
@@ -150,9 +155,11 @@ def readSurfaces() -> Surfaces:
         noticeText=(ROOT / "NOTICE").read_text(encoding="utf-8"),
         contributing=(ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8"),
         npmLicense=npm.get("license"),
+        pythonLicense=python["project"].get("license"),
         lockLicenses=lockLicenses,
         publishedLicenseFiles={
-            member: (ROOT / member / "LICENSE").read_text(encoding="utf-8") for member in PUBLISHED
+            member: (ROOT / member / "LICENSE").read_text(encoding="utf-8")
+            for member in (*PUBLISHED, PYTHON_PACKAGE)
         },
         readmes={name: (ROOT / name).read_text(encoding="utf-8") for name in READMES},
     )
@@ -166,7 +173,7 @@ def main() -> int:
         for one in found:
             print(f"  - {one}", file=sys.stderr)
         return 2
-    print(f"[licenseSsot] OK. {PRODUCT} product, {PERMISSIVE} for {len(PUBLISHED) + 1} published packages.")
+    print(f"[licenseSsot] OK. {PRODUCT} product, {PERMISSIVE} for {len(PUBLISHED) + 2} published packages.")
     return 0
 
 
@@ -189,6 +196,7 @@ def selftest() -> int:
         ("NOTICE loses the embedded data agreement", replace(green, noticeText=green.noticeText.replace(EMBEDDED_DATA_AGREEMENT, ""))),
         ("the grant stops naming its grantee", replace(green, contributing=green.contributing.replace(HOLDER, "the maintainer"))),
         ("the npm client relicenses", replace(green, npmLicense="MIT")),
+        ("the Python client relicenses", replace(green, pythonLicense="MIT")),
         ("a lockfile keeps the old license", replace(green, lockLicenses={**green.lockLicenses, f"{NPM_PACKAGE}/package-lock.json": "MIT"})),
         ("a published crate ships the wrong license file", replace(green, publishedLicenseFiles={**green.publishedLicenseFiles, PUBLISHED[0]: "MIT License"})),
         ("one language README drifts", replace(green, readmes={**green.readmes, "README_JA.md": "no license section"})),

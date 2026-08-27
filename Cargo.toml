@@ -6,6 +6,7 @@
 [workspace]
 resolver = "3"
 members = [
+    "clients/python",
     "crates/runtrol-provider",
     "crates/runtrol-security",
     "crates/runtrol-childproc",
@@ -109,6 +110,9 @@ schemars = { version = "1.2.2", default-features = false, features = ["derive", 
 ed25519-dalek = { version = "3.0.0", default-features = false, features = ["alloc", "fast", "zeroize"] }
 # Canonical unpadded base64url for public keys, nonces, digests, and signatures.
 base64ct = { version = "1.8.3", default-features = false, features = ["alloc"] }
+# Python's stable ABI binding. The wheel fixes Python 3.11 as its minimum and never embeds Runtime.
+pyo3 = { version = "0.29.0", default-features = false }
+pyo3-async-runtimes = { version = "0.29.0", default-features = false }
 
 # Metadata store with no background worker. Version 4.1 includes the region allocator RSS fix and is the floor.
 # Earlier versions also use a different variable-width tuple encoding. See docs/coreRuntime.md.

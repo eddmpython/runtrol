@@ -1,0 +1,38 @@
+[build-system]
+requires = ["maturin>=1.12,<2"]
+build-backend = "maturin"
+
+[project]
+name = "runtrol-runtime-client"
+version = "0.1.1"
+description = "Typed Python client for one shared local Runtrol Runtime."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+authors = [{ name = "eddmpython" }]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Programming Language :: Rust",
+  "Typing :: Typed",
+]
+
+[project.urls]
+Repository = "https://github.com/eddmpython/runtrol"
+
+[tool.maturin]
+bindings = "pyo3"
+module-name = "runtrol_runtime._native"
+python-source = "python"
+features = ["pyo3/abi3-py311"]
+include = [
+  { path = "schema/runtime.schema.json", format = "wheel" },
+  { path = "CHANGELOG.md", format = "wheel" },
+  { path = "LICENSE", format = "wheel" },
+]
+exclude = ["python/**/__pycache__/**", "python/**/*.pyc"]

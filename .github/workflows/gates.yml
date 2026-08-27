@@ -190,6 +190,9 @@ jobs:
       - name: 공개 Rust Runtime SDK 패키징과 외부 소비
         if: needs.detect.outputs.hasWorkspace == 'true'
         run: python -X utf8 tests/audit/runtimeRustClientSdk.py
+      - name: 공개 Python Runtime SDK 소스와 생성 계약
+        if: needs.detect.outputs.hasWorkspace == 'true'
+        run: python -X utf8 tests/audit/runtimePythonClientSdk.py --source-only
       - name: standalone Runtime 배포 게이트 자체 검증
         if: needs.detect.outputs.hasWorkspace == 'true'
         run: python -X utf8 tests/audit/runtimeDistribution.py --selftest

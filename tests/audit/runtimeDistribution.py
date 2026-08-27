@@ -46,6 +46,8 @@ def sourceProblems(tool: str, workflow: str) -> list[str]:
         "runtimeOwnedStateRemoved",
         "providerStateTouched",
         "sdkArtifacts",
+        "pythonArtifacts",
+        "PYTHON_WHEEL_GLOBS",
     )
     for token in requiredTool:
         if token not in tool:
@@ -68,11 +70,18 @@ def sourceProblems(tool: str, workflow: str) -> list[str]:
         "Refuse an incomplete Runtime platform set",
         "runtimeRustClientSdk.py",
         "runtimeClientSdk.py",
+        "runtimePythonClientSdk.py",
+        "maturin==1.12.6",
+        "cp311-abi3",
         "runtrol-runtime-protocol-${{ needs.prepare.outputs.version }}.crate",
         "runtrol-runtime-client-${{ needs.prepare.outputs.version }}.tgz",
         "Refuse an incomplete SDK artifact set",
-        "needs: [prepare, package, sdk]",
+        "Refuse an incomplete Python wheel set or any sdist",
+        "needs: [prepare, package, sdk, python_wheel]",
         "gh release create runtime-v",
+        "Publish Python client to PyPI with Trusted Publishing",
+        "pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33",
+        "name: pypi",
     )
     for token in requiredWorkflow:
         if token not in workflow:
@@ -133,7 +142,7 @@ def selftest() -> int:
             "GitHub Sigstore artifact attestation SHA256SUMS ZIP_TIME",
             "os.replace(temporary, output) runtime.install.json Runtime locator exists",
             "runtimeOwnedStateRemoved providerStateTouched",
-            "sdkArtifacts",
+            "sdkArtifacts pythonArtifacts PYTHON_WHEEL_GLOBS",
         )
     )
     cleanWorkflow = """
@@ -151,11 +160,18 @@ id-token: write
 Refuse an incomplete Runtime platform set
 runtimeRustClientSdk.py
 runtimeClientSdk.py
+runtimePythonClientSdk.py
+maturin==1.12.6
+cp311-abi3
 runtrol-runtime-protocol-${{ needs.prepare.outputs.version }}.crate
 runtrol-runtime-client-${{ needs.prepare.outputs.version }}.tgz
 Refuse an incomplete SDK artifact set
-needs: [prepare, package, sdk]
+Refuse an incomplete Python wheel set or any sdist
+needs: [prepare, package, sdk, python_wheel]
 gh release create runtime-v
+Publish Python client to PyPI with Trusted Publishing
+uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33
+name: pypi
 """
     if sourceProblems(cleanTool, cleanWorkflow):
         print("[runtimeDistribution --selftest] green source fixture was rejected", file=sys.stderr)
@@ -179,9 +195,32 @@ def releaseManifestJourney(package, scratch: Path) -> None:
         f"runtrol-runtime-client-{version}.tgz",
     ):
         (release / name).write_bytes(f"sdk:{name}".encode())
+    wheelNames = {
+        "darwin-arm64": f"runtrol_runtime_client-{version}-cp311-abi3-macosx_11_0_arm64.whl",
+        "darwin-x64": f"runtrol_runtime_client-{version}-cp311-abi3-macosx_10_12_x86_64.whl",
+        "linux-arm64": f"runtrol_runtime_client-{version}-cp311-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
+        "linux-x64": f"runtrol_runtime_client-{version}-cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+        "win32-arm64": f"runtrol_runtime_client-{version}-cp311-abi3-win_arm64.whl",
+        "win32-x64": f"runtrol_runtime_client-{version}-cp311-abi3-win_amd64.whl",
+    }
+    for target, name in wheelNames.items():
+        (release / name).write_bytes(f"python:{target}".encode())
     manifest = package.releaseManifest(release)
-    if len(manifest.get("artifacts", [])) != 6 or len(manifest.get("sdkArtifacts", [])) != 3:
+    if (
+        len(manifest.get("artifacts", [])) != 6
+        or len(manifest.get("sdkArtifacts", [])) != 3
+        or len(manifest.get("pythonArtifacts", [])) != 6
+    ):
         raise RuntimeError("release manifest does not cover every Runtime and SDK artifact")
+    (release / wheelNames["win32-x64"]).unlink()
+    missingWheelRejected = False
+    try:
+        package.releaseManifest(release)
+    except FileNotFoundError:
+        missingWheelRejected = True
+    if not missingWheelRejected:
+        raise RuntimeError("release manifest accepted a missing Python wheel")
+    (release / wheelNames["win32-x64"]).write_bytes(b"python:win32-x64")
     (release / f"runtrol-runtime-client-{version}.tgz").unlink()
     try:
         package.releaseManifest(release)

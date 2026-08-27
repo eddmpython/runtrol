@@ -159,6 +159,10 @@ GATES: dict[str, tuple[str, list[str]]] = {
         "공개 Rust Runtime SDK 패키징과 외부 소비",
         [*PY, f"{HOOKS}/runtimeRustClientSdk.py"],
     ),
+    "runtimePythonClientSdk": (
+        "공개 Python Runtime SDK 소스와 생성 계약",
+        [*PY, f"{HOOKS}/runtimePythonClientSdk.py", "--source-only"],
+    ),
     "runtimeDistributionSelftest": (
         "standalone Runtime 배포 게이트 자체 검증",
         [*PY, f"{HOOKS}/runtimeDistribution.py", "--selftest"],

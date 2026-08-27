@@ -118,6 +118,8 @@ jobs:
         run: python -X utf8 tests/audit/runtimeRustClientSdk.py
       - name: Pack and consume the public TypeScript SDK outside the repository
         run: python -X utf8 tests/audit/runtimeClientSdk.py
+      - name: Inspect the public Python SDK source contract
+        run: python -X utf8 tests/audit/runtimePythonClientSdk.py --source-only
       - name: Collect the exact SDK artifacts
         run: |
           mkdir -p release
@@ -140,8 +142,54 @@ jobs:
             release/runtrol-runtime-client-${{ needs.prepare.outputs.version }}.tgz
           if-no-files-found: error
 
+  python_wheel:
+    needs: prepare
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.13"
+      - uses: Swatinem/rust-cache@63fed3e2fecf6f7b51dc6f043341b79ef82a9ae7 # v2.9.2
+      - name: Install the pinned Python wheel builder
+        run: python -m pip install maturin==1.12.6
+      - name: Refuse generated Python schema drift
+        run: python -X utf8 clients/python/tooling/generate.py --check
+      - name: Build one abi3-py311 wheel and no sdist
+        env:
+          FAMILY: ${{ matrix.family }}
+          MACOSX_DEPLOYMENT_TARGET: ${{ matrix.target == 'darwin-arm64' && '11.0' || matrix.target == 'darwin-x64' && '10.12' || '' }}
+        run: >-
+          python -c "import os,subprocess,sys;
+          command=[sys.executable,'-m','maturin','build','--manifest-path','clients/python/Cargo.toml','--release','--locked','--out','release'];
+          command.extend(['--compatibility','manylinux2014']) if os.environ['FAMILY'] == 'linux' else None;
+          subprocess.run(command,check=True)"
+      - name: Inspect and consume the exact Python wheel outside the repository
+        run: >-
+          python -X utf8 tests/audit/runtimePythonClientSdk.py
+          --wheel-directory release
+          --target ${{ matrix.target }}
+      - name: Attest the Python wheel with keyless Sigstore provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: release/runtrol_runtime_client-*.whl
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: runtrol-runtime-python-${{ needs.prepare.outputs.version }}-${{ matrix.target }}
+          path: release/runtrol_runtime_client-*.whl
+          if-no-files-found: error
+
   release:
-    needs: [prepare, package, sdk]
+    needs: [prepare, package, sdk, python_wheel]
     if: inputs.release
     runs-on: ubuntu-latest
     permissions:
@@ -177,6 +225,17 @@ jobs:
           expected={f'runtrol-runtime-protocol-{version}.crate',f'runtrol-runtime-client-{version}.crate',f'runtrol-runtime-client-{version}.tgz'};
           found={path.name for path in pathlib.Path('release').iterdir() if path.suffix in {'.crate','.tgz'}};
           (_ for _ in ()).throw(RuntimeError(f'SDK artifacts are {sorted(found)}, expected {sorted(expected)}')) if found != expected else None"
+      - name: Refuse an incomplete Python wheel set or any sdist
+        env:
+          EXPECTED_COUNT: ${{ needs.prepare.outputs.targetCount }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: >-
+          python -c "import os,pathlib;
+          root=pathlib.Path('release');
+          wheels=list(root.glob(f\"runtrol_runtime_client-{os.environ['VERSION']}-cp311-abi3-*.whl\"));
+          sdists=list(root.glob('runtrol_runtime_client-*.tar.gz'));
+          expected=int(os.environ['EXPECTED_COUNT']);
+          (_ for _ in ()).throw(RuntimeError(f'found {len(wheels)} Python wheels and {len(sdists)} sdists, expected {expected} wheels and no sdist')) if len(wheels) != expected or sdists else None"
       - name: Build the exact release manifest
         run: >-
           python -X utf8 .github/scripts/release/runtimePackage.py manifest
@@ -188,6 +247,7 @@ jobs:
           subject-path: |
             release/runtime-release-manifest.json
             release/runtrol-runtime-${{ needs.prepare.outputs.version }}-*.zip
+            release/runtrol_runtime_client-${{ needs.prepare.outputs.version }}-cp311-abi3-*.whl
       - name: Create the tagged Runtime release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -198,5 +258,26 @@ jobs:
           release/runtrol-runtime-protocol-${{ needs.prepare.outputs.version }}.crate
           release/runtrol-runtime-client-${{ needs.prepare.outputs.version }}.crate
           release/runtrol-runtime-client-${{ needs.prepare.outputs.version }}.tgz
+          release/runtrol_runtime_client-${{ needs.prepare.outputs.version }}-cp311-abi3-*.whl
           --title "Runtrol Runtime ${{ needs.prepare.outputs.version }}"
           --notes-file docs/runtimeOperations.md
+
+  publish_python:
+    needs: [prepare, release]
+    if: inputs.release
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/runtrol-runtime-client
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: runtrol-runtime-python-${{ needs.prepare.outputs.version }}-*
+          path: dist
+          merge-multiple: true
+      - name: Publish Python client to PyPI with Trusted Publishing
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2

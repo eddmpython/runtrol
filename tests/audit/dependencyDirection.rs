@@ -20,6 +20,11 @@ use cargo_metadata::{DependencyKind, MetadataCommand, Package};
 ///
 /// An empty slice means a leaf: it depends on no workspace crate at all.
 const ALLOWED_EDGES: &[(&str, &[&str])] = &[
+    // Python stable-ABI binding. It wraps only the two Apache public crates and cannot import Core or the daemon.
+    (
+        "runtrol-runtime-python",
+        &["runtrol-runtime-client", "runtrol-runtime-protocol"],
+    ),
     // Public Runtime vocabulary. It is provider-neutral and imports no private control or Core type.
     ("runtrol-runtime-protocol", &[]),
     // Public consumer SDK. Its only workspace dependency is the public wire contract.
