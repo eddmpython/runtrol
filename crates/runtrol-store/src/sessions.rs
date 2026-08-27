@@ -48,7 +48,7 @@ impl Store {
         let encoded = row.encode()?;
         let key = SessionKey::of(session);
 
-        let write = self.begin_durable_write("saving a session")?;
+        let write = self.begin_relaxed_write("saving a session")?;
         {
             let mut sessions = write
                 .open_table(SESSIONS)
@@ -238,7 +238,7 @@ impl Store {
         let existing = self.get_session(session)?;
         let key = SessionKey::of(session);
 
-        let write = self.begin_durable_write("removing a session")?;
+        let write = self.begin_relaxed_write("removing a session")?;
         let removed;
         {
             let mut sessions = write
@@ -360,6 +360,37 @@ impl Store {
     }
 
     /// Begin a write whose result must survive a power cut.
+    /// A write whose commit does not fsync: durable at the next durable commit, including the group flush.
+    ///
+    /// The hot session mutations use this because a durable commit is an fsync, and on a contended disk one
+    /// fsync held the daemon's only async thread for 0.6 to 13 seconds while every accept and greeting waited
+    /// (measured 2026-08-27 by the heartbeat and commit traces). The group flush below bounds the window in
+    /// which a power cut can lose these rows; a native pointer lost that way is rediscovered from the
+    /// provider's own catalogue.
+    pub(crate) fn begin_relaxed_write(
+        &self,
+        doing: &'static str,
+    ) -> Result<redb::WriteTransaction, StoreError> {
+        let write = self
+            .db()?
+            .begin_write()
+            .map_err(|error| StoreError::Engine {
+                doing,
+                source: Box::new(error.into()),
+            })?;
+        Ok(write)
+    }
+
+    /// Make everything committed so far durable with one fsync, off whatever thread calls this.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::Engine`] when the flush commit fails.
+    pub fn flush_durably(&self) -> Result<(), StoreError> {
+        let write = self.begin_durable_write("flushing prior commits")?;
+        commit_timed(write, "flushing prior commits")
+    }
+
     pub(crate) fn begin_durable_write(
         &self,
         doing: &'static str,

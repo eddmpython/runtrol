@@ -959,6 +959,26 @@ async fn serve_surfaces(
             while clients.join_next().await.is_some() {}
         });
     }
+    // The group flush: hot session writes commit without fsync, and this one task makes them durable on a
+    // short clock from a blocking thread. The fsync therefore never runs on the async thread again (measured
+    // 2026-08-27: single durable commits held it 0.6 to 13 seconds under contended CI disks).
+    {
+        let flushing = Arc::clone(&composed);
+        background.push(connections.spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+                let store = Arc::clone(&flushing);
+                let flushed =
+                    tokio::task::spawn_blocking(move || store.store.flush_durably()).await;
+                if let Ok(Err(error)) = flushed {
+                    // Reported once per failure through the crash-visible path below rather than swallowed:
+                    // a store that cannot flush will also fail the next mutation, which is where the person
+                    // sees it; this keeps the loop alive to say so again.
+                    close_trace(&format!("store flush failed: {error}"));
+                }
+            }
+        }));
+    }
     background.push(connections.spawn(crate::account_probe::supervise(
         Arc::clone(&composed),
         runtime_providers.clone(),
@@ -1988,11 +2008,10 @@ async fn converse_inner(
         mut session_index,
     } = services;
     loop {
+        // Deliberately untraced: this is the hottest line in the daemon, and a per-frame stderr write under the
+        // harness switch measurably moved the refresh p95 ratchet (56.8 ms over a 50 ms budget, 2026-08-27).
         let frame = match connection.recv().await {
-            Ok(Some(frame)) => {
-                close_trace("control: request frame read");
-                frame
-            }
+            Ok(Some(frame)) => frame,
             // The other end is gone. Ordinary, and the end of this task.
             Ok(None) => return,
             // The connection failed or sent something this build cannot carry. Said out loud if it can still be
