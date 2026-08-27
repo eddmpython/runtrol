@@ -37,7 +37,7 @@ pub fn arm_stall_backtrace(stalled: impl Fn() -> bool + Send + 'static) {
     // signal nothing else in this process uses. The thread id is stored as `usize`, which is a real cast on
     // both Unix families (an unsigned long on Linux, a pointer on macOS).
     unsafe {
-        ARMED_THREAD.store(libc::pthread_self() as usize, Ordering::Release);
+        ARMED_THREAD.store(thread_key(libc::pthread_self()), Ordering::Release);
         libc::signal(
             libc::SIGUSR1,
             print_backtrace as extern "C" fn(libc::c_int) as libc::sighandler_t,
@@ -54,13 +54,36 @@ pub fn arm_stall_backtrace(stalled: impl Fn() -> bool + Send + 'static) {
                 // SAFETY: the thread id was recorded by the armed thread itself, which lives as long as the
                 // process; SIGUSR1 carries the handler installed above.
                 unsafe {
-                    libc::pthread_kill(thread as libc::pthread_t, libc::SIGUSR1);
+                    libc::pthread_kill(thread_of(thread), libc::SIGUSR1);
                 }
             } else if !now_stalled {
                 reported = false;
             }
         }
     });
+}
+
+/// A thread id as a key: an unsigned long on Linux, so a checked conversion; the width is the same on
+/// every target this runs on and a failure would only ever mean a 32-bit host, which gets no watchdog.
+#[cfg(target_os = "linux")]
+fn thread_key(thread: libc::pthread_t) -> usize {
+    usize::try_from(thread).unwrap_or(0)
+}
+
+#[cfg(target_os = "linux")]
+fn thread_of(key: usize) -> libc::pthread_t {
+    libc::pthread_t::try_from(key).unwrap_or(0)
+}
+
+/// A thread id as a key: a pointer on the other Unix families, so a plain address.
+#[cfg(all(unix, not(target_os = "linux")))]
+fn thread_key(thread: libc::pthread_t) -> usize {
+    thread as usize
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
+fn thread_of(key: usize) -> libc::pthread_t {
+    key as libc::pthread_t
 }
 
 #[cfg(unix)]
