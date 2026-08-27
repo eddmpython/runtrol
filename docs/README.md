@@ -11,11 +11,11 @@
 | [providerDiscovery.md](providerDiscovery.md) | lazy executable probes, binary-identity cache, required and optional flags, honest model catalogues, and drift boundaries |
 | [coreRuntime.md](coreRuntime.md) | thin daemon boundary, runtime admission, memory and CPU budgets, bounded replay, cursor gaps, process containment, and metadata-only storage |
 | [runtimeProtocol.md](runtimeProtocol.md) | public Runtime transport, identity, methods, scopes, mutations, streams, errors, and compatibility |
-| [runtimeIntegration.md](runtimeIntegration.md) | Rust and TypeScript SDK adoption, enrollment, least privilege, reconnect, failure recovery, and credential lifecycle |
+| [runtimeIntegration.md](runtimeIntegration.md) | Rust, TypeScript, and Python SDK adoption, enrollment, exact-generation terminal continuity, least privilege, recovery, and credentials |
 | [runtimeSecurity.md](runtimeSecurity.md) | public endpoint trust layers, data ownership, authorization, hostile provider input, hosted companions, and incident response |
-| [runtimeOperations.md](runtimeOperations.md) | standalone Runtime artifacts, install, locator repair, administration, update, rollback, and uninstall |
+| [runtimeOperations.md](runtimeOperations.md) | standalone Runtime artifacts, install, locator repair, independent CLI administration, update, rollback, and uninstall |
 | [agentTools.md](agentTools.md) | one-click project enablement, the fixed seven-tool MCP catalogue, root-bound Runtime authority, provider registration, revocation, recovery, and real CLI verification |
-| [productSurfaces.md](productSurfaces.md) | public surface ownership, the VS Code-only PC decision, 30-session interaction contract, GitHub Pages distribution, and phone PWA boundary |
+| [productSurfaces.md](productSurfaces.md) | Runtime-first product identity, public client family, Studio GUI decision, unified sidebar, distribution, and phone boundary |
 | [phonePwa.md](phonePwa.md) | phone pairing, relay transport, durable device authority, bodyless Web Push, browser storage, reconnect, and current release limits |
 | [vscodeSurface.md](vscodeSurface.md) | the public VS Code runtime, module boundaries, 30-session and performance contracts, six-target distribution, and verification entry points |
 | [siteDeployment.md](siteDeployment.md) | GitHub Pages operating manual: what deploys and when, the everyday change loop, local preview, build budget, contract test, page anatomy, brand regeneration, post-deploy checks, rollback, and troubleshooting |

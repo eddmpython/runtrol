@@ -3,14 +3,15 @@
 > [!IMPORTANT]
 > **最高产品规则：仅看 Runtrol 侧边栏，无需点击，就必须能查看和管理此电脑上的所有已连接编码代理 CLI、当前项目、真实对话名称、通过旋转代理图标表示的运行中对话和用量。若任何信息藏在其他标签页、折叠视图、重复标签或错误层级之后，则禁止发布。**
 
-**在一个 VS Code 窗口中即时运行所有项目、会话和代理。**
+**把已安装的编码代理 CLI 连接到同一个本地 Runtime，并让任何应用通过同一公共契约操作它们。**
 
 [한국어](README.md) | [English](README_EN.md) | 中文 | [日本語](README_JA.md)
 
 **[产品站点](https://eddmpython.github.io/runtrol/)** · [从 Marketplace 安装](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio) · [手机应用](https://eddmpython.github.io/runtrol/app/)
 
-> 状态：**内核与 VS Code 扩展 `Runtrol Studio 0.1.22` 已面向六个原生目标公开。**
-> 侧边栏只有三节：你添加的项目及其会话、不属于任何项目的会话、各服务的用量。三节之外没有别的表面。
+> 状态：**Runtrol Runtime、公共 Rust、TypeScript、Python 客户端与旗舰 GUI Runtrol Studio 已经实现。**
+> Studio 把项目、会话、首次操作与各服务的七日用量放在一个原生列表中。
+> 即使没有 Studio，也可以通过 `runtrol integrations` 完成 Runtime 集成的批准与撤销。
 >
 > 现在按下去就能用的：
 >
@@ -18,7 +19,8 @@
 > - 新建会话就在按下的地方选服务，视线不会被拉到窗口顶部。
 > - 点开会话，那个 CLI 自己的界面会作为编辑器标签打开，直接输入就有回应。标签带着会话名，用项目的颜色。
 > - 置顶、改名、删除都在这一行上。删除调用服务自己的删除表面，所以是真的删掉。
-> - 用量：服务给出数字就画进度条，不给就说明为什么没有。
+> - 每个服务只显示一条主要七日用量。悬停或打开纵向菜单后，才显示服务报告的所有限制窗口和重置时间。
+>   没有数字时会说明原因，绝不捏造。
 >
 > 窗口出现时列表已经画好了。定位内核并连接需要几秒，不能让人干等，所以上一个窗口画过的列表会被保存，并在激活的
 > 第一行恢复。恢复的列表只是服务留在磁盘上的东西，它从不声称什么正在运行。
@@ -34,8 +36,9 @@ The security boundary and default-deny settings are documented in [SECURITY.md](
 
 ## 北极星
 
-**runtrol 将一个 VS Code 窗口变成所有项目、受支持的已安装编码代理 CLI 与 provider 所有会话的
-control plane。每个代理都能自主修改与其绑定的仓库。runtrol 保持会话存活、隔离并发工作，且不解释
+**runtrol 发现受支持的已安装编码代理 CLI，并通过公共本地 Runtime 连接 provider 所有的会话。
+Runtrol Studio 是旗舰 control plane，其他应用通过 Rust、TypeScript 或 Python 客户端使用同一 Runtime。
+每个代理都能自主修改与其绑定的仓库。runtrol 保持会话存活、隔离并发工作，且不解释
 对话内容，只把所选会话连接到准确的 workspace 或 worktree。会话和代理数量可以增长，但 renderer、
 active subscription 与 Code-hot workspace 始终有界。streaming 与后台工作绝不能让输入、滚动、会话切换
 或文件导航卡顿。已安装的 CLI、模型和 capability 在 runtime 自动发现。对话只在用户电脑与 provider
@@ -139,7 +142,7 @@ active subscription 与 Code-hot workspace 始终有界。streaming 与后台工
 | **PC（Windows、macOS、Linux）** | 从 [VS Code Marketplace 安装 `Runtrol Studio`](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio)。支持 x64 与 ARM64，不会分发独立桌面应用 |
 | **移动端** | [永久 GitHub Pages 地址上的手机 PWA](https://eddmpython.github.io/runtrol/app/)。先使用 VS Code 中的一次性二维码配对 |
 
-公开版本 `0.1.22` 与六个平台 VSIX 也可从 [GitHub Releases](https://github.com/eddmpython/runtrol/releases/tag/vscode-v0.1.22) 获取。
+公开版本与六个平台 VSIX 也可从 [GitHub Releases](https://github.com/eddmpython/runtrol/releases) 获取。
 VS Code 会自动更新从 Marketplace 安装的扩展。如果旧版本是直接通过 VSIX 安装的，请从 Marketplace 重新安装一次，因为 VS Code 会关闭手动 VSIX 安装的自动更新。
 
 ## 让代理使用 Runtrol
@@ -189,7 +192,8 @@ Rust 不是目的，而是上表中三个轴的手段。
 |---|---|---|
 | `crates/` | 产品内核（Rust）。守护进程、供应商适配器与传输。不存在独立 GUI crate | 已实现 |
 | [`clients/typescript/`](clients/typescript/) | 面向外部产品的公共 Runtime TypeScript SDK | 已验证打包消费 |
-| [`extensions/runtrol-vscode/`](extensions/runtrol-vscode/) | 唯一 PC 界面 `Runtrol Studio` | 30 会话发布负载已验证，0.1.22 已公开 |
+| [`clients/python/`](clients/python/) | 公共同步与异步 Runtime Python SDK，CPython 3.11+ abi3 | 已验证隔离 wheel 消费 |
+| [`extensions/runtrol-vscode/`](extensions/runtrol-vscode/) | 旗舰桌面 GUI `Runtrol Studio` | 已验证 30 会话发布负载与六个原生目标 |
 | [`pwa/`](pwa/) | 移动端 PWA | 已实现中继连接、会话控制、批准以及 `Needs you``Needs you`精确直达 |
 | [`site/`](site/) | [无依赖 GitHub Pages 落地页](https://eddmpython.github.io/runtrol/) | 已上线 |
 | [`assets/brand/`](assets/brand/) | 标志。SVG 为正本，favicon、图标与社交卡片皆由其派生 | |
@@ -215,7 +219,7 @@ git config core.hooksPath .githooks              # 每次克隆执行一次
 ## 许可证
 
 产品本体采用 [AGPL-3.0-only](LICENSE)。公开客户端包 (`runtrol-runtime-protocol` ·
-`runtrol-runtime-client` · `@runtrol/runtime-client`) 是供其他程序链接的，因此采用
+`runtrol-runtime-client` · `@runtrol/runtime-client` · Python `runtrol-runtime-client`) 是供其他程序链接的，因此采用
 [Apache-2.0](crates/runtrol-runtime-protocol/LICENSE)。
 
 仅仅使用 runtrol 不会给你的代码带来任何义务。runtrol 只是把智能体 CLI 作为独立进程来监督，

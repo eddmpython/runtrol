@@ -3,15 +3,15 @@
 > [!IMPORTANT]
 > **Top-level product rule: the Runtrol sidebar alone must show and manage every connected coding-agent CLI on this PC, the current project, actual conversation names, actively working conversations through spinning agent icons, and usage without a click. A release is blocked if any of this is hidden behind another tab, a collapsed view, repeated labels, or a false hierarchy.**
 
-**Run every project, session, and agent instantly from one VS Code window.**
+**Connect installed coding-agent CLIs to one local Runtime and operate them through the same public contract in any app.**
 
 [한국어](README.md) | English | [中文](README_ZH.md) | [日本語](README_JA.md)
 
 **[Product site](https://eddmpython.github.io/runtrol/)** · [Install from Marketplace](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio) · [Phone app](https://eddmpython.github.io/runtrol/app/)
 
-> Status: **the Core and the VS Code extension `Runtrol Studio 0.1.22` are public for six native targets.**
-> The sidebar is three sections: the projects you added with their conversations, the conversations that belong
-> to no project, and each service's usage. There is no surface outside those three.
+> Status: **Runtrol Runtime, public Rust, TypeScript, and Python clients, and the flagship Runtrol Studio GUI are built.**
+> Studio keeps projects, conversations, first-run actions, and each service's seven-day usage in one native list.
+> Runtime integration approval and revocation also work without Studio through `runtrol integrations`.
 >
 > What a person can press today:
 >
@@ -21,7 +21,8 @@
 > - Pressing a conversation opens that CLI's own screen as an editor tab, and typing there is answered. The tab
 >   carries the conversation's name and its project's colour.
 > - Pin, rename and delete live on the row. Delete calls the service's own deletion, so it really deletes.
-> - Usage draws a bar when the service publishes a number, and says why there is none when it does not.
+> - Each service has one primary seven-day usage line. Hover or the vertical menu reveals every limit window and
+>   reset the service reported. A missing number is explained, never invented.
 >
 > The list is already drawn when the window appears. Locating the Core and connecting takes seconds, and nobody
 > should watch them, so the list the last window drew is stored and restored in the first line of activation. A
@@ -40,8 +41,9 @@ The security boundary and default-deny settings are documented in [SECURITY.md](
 
 ## North Star
 
-**runtrol turns one VS Code window into the control plane for every project, supported installed coding-agent CLI,
-and provider-owned session. Each agent changes its bound repository autonomously. runtrol keeps sessions alive,
+**runtrol discovers supported installed coding-agent CLIs and connects provider-owned sessions through a public local
+Runtime. Runtrol Studio is its flagship control plane, and other applications use the same Runtime through Rust,
+TypeScript, or Python clients. Each agent changes its bound repository autonomously. runtrol keeps sessions alive,
 isolates concurrent work, and connects the selected session to its exact workspace or worktree without interpreting
 the conversation. Session and agent counts may grow while renderers, active subscriptions, and Code-hot workspaces
 remain bounded. Streaming and background work must never make typing, scrolling, session switching, or file
@@ -148,7 +150,7 @@ At every fork, take the side that is easier for the user. The test is not taste.
 | **PC (Windows, macOS, Linux)** | Install [`Runtrol Studio` from the VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio). x64 and ARM64 are supported. No separate desktop application is distributed |
 | **Mobile** | [Phone PWA at the permanent GitHub Pages origin](https://eddmpython.github.io/runtrol/app/). Pair first from the one-use QR in VS Code |
 
-Public release `0.1.22` and all six platform VSIX packages are also available from [GitHub Releases](https://github.com/eddmpython/runtrol/releases/tag/vscode-v0.1.22).
+Public releases and all six platform VSIX packages are also available from [GitHub Releases](https://github.com/eddmpython/runtrol/releases).
 VS Code automatically updates Marketplace installations. If an older version was installed directly from a VSIX, reinstall it once from the Marketplace because VS Code disables automatic updates for manual VSIX installations.
 
 ## Let agents use Runtrol
@@ -199,7 +201,8 @@ If those axes are not nailed down by gates, using Rust means nothing.
 |---|---|---|
 | `crates/` | The product core (Rust). Daemon, provider adapters, and transport. There is no standalone GUI crate | Implemented |
 | [`clients/typescript/`](clients/typescript/) | Public Runtime TypeScript SDK for external products | Packed consumer verified |
-| [`extensions/runtrol-vscode/`](extensions/runtrol-vscode/) | The only PC surface, `Runtrol Studio` | 30-session release load verified, 0.1.22 public |
+| [`clients/python/`](clients/python/) | Public synchronous and asynchronous Runtime Python SDK, CPython 3.11+ abi3 | Isolated wheel consumer verified |
+| [`extensions/runtrol-vscode/`](extensions/runtrol-vscode/) | Flagship desktop GUI, `Runtrol Studio` | 30-session release load and six native targets verified |
 | [`pwa/`](pwa/) | Mobile PWA | Relay connection, session control, approval, and exact `Needs you` focus implemented |
 | [`site/`](site/) | [Dependency-free GitHub Pages landing](https://eddmpython.github.io/runtrol/) | Live |
 | [`assets/brand/`](assets/brand/) | The logo. SVG is the source; favicons, icons, and social cards derive from it | |
@@ -225,7 +228,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) to contribute. Design-stage contributions
 ## License
 
 The product is [AGPL-3.0-only](LICENSE). The published client packages
-(`runtrol-runtime-protocol`, `runtrol-runtime-client`, `@runtrol/runtime-client`) exist for
+(`runtrol-runtime-protocol`, `runtrol-runtime-client`, `@runtrol/runtime-client`, and Python `runtrol-runtime-client`) exist for
 other programs to link against, so they are [Apache-2.0](crates/runtrol-runtime-protocol/LICENSE).
 
 Running runtrol places no license obligation on your own work. It supervises agent CLIs as

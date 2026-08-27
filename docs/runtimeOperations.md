@@ -3,7 +3,9 @@
 ## Artifact set
 
 A Runtime release contains standalone Runtime ZIPs for Windows, macOS, and Linux on x64 and arm64. It also contains
-the public Rust protocol crate, Rust client crate, TypeScript client package, and a release manifest.
+the public Rust protocol crate, Rust client crate, TypeScript client package, six CPython 3.11 stable-ABI Python
+wheels, and a release manifest. Python source distributions are refused so installation never falls back to an
+unreviewed local native build.
 
 Every Runtime ZIP contains one headless `runtrol` executable, LICENSE, NOTICE, public schema, manifest, checksums, and
 per-user install and uninstall scripts. It contains no provider CLI, provider credential, model, conversation, desktop
@@ -55,13 +57,19 @@ only its own entry, atomically, under the home's lock.
 
 ## Integration administration
 
-Use these VS Code commands:
+Runtime administration does not require Studio. Use the installed `runtrol` executable in an attached local terminal:
 
 | Command | Purpose |
 |---|---|
-| `Runtrol: Review Integration Requests` | Approve or deny exact pending identities, scopes, and roots |
-| `Runtrol: Manage Runtime Integrations` | Review and revoke installed consumer grants |
-| `Runtrol: Review Runtime Requests` | Confirm exact session-forget, key-rotation, and shared-writer session-open requests |
+| `runtrol integrations list [--json]` | List active and revoked integrations with exact scopes, roots, and generations |
+| `runtrol integrations review <pending-id>` | Approve a narrowed scope and root subset, deny, or cancel an enrollment |
+| `runtrol integrations revoke <integration-id>` | Revoke one exact installed consumer grant |
+| `runtrol requests review <pending-id>` | Confirm or deny an exact session-forget, key-rotation, or shared-writer request |
+| `runtrol providers help <provider-id>` | Show the provider's discovered installation or repair guidance |
+
+Authority-changing commands refuse piped input and command-line approval flags. They display the complete bounded
+subject and require an interactive decision plus exact identifier retyping. Studio exposes equivalent optional GUI
+commands named **Review Integration Requests**, **Manage Runtime Integrations**, and **Review Runtime Requests**.
 
 Revocation stops future Runtime access and retires subscriptions. It does not stop or delete provider-native sessions.
 After a consumer key is lost or a grant is revoked, create a new identity and enroll again. Do not silently reuse the

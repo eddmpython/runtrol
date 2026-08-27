@@ -4,8 +4,8 @@
 
 The public Runtime protocol is a provider-neutral JSON-RPC 2.0 contract for local products. The Rust DTOs in
 `runtrol-runtime-protocol` are the source of truth. They deterministically produce
-`schema/runtime.schema.json`, which is copied byte for byte into the TypeScript package and standalone Runtime
-archives.
+`schema/runtime.schema.json`, which is copied byte for byte into the TypeScript and Python packages and standalone
+Runtime archives.
 
 The private control wire remains a separate exact-version administration surface. Public consumers cannot import or
 reach private Core, daemon, IPC, store, driver, or VS Code extension modules.
@@ -40,9 +40,9 @@ opaque public endpoint, the private control endpoint, product version, process I
 whether it is draining. A consumer connects to the generation running the build it installed when that is listed and
 not draining, otherwise to the newest generation that is not draining. It is bootstrap data, not authority.
 
-The Rust and TypeScript SDKs derive the platform state directory, cap the locator at 8 KiB, reject links and malformed
-records, verify owner-only permissions, and validate the endpoint kind. Windows uses an owner-only named pipe. macOS
-and Linux use an owner-only Unix domain socket. There is no public TCP or HTTP listener.
+The Rust, TypeScript, and Python SDKs derive the platform state directory, cap the locator at 8 KiB, reject links and
+malformed records, verify owner-only permissions, and validate the endpoint kind. Windows uses an owner-only named
+pipe. macOS and Linux use an owner-only Unix domain socket. There is no public TCP or HTTP listener.
 
 Each frame is a 32-bit big-endian byte length followed by UTF-8 JSON. The frame ceiling is 16 MiB plus 64 KiB. Input
 has a separate 1 MiB ceiling. SDK readers validate lengths before allocation.
@@ -61,8 +61,9 @@ capabilities, numeric limits, and the current grant when authentication succeeds
 `runtime/initialized` before any ordinary request.
 
 An unenrolled identity may call `integrations/requestEnrollment` and `integrations/watchEnrollment`. Approval,
-denial, grant changes, and revocation happen through the local administration surface in Runtrol Studio. A public
-connection cannot approve itself.
+denial, grant changes, and revocation happen through the owner-local administration surface. The standalone
+`runtrol integrations` and `runtrol requests` commands are the baseline interface; Studio provides an equivalent
+optional GUI. A public connection cannot approve itself.
 
 ## Methods and scopes
 
@@ -79,6 +80,11 @@ connection cannot approve itself.
 | `sessions/interrupt`, `sessions/cool` | `session.stop` and the current lease |
 | `sessions/forget` | `session.delete`, a cold session, and exact local confirmation |
 | `sessions/deleteNative`, `sessions/archiveNative` | `session.delete`; the provider's own deletion or archival surface performs the mutation, and a conversation Runtime supervises is refused until it is forgotten |
+| `terminals/list`, `terminals/watchIndex`, `terminals/attach` | `session.output.read` and authorized terminal visibility |
+| `terminals/open` | `session.start` for a fresh target or `session.resume` for a native target, plus an approved root |
+| `terminals/acquireControl`, `terminals/write`, `terminals/resize` | `session.input.write` and the current terminal lease where applicable |
+| `terminals/stop` | `session.stop` and the current terminal lease |
+| `terminals/renewControl`, `terminals/releaseControl`, `terminals/detach` | The current terminal view or lease generation |
 | `approvals/respond` | `approval.respond.low` or `approval.respond.high`, plus the current lease |
 | `sessions/renewControl`, `sessions/releaseControl` | The current lease generation |
 | `integrations/getGrant`, `integrations/rotateKey` | The authenticated integration, with local confirmation for rotation |
@@ -86,7 +92,8 @@ connection cannot approve itself.
 
 Notifications are `providers/changed`, `providers/usageChanged` (the account usage snapshot, sent once when a
 provider subscription starts and again on every change), `providers/watchEnded`, `sessions/indexChanged`,
-`sessions/indexEnded`, `sessions/event`, and `sessions/lagged`. Notification names cannot be invoked as requests.
+`sessions/indexEnded`, `sessions/event`, `sessions/lagged`, `terminals/indexChanged`, `terminals/indexEnded`,
+`terminals/output`, `terminals/lagged`, and `terminals/exited`. Notification names cannot be invoked as requests.
 
 ### Native discovery scope
 
@@ -129,11 +136,20 @@ target, and a keyed authenticator over sensitive parameters. An exact duplicate 
 with different parameters returns `idempotencyConflict`. If delivery may have happened after the retention boundary,
 Runtime returns `outcomeUnknown` and never repeats the provider mutation automatically.
 
+Native conversation ownership is one atomic claim shared by structured sessions and hosted terminals. A second owner
+receives `nativeConversationBusy`, `terminalAlreadyLive`, or `legacyGenerationBusy` as appropriate. Each terminal
+descriptor carries both its Runtime generation and terminal generation. Reconnect attaches only to that exact Runtime
+generation; an unavailable owner returns `terminalGenerationUnavailable` and is never redirected.
+
 ## Streams
 
 Provider and managed-session watchers begin with a complete snapshot and then emit changed complete snapshots. Event
 watchers use `EventCursor { stream, epoch, seq }`. The start result states `startsAt`, `liveAt`, and any explicit gap.
 The consumer accepts a cursor only after it has consumed the event. Reconnect resumes from that accepted cursor.
+
+Terminal views stream monotonic output sequence numbers. A lag notification carries the complete current screen and
+the next sequence. A reconnect re-reads the exact generation's screen snapshot rather than replaying or interpreting
+missing bytes.
 
 Queues and replay are bounded. Lag ends or marks the subscription with the first unavailable cursor. The SDK never
 accumulates an unbounded transcript and never treats provider source offsets as reconnect cursors.
@@ -150,7 +166,8 @@ failures.
 runtimeNotInstalled runtimeUnavailable protocolIncompatible notInitialized unauthenticated
 enrollmentPending enrollmentDenied integrationRevoked scopeDenied presenceRequired rootDenied
 providerUnavailable capabilityUnavailable modelUnavailable nativeCatalogueUnsupported sessionNotFound
-sessionConflict controlConflict leaseExpired workspaceConflict approvalExpired approvalOptionInvalid
+terminalNotFound terminalGenerationUnavailable terminalGone terminalAlreadyLive terminalWorkspaceConflict
+nativeConversationBusy legacyGenerationBusy sessionConflict controlConflict leaseExpired workspaceConflict approvalExpired approvalOptionInvalid
 idempotencyConflict outcomeUnknown resourceExhausted rateLimited gap invalidRequest methodNotFound internal
 ```
 
@@ -162,6 +179,6 @@ finalized revision.
 The exact schema and revision inventory ship in every Runtime archive. Release metadata records the minimum
 rollback-safe store schema. Current release compatibility is:
 
-| Runtime | Rust SDK | TypeScript SDK | Finalized revision | Store rollback floor |
-|---|---|---|---|---|
-| 0.1.1 | 0.1.1 | 0.1.1 | `2026-08-13` | 1 |
+| Runtime | Rust SDK | TypeScript SDK | Python SDK | Finalized revision | Store rollback floor |
+|---|---|---|---|---|---|
+| 0.1.1 | 0.1.1 | 0.1.1 | 0.1.1 | `2026-08-13` | 1 |

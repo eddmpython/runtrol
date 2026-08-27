@@ -1,61 +1,86 @@
-# The terminal surface
+# Terminal surface
 
-The conversation surface is the coding service's own terminal interface, run by the Core on a pseudo
-terminal it owns and shown by any number of viewers at once. Runtrol carries the screen; it does not draw
-one of its own.
+The conversation surface is the coding service's own terminal interface. Runtime starts it on a pseudo terminal,
+keeps a bounded screen snapshot, and lets authorized viewers attach. Runtrol transports terminal bytes and never
+turns them into a Runtrol-owned chat transcript.
 
 ## Why
 
-Every service ships a terminal interface and keeps it current. A page of ours has to follow each of them
-feature by feature and is always behind. Carrying the service's screen costs nothing per feature: when a
-service adds one, it is there the same day. It is also the thin principle as a surface: bytes travel, and
-nothing between the service and the person reads them.
+Provider CLIs already own current model selection, permissions, approvals, history, and interactive presentation.
+Rebuilding those controls in every client creates a second product that drifts from the provider. A terminal viewer
+inherits new provider features without prompt injection, semantic parsing, or a model connection owned by Runtrol.
 
-## Shape
+## Host
 
-- **The Core is the terminal.** `runtrol-childproc::pty` makes the pseudo terminal (`ConPTY` on Windows,
-  `openpty` elsewhere, owned code, no third-party terminal crate). `runtrol-core::terminal` hosts the CLI on
-  it: one reader thread, a bounded output ring shared by every viewer, a screen model (`vt100`, no
-  scrollback) so a viewer that attaches late is handed the current picture.
-- **The Core answers the terminal's questions.** Measured 2026-08-25: Claude Code asks XTVERSION and the
-  cursor position at start and draws nothing until both are answered; Codex and Grok ask the cursor. The
-  host answers as xterm 378 would (`terminal::xterm`), so the screen exists before any viewer attaches and
-  two viewers never answer twice. Answers a viewer's own terminal sends are dropped on the input path.
-- **One mouse for every service** (`terminal::mouse`). The Core switches mouse reporting on toward the
-  viewer only, never toward the CLI, and translates each report into keys on the screen model: a wheel
-  notch is three arrows, a click on a row is the arrows that move the cursor's row there. The service sees
-  keys, as from a keyboard. Claude Code's own mouse reporting is switched off by its manifest
-  (`CLAUDE_CODE_DISABLE_MOUSE=1`) so there is one feel, not three.
-- **The launch is the manifest's word.** `[tui]` declares `new`, `resume`, `env`, `env_unset`. Nothing in
-  the Core, the daemon, the extension or the phone knows a service by name. `env_unset` exists because a
-  daemon started from inside a service's own session inherits that session's markers (measured: Claude
-  Code switched transcript saving off when it saw them).
-- **PC:** an editor-area terminal tab per conversation (`extensions/runtrol-vscode/src/terminalTabs.ts`).
-  The tab's pseudoterminal is one private-wire connection. Split, grid and full screen are VS Code's own.
-- **Phone:** the same terminal over the public Runtime, drawn by xterm.js. Same screen, same keyboard.
+- `runtrol-childproc::pty` owns ConPTY on Windows and `openpty` on Unix.
+- `runtrol-core::terminal` owns one reader, a bounded output ring, and a `vt100` screen snapshot without scrollback.
+- Runtime answers terminal capability and cursor-position queries once at the host. Viewers do not race to answer.
+- Mouse reports are normalized into provider-visible key input. Provider-specific launch behavior remains declarative
+  in the manifest `[tui]` section through `new`, `resume`, `env`, and `env_unset`.
+- No Runtime, Studio, SDK, or phone code selects behavior by a hardcoded provider name.
 
-## Wire
+The screen model exists only for geometry, mouse translation, and late-view snapshots. It is dropped with the hosted
+terminal and is never persisted as a conversation copy.
 
-Private wire (`runtrol-ipc`): `terminalOpen { provider, native, workspace, cols, rows }` or
-`terminalAttach { terminal, cols, rows }` turns the connection into a view. Down: `terminalOpened`, then
-`terminalOutput { bytes }` (base64) repeatedly, `terminalLagged {}` when the viewer fell behind the ring
-(the screen follows; clear first), `terminalExited { code }`. Up, while the view lasts: `terminalInput
-{ bytes }` and `terminalResize { cols, rows }`. Opening a conversation whose terminal is already open joins
-it rather than starting a second process.
+## Public Runtime contract
 
-Scope: opening a fresh conversation needs `session.start`, opening a stored one needs `session.resume`,
-and both pass the same provider and workspace boundary a session start does; joining and typing need
-`session.inputWrite`; a resize needs `session.outputRead`. Nothing here is
-reachable with a listing scope alone.
+Application integrations use the public Runtime methods:
+
+| Method group | Purpose |
+|---|---|
+| `terminals/list`, `terminals/watchIndex` | Discover live terminal descriptors and their owning Runtime generation |
+| `terminals/open`, `terminals/attach` | Open a fresh or native provider terminal, or attach a viewer to an existing one |
+| `terminals/acquireControl`, `renewControl`, `releaseControl` | Hold one bounded terminal input lease |
+| `terminals/write`, `terminals/resize` | Send base64 bytes or exact geometry under the current lease |
+| `terminals/detach`, `terminals/stop` | Detach one viewer or explicitly stop the hosted provider process |
+| `terminals/output`, `terminals/lagged`, `terminals/exited` | Stream ordered output, replace a lagged view from a complete snapshot, and report exit |
+
+Open and attach return a terminal descriptor, a view ID, the current base64 screen, and an optional control lease.
+Output sequence numbers are per view. A lag notification includes the complete replacement screen and next sequence,
+so a client never attempts to reconstruct missing bytes semantically.
+
+Fresh open needs `session.start`; native resume needs `session.resume`; listing and viewing need
+`session.output.read`; write and lifecycle mutations need the corresponding input or stop scope plus an unexpired
+control lease. Canonical root checks and provider capabilities are the same boundaries used by structured sessions.
+
+## Generation continuity
+
+Every descriptor carries `runtimeGeneration` and `terminalGeneration`. A client that reconnects after transport loss
+must re-read the owner-validated locator, select the exact Runtime generation named by the descriptor, attach there,
+and replace its screen from the returned snapshot. It must not redirect to the current generation.
+
+`terminalAlreadyLive` identifies the generation and terminal that already own a native provider conversation.
+`terminalGenerationUnavailable` means that exact owner no longer exists. `terminalGone`,
+`terminalWorkspaceConflict`, `nativeConversationBusy`, and `legacyGenerationBusy` are distinct typed failures. Input,
+resize, stop, control acquisition, and approval mutations are never retried after an uncertain outcome.
+
+One atomic native claim registry prevents a native conversation from having both a structured owner and a terminal
+owner, including during generation handover. A draining generation may serve terminals it already owns but cannot
+open new ones.
+
+## Clients
+
+- Rust exposes the typed terminal client and stream in `runtrol-runtime-client`.
+- TypeScript exposes `TerminalClient`, `TerminalView`, exact-generation attach, and typed Runtime failures from
+  `@runtrol/runtime-client`.
+- Python exposes asynchronous and synchronous terminal clients from `runtrol_runtime`, with the same schema-generated
+  params and typed public exceptions.
+- Studio uses a dedicated public Runtime terminal connection per editor tab. Its private administration connection
+  contains no terminal request or response variants.
+- The phone uses its authenticated, device-scoped private transport adapter into the same terminal host. This paired
+  device wire is not an SDK or application integration surface.
+
+No published Studio release before the public terminal contract stored a private terminal attachment identity.
+Therefore there is no legacy published terminal tab that can be discovered or migrated. Compatibility is enforced by
+generation-pinned public attach and the `legacyGenerationBusy` barrier rather than an invented client-side bridge.
 
 ## Lifetime
 
-A terminal lives while its CLI runs, whatever the viewers do; closing a tab detaches a viewer and the
-conversation continues. A draining Core generation counts open terminals as live work, stays until they
-end, and refuses to open new ones (the successor takes them). When the CLI exits, the Core lets the last
-frame drain before releasing the terminal (measured on Windows: releasing on the exit itself lost it).
+A terminal lives while its provider CLI runs. Closing a Studio tab or SDK view detaches that viewer only. When the
+provider exits, Runtime drains the final frame before releasing the terminal. A draining Runtime generation remains
+alive until every terminal and structured session it owns has ended.
 
-## What is deliberately absent
+## Deliberately absent
 
-No transcript, no parsing of the screen for meaning, no prompt rewriting, no model call. The screen model is
-geometry for the mouse and a snapshot for late viewers, and it is dropped with the terminal.
+There is no transcript storage, screen interpretation, prompt rewrite, semantic routing, hidden model call, or API
+key relay. Runtime carries bytes, authority, geometry, bounded replay, and process lifetime only.

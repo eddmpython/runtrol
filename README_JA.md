@@ -3,15 +3,15 @@
 > [!IMPORTANT]
 > **最上位の製品規則: Runtrol サイドバーだけで、この PC に接続されたすべてのコーディングエージェント CLI、現在のプロジェクト、実際の会話名、実行中の会話を示す回転するエージェントアイコン、使用量をクリックせずに把握して管理できなければならない。別タブ、折りたたまれたビュー、重複ラベル、誤った階層の背後に情報が隠れる場合はリリースできない。**
 
-**一つの VS Code ウィンドウですべてのプロジェクト、セッション、エージェントを即座に運用する。**
+**インストール済みのコーディングエージェント CLI を一つのローカル Runtime に接続し、どのアプリからも同じ公開契約で運用する。**
 
 [한국어](README.md) | [English](README_EN.md) | [中文](README_ZH.md) | 日本語
 
 **[製品サイト](https://eddmpython.github.io/runtrol/)** · [Marketplace からインストール](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio) · [スマートフォンアプリ](https://eddmpython.github.io/runtrol/app/)
 
-> ステータス: **コアと VS Code 拡張 `Runtrol Studio 0.1.22` を六つのネイティブ対象で公開した。**
-> サイドバーは三つの節だけだ。追加したプロジェクトとその会話、プロジェクトに属さない会話、
-> サービスごとの使用量。この三つの外に表面はない。
+> ステータス: **Runtrol Runtime、公開 Rust、TypeScript、Python クライアント、代表 GUI の Runtrol Studio が実装済みである。**
+> Studio はプロジェクト、会話、初回操作、サービスごとの七日間使用量を一つのネイティブ一覧に置く。
+> Studio がなくても `runtrol integrations` で Runtime 統合の承認と失効が完結する。
 >
 > いま人が押して動くもの:
 >
@@ -21,7 +21,8 @@
 > - 会話を押すと、その CLI 自身の画面がエディタのタブとして開き、そこに打てば返ってくる。タブは会話の名前を
 >   持ち、プロジェクトの色をまとう。
 > - 固定、名前の変更、削除は行にある。削除はサービス自身の削除表面を呼ぶので本当に消える。
-> - 使用量は、サービスが数値を出すならバーで、出さないなら「なぜ無いか」で答える。
+> - サービスごとに主要な七日間使用量を一行だけ表示する。ホバーまたは縦メニューで、サービスが報告した
+>   全制限窓とリセット時刻を開く。数値がなければ捏造せず理由を示す。
 >
 > 一覧は窓が現れた時点ですでに描かれている。コアを見つけて繋ぐのに数秒かかるが、その間に見るものが無いのは
 > 失敗なので、前の窓が描いた一覧を保存し、起動の最初の行で戻す。戻した一覧はサービスがディスクに持つものだけで、
@@ -39,8 +40,9 @@ The security boundary and default-deny settings are documented in [SECURITY.md](
 
 ## 北極星
 
-**runtrol は一つの VS Code ウィンドウを、すべてのプロジェクト、対応するインストール済み
-コーディングエージェント CLI、provider 所有セッションの control plane にする。各エージェントは
+**runtrol は対応するインストール済みコーディングエージェント CLI を検出し、provider 所有セッションを
+公開ローカル Runtime で接続する。Runtrol Studio は代表 control plane であり、他のアプリは Rust、
+TypeScript、Python クライアントから同じ Runtime を使う。各エージェントは
 結び付けられたリポジトリを自律的に変更する。runtrol はセッションを生かし、同時作業を隔離し、
 会話本文を解釈せずに選択したセッションを正確な workspace または worktree に接続する。
 セッションとエージェントが増えても renderer、active subscription、Code-hot workspace は bounded のまま。
@@ -145,7 +147,7 @@ streaming と background 作業が入力、スクロール、セッション切�
 | **PC（Windows、macOS、Linux）** | [VS Code Marketplace から `Runtrol Studio`](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio) をインストールする。x64 と ARM64 に対応し、独立したデスクトップアプリは配布しない |
 | **モバイル** | [恒久的な GitHub Pages オリジンのスマートフォン PWA](https://eddmpython.github.io/runtrol/app/)。まず VS Code の一回限りの QR でペアリングする |
 
-公開リリース `0.1.22` と六つの platform VSIX は [GitHub Releases](https://github.com/eddmpython/runtrol/releases/tag/vscode-v0.1.22) からも取得できる。
+公開リリースと六つの platform VSIX は [GitHub Releases](https://github.com/eddmpython/runtrol/releases) からも取得できる。
 Marketplace からインストールした拡張は VS Code が自動更新する。以前の版を VSIX から直接インストールした場合、VS Code はその拡張の自動更新を無効にするため、Marketplace から一度再インストールする。
 
 ## エージェントに Runtrol を使わせる
@@ -196,7 +198,8 @@ Rust は目的ではなく、上の表の三つの軸のための手段である
 |---|---|---|
 | `crates/` | 製品コア（Rust）。デーモン、プロバイダーアダプター、トランスポート。独立 GUI crate は存在しない | 実装済み |
 | [`clients/typescript/`](clients/typescript/) | 外部製品向け公開 Runtime TypeScript SDK | packed consumer 検証済み |
-| [`extensions/runtrol-vscode/`](extensions/runtrol-vscode/) | 唯一の PC surface `Runtrol Studio` | 30 session のリリース負荷を検証、0.1.22 公開済み |
+| [`clients/python/`](clients/python/) | 公開同期・非同期 Runtime Python SDK、CPython 3.11+ abi3 | 隔離 wheel consumer 検証済み |
+| [`extensions/runtrol-vscode/`](extensions/runtrol-vscode/) | 代表デスクトップ GUI `Runtrol Studio` | 30 session のリリース負荷と六つのネイティブ対象を検証済み |
 | [`pwa/`](pwa/) | モバイル PWA | リレー接続、セッション制御、承認、`Needs you``Needs you`正確な focus を実装済み |
 | [`site/`](site/) | [依存関係のない GitHub Pages ランディング](https://eddmpython.github.io/runtrol/) | 公開済み |
 | [`assets/brand/`](assets/brand/) | ロゴ。SVG が正本で、favicon・アイコン・ソーシャルカードはそこから派生する | |
@@ -222,7 +225,7 @@ git config core.hooksPath .githooks              # クローンごとに一度
 ## ライセンス
 
 製品本体は [AGPL-3.0-only](LICENSE)。公開クライアントパッケージ (`runtrol-runtime-protocol` ·
-`runtrol-runtime-client` · `@runtrol/runtime-client`) は他のプログラムがリンクするためのものなので
+`runtrol-runtime-client` · `@runtrol/runtime-client` · Python `runtrol-runtime-client`) は他のプログラムがリンクするためのものなので
 [Apache-2.0](crates/runtrol-runtime-protocol/LICENSE)。
 
 runtrol を使うだけでは、あなたのコードに何の義務も生じません。runtrol はエージェント CLI を

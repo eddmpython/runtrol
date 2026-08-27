@@ -12,8 +12,8 @@ checks and prove the named Runtime instance. Suspicious ownership, permissions, 
 fails closed and requires local repair.
 
 The public dispatcher cannot invoke private administration methods. Integration approval, grant widening, root
-widening, revocation, installation repair, and physical-presence confirmation remain local administration actions in
-Runtrol Studio.
+widening, revocation, installation repair, and physical-presence confirmation remain owner-local administration
+actions. The installed `runtrol` command provides this surface independently; Studio is an optional GUI for it.
 
 ## Data ownership
 
@@ -81,8 +81,9 @@ request to bind a public listener. A companion cannot turn the owner-only Runtim
 
 ## Incident response
 
-Use `Runtrol: Manage Runtime Integrations` to revoke a compromised or removed consumer. Revocation does not delete a
-provider conversation or hide whether a turn is still active. Interrupting work is a separate explicit operation.
+Use `runtrol integrations revoke <integration-id>` or Studio's **Manage Runtime Integrations** command to revoke a
+compromised or removed consumer. Revocation does not delete a provider conversation or hide whether a turn is still
+active. Interrupting work is a separate explicit operation.
 
 If locator ownership or permissions are unsafe, do not delete it through an SDK. Stop the verified Runtime, inspect
 the state directory owner, remove only the verified stale locator, and start the signed installed executable. If the

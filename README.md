@@ -3,15 +3,15 @@
 > [!IMPORTANT]
 > **최상위 제품 강행 원칙: Runtrol 사이드바 한 화면만으로 이 PC의 모든 연결된 에이전트 CLI, 현재 프로젝트, 실제 대화명, 실행 중인 항목의 회전 에이전트 아이콘과 사용량을 클릭 없이 파악하고 관리할 수 있어야 한다. 이 정보가 다른 탭, 접힌 뷰, 반복 라벨이나 잘못된 계층 뒤에 숨으면 릴리즈할 수 없다.**
 
-**한 개의 VS Code 창에서 모든 프로젝트, 세션, 에이전트를 즉시 운영한다.**
+**설치형 코딩 에이전트 CLI를 한 로컬 Runtime에 연결하고, 어떤 앱에서도 같은 공개 계약으로 운영한다.**
 
 한국어 | [English](README_EN.md) | [中文](README_ZH.md) | [日本語](README_JA.md)
 
 **[제품 사이트](https://eddmpython.github.io/runtrol/)** · [Marketplace 설치](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio) · [휴대폰 앱](https://eddmpython.github.io/runtrol/app/)
 
-> 상태: **코어와 VS Code 확장 `Runtrol Studio 0.1.22`를 6개 네이티브 플랫폼으로 공개했다.**
-> 사이드바는 세 절이다. 추가한 프로젝트와 그 대화, 프로젝트 없이 한 대화, 서비스별 사용량.
-> 세 절 밖의 표면은 없다.
+> 상태: **Runtrol Runtime, 공개 Rust, TypeScript, Python 클라이언트와 대표 GUI Runtrol Studio가 서 있다.**
+> Studio 사이드바는 프로젝트, 대화, 첫 실행 행동, 서비스별 7일 사용량을 한 네이티브 목록에 둔다.
+> Runtime 통합 승인과 철회는 Studio 없이도 `runtrol integrations` 명령으로 끝난다.
 >
 > 지금 사람이 눌러서 되는 것:
 >
@@ -21,7 +21,8 @@
 > - 대화를 누르면 그 CLI 자신의 화면이 편집기 탭으로 열리고 바로 타이핑해서 답이 온다. 탭은 그 대화의 이름을
 >   달고 프로젝트의 색을 쓴다.
 > - 대화 행에서 고정, 이름 변경, 삭제를 한다. 삭제는 서비스 자신의 삭제 표면을 부르므로 실제로 지워진다.
-> - 사용량은 서비스가 숫자를 주면 막대로, 안 주면 왜 없는지로 말한다.
+> - 사용량은 서비스별 한 줄에서 실제 7일 창만 먼저 보이고, 호버나 세로 메뉴를 열면 서비스가 보고한 모든
+>   제한 창과 초기화 시각이 나온다. 숫자가 없으면 만들지 않고 왜 없는지로 말한다.
 >
 > 목록은 창이 뜰 때 이미 그려져 있다. 코어를 찾고 붙는 몇 초 동안 볼 것이 없어서는 안 되므로, 지난 창이 그린
 > 목록을 저장해 두고 활성화 첫 줄에서 되살린다. 되살린 목록은 서비스가 디스크에 갖고 있는 것뿐이고 무엇이
@@ -39,8 +40,9 @@
 
 ## 북극성
 
-**runtrol은 한 개의 VS Code 창을 모든 프로젝트, 지원되는 설치형 코딩 에이전트 CLI,
-provider 소유 세션의 control plane으로 만든다. 각 에이전트는 결박된 저장소를 자율적으로 변경한다.
+**runtrol은 지원되는 설치형 코딩 에이전트 CLI를 발견하고 provider 소유 세션을 공개 로컬 Runtime으로
+연결한다. Runtrol Studio는 그 계약을 사용하는 대표 control plane이고, 다른 앱은 Rust, TypeScript,
+Python 클라이언트로 같은 Runtime에 붙는다. 각 에이전트는 결박된 저장소를 자율적으로 변경한다.
 runtrol은 세션을 살려 두고 동시 작업을 격리하며, 대화 본문을 해석하지 않고 선택한 세션을 정확한
 workspace 또는 worktree에 연결한다. 세션과 에이전트가 늘어도 renderer, 활성 subscription,
 Code-hot workspace는 bounded 상태를 유지한다. streaming과 background 작업은 입력, 스크롤,
@@ -145,7 +147,7 @@ Code-hot workspace는 bounded 상태를 유지한다. streaming과 background �
 | **PC (Windows, macOS, Linux)** | [VS Code Marketplace에서 `Runtrol Studio`](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio)를 설치한다. x64와 ARM64를 지원하며 별도 데스크톱 앱은 배포하지 않는다 |
 | **모바일** | [영구 GitHub Pages 주소의 휴대폰 PWA](https://eddmpython.github.io/runtrol/app/). 먼저 VS Code에서 일회용 QR로 페어링한다 |
 
-공개 릴리스 `0.1.22`과 6개 플랫폼별 VSIX는 [GitHub Releases](https://github.com/eddmpython/runtrol/releases/tag/vscode-v0.1.22)에서도 받을 수 있다.
+공개 릴리스와 6개 플랫폼별 VSIX는 [GitHub Releases](https://github.com/eddmpython/runtrol/releases)에서도 받을 수 있다.
 Marketplace 설치는 VS Code가 자동 갱신한다. 예전 버전을 VSIX로 직접 설치했다면 VS Code가 그 확장의 자동 갱신을 끄므로 Marketplace에서 한 번 다시 설치한다.
 
 ## 에이전트에게 Runtrol 맡기기
@@ -196,7 +198,8 @@ Rust 는 목적이 아니라 위 표의 세 축을 위한 수단이다.
 |---|---|---|
 | `crates/` | 제품 코어 (Rust). daemon, provider 어댑터, 전송. 독립 GUI crate는 없다 | 구현됨 |
 | [`clients/typescript/`](clients/typescript/) | 외부 제품용 공개 Runtime TypeScript SDK | packed 소비 검증 |
-| [`extensions/runtrol-vscode/`](extensions/runtrol-vscode/) | 유일한 PC 표면 `Runtrol Studio` | 30개 세션 출시 부하 검증, 0.1.22 공개 |
+| [`clients/python/`](clients/python/) | 동기 및 비동기 공개 Runtime Python SDK, CPython 3.11+ abi3 | 격리 wheel 소비 검증 |
+| [`extensions/runtrol-vscode/`](extensions/runtrol-vscode/) | 대표 데스크톱 GUI `Runtrol Studio` | 30개 세션 출시 부하와 6개 네이티브 대상 검증 |
 | [`pwa/`](pwa/) | 모바일 PWA | 릴레이 연결, 대화 제어, 승인, `Needs you` 직행 구현 |
 | [`site/`](site/) | [무의존성 GitHub Pages 랜딩](https://eddmpython.github.io/runtrol/) | 공개됨 |
 | [`assets/brand/`](assets/brand/) | 로고. SVG 가 정본, 파비콘·아이콘·소셜 카드는 파생 | |
@@ -222,7 +225,7 @@ git config core.hooksPath .githooks              # 클론마다 한 번
 ## 라이선스
 
 제품 본체는 [AGPL-3.0-only](LICENSE). 공개 클라이언트 패키지 (`runtrol-runtime-protocol` ·
-`runtrol-runtime-client` · `@runtrol/runtime-client`) 는 남이 링크하라고 내는 것이므로
+`runtrol-runtime-client` · `@runtrol/runtime-client` · Python `runtrol-runtime-client`) 는 남이 링크하라고 내는 것이므로
 [Apache-2.0](crates/runtrol-runtime-protocol/LICENSE).
 
 runtrol 을 쓰는 것만으로는 당신 코드에 아무 의무도 생기지 않는다. runtrol 은 에이전트 CLI 를

@@ -12,13 +12,28 @@ and refactoring that no user can observe do not belong here.
 
 ### Added
 
-- Agent Usage draws every limit a service actually has, one named bar each, and all three services now fill
-  them without a turn. Claude Code shows its five-hour window, its whole-account week and its per-model week
-  side by side, named for the model the service scoped them to; Codex shows every metered bucket it has,
-  including the model-scoped pair it publishes beside the account's own week; Grok shows its plan, its sign-in
-  and its usage period. The line above the bars names the window the service says is binding right now rather
-  than the first one, because on a measured account the five-hour window read 13% while the model-scoped week
-  was at 100% and refusing work.
+- Applications can now open, list, watch, attach, control, resize, write, detach, and stop provider terminal
+  sessions through the public Runtime protocol. Rust, TypeScript, and Python clients expose the same typed
+  terminal contract. A reconnect is pinned to the Runtime generation that owns the terminal and never retries
+  uncertain input or redirects it to another process.
+
+- The public Python package is distributed as `runtrol-runtime-client` and imported as `runtrol_runtime`. It
+  provides synchronous and asynchronous APIs, generated protocol types, typed Runtime exceptions, and one
+  CPython 3.11 stable-ABI wheel for each of the six native targets. Release publication refuses source
+  distributions and consumes every built wheel outside the repository before publishing.
+
+- Runtime integrations can be reviewed, narrowed, listed, and revoked without Studio through interactive
+  `runtrol integrations` commands. Exact local confirmation requests use `runtrol requests review`. Piped
+  authority changes and command-line approval shortcuts are refused.
+
+- Studio now uses one native `Runtrol` sidebar instead of separate Projects, Conversations, and Agent Usage
+  view headers. Projects contain their conversations, projectless conversations remain top-level rows, and
+  every installed service contributes one compact seven-day usage line at the bottom. Hover and the vertical
+  menu action disclose every provider-reported window, plan, reset, report age, and blocking limit.
+
+- Runtime now holds one atomic native-conversation claim across structured sessions, hosted terminals, and
+  draining generations. Typed ownership failures prevent a second process or a newer Runtime generation from
+  silently taking over a live native conversation.
 
 - A row with no bar names which of four things is true, because they need four different responses: nobody is
   signed in, the service publishes no usage at all, the service was asked and the answer could not be read, or
