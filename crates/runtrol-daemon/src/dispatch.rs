@@ -1293,7 +1293,10 @@ pub(crate) fn answer_prepared(
             } else {
                 CloseMode::graceful()
             };
-            match sessions.close(session) {
+            crate::serve::close_trace("dispatch: close received");
+            let closing = sessions.close(session);
+            crate::serve::close_trace("dispatch: session released");
+            match closing {
                 Ok(closing) => match composed.store.remove_session(session) {
                     Ok(_) => Reply::Stopping {
                         agent: closing.agent,
