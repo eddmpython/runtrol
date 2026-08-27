@@ -1992,6 +1992,11 @@ async fn converse_inner(
                 continue;
             }
         };
+        // The earliest point a close is a close: with the dispatch breadcrumbs, silence here means the CLI's
+        // request never got read off the connection at all (the accept or read side is what is starved).
+        if matches!(request, Request::Close { .. }) {
+            close_trace("control: close request read");
+        }
 
         if let Err(refusal) = crate::scope::allowed_with_authority(
             conversation.caller(),
