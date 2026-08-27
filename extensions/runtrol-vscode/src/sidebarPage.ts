@@ -188,7 +188,10 @@ function conversationHtml(row: SidebarConversationRow, assets: SidebarAssets): s
     row.canArchive ? action("runtrol.archiveConversation", "Archive", "archive") : "",
     row.canDelete ? action("runtrol.deleteConversation", "Delete", "trash") : "",
   ].join("");
-  return `<div class="row conv${row.canOpen ? "" : " blocked"}${row.pinned ? " pinned" : ""}" role="button" tabindex="0" data-kind="conversation" data-key="${escapeHtml(row.key)}" title="${escapeHtml(row.blocked ?? `${row.serviceName} · ${spokenActivity(row)}${row.tool ? ` · ${row.tool}` : ""}`)}">
+  // A native tooltip only where it says the one thing the row cannot show: why an open would be refused.
+  // Everything else the tooltip used to repeat (service, activity, model) is already on the row, and a
+  // tooltip floating beside the hover actions reads as clutter (operator, 2026-08-27).
+  return `<div class="row conv${row.canOpen ? "" : " blocked"}${row.pinned ? " pinned" : ""}" role="button" tabindex="0" data-kind="conversation" data-key="${escapeHtml(row.key)}"${row.blocked ? ` title="${escapeHtml(row.blocked)}"` : ""}>
 <span class="bar" style="background:${themeColorVar(row.color)}"></span>
 <img class="glyph${row.activity === "working" ? " working" : ""}" src="${escapeHtml(iconUri)}" alt="${escapeHtml(row.serviceName)}" draggable="false">
 <span class="title">${escapeHtml(row.title)}</span>

@@ -48,7 +48,7 @@ test("a chip's ring is the whole-account week and its caption is that number", (
   ]);
 });
 
-test("the chip draws one concentric ring per layer and the hover names them outermost first", () => {
+test("the chip draws one concentric ring per layer and no browser tooltip beside the panel", () => {
   const html = usageStripHtml(usageChips([row({
     meters: [
       { key: "5h", label: "5h", percent: 12, detail: "12% used", governing: false },
@@ -58,7 +58,9 @@ test("the chip draws one concentric ring per layer and the hover names them oute
   assert.equal((html.match(/class="fill"/g) ?? []).length, 2);
   assert.ok(html.includes('r="11"'));
   assert.ok(html.includes('r="8"'));
-  assert.ok(html.includes("rings, outermost first: 7d 76%, 5h 12%"));
+  // The hover panel is the one detail surface: a native tooltip floating over it read as two competing
+  // popups (operator, 2026-08-27), so the strip carries no title attribute anywhere.
+  assert.ok(!html.includes('title="'));
 });
 
 test("a row without a number keeps an empty ring and names its cause under it", () => {
@@ -108,10 +110,10 @@ test("a blocking limit colours the chip and the panel", () => {
   assert.ok(html.includes('class="position reached"'));
 });
 
-test("a signed-out chip answers a click with the sign-in action and says so in its hover", () => {
+test("a signed-out chip answers a click with the sign-in action and says so to a screen reader", () => {
   const html = usageStripHtml(usageChips([row({ state: "signedOut", position: "Not signed in", age: null })]), assets);
   assert.ok(html.includes('data-action="signIn" data-provider="codex"'));
-  assert.ok(html.includes('title="Codex: Not signed in"'));
+  assert.ok(html.includes('aria-label="Codex: Sign in"'));
   assert.ok(!html.includes("Press Enter"));
 });
 

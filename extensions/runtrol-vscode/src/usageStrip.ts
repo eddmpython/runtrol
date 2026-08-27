@@ -137,17 +137,10 @@ function chipHtml(chip: UsageChip, index: number, assets: UsageStripAssets): str
   const spoken = chip.percent === null
     ? `${chip.name}: ${chip.caption}`
     : `${chip.name}: seven day usage ${chip.percent} percent${chip.reached ? ", a limit is blocking" : ""}`;
-  // The hover preview is the browser's own tooltip: it floats outside the view's box, so it is readable however
-  // short the view is, and it carries every fact the panel does. The panel is the same facts with bars.
-  const preview = [
-    `${chip.name}: ${chip.position}`,
-    ...(chip.rings.length > 1 ? [`rings, outermost first: ${chip.rings.map((ring) => `${ring.label} ${ring.percent}%`).join(", ")}`] : []),
-    ...(chip.plan ? [chip.plan] : []),
-    ...chip.meters.map((meter) => `${meter.label}: ${meter.detail}`),
-    ...(chip.age ? [chip.age] : []),
-  ];
+  // No native tooltip: the hover panel is the one detail surface, and a browser tooltip floating over it was
+  // read as two competing popups (operator, 2026-08-27). Screen readers keep the spoken summary.
   const direct = chip.action ? ` data-action="${chip.action}" data-provider="${escapeHtml(chip.providerId)}"` : "";
-  return `<button class="chip${chip.reached ? " reached" : ""}${chip.percent === null ? " bare" : ""}" type="button" role="listitem" data-index="${index}"${direct} aria-label="${escapeHtml(spoken)}" aria-expanded="false" aria-controls="panel-${index}" title="${escapeHtml(preview.join("\n"))}">
+  return `<button class="chip${chip.reached ? " reached" : ""}${chip.percent === null ? " bare" : ""}" type="button" role="listitem" data-index="${index}"${direct} aria-label="${escapeHtml(spoken)}" aria-expanded="false" aria-controls="panel-${index}">
 <span class="ring">
 <svg viewBox="0 0 26 26" aria-hidden="true">
 ${chip.rings.slice(0, RING_RADII.length).map((ring, at) => {
@@ -166,11 +159,13 @@ ${chip.rings.length === 0 ? `<circle class="track" cx="13" cy="13" r="${RING_RAD
 }
 
 function panelHtml(chip: UsageChip, index: number): string {
+  // One sentence per window was read as noise (operator, 2026-08-27): a row is its bar and its percent, and
+  // only the window that is actually governing keeps its words (its reset is the one actionable fact here).
   const bars = chip.meters.map((meter) => `<div class="meter${meter.governing ? " governing" : ""}">
 <span class="label">${escapeHtml(meter.label)}</span>
 <span class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${meter.percent}" aria-label="${escapeHtml(`${meter.label} ${meter.percent} percent`)}"><span class="value" style="width:${meter.percent}%"></span></span>
 <span class="percent">${meter.percent}%</span>
-<span class="detail">${escapeHtml(meter.detail)}</span>
+${meter.governing ? `<span class="detail">${escapeHtml(meter.detail)}</span>` : ""}
 </div>`).join("");
   return `<section class="panel" id="panel-${index}" hidden>
 <h2>${escapeHtml(chip.name)}${chip.plan ? ` <span class="plan">${escapeHtml(chip.plan)}</span>` : ""}</h2>

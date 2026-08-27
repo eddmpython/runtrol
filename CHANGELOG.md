@@ -23,6 +23,10 @@ and refactoring that no user can observe do not belong here.
 - A conversation named by its first prompt (Codex does this when a thread has no name) wraps to two lines instead
   of being cut short.
 
+- Hovering is calmer: the usage panel is the one detail surface (the browser tooltip that floated over it is
+  gone), a conversation row keeps a tooltip only for the reason an open would be refused, and inside the panel
+  only the window that is actually limiting you keeps its sentence; the others are a bar and a number.
+
 ### Added
 
 - Every conversation row shows what its provider process holds in memory right now (`412 MB`), read from the
@@ -33,6 +37,17 @@ and refactoring that no user can observe do not belong here.
 
 - Opening a conversation right after a Runtime update no longer fails with "the native catalogue observation
   expired": Studio reads the provider's catalogue again and opens with the proof it hands back now.
+
+- Clicking a conversation row now opens its terminal tab in a window that has never selected a conversation
+  before. The click used to fall through to "open the selected conversation" and do nothing on a fresh window.
+
+- A conversation under a project heading now opens even when the window itself is open on a different folder:
+  adding a project also asks for its folder, so the open is no longer refused with `rootDenied`.
+
+- After a Runtime update, native conversations no longer stay refused with `legacyGenerationBusy` while a
+  pre-update daemon is still winding down. A predecessor that cannot prove the claims handoff (it predates the
+  protocol) stops blocking after a few seconds instead of for as long as it lives; one that proves it keeps the
+  full cross-generation double-open protection.
 
 ## [0.1.23] - 2026-08-27
 
