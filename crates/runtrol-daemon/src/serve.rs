@@ -926,7 +926,7 @@ async fn serve_surfaces(
                 tokio::select! {
                     arrived = listener.accept() => match arrived {
                         Ok(connection) => {
-                            close_trace("control: connection accepted");
+                            close_trace("control: local connection accepted");
                             clients.spawn(converse(
                                 SurfaceConnection::Local(connection),
                                 Conversation::at_the_machine(),
@@ -941,6 +941,7 @@ async fn serve_surfaces(
                             ));
                         }
                         Err(error) => {
+                            close_trace("control: local accept failed");
                             drop(local_failed.send(error));
                             break;
                         }
@@ -974,6 +975,7 @@ async fn serve_surfaces(
                 tokio::select! {
                     arrived = runtime_listener.accept() => match arrived {
                         Ok(connection) => {
+                            close_trace("runtime: connection accepted");
                             clients.spawn(crate::runtime_serve::serve_connection(
                                 connection,
                                 runtime_instance.clone(),
@@ -988,6 +990,7 @@ async fn serve_surfaces(
                             ));
                         }
                         Err(error) => {
+                            close_trace("runtime: accept failed");
                             drop(runtime_failed.send(error));
                             break;
                         }
@@ -1943,6 +1946,7 @@ async fn converse(
     conversation: Conversation,
     services: ConnectionServices,
 ) {
+    close_trace("control: conversation began");
     let mut release_watch_memory = false;
     Box::pin(converse_inner(
         connection,
@@ -1978,7 +1982,10 @@ async fn converse_inner(
     } = services;
     loop {
         let frame = match connection.recv().await {
-            Ok(Some(frame)) => frame,
+            Ok(Some(frame)) => {
+                close_trace("control: request frame read");
+                frame
+            }
             // The other end is gone. Ordinary, and the end of this task.
             Ok(None) => return,
             // The connection failed or sent something this build cannot carry. Said out loud if it can still be
