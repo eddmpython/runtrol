@@ -93,6 +93,9 @@ export class Controller implements vscode.Disposable {
   private helpTerminal: vscode.Terminal | null = null;
   private nativeDiscoveryRestart: NodeJS.Timeout | null = null;
   private nativeDiscoveryPauseDepth = 0;
+  /// The services this window has already asked for their stored conversations, so a service that
+  /// becomes usable late is asked exactly once rather than on every listing the watch pushes.
+  private readonly chatDiscoveryAsked = new Set<string>();
   private nativeDiscoveryGeneration = 0;
   /// One provider probe at a time. Each spawns a CLI, so the queue is what keeps activation answerable.
   private verificationTail: Promise<void> = Promise.resolve();
@@ -283,6 +286,7 @@ export class Controller implements vscode.Disposable {
   /// conversations arriving.
   async refreshAfterRootWidened(): Promise<void> {
     this.cancelNativeDiscoveries();
+    this.chatDiscoveryAsked.clear();
     this.state.clearNativeCatalogues();
     await this.refresh();
     this.startExistingChatDiscovery();
@@ -429,6 +433,7 @@ export class Controller implements vscode.Disposable {
     this.indexAbort?.abort();
     this.indexAbort = null;
     this.cancelNativeDiscoveries();
+    this.chatDiscoveryAsked.clear();
     this.state.clearNativeCatalogues();
     await this.client.reset();
     await this.runtime.reset();
@@ -1318,6 +1323,7 @@ export class Controller implements vscode.Disposable {
     providers: readonly ProviderLine[],
   ): void {
     // Anything listed at all means the Core answered this window.
+    const reachedBefore = this.state.coreReach === "reached";
     this.state.setCoreReach("reached");
     const titleProviders = nativeTitleRefreshProviders(this.state.sessions, sessions);
     const previousSelected = this.state.selected;
@@ -1332,6 +1338,28 @@ export class Controller implements vscode.Disposable {
         this.say(warning, "warning");
       }
     }
+    // Reaching the Core, for the first time or after losing it, is where the one-shot startup work has to
+    // be picked up again: initialization and `refresh` are its only callers, and both of them throw while
+    // the Core is not up yet, which is exactly when a window starts its own.
+    if (!reachedBefore) {
+      this.startProviderVerification(this.state.providers);
+      this.startExistingChatDiscovery();
+    }
+    // A service that becomes usable after the last refresh has never been asked for its stored
+    // conversations. The watch reports that it became usable, and reporting was all anything did.
+    // Measured on the operator machine 2026-08-28: the Claude CLI was replacing itself (2.1.248 to
+    // 2.1.250) while a window opened, so it was unusable at every point that asks, and its probe only
+    // finished five and a half minutes later. That window then listed every project with nothing under
+    // it and no notice saying why, for an hour, until Refresh Conversations was run by hand. Asked once
+    // per service per window: the reconnect paths that drop the catalogues clear this with them.
+    let waking = false;
+    for (const provider of this.state.providers) {
+      if (!isUsable(provider) || this.chatDiscoveryAsked.has(provider.providerId)) continue;
+      this.chatDiscoveryAsked.add(provider.providerId);
+      this.deferNativeDiscovery(provider.providerId, false);
+      waking = true;
+    }
+    if (waking) this.scheduleNativeDiscoveries();
     for (const providerId of titleProviders) this.deferNativeDiscovery(providerId, true);
     if (titleProviders.length > 0) this.scheduleNativeDiscoveries();
     if (selected && !this.state.selected) {
@@ -1484,6 +1512,7 @@ export class Controller implements vscode.Disposable {
 
   private startExistingChatDiscovery(): void {
     for (const provider of this.state.providers.filter(isUsable)) {
+      this.chatDiscoveryAsked.add(provider.providerId);
       this.deferNativeDiscovery(provider.providerId, false);
     }
     this.flushNativeDiscoveries();
