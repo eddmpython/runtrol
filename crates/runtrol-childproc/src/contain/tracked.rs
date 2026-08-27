@@ -604,14 +604,33 @@ impl ChildGuard {
         #[cfg(unix)]
         if let Some(tracked) = &mut self.tracked {
             let _requested = tracked.registry.stop_keeper(&tracked.id)?;
-            let _exit_status =
-                child
-                    .wait_keeper()
-                    .await
-                    .map_err(|error| SpawnError::Containment {
+            // Bounded: a keeper that does not answer the stop within the deadline is ended by force. Without the
+            // bound this wait held a session's close forever, and every caller behind it (measured 2026-08-27 on
+            // the Linux host harness: `close --now` timed out at 15 s on every trial while Windows returned at
+            // once). The forced end is reported on stderr rather than as a refusal, because the close did
+            // happen; what did not happen is the keeper's own cooperation, which is a diagnosis, not a failure.
+            match tokio::time::timeout(KEEPER_STOP_DEADLINE, child.wait_keeper()).await {
+                Ok(Ok(_exit_status)) => {}
+                Ok(Err(error)) => {
+                    return Err(SpawnError::Containment {
                         doing: "reaping a terminated child root",
                         detail: error.to_string(),
-                    })?;
+                    });
+                }
+                Err(_elapsed) => {
+                    eprintln!(
+                        "runtrol: a tracked child keeper did not stop within {} ms; ending it by force",
+                        KEEPER_STOP_DEADLINE.as_millis()
+                    );
+                    child
+                        .kill()
+                        .await
+                        .map_err(|error| SpawnError::Containment {
+                            doing: "forcing a tracked child keeper to stop",
+                            detail: error.to_string(),
+                        })?;
+                }
+            }
             tracked.registry.finish_terminate(&tracked.id)?;
             tracked.finished = true;
             return Ok(());
@@ -626,6 +645,10 @@ impl ChildGuard {
         Ok(())
     }
 }
+
+/// How long a keeper is given to stop on request before it is ended by force.
+#[cfg(unix)]
+const KEEPER_STOP_DEADLINE: std::time::Duration = std::time::Duration::from_secs(5);
 
 impl Drop for ChildGuard {
     fn drop(&mut self) {
