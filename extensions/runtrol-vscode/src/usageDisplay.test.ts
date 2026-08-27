@@ -3,6 +3,7 @@ import test from "node:test";
 
 import type { ProviderLine, ProviderUsageGauge, ProviderUsageWindow } from "./runtimeTypes";
 import {
+  primarySevenDayMeter,
   setupRows,
   shortened,
   usageDetail,
@@ -62,6 +63,17 @@ test("every window a service described becomes its own labelled bar", () => {
     "seven_day",
     "seven_day:Fable",
   ]);
+});
+
+test("the compact sidebar prefers the whole-account week over an earlier model-scoped week", () => {
+  const meters = usageMeters(
+    gauge({ windows: [MEASURED_CLAUDE[2], MEASURED_CLAUDE[1], MEASURED_CLAUDE[0]] }),
+    NOW,
+  );
+
+  assert.deepEqual(primarySevenDayMeter(meters), meters[1]);
+  assert.equal(primarySevenDayMeter(meters)?.label, "7d");
+  assert.equal(primarySevenDayMeter(meters)?.percent, 95);
 });
 
 test("a bar is named by what the service scoped it to, never by a phrase composed here", () => {

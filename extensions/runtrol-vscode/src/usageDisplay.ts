@@ -300,6 +300,17 @@ export function usageMeters(gauge: ProviderUsageGauge, nowMs: number): UsageMete
   });
 }
 
+/// The whole-account seven-day window used by the compact sidebar row.
+///
+/// Some services report model-scoped seven-day windows before the general window. The compact row still represents
+/// the account, so an exact `7d` wins regardless of provider order. A scoped week is only a fallback when no general
+/// week exists; every reported window remains available in the hover and details popup.
+export function primarySevenDayMeter(meters: readonly UsageMeter[]): UsageMeter | null {
+  return meters.find((meter) => meter.label === "7d")
+    ?? meters.find((meter) => meter.label.startsWith("7d "))
+    ?? null;
+}
+
 /// One reported percentage as a proportion a bar can draw, or null when the service reported none.
 ///
 /// The one place a percentage is bounded, so every surface that shows the same window shows the same

@@ -17,7 +17,7 @@ import type { ProjectRecord } from "./projects";
 import { awaitsVerification, isUsable } from "./providerHealth";
 import type { ProviderCapabilities } from "./runtimeTypes";
 import { type CoreReach, RuntimeState } from "./state";
-import { usageRows, type UsageMeter, type UsageRow } from "./usageDisplay";
+import { primarySevenDayMeter, usageRows, type UsageRow } from "./usageDisplay";
 
 /// One conversation, as one row.
 ///
@@ -145,7 +145,7 @@ export class UsageItem extends vscode.TreeItem {
   constructor(readonly usage: UsageRow, extensionUri: vscode.Uri | null = null) {
     super(usage.name, vscode.TreeItemCollapsibleState.None);
     this.id = usage.key;
-    const weekly = weeklyMeter(usage.meters);
+    const weekly = primarySevenDayMeter(usage.meters);
     this.description = weekly
       ? `7d  ${progress(weekly.percent)}  ${weekly.percent}%`
       : usage.state === "unavailable"
@@ -187,10 +187,6 @@ export class SidebarActionItem extends vscode.TreeItem {
       title: kind === "project" ? "Add a project" : "Start a conversation",
     };
   }
-}
-
-function weeklyMeter(meters: readonly UsageMeter[]): UsageMeter | null {
-  return meters.find((meter) => meter.label === "7d" || meter.label.startsWith("7d ")) ?? null;
 }
 
 function progress(percent: number): string {
