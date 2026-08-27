@@ -1125,6 +1125,13 @@ async fn serve_surfaces(
                 }
                 ReservationAsked::ReleaseClosing(reservation) => {
                     sessions.release_closing(reservation);
+                    // The native claim the closed session held is dropped here, the same as `CancelOpen`
+                    // above does for an abandoned open. Without it the claim outlived the session, and a
+                    // resume of the same provider-native conversation right after `close` was refused as
+                    // "already live as a structured session" (measured 2026-08-27 by the ACP smoke gate on
+                    // every platform). The reservation task is one FIFO, so a resume that follows the close's
+                    // own reply is reserved only after this release is applied.
+                    composed.native_claims.replace_structured(&sessions);
                     runtrol_childproc::footprint::release_unused_memory();
                 }
                 ReservationAsked::ReleaseProviderUpdate(reservation) => {
