@@ -47,13 +47,13 @@ if (bundled.status !== 0) {
 // provider-owned conversation paths at its security boundary; leaving only the harness on an alias such as
 // macOS `/tmp` or a Windows 8.3 name would falsely report that a conversation in the same folder never arrived.
 const temporaryRoot = await realpath(process.platform === "darwin" ? "/tmp" : os.tmpdir());
-const temporary = await mkdtemp(path.join(temporaryRoot, "runtrol-vscode-host-"));
+const temporary = await mkdtemp(path.join(temporaryRoot, "rvh-"));
 // A crashed earlier run leaves its whole isolated world behind, and those leftovers accumulate forever and even
 // surface as windows full of fake workspaces during later tests. Every run therefore starts by deleting its
 // stale predecessors. The age guard keeps a concurrent run's live directory safe; only abandoned ones go.
 const STALE_RUN_AGE_MS = 2 * 60 * 60 * 1000;
 for (const entry of await readdir(temporaryRoot).catch(() => [])) {
-  if (!entry.startsWith("runtrol-vscode-host-")) continue;
+  if (!entry.startsWith("rvh-")) continue;
   const stale = path.join(temporaryRoot, entry);
   if (stale === temporary) continue;
   const age = await stat(stale).then((s) => Date.now() - s.mtimeMs).catch(() => 0);
@@ -332,7 +332,9 @@ listen = "stdio"
   await rm(output, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   await rm(temporary, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   if (cleanupFailures.length > 0) {
-    throw new Error(`hot-session cleanup failed:\n${cleanupFailures.join("\n")}`);
+    // The daemon's own words go with the failure: a close that times out is diagnosed from what the Core said
+    // while it was closing, and nothing else in this harness sees that stream.
+    throw new Error(`hot-session cleanup failed:\n${cleanupFailures.join("\n")}\nCore stderr:\n${daemonStderr}`);
   }
 }
 
