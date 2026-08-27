@@ -308,7 +308,7 @@ listen = "stdio"
   if (crash) {
     throw new Error(`the VS Code host run failed after a Core crash:\n${crash}`, { cause: hostError });
   }
-  if (daemonStderr) {
+  if (daemonStderrText()) {
     throw new Error(`the VS Code host run failed and Core reported:\n${daemonStderrText()}`, { cause: hostError });
   }
   throw hostError;
