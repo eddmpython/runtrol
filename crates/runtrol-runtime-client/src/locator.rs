@@ -388,9 +388,14 @@ fn validate_endpoint(
         socket_name.is_some_and(is_generation_socket_name)
     };
     if !endpoint.is_absolute() || endpoint.parent() != Some(expected_parent) || !named_as_expected {
-        return Err(LocatorError::Unsafe(
-            "the Runtime socket escaped its owner-only state directory".to_owned(),
-        ));
+        // The three facts ride along because the bare sentence proved undiagnosable: a macOS CI failure
+        // repeated twice on 2026-08-27 and nothing said whether the name, the parent, or absoluteness broke.
+        return Err(LocatorError::Unsafe(format!(
+            "the Runtime socket escaped its owner-only state directory \
+             (socket {}, state directory {}, name accepted: {named_as_expected})",
+            endpoint.display(),
+            expected_parent.display(),
+        )));
     }
     Ok(())
 }
