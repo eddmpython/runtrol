@@ -29,7 +29,7 @@ const SUITES = [
   "sessionDisplay",
 ];
 
-const out = await mkdtemp(path.join(tmpdir(), "posix-suite-"));
+const out = await mkdtemp(path.join(tmpdir(), "rvx-"));
 try {
   const shim = path.join(out, "posixPathShim.mjs");
   await writeFile(

@@ -38,7 +38,7 @@ if (!process.argv[2]) {
 }
 await access(archive);
 
-const temporary = await mkdtemp(path.join(os.tmpdir(), "runtrol-installed-safe-"));
+const temporary = await mkdtemp(path.join(os.tmpdir(), "rvs-"));
 const runtimeState = isolatedRuntimeState(temporary);
 const userData = path.join(temporary, "user-data");
 const extensions = path.join(temporary, "extensions");
