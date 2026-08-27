@@ -10,6 +10,14 @@ and refactoring that no user can observe do not belong here.
 
 ## [Unreleased]
 
+## [0.1.26] - 2026-08-28
+
+### Fixed
+
+- The sidebar no longer shows "Runtrol Runtime is not installed" when a healthy Runtime from an earlier build
+  is still running. A window that installed a new build but whose own build has not taken over yet now uses the
+  Runtime that is actually serving, instead of waiting for its exact build and then declaring nothing installed.
+
 ### Fixed
 
 - The Runtime no longer goes quiet under load: starting or closing a conversation used to wait behind another
