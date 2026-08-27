@@ -435,8 +435,23 @@ impl Store {
         {
             return Ok(());
         }
-        let write = self.begin_durable_write("flushing prior commits")?;
-        commit_timed(write, "flushing prior commits")?;
+        // One fsync of the file through a second handle, never an engine transaction: an empty durable commit
+        // would hold the engine's single writer lock for the whole fsync, and every session write on the async
+        // thread would queue behind it (measured 2026-08-28 on the Windows host: refresh p95 rose from 50 to
+        // 90 ms). The relaxed commits already wrote their pages to the operating system; flushing the file
+        // makes them durable without touching the engine at all.
+        let began = std::time::Instant::now();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(self.path().as_std_path())
+            .and_then(|file| file.sync_all())
+            .map_err(|error| StoreError::Engine {
+                doing: "flushing prior commits",
+                source: Box::new(error.into()),
+            })?;
+        if std::env::var_os("RUNTROL_CLOSE_TRACE").is_some_and(|value| value == "1") {
+            flush_trace(began.elapsed().as_millis());
+        }
         self.flushed_commits
             .store(seen, std::sync::atomic::Ordering::Release);
         Ok(())
@@ -461,6 +476,15 @@ impl Store {
             })?;
         Ok(write)
     }
+}
+
+/// One group flush on stderr, only when the harness switch asks (checked by the caller).
+#[expect(
+    clippy::print_stderr,
+    reason = "the breadcrumb exists to reach a harness's captured stderr, and only when RUNTROL_CLOSE_TRACE=1 asks for it"
+)]
+fn flush_trace(milliseconds: u128) {
+    eprintln!("runtrol store: flushing prior commits took {milliseconds}ms");
 }
 
 /// Commit one write, and say how long the engine held the thread when the harness switch asks.
