@@ -17,7 +17,7 @@ import { conversationIcon } from "./conversationIcon";
 import { canDelete } from "./conversationDeletion";
 import { loose, projects, type Conversation, type ProjectGroup } from "./conversationList";
 import type { ProjectRecord } from "./projects";
-import { projectColorId } from "./projectColor";
+import { rowHueClass } from "./projectColor";
 import { awaitsVerification, isUsable } from "./providerHealth";
 import type { ProviderCapabilities } from "./runtimeTypes";
 import { ConversationItem, ProjectItem, ServiceChoiceItem } from "./sidebarTargets";
@@ -279,7 +279,7 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
       key: group.key,
       name: group.name,
       workspace: group.workspace,
-      color: projectColorId(group.workspace),
+      hue: rowHueClass(group.workspace),
       kind: group.kind,
       pinned: group.pinned,
       current: group.current,
@@ -287,7 +287,7 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
       attention: group.attention,
       live: group.live,
       agentTools: this.agentTools.enabled(group.workspace),
-      rows: pinnedFirst(group.rows).map((row) => this.conversationRow(row, projectColorId(group.workspace))),
+      rows: pinnedFirst(group.rows).map((row) => this.conversationRow(row, rowHueClass(group.workspace))),
     }));
     const looseRows = pinnedFirst(loose(rows)).map((row) => this.conversationRow(row, null));
     const usage: UsageChip[] = usageChips(usageRows(this.state.usage, this.state.providers, Date.now()));
@@ -307,7 +307,7 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
     };
   }
 
-  private conversationRow(row: Conversation, color: string | null): SidebarConversationRow {
+  private conversationRow(row: Conversation, hue: string | null): SidebarConversationRow {
     const capabilities: ProviderCapabilities | null = this.state.providerCapabilities(row.providerId);
     const memoryBytes = this.state.memoryFor(row) ?? row.session?.memoryBytes ?? null;
     return {
@@ -315,7 +315,7 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
       title: row.title,
       serviceName: row.serviceName,
       icon: row.serviceIcon,
-      color,
+      hue,
       activity: row.activity,
       live: row.live,
       canOpen: row.canOpen,

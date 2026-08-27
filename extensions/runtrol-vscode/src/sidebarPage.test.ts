@@ -5,7 +5,6 @@ import {
   formatMemory,
   rowKeys,
   sidebarHtml,
-  themeColorVar,
   type SidebarConversationRow,
   type SidebarModel,
   type SidebarProjectRow,
@@ -17,7 +16,7 @@ function conversation(overrides: Partial<SidebarConversationRow>): SidebarConver
     title: "Fix the login flow",
     serviceName: "Claude Code",
     icon: "claude",
-    color: "terminal.ansiBlue",
+    hue: "hueBlue",
     activity: "saved",
     live: false,
     canOpen: true,
@@ -38,7 +37,7 @@ function project(overrides: Partial<SidebarProjectRow>): SidebarProjectRow {
     key: "project:app",
     name: "app",
     workspace: "C:\\work\\app",
-    color: "terminal.ansiBlue",
+    hue: "hueBlue",
     kind: "created",
     pinned: false,
     current: false,
@@ -55,7 +54,7 @@ function model(overrides: Partial<SidebarModel>): SidebarModel {
   return {
     notices: [],
     projects: [project({})],
-    loose: [conversation({ key: "codex:loose", color: null, serviceName: "Codex", icon: "codex" })],
+    loose: [conversation({ key: "codex:loose", hue: null, serviceName: "Codex", icon: "codex" })],
     usage: [],
     serviceChoice: null,
     firstRun: false,
@@ -84,10 +83,15 @@ test("the three zones are drawn in order with their own titles, and the project 
 
 test("a project's colour reaches its heading bar and every conversation under it", () => {
   const html = sidebarHtml(model({}), assets);
-  const blue = themeColorVar("terminal.ansiBlue");
-  assert.equal(blue, "var(--vscode-terminal-ansiBlue)");
-  assert.equal((html.match(new RegExp(blue.replace(/[()]/gu, "\\$&"), "gu")) ?? []).length, 2, "heading and its one row");
-  assert.ok(html.includes("background:transparent"), "a loose conversation has no project colour");
+  // The class, not a colour written onto the element: the page's CSP allows styles only from its nonced
+  // stylesheet, and a nonce never covers an inline `style` attribute, so a colour put there paints nothing.
+  assert.equal((html.match(/class="bar hueBlue"/gu) ?? []).length, 2, "heading and its one row");
+  assert.ok(
+    html.includes(".row .bar.hueBlue { background: var(--vscode-charts-blue); }"),
+    "the page carries the rule that paints the band",
+  );
+  assert.ok(!html.includes('style="background'), "no colour is written onto an element for the CSP to drop");
+  assert.ok(html.includes('class="bar"></span>'), "a loose conversation has no project colour");
 });
 
 test("row actions are buttons that name their command, and only the actions a row can perform", () => {
@@ -120,7 +124,7 @@ test("row keys are unique and in page order, which is what the eye test reads", 
 test("the vertical-dots menu lists the rare actions and the page escapes what services said", () => {
   const html = sidebarHtml(model({
     menu: [{ command: "runtrol.pairPhone", label: "Pair a phone" }],
-    loose: [conversation({ key: "x", title: "<script>alert(1)</script>", color: null })],
+    loose: [conversation({ key: "x", title: "<script>alert(1)</script>", hue: null })],
   }), assets);
   assert.ok(html.includes('class="ci ci-kebab-vertical"'));
   assert.ok(html.includes('data-command="runtrol.pairPhone"'));

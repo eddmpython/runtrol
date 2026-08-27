@@ -6,7 +6,7 @@ import {
 } from "@runtrol/runtime-client";
 import * as vscode from "vscode";
 import type { Conversation, StartedConversation } from "./conversationList";
-import { projectColorId } from "./projectColor";
+import { tabColorId } from "./projectColor";
 import type { StudioRuntimeClient } from "./runtimeClient";
 
 /// The conversation surface: the coding service's own terminal interface, hosted by the Core on a pseudo
@@ -62,7 +62,7 @@ export class TerminalTabs implements vscode.Disposable {
     });
     // The tab is named for the conversation and coloured for its project. The name answers "which conversation",
     // the colour answers "whose project", and the two together fit in the width a tab actually has.
-    const colour = conversation.projectless ? null : projectColorId(conversation.workspace);
+    const colour = conversation.projectless ? null : tabColorId(conversation.workspace);
     const terminal = vscode.window.createTerminal({
       name: conversation.title,
       iconPath: this.iconFor(conversation),
@@ -87,7 +87,7 @@ export class TerminalTabs implements vscode.Disposable {
       workspace,
       blocked: null,
     }, async () => null);
-    const colour = projectless ? null : projectColorId(workspace);
+    const colour = projectless ? null : tabColorId(workspace);
     const terminal = vscode.window.createTerminal({
       name,
       iconPath: this.iconForProvider(providerId),

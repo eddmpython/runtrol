@@ -11,6 +11,7 @@
 /// and nothing else; it never asks a provider anything and never sees a conversation.
 
 import type { ConversationActivity } from "./conversationList";
+import { HUES } from "./projectColor";
 import { escapeHtml, usageChipsMarkup, usagePanelsMarkup, USAGE_SCRIPT, USAGE_STYLE, type UsageChip, type UsageStripAssets } from "./usageStrip";
 
 export type SidebarConversationRow = {
@@ -20,7 +21,7 @@ export type SidebarConversationRow = {
   /// The declared icon name, resolved to a page URI by the host.
   readonly icon: string;
   /// The project's colour as a VS Code theme colour id, or null for a conversation outside every project.
-  readonly color: string | null;
+  readonly hue: string | null;
   readonly activity: ConversationActivity;
   readonly live: boolean;
   readonly canOpen: boolean;
@@ -40,7 +41,7 @@ export type SidebarProjectRow = {
   readonly key: string;
   readonly name: string;
   readonly workspace: string;
-  readonly color: string | null;
+  readonly hue: string | null;
   readonly kind: "created" | "open";
   readonly pinned: boolean;
   readonly current: boolean;
@@ -81,10 +82,13 @@ export type SidebarModel = {
 
 export type SidebarAssets = UsageStripAssets;
 
-/// A theme colour id (`terminal.ansiBlue`) as the CSS variable the webview exposes for it.
-export function themeColorVar(color: string | null): string {
-  return color ? `var(--vscode-${color.replace(/\./gu, "-")})` : "transparent";
-}
+/// One rule per hue, generated from the palette so the page and the projects cannot disagree about a colour.
+///
+/// In the stylesheet rather than on the element: the page's CSP allows styles from this nonced block only, and a
+/// nonce does not cover inline `style` attributes, so a colour written onto the element is simply dropped.
+const HUE_STYLE = HUES
+  .map((hue) => `.row .bar.${hue.band} { background: var(--vscode-${hue.chart.replace(/\./gu, "-")}); }`)
+  .join("\n");
 
 /// Bytes as the short figure a row can carry: whole megabytes below a gigabyte, one decimal above.
 export function formatMemory(bytes: number): string {
@@ -111,7 +115,7 @@ export function sidebarHtml(model: SidebarModel, assets: SidebarAssets): string 
 <meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${assets.cspSource} data:; style-src 'nonce-${assets.nonce}'; script-src 'nonce-${assets.nonce}'">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<style nonce="${assets.nonce}">${STYLE}${USAGE_STYLE}</style>
+<style nonce="${assets.nonce}">${STYLE}${HUE_STYLE}${USAGE_STYLE}</style>
 </head>
 <body>
 ${menuHtml(model.menu)}
@@ -165,7 +169,7 @@ ${action("runtrol.removeProject", "Remove from the sidebar (the folder stays)", 
     : `<span class="actions">${action("runtrol.newConversationInProject", "New conversation here", "add")}${action("runtrol.createProjectHere", "Keep this folder as a project", "folder-library")}</span>`;
   return `<div class="project${project.collapsed ? " collapsed" : ""}" data-project="${escapeHtml(project.key)}"${project.kind === "created" ? ' draggable="true"' : ""}>
 <div class="row project-row${project.current ? " current" : ""}" role="button" tabindex="0" data-kind="project" data-key="${escapeHtml(project.key)}" aria-expanded="${project.collapsed ? "false" : "true"}" title="${escapeHtml(project.workspace)}">
-<span class="bar" style="background:${themeColorVar(project.color)}"></span>
+<span class="bar${project.hue ? ` ${project.hue}` : ""}"></span>
 <span class="chevron" aria-hidden="true"></span>
 <span class="name">${escapeHtml(project.name)}</span>
 <span class="count">${count}</span>
@@ -192,7 +196,7 @@ function conversationHtml(row: SidebarConversationRow, assets: SidebarAssets): s
   // Everything else the tooltip used to repeat (service, activity, model) is already on the row, and a
   // tooltip floating beside the hover actions reads as clutter (operator, 2026-08-27).
   return `<div class="row conv${row.canOpen ? "" : " blocked"}${row.pinned ? " pinned" : ""}" role="button" tabindex="0" data-kind="conversation" data-key="${escapeHtml(row.key)}"${row.blocked ? ` title="${escapeHtml(row.blocked)}"` : ""}>
-<span class="bar" style="background:${themeColorVar(row.color)}"></span>
+<span class="bar${row.hue ? ` ${row.hue}` : ""}"></span>
 <img class="glyph${row.activity === "working" ? " working" : ""}" src="${escapeHtml(iconUri)}" alt="${escapeHtml(row.serviceName)}" draggable="false">
 <span class="title">${escapeHtml(row.title)}</span>
 ${dot}
