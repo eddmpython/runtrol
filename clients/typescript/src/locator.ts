@@ -96,7 +96,25 @@ export class RuntimeLocator {
     // is accepted, so a swap between the two is still refused. What changes is that a moving file is given a few
     // more chances to hold still instead of being called an attack.
     for (let attempt = 0; ; attempt += 1) {
-      const read = await this.read();
+      let read;
+      try {
+        read = await this.read();
+      } catch (error) {
+        // A locator mid-replace: four coexisting generations rewrite the file often, and an ACL or native
+        // verification probe that lands inside the atomic rename window fails with a command error, not a
+        // security verdict (measured 2026-08-27 21:45 on the operator machine: two "not installed" toasts
+        // while the daemon was healthy). Only the probe-failed shape retries; a real DACL verdict, and a
+        // probe that keeps failing, still refuse.
+        if (
+          attempt < LOCATOR_SETTLE_ATTEMPTS
+          && error instanceof RuntimeLocatorError
+          && String(error.message).includes("could not verify Runtime locator")
+        ) {
+          await new Promise((resolve) => setTimeout(resolve, 120));
+          continue;
+        }
+        throw error;
+      }
       if (!read) return { state: "notInstalled" };
       const chosen = chooseGeneration(read.record, this.preferDigest);
       if (!chosen) return { state: "notInstalled" };
