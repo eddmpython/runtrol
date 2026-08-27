@@ -150,7 +150,11 @@ function probeEndpoint(executable: string): Promise<string> {
     execFile(
       executable,
       ["endpoint"],
-      { encoding: "utf8", timeout: 12_000, windowsHide: true },
+      // Thirty seconds, not twelve: `endpoint` may be STARTING the first daemon of a home, and that daemon
+      // binds first and assembles afterwards, so on a storming disk the greeting legitimately arrives late
+      // (measured 2026-08-27 on the CI hosts: first assembly outlived the old probe budget and the extension
+      // reported a healthy install as "no usable core").
+      { encoding: "utf8", timeout: 30_000, windowsHide: true },
       (error, stdout, stderr) => {
         if (error) {
           // Both halves, always: the exec error says how the probe ended (exit code, timeout kill) and the
