@@ -77,10 +77,7 @@ impl Store {
                     source: Box::new(error.into()),
                 })?;
         }
-        write.commit().map_err(|error| StoreError::Engine {
-            doing: "committing a session",
-            source: Box::new(error.into()),
-        })
+        commit_timed(write, "committing a session")
     }
 
     /// Read one session row.
@@ -284,10 +281,7 @@ impl Store {
                 source: Box::new(error.into()),
             })?;
         }
-        write.commit().map_err(|error| StoreError::Engine {
-            doing: "committing a removal",
-            source: Box::new(error.into()),
-        })?;
+        commit_timed(write, "committing a removal")?;
         Ok(removed)
     }
 
@@ -327,10 +321,7 @@ impl Store {
                     source: Box::new(error.into()),
                 })?;
         }
-        write.commit().map_err(|error| StoreError::Engine {
-            doing: "committing a cursor",
-            source: Box::new(error.into()),
-        })
+        commit_timed(write, "committing a cursor")
     }
 
     /// Read where a session's event stream had reached.
@@ -388,6 +379,31 @@ impl Store {
             })?;
         Ok(write)
     }
+}
+
+/// Commit one write, and say how long the engine held the thread when the harness switch asks.
+///
+/// The daemon runs its dispatch on one async thread; a durable commit is an fsync, and on a contended CI
+/// disk one fsync-class stall held that thread for 13 seconds while every accept and greeting waited
+/// (measured 2026-08-27 by the heartbeat trace). The figure printed here turns that silence into a name.
+#[expect(
+    clippy::print_stderr,
+    reason = "the breadcrumb exists to reach a harness's captured stderr, and only when RUNTROL_CLOSE_TRACE=1 asks for it"
+)]
+fn commit_timed(write: redb::WriteTransaction, doing: &'static str) -> Result<(), StoreError> {
+    let traced = std::env::var_os("RUNTROL_CLOSE_TRACE").is_some_and(|value| value == "1");
+    let began = std::time::Instant::now();
+    let committed = write.commit().map_err(|error| StoreError::Engine {
+        doing,
+        source: Box::new(error.into()),
+    });
+    if traced {
+        eprintln!(
+            "runtrol store: {doing} took {}ms",
+            began.elapsed().as_millis()
+        );
+    }
+    committed
 }
 
 /// The result of listing sessions: the ones that read, and the ones that did not.
