@@ -10,6 +10,15 @@ and refactoring that no user can observe do not belong here.
 
 ## [Unreleased]
 
+## [0.1.27] - 2026-08-28
+
+### Fixed
+
+- The sidebar lists a project's conversations on its own again. A coding service that became usable after the
+  window had already asked (its CLI updating in the background, or the Runtime still starting) was never asked
+  again, so the panel showed every project with nothing under it, said nothing about why, and stayed that way
+  until Refresh Conversations was run by hand.
+
 ## [0.1.26] - 2026-08-28
 
 ### Fixed
