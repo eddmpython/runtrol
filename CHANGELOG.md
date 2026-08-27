@@ -10,6 +10,14 @@ and refactoring that no user can observe do not belong here.
 
 ## [Unreleased]
 
+## [0.1.25] - 2026-08-27
+
+### Fixed
+
+- While several Runtime generations coexist right after an update, the locator file is rewritten often, and a
+  security check that landed mid-rewrite made Studio pop "Runtrol Runtime is not installed" although the daemon
+  was healthy. The check now retries through that instant; a real security verdict still refuses.
+
 ## [0.1.24] - 2026-08-27
 
 ### Changed
