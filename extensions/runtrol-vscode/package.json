@@ -113,6 +113,12 @@
         {
           "id": "runtrol.sidebar",
           "name": "Runtrol"
+        },
+        {
+          "id": "runtrol.usage",
+          "name": "Usage",
+          "type": "webview",
+          "initialSize": 1
         }
       ]
     },
@@ -145,12 +151,6 @@
         "command": "runtrol.setUpServices",
         "title": "Set Up Coding Services",
         "icon": "$(add)",
-        "category": "Runtrol"
-      },
-      {
-        "command": "runtrol.showUsageDetails",
-        "title": "Show Usage Details",
-        "icon": "$(kebab-vertical)",
         "category": "Runtrol"
       },
       {
@@ -496,7 +496,7 @@
       "view/title": [
         {
           "command": "runtrol.setUpServices",
-          "when": "view == runtrol.sidebar",
+          "when": "view == runtrol.usage",
           "group": "2_services@0"
         },
         {
@@ -685,11 +685,6 @@
           "command": "runtrol.moveProjectDown",
           "when": "view == runtrol.sidebar && viewItem =~ /^runtrol\\.project\\.created/",
           "group": "1_manage@0"
-        },
-        {
-          "command": "runtrol.showUsageDetails",
-          "when": "view == runtrol.sidebar && viewItem =~ /^runtrol\\.usage\\./",
-          "group": "inline@0"
         }
       ]
     },

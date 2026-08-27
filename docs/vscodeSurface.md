@@ -58,18 +58,21 @@ provider remedy, and approval actions exist only when Runtime reports the matchi
 The title toolbar keeps **Add Project** and **New Conversation** visible. Less frequent navigation and administration
 remain in the overflow menu and Command Palette. All inline actions have command and keyboard-accessible equivalents.
 
-## Usage rows
+## Usage strip
 
-Each installed provider occupies one native tree line at the bottom of the same view. The visible detail is exactly:
+Under the list, pinned in the same container, the `runtrol.usage` view draws one chip per installed provider: the
+provider's icon inside a ring gauge, with the number under it. No provider name is drawn; the icon is the label, so
+a chip's width never depends on a name and the strip reads the same with three providers or ten. The ring is the
+seven-day window when the provider publishes one, otherwise the window the provider says governs, otherwise an empty
+ring with a one-word cause (`No report`, `Sign in`, `Fix`, `Checking`, `Offline`). A blocking limit turns the ring
+and the number the theme's error colour.
 
-- `7d` plus a bounded progress bar and exact percentage when a seven-day window is published;
-- `7d No report` when no seven-day number exists;
-- an explicit signed-out or unavailable state when the CLI cannot currently run.
-
-The row tooltip lists every reported limit window, reset time, plan, governing condition, report age, and cost or token
-fact the provider declared. Pressing the row or its `$(kebab-vertical)` inline action opens the same VS Code Quick Pick
-detail, so disclosure works with mouse and keyboard. A hidden shorter window can still surface a blocking warning.
-Studio never converts a missing percentage into zero or derives account capacity from terminal text.
+Hovering or focusing a chip (chips are buttons, reached with Tab) opens that provider's panel under the strip; Enter
+pins it and Escape closes it. The panel lists the plan the provider named, one thin bar per reported window with its
+own name (`5h`, `7d`, `7d GPT-5.3-Codex`), each bar's reset and governing note, the report age, and the one action a
+state offers (`Sign in`, `Fix`). This strip is the only webview Studio contributes; it renders host-built markup under
+a nonce Content Security Policy and posts back nothing but the pressed action. Studio never converts a missing
+percentage into zero or derives account capacity from terminal text.
 
 Usage is pushed on the provider subscription and remembered briefly only as bounded operational telemetry so a new
 window does not flash an empty strip. Expired, future-dated, or old-schema reports are refused.

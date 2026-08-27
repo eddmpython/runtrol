@@ -42,6 +42,8 @@ export class ValidatedLocator {
     public readonly runtimeVersion: string,
     public readonly digest: string,
     public readonly draining: boolean,
+    /** Where the same generation answers its owner's administration protocol. Not a Runtime endpoint. */
+    public readonly controlEndpoint: string,
   ) {
     if (token !== validatedLocatorToken) {
       throw new RuntimeLocatorError("unsafe", "Runtime locator was not validated by this SDK");
@@ -201,6 +203,7 @@ function validated(record: RuntimeLocatorRecord, generation: RuntimeGeneration):
     generation.runtimeVersion,
     generation.digest,
     generation.draining,
+    generation.controlEndpoint,
   );
 }
 
@@ -316,8 +319,17 @@ export function validatedLocatorForTesting(
   runtimeVersion: string,
   digest: string = "0".repeat(64),
   draining: boolean = false,
+  controlEndpoint: string = `${endpoint}-control`,
 ): ValidatedLocator {
-  return new ValidatedLocator(validatedLocatorToken, instanceId, endpoint, runtimeVersion, digest, draining);
+  return new ValidatedLocator(
+    validatedLocatorToken,
+    instanceId,
+    endpoint,
+    runtimeVersion,
+    digest,
+    draining,
+    controlEndpoint,
+  );
 }
 
 function validateLocatorRecord(record: RuntimeLocatorRecord, locatorPath: string): void {

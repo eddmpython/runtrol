@@ -17,7 +17,6 @@ import type { ProjectRecord } from "./projects";
 import { awaitsVerification, isUsable } from "./providerHealth";
 import type { ProviderCapabilities } from "./runtimeTypes";
 import { type CoreReach, RuntimeState } from "./state";
-import { primarySevenDayMeter, usageRows, type UsageRow } from "./usageDisplay";
 
 /// One conversation, as one row.
 ///
@@ -62,14 +61,12 @@ export class ProjectItem extends vscode.TreeItem {
     super(
       group.name,
       // A project with nothing in it yet has nothing to disclose, so it draws as a plain row whose only invite
-      // is the new-conversation button. Otherwise: open when the reader has a reason to be looking inside
-      // (something waiting, something live, the window's own project, or the open conversation lives here),
-      // closed for everything else so twenty projects do not become one long scroll.
+      // is the new-conversation button. Otherwise it opens: a conversation behind a chevron is a conversation
+      // the person cannot see, and VS Code remembers each heading the person closes by its id, so the long
+      // scroll is theirs to trim rather than ours to hide.
       group.rows.length === 0
         ? vscode.TreeItemCollapsibleState.None
-        : group.attention > 0 || group.live > 0 || group.current || group.holdsOpen
-          ? vscode.TreeItemCollapsibleState.Expanded
-          : vscode.TreeItemCollapsibleState.Collapsed,
+        : vscode.TreeItemCollapsibleState.Expanded,
     );
     this.id = group.key;
     const detail = projectDetail(group);
@@ -137,40 +134,6 @@ export class ServiceChoiceItem extends vscode.TreeItem {
   }
 }
 
-/// One installed CLI's seven-day position, kept to one native tree line.
-///
-/// Every other window and the complete provider report remain in the hover. The row's vertical menu opens the same
-/// detail as a popup, so the permanent sidebar spends no extra height on account telemetry.
-export class UsageItem extends vscode.TreeItem {
-  constructor(readonly usage: UsageRow, extensionUri: vscode.Uri | null = null) {
-    super(usage.name, vscode.TreeItemCollapsibleState.None);
-    this.id = usage.key;
-    const weekly = primarySevenDayMeter(usage.meters);
-    this.description = weekly
-      ? `7d  ${progress(weekly.percent)}  ${weekly.percent}%`
-      : usage.state === "unavailable"
-        ? "Unavailable"
-        : usage.state === "signedOut"
-          ? "Sign in"
-          : "7d  No report";
-    this.contextValue = `runtrol.usage.${usage.state}`;
-    this.tooltip = usage.tooltip;
-    this.iconPath = usage.reached
-      ? new vscode.ThemeIcon("warning", new vscode.ThemeColor("notificationsWarningIcon.foreground"))
-      : extensionUri
-        ? conversationIcon(extensionUri, usage.icon)
-        : new vscode.ThemeIcon(usage.icon);
-    this.command = {
-      command: "runtrol.showUsageDetails",
-      title: "Show usage details",
-      arguments: [this],
-    };
-    this.accessibilityInformation = {
-      label: `${usage.name}, ${weekly ? `seven day usage ${weekly.percent} percent` : usage.detail}`,
-    };
-  }
-}
-
 /// One first-run action inside the unified list, used only while no conversation or project row exists.
 export class SidebarActionItem extends vscode.TreeItem {
   constructor(kind: "project" | "conversation") {
@@ -189,12 +152,7 @@ export class SidebarActionItem extends vscode.TreeItem {
   }
 }
 
-function progress(percent: number): string {
-  const filled = Math.round(Math.max(0, Math.min(100, percent)) / 12.5);
-  return `${"█".repeat(filled)}${"░".repeat(8 - filled)}`;
-}
-
-export type ChatTreeItem = ConversationItem | ProjectItem | ServiceChoiceItem | SidebarActionItem | UsageItem;
+export type ChatTreeItem = ConversationItem | ProjectItem | ServiceChoiceItem | SidebarActionItem;
 
 /// Which compatibility shape one tree draws.
 ///
@@ -687,9 +645,8 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
         && this.state.providers.some(isUsable)
         ? [new SidebarActionItem("project"), new SidebarActionItem("conversation")]
         : [];
-      const usage = usageRows(this.state.usage, this.state.providers, Date.now())
-        .map((row) => new UsageItem(row, this.extensionUri));
-      this.items = [...choices, ...actions, ...headings, ...looseRows, ...usage];
+      // Usage is not a row here: the strip under this list draws it (`usageStripView.ts`).
+      this.items = [...choices, ...actions, ...headings, ...looseRows];
       this.flat = looseRows;
     } else {
       this.items = [...choices, ...headings];

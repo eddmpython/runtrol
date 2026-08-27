@@ -39,7 +39,8 @@ import { setupRows } from "./usageDisplay";
 import { WorkspaceRootFollowing } from "./workspaceRoots";
 import { conversationIcon } from "./conversationIcon";
 import { TerminalTabs } from "./terminalTabs";
-import { ConversationItem, ConversationsTree, ProjectItem, ServiceChoiceItem, UsageItem, icon } from "./trees";
+import { ConversationItem, ConversationsTree, ProjectItem, ServiceChoiceItem, icon } from "./trees";
+import { USAGE_VIEW_ID, UsageStripView } from "./usageStripView";
 
 declare const RUNTROL_INCLUDE_TEST_JOURNEY: boolean;
 
@@ -78,14 +79,25 @@ const SESSION_SWITCH_ROUNDS = 5;
 const MEASURED_HOST = process.env.RUNTROL_VSCODE_PERFORMANCE === "1";
 
 export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi {
-  const locator = new CoreLocator(context);
+  // Declared below; the private locator only asks it after activation has built it.
+  let runtime: StudioRuntimeClient;
+  const locator = new CoreLocator(
+    context,
+    () => runtime.warmLocator().then((listed) => listed?.controlEndpoint ?? null),
+  );
   const client = new CoreClient(locator);
   const agentTools = new AgentToolsController(() => locator.runtimeExecutable());
   let initializationStage = "runtime:bootstrap";
-  const runtime = new StudioRuntimeClient(
+  runtime = new StudioRuntimeClient(
     context,
-    () => locator.runtimeExecutable(),
-    () => locator.managedDigest(),
+    async () => {
+      const located = await locator.locate();
+      return { runtimeExecutable: located.executable, preferDigest: located.managedDigest };
+    },
+    async () => {
+      const expected = await locator.firstCandidate();
+      return { runtimeExecutable: expected.executable, preferDigest: expected.managedDigest };
+    },
     (pendingId, signature) => selfApproveIntegration(client, pendingId, signature),
     (confirmationId, sessionId) => confirmRuntimeForget(client, confirmationId, sessionId),
     (confirmationId, workspace) => confirmRuntimeSharedOpen(client, confirmationId, workspace),
@@ -160,12 +172,28 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
   // One native list owns the whole sidebar. Projects remain real parents, loose conversations sit beside them,
   // and each installed CLI contributes only its seven-day usage line at the bottom.
   const sidebar = new ConversationsTree("all", state, projectStore, agentTools, context.extensionUri);
+  // Under the list, pinned: every installed service as an icon with a ring gauge, and its windows on hover.
+  const providerNamed = (providerId: string) => {
+    const provider = state.providers.find((candidate) => candidate.providerId === providerId);
+    if (!provider) throw new Error(`${providerId} is not an installed service`);
+    return provider;
+  };
+  const usageStrip = new UsageStripView(state, context.extensionUri, {
+    signIn: (providerId) => afterReady(async () => {
+      await controller.signInProvider(providerNamed(providerId));
+    }),
+    fix: (providerId) => afterReady(async () => {
+      await controller.fixService(providerNamed(providerId));
+    }),
+  }, (error) => void vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error)));
 
   context.subscriptions.push(
     state,
     controller,
     agentTools,
     sidebar,
+    usageStrip,
+    vscode.window.registerWebviewViewProvider(USAGE_VIEW_ID, usageStrip),
     vscode.window.registerFileDecorationProvider(sidebar.decorations),
     vscode.commands.registerCommand(
       "runtrol.refresh",
@@ -401,32 +429,6 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
       })),
     ),
     vscode.commands.registerCommand(
-      "runtrol.showUsageDetails",
-      (item: unknown) => run(() => afterReady(async () => {
-        if (!(item instanceof UsageItem)) return;
-        const provider = state.providers.find(
-          (candidate) => candidate.providerId === item.usage.providerId,
-        );
-        const action = item.usage.state === "signedOut"
-          ? "Sign in"
-          : item.usage.state === "unavailable"
-            ? "Fix"
-            : "Set up services";
-        const chosen = await vscode.window.showInformationMessage(
-          item.usage.tooltip.replaceAll("\n", " · "),
-          action,
-        );
-        if (chosen !== action) return;
-        if (action === "Sign in" && provider) {
-          await controller.signInProvider(provider);
-        } else if (action === "Fix" && provider) {
-          await controller.fixService(provider);
-        } else {
-          await vscode.commands.executeCommand("runtrol.setUpServices");
-        }
-      })),
-    ),
-    vscode.commands.registerCommand(
       "runtrol.selectSession",
       (item) => run(() => afterReady(() => controller.select(item))),
     ),
@@ -540,6 +542,9 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
   );
   // Before the Runtime integration speaks: proving the daemon that answered is the installed generation
   // is what lets everything past the hello assume the daemon and this extension are the same build.
+  // The public locator's native verification starts now; the private locator reads the control endpoint off
+  // its answer instead of spawning `endpoint`, and `initialize` finds it settled. See `warmLocator`.
+  void runtime.warmLocator();
   const runtimeInitialization = superviseCoreCurrency(client, locator, (updating) => {
     // Under the usage strip, where it stays. The count is what this window can see running: those are the
     // conversations the older generation is still holding, and when the last one ends the installed build takes

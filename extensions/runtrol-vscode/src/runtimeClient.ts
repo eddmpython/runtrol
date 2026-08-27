@@ -41,7 +41,9 @@ import { collectNativeChats } from "./nativeChatCatalogue";
 import type { NativeChatCatalogue, NativeChatLine } from "./runtimeTypes";
 
 const SECRET_KEY = "runtrol.runtime.integration.v1";
-const ENROLLMENT_PASSIVE_SETTLE_MS = 250;
+
+/// Which Core file the public locator verifies with, and which generation it should prefer.
+export type RuntimeSource = { runtimeExecutable: string; preferDigest: string | null };
 const ENROLLMENT_DECISION_SETTLE_MS = 5_000;
 const ENROLLMENT_DECISION_POLL_MS = 50;
 const RUNTIME_LOCATOR_SETTLE_MS = 12_000;
@@ -96,6 +98,7 @@ export class StudioRuntimeClient implements vscode.Disposable {
   private options: ClientOptions | null = null;
   private stored: StoredIntegration | null = null;
   private locator: Promise<ValidatedLocator> | null = null;
+  private firstInspection: Promise<ValidatedLocator | null> | null = null;
   private commandTail: Promise<void> = Promise.resolve();
   private controlPersistence: Promise<void> = Promise.resolve();
   private readonly controls = new Map<string, ControlLease>();
@@ -108,10 +111,12 @@ export class StudioRuntimeClient implements vscode.Disposable {
 
   constructor(
     private readonly context: vscode.ExtensionContext,
-    private readonly locateRuntimeExecutable: () => Promise<string>,
-    /// The digest of the Core this extension installed, so the locator chooses that generation. Null when the
-    /// operator runs their own corePath, in which case the newest generation that is not draining is chosen.
-    private readonly installedCoreDigest: () => Promise<string | null>,
+    /// The Core the endpoint probe settled on, with the digest of the Core this extension installed when that
+    /// is the one in use (null for an operator corePath or a PATH build, so the newest generation not draining
+    /// is chosen).
+    private readonly locateRuntime: () => Promise<RuntimeSource>,
+    /// The Core the probe is expected to settle on, known before it answers; see `warmLocator`.
+    private readonly expectedRuntime: () => Promise<RuntimeSource>,
     private readonly selfApprove: (pendingId: string, signature: string) => Promise<boolean>,
     private readonly confirmForget: (
       confirmationId: string,
@@ -125,15 +130,43 @@ export class StudioRuntimeClient implements vscode.Disposable {
     private readonly reportInitialization: (stage: string) => void = () => undefined,
   ) {}
 
+  /// Begin the locator inspection now, before anything waits on it.
+  ///
+  /// On Windows the inspection runs the installed Core once to verify the locator natively, and a Core process
+  /// costs a few hundred milliseconds to start (measured 2026-08-27: 250 to 390 ms per spawn on a desktop). Run
+  /// from activation, that spawn overlaps the private endpoint probe instead of following it, and `initialize`
+  /// finds the answer already in hand. Errors are not reported here: `initialize` re-inspects on its own path and
+  /// reports what it finds, so nothing is lost by letting this early attempt fail quietly.
+  warmLocator(): Promise<ValidatedLocator | null> {
+    this.firstInspection ??= this.resolveExecutable(this.expectedRuntime)
+      .then(() => this.inspectOnce())
+      .catch(() => null);
+    return this.firstInspection;
+  }
+
+  /// One look at the locator, without waiting for a generation to appear.
+  ///
+  /// A running generation of the installed build is remembered as the settled locator, so `initialize` does not
+  /// inspect again. Anything else answers null and leaves the settling to `initialize`'s own loop.
+  private async inspectOnce(): Promise<ValidatedLocator | null> {
+    const inspected = await RuntimeLocator.system({
+      ...(process.platform === "win32" && this.runtimeExecutable && isAbsolute(this.runtimeExecutable)
+        ? { runtimeExecutable: this.runtimeExecutable }
+        : {}),
+      ...(this.preferDigest ? { preferDigest: this.preferDigest } : {}),
+    }).inspect();
+    if (inspected.state !== "running") return null;
+    if (this.preferDigest && inspected.locator.digest !== this.preferDigest) return null;
+    this.locator ??= Promise.resolve(inspected.locator);
+    return inspected.locator;
+  }
+
   async initialize(): Promise<void> {
     this.reportInitialization("bootstrap");
-    const [stored, runtimeExecutable, preferDigest] = await Promise.all([
+    const [stored] = await Promise.all([
       this.loadOrCreateIdentity(),
-      this.locateRuntimeExecutable(),
-      this.installedCoreDigest(),
+      this.resolveExecutable(this.locateRuntime),
     ]);
-    this.runtimeExecutable = runtimeExecutable;
-    this.preferDigest = preferDigest;
     await this.withRuntimeLocator(async () => undefined);
     this.reportInitialization("integration");
     try {
@@ -946,6 +979,20 @@ export class StudioRuntimeClient implements vscode.Disposable {
     return this.options;
   }
 
+  /// The executable and installed digest the locator inspection is keyed on.
+  ///
+  /// The warm pass keys on what the probe is expected to settle on; `initialize` keys on what it did settle
+  /// on. When the two differ (the installed Core could not answer and the probe fell back to a PATH build), the
+  /// early inspection preferred a generation that will never appear, so it is dropped and taken again.
+  private async resolveExecutable(source: () => Promise<RuntimeSource>): Promise<void> {
+    const { runtimeExecutable, preferDigest } = await source();
+    if (this.runtimeExecutable !== runtimeExecutable || this.preferDigest !== preferDigest) {
+      this.locator = null;
+    }
+    this.runtimeExecutable = runtimeExecutable;
+    this.preferDigest = preferDigest;
+  }
+
   private withRuntimeLocator<T>(operation: (locator: ValidatedLocator) => Promise<T>): Promise<T> {
     const pending = this.locator ??= inspectRuntimeLocator(this.runtimeExecutable, this.preferDigest);
     return pending.then(operation).catch((error: unknown) => {
@@ -1052,15 +1099,10 @@ export class StudioRuntimeClient implements vscode.Disposable {
         requestedScopes: ALL_STUDIO_SCOPES,
         requestedRoots: roots,
       });
-      const passiveDeadline = Math.min(
-        receipt.expiresAtMs,
-        Date.now() + ENROLLMENT_PASSIVE_SETTLE_MS,
-      );
+      // Studio approves its own request at once: it is the person's window, and a quarter second spent
+      // waiting for somebody else to approve it was a quarter second of every activation (measured 2026-08-27,
+      // 250 ms of a 2.3 s activation). A request already decided (a policy, or an earlier attempt) is honoured.
       let decision = await runtime.integrations().watch(receipt.pendingId);
-      while (decision.state === "pending" && Date.now() < passiveDeadline) {
-        await new Promise((resolve) => setTimeout(resolve, ENROLLMENT_DECISION_POLL_MS));
-        decision = await runtime.integrations().watch(receipt.pendingId);
-      }
       if (decision.state === "pending") {
         const approved = await this.selfApprove(
           receipt.pendingId,

@@ -42,14 +42,19 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
     views = contributes.get("views") if isinstance(contributes, dict) else None
     view_containers = contributes.get("viewsContainers") if isinstance(contributes, dict) else None
     runtrol_views = views.get("runtrol") if isinstance(views, dict) else None
+    # Two views and only two: the native list, then the usage strip pinned under it. The strip is a webview
+    # because a native tree cannot draw a ring gauge (2026-08-27); it is the only webview this product draws.
     if (
         not isinstance(runtrol_views, list)
-        or len(runtrol_views) != 1
+        or len(runtrol_views) != 2
         or not isinstance(runtrol_views[0], dict)
         or runtrol_views[0].get("id") != "runtrol.sidebar"
         or runtrol_views[0].get("type") == "webview"
+        or not isinstance(runtrol_views[1], dict)
+        or runtrol_views[1].get("id") != "runtrol.usage"
+        or runtrol_views[1].get("type") != "webview"
     ):
-        found.append("Runtrol must contribute one unified native sidebar view")
+        found.append("Runtrol must contribute one native sidebar list followed by the usage strip webview")
     welcome_entries = contributes.get("viewsWelcome") if isinstance(contributes, dict) else None
     welcomes = welcome_entries if isinstance(welcome_entries, list) else []
     def welcome_for(when: str, token: str, view: str = "runtrol.sidebar") -> bool:
@@ -137,15 +142,6 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
         found.append("the usage section must have one activatable set-up command")
     if "onView:runtrol.sidebar" not in activations:
         found.append("the unified sidebar view must activate the extension")
-    usage_detail_entry = any(
-        isinstance(entry, dict)
-        and entry.get("command") == "runtrol.showUsageDetails"
-        and entry.get("when") == "view == runtrol.sidebar && viewItem =~ /^runtrol\\.usage\\./"
-        and str(entry.get("group", "")).startswith("inline")
-        for entry in winner_entries
-    )
-    if "runtrol.showUsageDetails" not in command_ids or not usage_detail_entry:
-        found.append("each compact usage row must expose one inline details action")
     colors = contributes.get("colors") if isinstance(contributes, dict) else None
     if not any(isinstance(entry, dict) and entry.get("id") == "runtrol.accent" for entry in colors or []):
         found.append("the native first-run actions must use the declared Runtrol accent")
@@ -228,8 +224,8 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             found.append(f"no chat container may be contributed to the {container_kind}; the conversation is a terminal tab")
     for view_group, entries in (views.items() if isinstance(views, dict) else []):
         for entry in entries if isinstance(entries, list) else []:
-            if isinstance(entry, dict) and entry.get("type") == "webview":
-                found.append(f"{view_group} contributes a webview view {entry.get('id')}; the unified sidebar is native")
+            if isinstance(entry, dict) and entry.get("type") == "webview" and entry.get("id") != "runtrol.usage":
+                found.append(f"{view_group} contributes a webview view {entry.get('id')}; the only webview is the usage strip")
 
     required = {
         "core/framing.ts": [
@@ -251,7 +247,7 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             'initializationStage = "runtime:bootstrap"',
             'executeCommand("runtrol.sidebar.focus")',
             '"runtrol.setUpServices"',
-            '"runtrol.showUsageDetails"',
+            "registerWebviewViewProvider(USAGE_VIEW_ID, usageStrip)",
             "await controller.signInProvider(provider)",
             "await controller.fixService(provider)",
         ],
@@ -292,16 +288,23 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             '"runtrol.hasUsableProvider"',
             '"runtrol.isVerifyingProvider"',
             "awaitsVerification",
-            "export class UsageItem",
-            "primarySevenDayMeter(usage.meters)",
-            "Math.max(0, Math.min(100, percent))",
-            '"█".repeat(filled)',
-            'command: "runtrol.showUsageDetails"',
-            "this.tooltip = usage.tooltip",
             'new vscode.ThemeColor("runtrol.accent")',
             'if (this.part === "all")',
+            "this.items = [...choices, ...actions, ...headings, ...looseRows]",
+        ],
+        "usageStrip.ts": [
+            "export function usageChips",
+            "primarySevenDayMeter(row.meters)",
+            'role="progressbar"',
+            "Content-Security-Policy",
+            "script-src 'nonce-",
+            'aria-expanded="false"',
+            "export function escapeHtml",
+        ],
+        "usageStripView.ts": [
+            "enableScripts: true",
+            "localResourceRoots",
             "usageRows(this.state.usage",
-            "this.items = [...choices, ...actions, ...headings, ...looseRows, ...usage]",
         ],
         "usageDisplay.ts": [
             'provider.installation.state !== "missing"',
@@ -429,7 +432,10 @@ def selftest() -> int:
         "activationEvents": ["onView:runtrol.sidebar", "onCommand:runtrol.setUpServices"],
         "contributes": {
             "viewsContainers": {"activitybar": [{"id": "runtrol", "title": "Runtrol"}]},
-            "views": {"runtrol": [{"id": "runtrol.sidebar", "name": "Runtrol"}]},
+            "views": {"runtrol": [
+                {"id": "runtrol.sidebar", "name": "Runtrol"},
+                {"id": "runtrol.usage", "name": "Usage", "type": "webview"},
+            ]},
             "viewsWelcome": [
                 {
                     "view": "runtrol.sidebar",
@@ -454,7 +460,6 @@ def selftest() -> int:
             ],
             "commands": [
                 {"command": "runtrol.setUpServices"},
-                {"command": "runtrol.showUsageDetails"},
                 {"command": "runtrol.deleteConversation", "icon": "$(close)"},
             ],
             "menus": {
@@ -481,11 +486,6 @@ def selftest() -> int:
                         "when": "view == runtrol.sidebar && viewItem =~ /\\.delete/",
                         "group": "inline@1",
                     },
-                    {
-                        "command": "runtrol.showUsageDetails",
-                        "when": "view == runtrol.sidebar && viewItem =~ /^runtrol\\.usage\\./",
-                        "group": "inline@0",
-                    },
                 ],
             },
             "colors": [{"id": "runtrol.accent"}],
@@ -506,7 +506,7 @@ def selftest() -> int:
             "afterReady selfApproveIntegration(client, pendingId, signature) "
             'initializationStage = "runtime:bootstrap" missionController.startAutoFlights() '
             'executeCommand("runtrol.sidebar.focus") '
-            '"runtrol.setUpServices" "runtrol.showUsageDetails" '
+            '"runtrol.setUpServices" registerWebviewViewProvider(USAGE_VIEW_ID, usageStrip) '
             "await controller.signInProvider(provider) await controller.fixService(provider)"
         ),
         "providerHealth.ts": (
@@ -530,13 +530,15 @@ def selftest() -> int:
             'this.revealCurrentProject() '
             'this.state.incompleteDiscovery this.state.coreReach Cannot reach the Runtrol Core. '
             '"runtrol.hasUsableProvider" "runtrol.isVerifyingProvider" awaitsVerification '
-            'export class UsageItem primarySevenDayMeter(usage.meters) '
-            'Math.max(0, Math.min(100, percent)) "█".repeat(filled) '
-            'command: "runtrol.showUsageDetails" this.tooltip = usage.tooltip '
             'new vscode.ThemeColor("runtrol.accent") if (this.part === "all") '
-            'usageRows(this.state.usage '
-            'this.items = [...choices, ...actions, ...headings, ...looseRows, ...usage]'
+            'this.items = [...choices, ...actions, ...headings, ...looseRows]'
         ),
+        "usageStrip.ts": (
+            "export function usageChips primarySevenDayMeter(row.meters) "
+            "role=\"progressbar\" Content-Security-Policy script-src 'nonce- aria-expanded=\"false\" "
+            "export function escapeHtml"
+        ),
+        "usageStripView.ts": "enableScripts: true localResourceRoots usageRows(this.state.usage",
         "usageDisplay.ts": (
             'provider.installation.state !== "missing" detail: "Not signed in · Sign in" '
             'detail: "Checking" detail: "Unavailable · Fix" '
@@ -591,7 +593,11 @@ def selftest() -> int:
         return 2
 
     split_view = json.loads(json.dumps(package))
-    split_view["contributes"]["views"]["runtrol"].append({"id": "runtrol.usage", "name": "Usage"})
+    split_view["contributes"]["views"]["runtrol"].append({"id": "runtrol.missions", "name": "Missions"})
+    native_strip = json.loads(json.dumps(package))
+    del native_strip["contributes"]["views"]["runtrol"][1]["type"]
+    no_strip = json.loads(json.dumps(package))
+    no_strip["contributes"]["views"]["runtrol"].pop()
     webview_sidebar = json.loads(json.dumps(package))
     webview_sidebar["contributes"]["views"]["runtrol"][0]["type"] = "webview"
     chat_container = json.loads(json.dumps(package))
@@ -644,10 +650,11 @@ def selftest() -> int:
         ),
         (package, {**sources, "conversationIcon.ts": sources["conversationIcon.ts"].replace("provider-icons", "brand")}),
         (package, {**sources, "conversationList.ts": sources["conversationList.ts"] + " `Chat ${identity}`"}),
-        (package, {**sources, "trees.ts": sources["trees.ts"].replace("primarySevenDayMeter(usage.meters)", "")}),
-        (package, {**sources, "trees.ts": sources["trees.ts"].replace('"█".repeat(filled)', "")}),
-        (package, {**sources, "trees.ts": sources["trees.ts"].replace('command: "runtrol.showUsageDetails"', "")}),
-        (package, {**sources, "trees.ts": sources["trees.ts"].replace("usageRows(this.state.usage", "")}),
+        (package, {**sources, "usageStrip.ts": sources["usageStrip.ts"].replace('role="progressbar"', "")}),
+        (package, {**sources, "usageStrip.ts": sources["usageStrip.ts"].replace("Content-Security-Policy", "")}),
+        (native_strip, sources),
+        (no_strip, sources),
+        (package, {**sources, "usageStripView.ts": sources["usageStripView.ts"].replace("usageRows(this.state.usage", "")}),
         (package, {**sources, "extension.ts": sources["extension.ts"].replace('executeCommand("runtrol.sidebar.focus")', "")}),
         (package, {**sources, "stateRows.ts": sources["stateRows.ts"].replace("discoveryNotice", "")}),
         (package, {**sources, "trees.ts": sources["trees.ts"].replace("conversationIcon(extensionUri, conversation.serviceIcon)", "")}),
