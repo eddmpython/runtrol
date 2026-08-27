@@ -901,6 +901,17 @@ async fn serve_surfaces(
         reserving.clone(),
         noticing_updates,
     )));
+    // A once-a-second pulse on stderr, only under the harness trace switch: its silence in a captured log is
+    // the direct picture of the runtime thread being wedged, which no per-request breadcrumb can draw (the CI
+    // Unix hosts show connected clients whose greeting is never answered while the daemon says nothing).
+    if std::env::var_os("RUNTROL_CLOSE_TRACE").is_some_and(|value| value == "1") {
+        connections.spawn(async {
+            loop {
+                close_trace("heartbeat");
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            }
+        });
+    }
     let (local_failed, mut local_failures) = mpsc::unbounded_channel();
     {
         let asking = asking.clone();
@@ -915,6 +926,7 @@ async fn serve_surfaces(
                 tokio::select! {
                     arrived = listener.accept() => match arrived {
                         Ok(connection) => {
+                            close_trace("control: connection accepted");
                             clients.spawn(converse(
                                 SurfaceConnection::Local(connection),
                                 Conversation::at_the_machine(),
