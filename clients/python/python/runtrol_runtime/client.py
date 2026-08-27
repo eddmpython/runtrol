@@ -37,6 +37,13 @@ def _object(encoded: str) -> JsonObject:
     return value
 
 
+def _objects(encoded: str) -> list[JsonObject]:
+    value = json.loads(encoded)
+    if not isinstance(value, list) or not all(isinstance(item, dict) for item in value):
+        raise TypeError("Runtime result is not an object list")
+    return value
+
+
 @dataclass(frozen=True, slots=True)
 class TerminalEvent:
     """Exact provider terminal bytes or one explicit view lifecycle boundary."""
@@ -195,23 +202,42 @@ class AsyncRuntimeClient:
     async def terminals(self) -> JsonObject:
         return await self.call("terminals.list")
 
+    async def terminal_generations(self) -> list[JsonObject]:
+        """List exact current and draining generation outcomes for terminal routing."""
+
+        return _objects(await _native_await(self._native.terminal_generations()))
+
     async def subscribe(self, kind: str, params: JsonObject | None = None) -> AsyncSubscription:
         native = await _native_await(
             self._native.subscribe(kind, json.dumps(params or {}, separators=(",", ":")))
         )
         return AsyncSubscription(native)
 
-    async def terminal(self, kind: str, params: JsonObject) -> AsyncTerminalView:
+    async def terminal(
+        self,
+        kind: str,
+        params: JsonObject,
+        runtime_generation: str | None = None,
+    ) -> AsyncTerminalView:
         native = await _native_await(
-            self._native.terminal(kind, json.dumps(params, separators=(",", ":")))
+            self._native.terminal(
+                kind,
+                json.dumps(params, separators=(",", ":")),
+                runtime_generation,
+            )
         )
         return AsyncTerminalView(native)
 
     async def open_terminal(self, params: JsonObject) -> AsyncTerminalView:
         return await self.terminal("open", params)
 
-    async def attach_terminal(self, params: JsonObject) -> AsyncTerminalView:
-        return await self.terminal("attach", params)
+    async def attach_terminal(
+        self,
+        params: JsonObject,
+        *,
+        runtime_generation: str | None = None,
+    ) -> AsyncTerminalView:
+        return await self.terminal("attach", params, runtime_generation)
 
     async def panic_stop(self) -> None:
         await self.call("panicStop")
@@ -388,19 +414,34 @@ class RuntimeClient:
     def terminals(self) -> JsonObject:
         return self._runner.call(self._asynchronous.terminals)
 
+    def terminal_generations(self) -> list[JsonObject]:
+        return self._runner.call(self._asynchronous.terminal_generations)
+
     def subscribe(self, kind: str, params: JsonObject | None = None) -> Subscription:
         subscription = self._runner.call(lambda: self._asynchronous.subscribe(kind, params))
         return Subscription(self._runner, subscription)
 
-    def terminal(self, kind: str, params: JsonObject) -> TerminalView:
-        terminal = self._runner.call(lambda: self._asynchronous.terminal(kind, params))
+    def terminal(
+        self,
+        kind: str,
+        params: JsonObject,
+        runtime_generation: str | None = None,
+    ) -> TerminalView:
+        terminal = self._runner.call(
+            lambda: self._asynchronous.terminal(kind, params, runtime_generation)
+        )
         return TerminalView(self._runner, terminal)
 
     def open_terminal(self, params: JsonObject) -> TerminalView:
         return self.terminal("open", params)
 
-    def attach_terminal(self, params: JsonObject) -> TerminalView:
-        return self.terminal("attach", params)
+    def attach_terminal(
+        self,
+        params: JsonObject,
+        *,
+        runtime_generation: str | None = None,
+    ) -> TerminalView:
+        return self.terminal("attach", params, runtime_generation)
 
     def panic_stop(self) -> None:
         self._runner.call(self._asynchronous.panic_stop)

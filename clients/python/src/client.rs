@@ -6,15 +6,15 @@ use pyo3::prelude::*;
 use runtrol_runtime_client::{
     ClientError, ClientOptions, EnrollmentProposal, IntegrationCredentials, IntegrationIdentity,
     ProviderNotification, RuntimeClient, RuntimeLocator, SessionIndexNotification,
-    SessionNotification, TerminalIndexNotification,
+    SessionNotification, TerminalClient, TerminalFleetOutcome, TerminalIndexNotification,
 };
 use runtrol_runtime_protocol::{
     AcquireControlParams, AdoptNativeSessionParams, AppScope, ArchiveNativeSessionParams,
     ControlLeaseParams, CoolSessionParams, DeleteNativeSessionParams, ForgetSessionParams,
     GetProviderCapabilitiesParams, GetSessionParams, IntegrationGrant, ListModelsParams,
     ListNativeSessionsParams, ListPendingApprovalsParams, MutationRequestId, PendingEnrollmentId,
-    RespondApprovalParams, ResumeSessionParams, SetModeParams, SetModelParams, StartSessionParams,
-    SubmitBlocksParams, SubmitInputParams, WatchEventsParams,
+    RespondApprovalParams, ResumeSessionParams, RuntimeError, RuntimeErrorKind, SetModeParams,
+    SetModelParams, StartSessionParams, SubmitBlocksParams, SubmitInputParams, WatchEventsParams,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -65,6 +65,35 @@ impl ConnectConfig {
 
     pub(crate) async fn connect(&self) -> Result<RuntimeClient, ClientError> {
         RuntimeLocator::system()?.connect(self.options()).await
+    }
+
+    pub(crate) async fn connect_generation(
+        &self,
+        runtime_generation: &str,
+    ) -> Result<RuntimeClient, ClientError> {
+        let locator = RuntimeLocator::system()?;
+        let generation = locator
+            .inspect_all()?
+            .into_iter()
+            .find(|candidate| candidate.digest() == runtime_generation)
+            .ok_or_else(|| {
+                RuntimeError::plain(
+                    RuntimeErrorKind::TerminalGenerationUnavailable,
+                    "the Runtime generation that owns this terminal is no longer listed",
+                    runtime_generation,
+                )
+            })?;
+        RuntimeClient::connect_to(generation, self.options()).await
+    }
+
+    pub(crate) async fn connect_terminal(
+        &self,
+        runtime_generation: Option<&str>,
+    ) -> Result<RuntimeClient, ClientError> {
+        match runtime_generation {
+            Some(generation) => self.connect_generation(generation).await,
+            None => self.connect().await,
+        }
     }
 }
 
@@ -131,15 +160,27 @@ impl PyRuntimeClient {
     }
 
     /// Open or attach one provider-faithful terminal on its own authenticated connection.
+    #[pyo3(signature = (kind, params_json, runtime_generation=None))]
     fn terminal<'py>(
         &self,
         py: Python<'py>,
         kind: String,
         params_json: String,
+        runtime_generation: Option<String>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let config = self.config.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            crate::terminal::open_terminal(config, kind, params_json)
+            crate::terminal::open_terminal(config, kind, params_json, runtime_generation)
+                .await
+                .map_err(NativeError::new_err)
+        })
+    }
+
+    /// List every current and draining Runtime generation without hiding unsupported or failed peers.
+    fn terminal_generations<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let config = self.config.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            terminal_generations(config)
                 .await
                 .map_err(NativeError::new_err)
         })
@@ -166,6 +207,45 @@ impl PyRuntimeClient {
                 .map_err(NativeError::new_err)
         })
     }
+}
+
+async fn terminal_generations(config: ConnectConfig) -> Result<String, String> {
+    let locator = RuntimeLocator::system().map_err(|error| crate::error_json(&error.into()))?;
+    let entries = TerminalClient::list_all_generations(&locator, config.options())
+        .await
+        .map_err(|error| crate::error_json(&error))?;
+    let projected = entries
+        .into_iter()
+        .map(|entry| {
+            let outcome = match entry.outcome {
+                TerminalFleetOutcome::Listed(snapshot) => {
+                    serde_json::json!({ "kind": "listed", "snapshot": snapshot })
+                }
+                TerminalFleetOutcome::Unsupported => serde_json::json!({ "kind": "unsupported" }),
+                TerminalFleetOutcome::Failed(error) => serde_json::json!({
+                    "kind": "failed",
+                    "error": serde_json::from_str::<serde_json::Value>(&crate::error_json(&error))
+                        .unwrap_or_else(|_| serde_json::json!({
+                            "code": "internal",
+                            "message": "Runtime generation failure could not be encoded",
+                            "retryable": false,
+                            "correlationId": "python-terminal-fleet"
+                        }))
+                }),
+            };
+            serde_json::json!({
+                "runtimeGeneration": entry.runtime_generation,
+                "draining": entry.draining,
+                "outcome": outcome
+            })
+        })
+        .collect::<Vec<_>>();
+    serde_json::to_string(&projected).map_err(|error| {
+        native_error_json(
+            "internal",
+            &format!("terminal generation results cannot be encoded: {error}"),
+        )
+    })
 }
 
 pub(crate) async fn connect_client(config: ConnectConfig) -> Result<PyRuntimeClient, String> {

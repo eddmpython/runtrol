@@ -33,5 +33,12 @@ Dedicated provider, session, event, and terminal-index subscriptions use `subscr
 `open_terminal()` and `attach_terminal()`, and both terminal views expose the same control methods. Terminal output
 remains bytes and is never converted into chat messages.
 
+`terminal_generations()` returns an explicit result for every current and draining Runtime generation. Reattach a
+recorded terminal with `attach_terminal(params, runtime_generation=descriptor["runtimeGeneration"])`. The client
+re-reads the owner-only locator and connects only to that exact generation. If it has vanished, the call raises
+`TerminalGenerationUnavailableError` and never redirects the terminal ID to a successor.
+
 The checked schema and generated `TypedDict` declarations ship in the wheel. Runtime absence raises
-`RuntimeNotInstalledError`; importing the package and calling `connect()` never installs or starts it.
+`RuntimeNotInstalledError`. Runtime availability, protocol compatibility, terminal ownership, generation, and
+workspace conflicts have dedicated public exception classes. Importing the package and calling `connect()` never
+installs or starts Runtime.

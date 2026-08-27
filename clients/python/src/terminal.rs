@@ -187,10 +187,18 @@ pub(crate) async fn open_terminal(
     config: ConnectConfig,
     kind: String,
     params_json: String,
+    runtime_generation: Option<String>,
 ) -> Result<PyTerminalView, String> {
     let (ready, opened) = oneshot::channel();
     let (sender, commands) = mpsc::channel(TERMINAL_COMMAND_CAPACITY);
-    tokio::spawn(run_terminal(config, kind, params_json, ready, commands));
+    tokio::spawn(run_terminal(
+        config,
+        kind,
+        params_json,
+        runtime_generation,
+        ready,
+        commands,
+    ));
     let (opened_json, initial_screen) = opened.await.map_err(|_| {
         serde_json::json!({
             "code": "runtimeUnavailable",
@@ -212,10 +220,11 @@ async fn run_terminal(
     config: ConnectConfig,
     kind: String,
     params_json: String,
+    runtime_generation: Option<String>,
     ready: oneshot::Sender<Result<(String, Vec<u8>), String>>,
     mut commands: mpsc::Receiver<TerminalCommand>,
 ) {
-    let mut runtime = match config.connect().await {
+    let mut runtime = match config.connect_terminal(runtime_generation.as_deref()).await {
         Ok(runtime) => runtime,
         Err(error) => {
             let _sent = ready.send(Err(crate::error_json(&error)));

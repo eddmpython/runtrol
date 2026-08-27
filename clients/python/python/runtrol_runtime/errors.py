@@ -31,6 +31,38 @@ class OutcomeUnknownError(RuntimeError):
     """A mutation may have completed and must be queried or retried with the same request ID."""
 
 
+class RuntimeUnavailableError(RuntimeError):
+    """The installed shared Runtime cannot currently be reached."""
+
+
+class ProtocolIncompatibleError(RuntimeError):
+    """The installed Runtime and this client share no compatible public contract."""
+
+
+class LegacyGenerationBusyError(RuntimeError):
+    """A pre-public draining generation may still own the requested native conversation."""
+
+
+class NativeConversationBusyError(RuntimeError):
+    """A structured process already owns the requested native conversation."""
+
+
+class TerminalAlreadyLiveError(RuntimeError):
+    """A terminal in another Runtime generation already owns the native conversation."""
+
+
+class TerminalGoneError(RuntimeError):
+    """The requested terminal process or view has ended."""
+
+
+class TerminalGenerationUnavailableError(RuntimeError):
+    """The exact Runtime generation recorded on a terminal is no longer available."""
+
+
+class TerminalWorkspaceConflictError(RuntimeError):
+    """The native conversation is live in a different canonical workspace."""
+
+
 def translate(error: _native.NativeError) -> NoReturn:
     """Raise the typed public equivalent of one native failure payload."""
 
@@ -46,7 +78,15 @@ def translate(error: _native.NativeError) -> NoReturn:
         "correlation_id": str(payload.get("correlationId", "python-client")),
     }
     error_type = {
+        "legacyGenerationBusy": LegacyGenerationBusyError,
+        "nativeConversationBusy": NativeConversationBusyError,
+        "protocolIncompatible": ProtocolIncompatibleError,
         "runtimeNotInstalled": RuntimeNotInstalledError,
+        "runtimeUnavailable": RuntimeUnavailableError,
+        "terminalAlreadyLive": TerminalAlreadyLiveError,
+        "terminalGenerationUnavailable": TerminalGenerationUnavailableError,
+        "terminalGone": TerminalGoneError,
+        "terminalWorkspaceConflict": TerminalWorkspaceConflictError,
         "outcomeUnknown": OutcomeUnknownError,
     }.get(failure["code"], RuntimeError)
     raise error_type(**failure) from error
