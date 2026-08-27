@@ -40,6 +40,11 @@ opaque public endpoint, the private control endpoint, product version, process I
 whether it is draining. A consumer connects to the generation running the build it installed when that is listed and
 not draining, otherwise to the newest generation that is not draining. It is bootstrap data, not authority.
 
+A locator written by a Runtime from before generations (Marketplace 0.1.20 to 0.1.22 named one daemon and no
+digest) is read by every SDK as one generation with an all-zero digest and no control endpoint. Installed machines
+carry that file until the newer build has published its own generation beside the older daemon, and a client that
+refused it would strand them at "malformed" instead of reaching the daemon that is serving.
+
 The Rust, TypeScript, and Python SDKs derive the platform state directory, cap the locator at 8 KiB, reject links and
 malformed records, verify owner-only permissions, and validate the endpoint kind. Windows uses an owner-only named
 pipe. macOS and Linux use an owner-only Unix domain socket. There is no public TCP or HTTP listener.

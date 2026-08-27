@@ -16,6 +16,59 @@ const RUNTIME_FOLDER: &str = "runtrol";
 const MAX_LOCATOR_BYTES: u64 = 16 * 1024;
 const MAX_ENDPOINT_BYTES: usize = 1024;
 const MAX_GENERATIONS: usize = 16;
+/// The schema Runtimes published before generations (Marketplace 0.1.20 to 0.1.22) wrote.
+const LEGACY_LOCATOR_SCHEMA: u32 = 1;
+/// The digest a pre-generation Runtime never named. All zeros, so it matches no build's preference.
+const LEGACY_DIGEST: &str = "0000000000000000000000000000000000000000000000000000000000000000";
+
+/// A locator written by a Runtime that predates generations.
+///
+/// Those Runtimes are installed on real machines, and the client that replaces them meets their locator
+/// first: the newer Core starts beside the older daemon and drains it, but until it has published its own
+/// generation the file on disk is the old one. Refusing it stranded every such machine at "malformed"
+/// (measured 2026-08-27 by the shipped-Runtime interop gate). The old record names one daemon and no
+/// digest, so it lifts into one generation with [`LEGACY_DIGEST`] and an empty control endpoint that
+/// nothing connects to; only its public endpoint is used.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct LegacyLocatorRecord {
+    schema: u32,
+    instance_id: String,
+    endpoint_kind: RuntimeEndpointKind,
+    endpoint: String,
+    runtime_version: String,
+    process_id: u32,
+}
+
+impl LegacyLocatorRecord {
+    fn lifted(self) -> RuntimeLocatorRecord {
+        RuntimeLocatorRecord {
+            schema: RUNTIME_LOCATOR_SCHEMA,
+            instance_id: self.instance_id,
+            generations: vec![RuntimeGeneration {
+                digest: LEGACY_DIGEST.to_owned(),
+                endpoint_kind: self.endpoint_kind,
+                endpoint: self.endpoint,
+                control_endpoint: String::new(),
+                runtime_version: self.runtime_version,
+                process_id: self.process_id,
+                started_at_ms: 0,
+                live_sessions: 0,
+                draining: false,
+            }],
+        }
+    }
+}
+
+fn decode_record(bytes: &[u8]) -> Result<RuntimeLocatorRecord, LocatorError> {
+    match serde_json::from_slice::<RuntimeLocatorRecord>(bytes) {
+        Ok(record) => Ok(record),
+        Err(current) => match serde_json::from_slice::<LegacyLocatorRecord>(bytes) {
+            Ok(legacy) if legacy.schema == LEGACY_LOCATOR_SCHEMA => Ok(legacy.lifted()),
+            _ => Err(LocatorError::Malformed(current.to_string())),
+        },
+    }
+}
 
 /// A validated Runtime locator ready for connection and instance proof.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -134,8 +187,7 @@ impl RuntimeLocator {
 
         let bytes = std::fs::read(&self.path)
             .map_err(|error| LocatorError::Io(io_detail("reading the Runtime locator", &error)))?;
-        let record: RuntimeLocatorRecord = serde_json::from_slice(&bytes)
-            .map_err(|error| LocatorError::Malformed(error.to_string()))?;
+        let record = decode_record(&bytes)?;
         validate_record(&record, &self.path)?;
         Ok(Some(record))
     }
@@ -276,17 +328,23 @@ fn validate_generation(
             "Runtime generation digest is not lowercase SHA-256 hex".to_owned(),
         ));
     }
+    let legacy = generation.digest == LEGACY_DIGEST;
     if generation.process_id == 0
         || generation.endpoint.is_empty()
         || generation.endpoint.len() > MAX_ENDPOINT_BYTES
-        || generation.control_endpoint.is_empty()
+        || (!legacy && generation.control_endpoint.is_empty())
         || generation.control_endpoint.len() > MAX_ENDPOINT_BYTES
     {
         return Err(LocatorError::Malformed(
             "Runtime process or endpoint is invalid".to_owned(),
         ));
     }
-    validate_endpoint(generation.endpoint_kind, &generation.endpoint, locator_path)
+    validate_endpoint(
+        generation.endpoint_kind,
+        &generation.endpoint,
+        locator_path,
+        legacy,
+    )
 }
 
 #[cfg(windows)]
@@ -294,6 +352,7 @@ fn validate_endpoint(
     kind: RuntimeEndpointKind,
     endpoint: &str,
     _locator_path: &Path,
+    _legacy: bool,
 ) -> Result<(), LocatorError> {
     if !matches!(kind, RuntimeEndpointKind::NamedPipe)
         || !endpoint.starts_with(r"\\.\pipe\runtrol-runtime-")
@@ -310,6 +369,7 @@ fn validate_endpoint(
     kind: RuntimeEndpointKind,
     endpoint: &str,
     locator_path: &Path,
+    legacy: bool,
 ) -> Result<(), LocatorError> {
     if !matches!(kind, RuntimeEndpointKind::UnixSocket) {
         return Err(LocatorError::Unsafe(
@@ -321,10 +381,13 @@ fn validate_endpoint(
         LocatorError::Unsafe("the Runtime locator has no owning state directory".to_owned())
     })?;
     let socket_name = endpoint.file_name().and_then(std::ffi::OsStr::to_str);
-    if !endpoint.is_absolute()
-        || endpoint.parent() != Some(expected_parent)
-        || !socket_name.is_some_and(is_generation_socket_name)
-    {
+    // A pre-generation Runtime bound the bare `runtrol-runtime.sock`; every generation since names itself.
+    let named_as_expected = if legacy {
+        socket_name == Some("runtrol-runtime.sock")
+    } else {
+        socket_name.is_some_and(is_generation_socket_name)
+    };
+    if !endpoint.is_absolute() || endpoint.parent() != Some(expected_parent) || !named_as_expected {
         return Err(LocatorError::Unsafe(
             "the Runtime socket escaped its owner-only state directory".to_owned(),
         ));
@@ -684,6 +747,28 @@ pub enum LocatorError {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_pre_generation_locator_lifts_into_one_digestless_generation() {
+        let bytes = br#"{"schema":1,"instanceId":"rtm_11111111111111111111111111111111","endpointKind":"unixSocket","endpoint":"/tmp/x/runtrol-runtime.sock","runtimeVersion":"0.1.22","processId":4242}"#;
+        let record = super::decode_record(bytes).expect("a shipped locator decodes");
+        assert_eq!(record.schema, super::RUNTIME_LOCATOR_SCHEMA);
+        assert_eq!(record.generations.len(), 1);
+        let generation = record.generations.first().expect("one generation");
+        assert_eq!(generation.digest, super::LEGACY_DIGEST);
+        assert!(generation.control_endpoint.is_empty());
+        assert_eq!(generation.runtime_version, "0.1.22");
+        assert!(!generation.draining);
+    }
+
+    #[test]
+    fn a_locator_of_neither_schema_stays_malformed() {
+        let bytes = br#"{"schema":7,"instanceId":"rtm_1"}"#;
+        assert!(matches!(
+            super::decode_record(bytes),
+            Err(super::LocatorError::Malformed(_))
+        ));
+    }
+
     use super::*;
 
     struct Scratch(PathBuf);

@@ -13,6 +13,10 @@ const MAX_ENDPOINT_BYTES = 1024;
 const MAX_GENERATIONS = 16;
 const MAX_SECURITY_OUTPUT_BYTES = 16 * 1024;
 const LOCATOR_SCHEMA = 2;
+/** The schema Runtimes published before generations (Marketplace 0.1.20 to 0.1.22) wrote. */
+const LEGACY_LOCATOR_SCHEMA = 1;
+/** The digest a pre-generation Runtime never named. All zeros, so it matches no build's preference. */
+export const LEGACY_DIGEST = "0".repeat(64);
 const runtimeLocatorToken = Symbol("Runtime locator path");
 const executeFile = promisify(execFile);
 
@@ -127,7 +131,7 @@ export class RuntimeLocator {
     }
     let record: RuntimeLocatorRecord;
     try {
-      record = validatePublic<RuntimeLocatorRecord>("RuntimeLocatorRecord", decoded);
+      record = liftLegacyRecord(decoded) ?? validatePublic<RuntimeLocatorRecord>("RuntimeLocatorRecord", decoded);
     } catch (error) {
       // A locator of another shape (one written before generations, or by a later build) is a locator
       // this SDK cannot choose from, and that is a malformed locator rather than a protocol failure.
@@ -343,12 +347,54 @@ function validateLocatorRecord(record: RuntimeLocatorRecord, locatorPath: string
   }
 }
 
+/**
+ * A record from a Runtime that predates generations, lifted into the shape this SDK reads.
+ *
+ * Those Runtimes (Marketplace 0.1.20 to 0.1.22) are installed on real machines, and the client that
+ * replaces them meets their locator first: the newer Core starts beside the older daemon and drains it,
+ * but until it has published its own generation the file on disk is the old one. Refusing it stranded
+ * every such machine at "malformed" (measured 2026-08-27 by the shipped-Runtime interop gate). The old
+ * record names one daemon and no digest, so it becomes one generation with the all-zero digest that no
+ * build prefers and an empty control endpoint that nothing connects to; only its public endpoint is used.
+ */
+function liftLegacyRecord(decoded: unknown): RuntimeLocatorRecord | null {
+  if (!decoded || typeof decoded !== "object" || Array.isArray(decoded)) return null;
+  const record = decoded as Record<string, unknown>;
+  if (record.schema !== LEGACY_LOCATOR_SCHEMA) return null;
+  const keys = Object.keys(record).sort().join(",");
+  if (keys !== "endpoint,endpointKind,instanceId,processId,runtimeVersion,schema"
+    || typeof record.instanceId !== "string"
+    || (record.endpointKind !== "namedPipe" && record.endpointKind !== "unixSocket")
+    || typeof record.endpoint !== "string"
+    || typeof record.runtimeVersion !== "string"
+    || typeof record.processId !== "number" || !Number.isInteger(record.processId)) {
+    throw new RuntimeLocatorError("malformed", "a pre-generation Runtime locator is not the shape those Runtimes wrote");
+  }
+  return {
+    schema: LOCATOR_SCHEMA,
+    instanceId: record.instanceId,
+    generations: [{
+      digest: LEGACY_DIGEST,
+      endpointKind: record.endpointKind,
+      endpoint: record.endpoint,
+      controlEndpoint: "",
+      runtimeVersion: record.runtimeVersion,
+      processId: record.processId,
+      startedAtMs: 0,
+      liveSessions: 0,
+      draining: false,
+    }],
+  };
+}
+
 function validateGeneration(generation: RuntimeGeneration, locatorPath: string): void {
+  const legacy = generation.digest === LEGACY_DIGEST;
   if (generation.processId === 0
     || !/^[0-9a-f]{64}$/u.test(generation.digest)
     || generation.runtimeVersion.length === 0 || generation.runtimeVersion.length > 128
     || generation.endpoint.length === 0 || Buffer.byteLength(generation.endpoint) > MAX_ENDPOINT_BYTES
-    || generation.controlEndpoint.length === 0 || Buffer.byteLength(generation.controlEndpoint) > MAX_ENDPOINT_BYTES) {
+    || (!legacy && generation.controlEndpoint.length === 0)
+    || Buffer.byteLength(generation.controlEndpoint) > MAX_ENDPOINT_BYTES) {
     throw new RuntimeLocatorError("malformed", "Runtime locator generation has invalid bounded fields");
   }
   if (process.platform === "win32") {
@@ -358,7 +404,9 @@ function validateGeneration(generation: RuntimeGeneration, locatorPath: string):
     }
   } else if (generation.endpointKind !== "unixSocket" || !isAbsolute(generation.endpoint)
     || dirname(generation.endpoint) !== dirname(locatorPath)
-    || !/^runtrol-runtime-[0-9a-f]{16}\.sock$/u.test(basename(generation.endpoint))) {
+    || !(legacy
+      ? basename(generation.endpoint) === "runtrol-runtime.sock"
+      : /^runtrol-runtime-[0-9a-f]{16}\.sock$/u.test(basename(generation.endpoint)))) {
     throw new RuntimeLocatorError(
       "unsafe",
       "Runtime socket escaped its owner-only state directory",

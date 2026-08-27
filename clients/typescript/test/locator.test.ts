@@ -7,6 +7,7 @@ import { test } from "node:test";
 import { promisify } from "node:util";
 
 import { RuntimeLocator, RuntimeLocatorError } from "../src/index.js";
+import { LEGACY_DIGEST } from "../src/locator.js";
 import { runtimeLocatorAt } from "../src/testing.js";
 
 const executeFile = promisify(execFile);
@@ -58,18 +59,31 @@ test("an owner-only locator lists generations and the newest one that is not dra
   }
 });
 
-test("a locator from before generations is malformed rather than misread", async () => {
+test("a locator from before generations is read as one digestless generation, never misread", async () => {
   const scratch = await mkdtemp(join(tmpdir(), "runtrol-ts-locator-legacy-"));
   const path = join(scratch, "runtime.locator.json");
   try {
     await writeFile(path, JSON.stringify({
       schema: 1,
       instanceId: `rtm_${"4".repeat(32)}`,
-      endpointKind: "namedPipe",
-      endpoint: "\\\\.\\pipe\\runtrol-runtime-fixture",
-      runtimeVersion: "0.1.1",
+      endpointKind: process.platform === "win32" ? "namedPipe" : "unixSocket",
+      endpoint: process.platform === "win32"
+        ? "\\\\.\\pipe\\runtrol-runtime-fixture"
+        : join(scratch, "runtrol-runtime.sock"),
+      runtimeVersion: "0.1.22",
       processId: process.pid,
     }));
+    await makeOwnerOnly(path);
+    // Preferring a digest the old daemon never named still lands on it: it is the only generation listed.
+    const state = await runtimeLocatorAt(path, "a".repeat(64)).inspect();
+    assert.equal(state.state, "running");
+    if (state.state !== "running") return;
+    assert.equal(state.locator.digest, LEGACY_DIGEST);
+    assert.equal(state.locator.controlEndpoint, "");
+    assert.equal(state.locator.runtimeVersion, "0.1.22");
+    assert.equal(state.locator.draining, false);
+    // A record that claims the old schema with fields it never had is still malformed.
+    await writeFile(path, JSON.stringify({ schema: 1, instanceId: "rtm_x", surprise: true }));
     await makeOwnerOnly(path);
     await assert.rejects(
       () => runtimeLocatorAt(path).inspect(),
