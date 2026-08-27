@@ -1206,10 +1206,17 @@ async function inspectRuntimeLocator(
       }
     }
     if (Date.now() >= deadline) {
-      // Named, because "not installed" is the one sentence that fits four different situations: nothing is
-      // published, something is published somewhere else, the generation listed is draining, or the generation
-      // listed is a different build than the one this window installed. Whoever reads this next should not have
-      // to guess which.
+      // The window installed one build but a different one is serving, and the settle window passed without our
+      // own generation appearing. A running Runtime speaks the version-negotiated public protocol whichever
+      // build published it, so a healthy one that is not ours is still a Runtime this window can use: taking it
+      // is right, and refusing it stranded the sidebar at "not installed" while a healthy daemon answered
+      // (measured 2026-08-28 on the operator machine, four older generations still alive from repeated
+      // installs kept a just-installed window from ever seeing its own digest).
+      if (inspected.state === "running") {
+        return inspected.locator;
+      }
+      // Nothing is serving at all. Named, because "not installed" fits more than one situation: nothing is
+      // published, or only a draining generation is. Whoever reads this next should not have to guess which.
       const listed = await locator.inspectAll().catch(() => []);
       const seen = listed.map((entry) => `${entry.digest.slice(0, 16)}${entry.draining ? " draining" : ""}`);
       throw new Error(
