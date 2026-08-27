@@ -342,10 +342,7 @@ fn verify_stop_all(directory: &str) -> Result<(), String> {
         command.stdout(Stdio::null());
         command.stderr(Stdio::inherit());
         command.kill_on_drop(true);
-        let spawned = {
-            let _entered = runtime.enter();
-            command.spawn(&containment)
-        };
+        let spawned = runtime.block_on(command.spawn(&containment));
         let (child, guard) =
             spawned.map_err(|error| format!("could not start a stop-all provider: {error}"))?;
         children.push(child);
@@ -452,10 +449,7 @@ fn verify_update_rename(directory: &str) -> Result<(), String> {
         command.stdout(Stdio::null());
         command.stderr(Stdio::inherit());
         command.kill_on_drop(true);
-        let spawned = {
-            let _entered = runtime.enter();
-            command.spawn(&containment)
-        };
+        let spawned = runtime.block_on(command.spawn(&containment));
         let (mut child, mut guard) =
             spawned.map_err(|error| format!("could not start the {label} session: {error}"))?;
         let status = runtime
