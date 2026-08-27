@@ -397,14 +397,17 @@ async fn answer(
     )
     .await;
     let reservation = reserved.map(|one| one.reservation);
-    let (reply, reservations) = finish_cleanup(answer_prepared(
-        conversation,
-        composed,
-        sessions,
-        request,
-        prepared,
-        reservation,
-    ))
+    let (reply, reservations) = finish_cleanup(
+        answer_prepared(
+            conversation,
+            composed,
+            sessions,
+            request,
+            prepared,
+            reservation,
+        )
+        .await,
+    )
     .await;
     for reservation in reservations {
         match reservation {
@@ -1016,7 +1019,7 @@ pub(crate) async fn prepare_isolated_workspace(
     clippy::too_many_lines,
     reason = "one exhaustive request table keeps every scope-checked wire operation visible in one place"
 )]
-pub(crate) fn answer_prepared(
+pub(crate) async fn answer_prepared(
     conversation: &mut Conversation,
     composed: &Composed,
     sessions: &mut SessionManager,
@@ -1217,28 +1220,34 @@ pub(crate) fn answer_prepared(
             workspace_access: _,
             model: _,
             permission: _,
-        } => open(
-            composed,
-            sessions,
-            &provider,
-            PreparedKind::Start,
-            prepared,
-            reservation,
-        ),
+        } => {
+            open(
+                composed,
+                sessions,
+                &provider,
+                PreparedKind::Start,
+                prepared,
+                reservation,
+            )
+            .await
+        }
 
         Request::Resume {
             provider,
             native: _,
             workspace: _,
             workspace_access: _,
-        } => open(
-            composed,
-            sessions,
-            &provider,
-            PreparedKind::Resume,
-            prepared,
-            reservation,
-        ),
+        } => {
+            open(
+                composed,
+                sessions,
+                &provider,
+                PreparedKind::Resume,
+                prepared,
+                reservation,
+            )
+            .await
+        }
 
         Request::Prompt { session, text } => send(
             sessions,
@@ -1251,7 +1260,17 @@ pub(crate) fn answer_prepared(
                 Ok(label) => label,
                 Err(why) => return Reply::One(refuse(why)),
             };
-            match composed.store.set_session_label(session, label) {
+            let store = std::sync::Arc::clone(&composed.store);
+            let labelled =
+                tokio::task::spawn_blocking(move || store.set_session_label(session, label))
+                    .await
+                    .unwrap_or_else(|_worker| {
+                        Err(StoreError::Codec {
+                            field: "store worker",
+                            why: "the store worker ended before the name was saved",
+                        })
+                    });
+            match labelled {
                 Ok(true) => Reply::One(Response::Done),
                 Ok(false) => Reply::One(refuse(
                     "the provider has not established this session yet, so its name cannot be saved",
@@ -1296,8 +1315,23 @@ pub(crate) fn answer_prepared(
             crate::serve::close_trace("dispatch: close received");
             let closing = sessions.close(session);
             crate::serve::close_trace("dispatch: session released");
+            // Off the async thread, like every durable session write (see `persist_live_from_store`), and
+            // only once the close itself is settled: a close the manager refuses keeps its stored pointer.
+            let removed = if matches!(closing, Ok(_) | Err(SessionError::NotLive { .. })) {
+                let store = std::sync::Arc::clone(&composed.store);
+                tokio::task::spawn_blocking(move || store.remove_session(session))
+                    .await
+                    .unwrap_or_else(|_worker| {
+                        Err(StoreError::Codec {
+                            field: "store worker",
+                            why: "the store worker ended before the session pointer was removed",
+                        })
+                    })
+            } else {
+                Ok(false)
+            };
             match closing {
-                Ok(closing) => match composed.store.remove_session(session) {
+                Ok(closing) => match removed {
                     Ok(_) => Reply::Stopping {
                         agent: closing.agent,
                         how,
@@ -1312,7 +1346,7 @@ pub(crate) fn answer_prepared(
                         }],
                     },
                 },
-                Err(SessionError::NotLive { .. }) => match composed.store.remove_session(session) {
+                Err(SessionError::NotLive { .. }) => match removed {
                     Ok(true) => Reply::One(Response::Done),
                     Ok(false) => reply_from_session_error(&SessionError::NotLive { session }),
                     Err(error) => Reply::One(refuse(&error.to_string())),
@@ -1476,7 +1510,7 @@ fn remote_connection(composed: &Composed) -> Response {
 }
 
 /// Commit a session process that was opened by its connection task.
-fn open(
+async fn open(
     composed: &Composed,
     sessions: &mut SessionManager,
     requested_provider: &str,
@@ -1533,7 +1567,7 @@ fn open(
         }
     };
     let mut agents = Vec::new();
-    let response = match persist_live(composed, sessions, attached.session) {
+    let response = match persist_live(composed, sessions, attached.session).await {
         Ok(()) => Response::Started {
             session: attached.session,
         },
@@ -1870,17 +1904,17 @@ fn forbidden_label_character(character: char) -> bool {
 /// Persist the minimal pointer for one live session once its provider has named it.
 ///
 /// No conversation value can enter this function: [`StoredSession`] has no field capable of holding one.
-pub(crate) fn persist_live(
+pub(crate) async fn persist_live(
     composed: &Composed,
     sessions: &SessionManager,
     session: SessionId,
 ) -> Result<(), StoreError> {
-    persist_live_from_store(&composed.store, sessions, session)
+    persist_live_from_store(&composed.store, sessions, session).await
 }
 
 /// Persist one live pointer against an explicit store for public Runtime composition.
-pub(crate) fn persist_live_from_store(
-    store: &runtrol_store::Store,
+pub(crate) async fn persist_live_from_store(
+    store: &std::sync::Arc<runtrol_store::Store>,
     sessions: &SessionManager,
     session: SessionId,
 ) -> Result<(), StoreError> {
@@ -1900,30 +1934,40 @@ pub(crate) fn persist_live_from_store(
         Some(prior) => store.get_session(prior)?,
         None => store.get_session(session)?,
     };
-    if let Some(prior) = prior_session
-        && prior != session
-    {
-        store.remove_session(prior)?;
-    }
+    let displaced = prior_session.filter(|prior| *prior != session);
 
     let now = WallMs::now();
-    store.put_session(
-        session,
-        &StoredSession {
-            provider: live.provider,
-            native,
-            cwd: live.workspace.clone(),
-            label: prior_row.as_ref().and_then(|row| row.label.clone()),
-            created_at: prior_row.as_ref().map_or(now, |row| row.created_at),
-            last_seen_at: live.state.last_seen(),
-            pinned: prior_row.as_ref().is_some_and(|row| row.pinned),
-            archived: false,
-            forked_from: prior_row.and_then(|row| row.forked_from),
-            // The shared-daemon driver has no per-session process identity. A stale PID would be worse than
-            // `None`, and hotness is joined from the live manager while this daemon is running.
-            live: None,
-        },
-    )
+    let row = StoredSession {
+        provider: live.provider,
+        native,
+        cwd: live.workspace.clone(),
+        label: prior_row.as_ref().and_then(|row| row.label.clone()),
+        created_at: prior_row.as_ref().map_or(now, |row| row.created_at),
+        last_seen_at: live.state.last_seen(),
+        pinned: prior_row.as_ref().is_some_and(|row| row.pinned),
+        archived: false,
+        forked_from: prior_row.and_then(|row| row.forked_from),
+        // The shared-daemon driver has no per-session process identity. A stale PID would be worse than
+        // `None`, and hotness is joined from the live manager while this daemon is running.
+        live: None,
+    };
+    // The durable writes run on a blocking worker: each is an fsync, and on the daemon's one async thread an
+    // fsync held every accept and greeting for seconds on contended disks (measured 2026-08-27).
+    let writer = std::sync::Arc::clone(store);
+    match tokio::task::spawn_blocking(move || {
+        if let Some(prior) = displaced {
+            writer.remove_session(prior)?;
+        }
+        writer.put_session(session, &row)
+    })
+    .await
+    {
+        Ok(written) => written,
+        Err(_worker) => Err(StoreError::Codec {
+            field: "store worker",
+            why: "the store worker ended before the session pointer was written",
+        }),
+    }
 }
 
 /// Every provider this build knows about, usable or not.
@@ -3033,7 +3077,8 @@ mod tests {
                 result: Ok(ModelCatalog::unknown("test catalogue")),
             },
             None,
-        );
+        )
+        .await;
 
         match reply {
             Reply::One(Response::Failed(error)) => {
@@ -3062,7 +3107,8 @@ mod tests {
                 result: Ok(ModelCatalog::unknown("test catalogue")),
             },
             None,
-        );
+        )
+        .await;
         assert!(
             matches!(reply, Reply::One(Response::Failed(_))),
             "a model result was accepted as an opened session"

@@ -2,11 +2,11 @@
 //!
 //! # Two durability settings, and the reason there are two
 //!
-//! Session rows are group-durable: each write commits atomically without its own fsync, and the daemon's
-//! group flush makes everything durable on a short clock from a blocking thread. One fsync per row held the
-//! daemon's only async thread for 0.6 to 13 seconds on contended disks (measured 2026-08-27), and the cost
-//! of the bounded window is one power-cut losing at most the last few hundred milliseconds of pointer
-//! changes, each rediscoverable from the provider's own catalogue.
+//! Session rows are written durably. Losing one loses a session the operator can no longer find, and no other
+//! copy exists anywhere; the fault-injection gate kills the daemon right after a start and expects the row to
+//! be there for the successor. The daemon therefore runs these writes on a blocking worker, never on its one
+//! async thread: one durable commit is an fsync, and on contended disks that held every accept and greeting
+//! for 0.6 to 13 seconds (measured 2026-08-27).
 //!
 //! Source checkpoints are written without durability. They are advisory progress metadata and are not the
 //! `WatchCursor` used for bounded reconnect. Losing one loses no session pointer or conversation content, and runtrol
@@ -51,7 +51,7 @@ impl Store {
         let encoded = row.encode()?;
         let key = SessionKey::of(session);
 
-        let write = self.begin_relaxed_write("saving a session")?;
+        let write = self.begin_durable_write("saving a session")?;
         {
             let mut sessions = write
                 .open_table(SESSIONS)
@@ -80,10 +80,7 @@ impl Store {
                     source: Box::new(error.into()),
                 })?;
         }
-        commit_timed(write, "committing a session")?;
-        self.relaxed_commits
-            .fetch_add(1, std::sync::atomic::Ordering::Release);
-        Ok(())
+        commit_timed(write, "committing a session")
     }
 
     /// Read one session row.
@@ -244,7 +241,7 @@ impl Store {
         let existing = self.get_session(session)?;
         let key = SessionKey::of(session);
 
-        let write = self.begin_relaxed_write("removing a session")?;
+        let write = self.begin_durable_write("removing a session")?;
         let removed;
         {
             let mut sessions = write
@@ -288,8 +285,6 @@ impl Store {
             })?;
         }
         commit_timed(write, "committing a removal")?;
-        self.relaxed_commits
-            .fetch_add(1, std::sync::atomic::Ordering::Release);
         Ok(removed)
     }
 
@@ -373,90 +368,6 @@ impl Store {
     }
 
     /// Begin a write whose result must survive a power cut.
-    /// A write whose commit does not fsync: durable at the next durable commit, including the group flush.
-    ///
-    /// The hot session mutations use this because a durable commit is an fsync, and on a contended disk one
-    /// fsync held the daemon's only async thread for 0.6 to 13 seconds while every accept and greeting waited
-    /// (measured 2026-08-27 by the heartbeat and commit traces). The group flush below bounds the window in
-    /// which a power cut can lose these rows; a native pointer lost that way is rediscovered from the
-    /// provider's own catalogue.
-    pub(crate) fn begin_relaxed_write(
-        &self,
-        doing: &'static str,
-    ) -> Result<redb::WriteTransaction, StoreError> {
-        let mut write = self
-            .db()?
-            .begin_write()
-            .map_err(|error| StoreError::Engine {
-                doing,
-                source: Box::new(error.into()),
-            })?;
-        // Explicit, because the engine's default is a durable (fsyncing) commit: without this line the
-        // "relaxed" write would still pay the fsync this helper exists to avoid. `None` skips only the
-        // fsync; the commit stays atomic, and the next durable commit (the group flush) persists it.
-        write
-            .set_durability(Durability::None)
-            .map_err(|error| StoreError::Engine {
-                doing,
-                source: Box::new(error.into()),
-            })?;
-        Ok(write)
-    }
-
-    /// Whether any relaxed commit landed since the last group flush, readable without touching the engine.
-    ///
-    /// The daemon asks this on its async thread before reaching for a blocking worker: an idle daemon must
-    /// neither fsync nor keep a pool thread alive (measured 2026-08-28: an unconditional 400 ms flush task
-    /// pushed the macOS idle footprint past its budget through the worker it kept spawning).
-    #[must_use]
-    pub fn needs_flush(&self) -> bool {
-        self.relaxed_commits
-            .load(std::sync::atomic::Ordering::Acquire)
-            != self
-                .flushed_commits
-                .load(std::sync::atomic::Ordering::Acquire)
-    }
-
-    /// Make everything committed so far durable with one fsync, off whatever thread calls this.
-    ///
-    /// # Errors
-    ///
-    /// [`StoreError::Engine`] when the flush commit fails.
-    pub fn flush_durably(&self) -> Result<(), StoreError> {
-        // Skip entirely when nothing relaxed has landed since the last flush: an idle daemon must not run
-        // an fsync clock (the flusher calls this every few hundred milliseconds for the whole daemon life).
-        let seen = self
-            .relaxed_commits
-            .load(std::sync::atomic::Ordering::Acquire);
-        if seen
-            == self
-                .flushed_commits
-                .load(std::sync::atomic::Ordering::Acquire)
-        {
-            return Ok(());
-        }
-        // One fsync of the file through a second handle, never an engine transaction: an empty durable commit
-        // would hold the engine's single writer lock for the whole fsync, and every session write on the async
-        // thread would queue behind it (measured 2026-08-28 on the Windows host: refresh p95 rose from 50 to
-        // 90 ms). The relaxed commits already wrote their pages to the operating system; flushing the file
-        // makes them durable without touching the engine at all.
-        let began = std::time::Instant::now();
-        std::fs::OpenOptions::new()
-            .write(true)
-            .open(self.path().as_std_path())
-            .and_then(|file| file.sync_all())
-            .map_err(|error| StoreError::Engine {
-                doing: "flushing prior commits",
-                source: Box::new(error.into()),
-            })?;
-        if std::env::var_os("RUNTROL_CLOSE_TRACE").is_some_and(|value| value == "1") {
-            flush_trace(began.elapsed().as_millis());
-        }
-        self.flushed_commits
-            .store(seen, std::sync::atomic::Ordering::Release);
-        Ok(())
-    }
-
     pub(crate) fn begin_durable_write(
         &self,
         doing: &'static str,
@@ -476,15 +387,6 @@ impl Store {
             })?;
         Ok(write)
     }
-}
-
-/// One group flush on stderr, only when the harness switch asks (checked by the caller).
-#[expect(
-    clippy::print_stderr,
-    reason = "the breadcrumb exists to reach a harness's captured stderr, and only when RUNTROL_CLOSE_TRACE=1 asks for it"
-)]
-fn flush_trace(milliseconds: u128) {
-    eprintln!("runtrol store: flushing prior commits took {milliseconds}ms");
 }
 
 /// Commit one write, and say how long the engine held the thread when the harness switch asks.

@@ -505,9 +505,9 @@ impl RuntimeControl {
     }
 
     /// Attach one provider process, persist any known structural pointer, and grant initiating integration control.
-    pub(crate) fn finish_open(
+    pub(crate) async fn finish_open(
         &mut self,
-        store: &Store,
+        store: &std::sync::Arc<Store>,
         sessions: &mut SessionManager,
         opening: RuntimeOpening,
         intent: &OpenIntent,
@@ -538,7 +538,10 @@ impl RuntimeControl {
                 };
             }
         };
-        if crate::dispatch::persist_live_from_store(store, sessions, attached.session).is_err() {
+        if crate::dispatch::persist_live_from_store(store, sessions, attached.session)
+            .await
+            .is_err()
+        {
             return match sessions.close(attached.session) {
                 Ok(closing) => RuntimeOpenCompletion::Cleanup {
                     agent: closing.agent,
@@ -2266,7 +2269,7 @@ pub(crate) async fn fixture_runtime_owner(
                             opening,
                             &intent,
                             agent,
-                        );
+                        ).await;
                         if let Err(completion) = answered.send(completion) {
                             discard_fixture_open_completion(&mut sessions, completion).await;
                         }
@@ -2700,7 +2703,7 @@ mod tests {
             .expect("fixture root")
             .join("state.redb")
             .expect("store path");
-        let store = Store::open(&store_path).expect("open store");
+        let store = std::sync::Arc::new(Store::open(&store_path).expect("open store"));
         let integration = IntegrationKey::from_bytes([9; 16]);
         let provider = ProviderId::parse("runtime-control-fixture").expect("provider");
         let request_id = MutationRequestId::now();
@@ -2739,13 +2742,16 @@ mod tests {
             reasoning_effort: None,
             permission: None,
         };
-        let RuntimeOpenCompletion::Answer(Ok(opened)) = control.finish_open(
-            &store,
-            &mut sessions,
-            *opening,
-            &intent,
-            Box::new(QuietAgent(session)),
-        ) else {
+        let RuntimeOpenCompletion::Answer(Ok(opened)) = control
+            .finish_open(
+                &store,
+                &mut sessions,
+                *opening,
+                &intent,
+                Box::new(QuietAgent(session)),
+            )
+            .await
+        else {
             panic!("expected an attached public session");
         };
         assert_eq!(opened.session.session_id.as_str(), session.to_string());

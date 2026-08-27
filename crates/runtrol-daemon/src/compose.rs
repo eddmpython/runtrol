@@ -294,7 +294,7 @@ pub struct Composed {
     /// runtrol's own directory, and every path inside it.
     pub home: RuntrolHome,
     /// The minimal session-pointer database. It has no type capable of holding conversation content.
-    pub store: Store,
+    pub store: Arc<Store>,
     /// Core-owned ordinary-chat linked worktrees and their exact cleanup state.
     pub(crate) isolated_workspaces: Mutex<crate::isolated_workspace::IsolatedWorkspaceController>,
     /// Local-only pending approval challenges for public Runtime integrations.
@@ -433,7 +433,7 @@ impl Composed {
             restore_device_authority(&store, machine_identity.push.as_deref())?;
         Ok(Self {
             home,
-            store,
+            store: Arc::new(store),
             isolated_workspaces: Mutex::new(isolated_workspaces),
             integration_admin: crate::integration_admin::IntegrationAdmin::default(),
             generation_authority: crate::generation_authority::GenerationAuthorityRelay::default(),
@@ -493,7 +493,7 @@ impl Composed {
             restore_device_authority(&store, machine_identity.push.as_deref())?;
         Ok(Self {
             home,
-            store,
+            store: Arc::new(store),
             isolated_workspaces: Mutex::new(isolated_workspaces),
             integration_admin: crate::integration_admin::IntegrationAdmin::default(),
             generation_authority: crate::generation_authority::GenerationAuthorityRelay::default(),

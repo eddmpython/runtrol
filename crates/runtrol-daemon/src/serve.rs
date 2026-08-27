@@ -998,31 +998,6 @@ async fn serve_surfaces(
             while clients.join_next().await.is_some() {}
         });
     }
-    // The group flush: hot session writes commit without fsync, and this one task makes them durable on a
-    // short clock from a blocking thread. The fsync therefore never runs on the async thread again (measured
-    // 2026-08-27: single durable commits held it 0.6 to 13 seconds under contended CI disks).
-    {
-        let flushing = Arc::clone(&composed);
-        background.push(connections.spawn(async move {
-            loop {
-                tokio::time::sleep(std::time::Duration::from_millis(400)).await;
-                // Asked here, before any worker is involved: an idle daemon must not keep a blocking-pool
-                // thread alive for flushes it has nothing to flush.
-                if !flushing.store.needs_flush() {
-                    continue;
-                }
-                let store = Arc::clone(&flushing);
-                let flushed =
-                    tokio::task::spawn_blocking(move || store.store.flush_durably()).await;
-                if let Ok(Err(error)) = flushed {
-                    // Reported once per failure through the crash-visible path below rather than swallowed:
-                    // a store that cannot flush will also fail the next mutation, which is where the person
-                    // sees it; this keeps the loop alive to say so again.
-                    close_trace(&format!("store flush failed: {error}"));
-                }
-            }
-        }));
-    }
     background.push(connections.spawn(crate::account_probe::supervise(
         Arc::clone(&composed),
         runtime_providers.clone(),
@@ -1260,7 +1235,7 @@ async fn serve_surfaces(
                     request,
                     prepared,
                     reservation,
-                );
+                ).await;
                 if matches!(reply, Reply::Draining) && !draining {
                     draining = true;
                     begin_drain(&composed, &mut background, &mut relay_hub);
@@ -1477,7 +1452,7 @@ async fn serve_surfaces(
                         opening,
                         &intent,
                         agent,
-                    );
+                    ).await;
                     deliver_runtime_open_completion(
                         &mut connections,
                         &runtime_returning,
@@ -1590,7 +1565,7 @@ async fn serve_surfaces(
                     // A draining generation persists nothing: the store belongs to its successor now,
                     // and the provider's own transcript is where this conversation reopens from.
                     if !draining {
-                        if let Err(error) = crate::dispatch::persist_live(&composed, &sessions, session) {
+                        if let Err(error) = crate::dispatch::persist_live(&composed, &sessions, session).await {
                             break Err(error.into());
                         }
                         if let Err(error) = composed.store.put_cursor(
