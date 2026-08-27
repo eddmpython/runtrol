@@ -444,6 +444,21 @@ struct AutomaticUpdateNotice {
 }
 
 /// Cancels a pending slot if connection preparation is abandoned.
+/// A breadcrumb for a hanging close, printed only when the environment asks.
+///
+/// The Unix host harness times a `close --now` out at 15 seconds with the daemon's stderr empty, which says
+/// nothing about where it stuck (measured 2026-08-27 on the CI runners; this machine has no Linux to attach a
+/// debugger to). The harness sets `RUNTROL_CLOSE_TRACE=1`; production daemons never print these.
+#[expect(
+    clippy::print_stderr,
+    reason = "the breadcrumb exists to reach the harness's captured stderr, and only when RUNTROL_CLOSE_TRACE=1 asks for it"
+)]
+pub(crate) fn close_trace(step: &str) {
+    if std::env::var_os("RUNTROL_CLOSE_TRACE").is_some_and(|value| value == "1") {
+        eprintln!("runtrol close trace: {step}");
+    }
+}
+
 struct ReservationGuard {
     reservation: Option<CleanupReservation>,
     cancelling: mpsc::UnboundedSender<ReservationAsked>,
@@ -2334,10 +2349,12 @@ async fn converse_inner(
                     reservation: Some(CleanupReservation::Closing(reservation)),
                     cancelling: reserving.clone(),
                 };
+                close_trace("stopping: agent.close begins");
                 let outcome = match agent.close(how).await {
                     Ok(()) => Response::Done,
                     Err(error) => refuse(&error.to_string()),
                 };
+                close_trace("stopping: agent.close returned");
                 drop(releasing);
                 if write(&mut connection, &outcome).await.is_err() {
                     return;
