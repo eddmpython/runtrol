@@ -313,7 +313,12 @@ listen = "stdio"
       windowsHide: true,
     });
     if (closed.status !== 0) {
-      cleanupFailures.push(`session ${session}: ${closed.stderr || closed.stdout || "close failed"}`);
+      // Say which failure this was: a refusal carries output, a hang carries only the timeout error, and a
+      // signal death carries the signal. All three used to read as the same two words.
+      const why = closed.stderr || closed.stdout
+        || (closed.error ? String(closed.error.code ?? closed.error.message) : "")
+        || `exit ${String(closed.status)} signal ${String(closed.signal)}`;
+      cleanupFailures.push(`session ${session}: close failed (${why.trim()})`);
     }
   }
   // The exact tree snapshot includes Core itself. End the whole owned tree in one convergent sweep instead
