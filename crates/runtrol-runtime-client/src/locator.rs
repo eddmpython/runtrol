@@ -394,12 +394,12 @@ fn validate_endpoint(
     // which can only make the check stricter.
     let same_parent = endpoint.parent() == Some(expected_parent)
         || match (
-            endpoint
-                .parent()
-                .and_then(|parent| parent.canonicalize().ok()),
-            expected_parent.canonicalize().ok(),
+            endpoint.parent().map(std::path::Path::canonicalize),
+            expected_parent.canonicalize(),
         ) {
-            (Some(socket_parent), Some(state_parent)) => socket_parent == state_parent,
+            (Some(Ok(socket_parent)), Ok(state_parent)) => socket_parent == state_parent,
+            // A parent that cannot be resolved keeps the exact-spelling verdict from above, which can
+            // only be stricter; the resolution error carries nothing this refusal would not already say.
             _ => false,
         };
     if !endpoint.is_absolute() || !same_parent || !named_as_expected {
