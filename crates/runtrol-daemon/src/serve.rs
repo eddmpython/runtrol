@@ -1007,15 +1007,6 @@ async fn serve_surfaces(
 
     let outcome = loop {
         tokio::select! {
-            Some(done) = connections.join_next() => {
-                // Every task on this set is meant to outlive the daemon; one ending, and above all one
-                // panicking, is exactly the silent listener death the trace switch exists to expose
-                // (measured 2026-08-27: two accepts, then a connected client whose greeting was never
-                // answered while the heartbeat kept printing).
-                close_trace(&format!("background task ended: {done:?}"));
-                continue;
-            }
-
             Some(error) = local_failures.recv() => {
                 break Err(error.into());
             }
