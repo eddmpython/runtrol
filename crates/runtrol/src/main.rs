@@ -283,13 +283,16 @@ fn serving() -> impl FnOnce(&tokio::runtime::Runtime) -> ExitCode {
             }
         }
         let served = runtime.block_on(async move {
+            boot_trace("daemon: binding the generation endpoint");
             let listener = runtrol_ipc::transport::Listener::bind(&address).await?;
+            boot_trace("daemon: endpoint bound; assembling");
             let composed =
                 runtrol_daemon::assemble_superseding(runtrol_drivers::builtin(), &identity)
                     .await
                     .map_err(|error| {
                         runtrol_daemon::ServeError::RuntimeBootstrap(error.to_string())
                     })?;
+            boot_trace("daemon: assembled; serving");
             runtrol_daemon::serve(composed, listener).await
         });
 
@@ -488,6 +491,20 @@ fn commanding(words: &[String]) -> impl FnOnce(&tokio::runtime::Runtime) -> Exit
                 ExitCode::FAILURE
             }
         }
+    }
+}
+
+/// One boot step on stderr, only when `RUNTROL_CLOSE_TRACE=1` asks for it (the CI harnesses do).
+///
+/// A daemon that never becomes ready and says nothing cannot be told apart from one that never ran
+/// (measured 2026-08-27: two macOS gate failures whose captured daemon stderr was empty).
+#[expect(
+    clippy::print_stderr,
+    reason = "the breadcrumb exists to reach a harness's captured stderr, and only when RUNTROL_CLOSE_TRACE=1 asks for it"
+)]
+fn boot_trace(step: &str) {
+    if std::env::var_os("RUNTROL_CLOSE_TRACE").is_some_and(|value| value == "1") {
+        eprintln!("runtrol {step}");
     }
 }
 
