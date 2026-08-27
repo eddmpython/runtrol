@@ -10,6 +10,8 @@ and refactoring that no user can observe do not belong here.
 
 ## [Unreleased]
 
+## [0.1.24] - 2026-08-27
+
 ### Changed
 
 - The sidebar is one page Studio draws itself, with three zones that have visible edges: projects, conversations
