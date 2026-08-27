@@ -293,7 +293,7 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             '"runtrol.isVerifyingProvider"',
             "awaitsVerification",
             "export class UsageItem",
-            'meter.label === "7d"',
+            "primarySevenDayMeter(usage.meters)",
             "Math.max(0, Math.min(100, percent))",
             '"█".repeat(filled)',
             'command: "runtrol.showUsageDetails"',
@@ -310,6 +310,9 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             'detail: "Unavailable · Fix"',
             'detail: `Disconnected · ${usageDetail(gauge, nowMs)}`',
             "export function usageMeters",
+            "export function primarySevenDayMeter",
+            'meters.find((meter) => meter.label === "7d")',
+            'meters.find((meter) => meter.label.startsWith("7d "))',
             "Math.max(0, Math.min(100",
             "export function setupRows",
             "icon: providerIcon(providerId, providers)",
@@ -527,7 +530,7 @@ def selftest() -> int:
             'this.revealCurrentProject() '
             'this.state.incompleteDiscovery this.state.coreReach Cannot reach the Runtrol Core. '
             '"runtrol.hasUsableProvider" "runtrol.isVerifyingProvider" awaitsVerification '
-            'export class UsageItem meter.label === "7d" '
+            'export class UsageItem primarySevenDayMeter(usage.meters) '
             'Math.max(0, Math.min(100, percent)) "█".repeat(filled) '
             'command: "runtrol.showUsageDetails" this.tooltip = usage.tooltip '
             'new vscode.ThemeColor("runtrol.accent") if (this.part === "all") '
@@ -538,7 +541,10 @@ def selftest() -> int:
             'provider.installation.state !== "missing" detail: "Not signed in · Sign in" '
             'detail: "Checking" detail: "Unavailable · Fix" '
             'detail: `Disconnected · ${usageDetail(gauge, nowMs)}` '
-            "export function usageMeters Math.max(0, Math.min(100 "
+            'export function usageMeters export function primarySevenDayMeter '
+            'meters.find((meter) => meter.label === "7d") '
+            'meters.find((meter) => meter.label.startsWith("7d ")) '
+            "Math.max(0, Math.min(100 "
             'export function setupRows export function usageAbsenceCause icon: providerIcon(providerId, providers) '
             'provider.installation.state === "missing" && Boolean(provider.help?.install)'
         ),
@@ -638,7 +644,7 @@ def selftest() -> int:
         ),
         (package, {**sources, "conversationIcon.ts": sources["conversationIcon.ts"].replace("provider-icons", "brand")}),
         (package, {**sources, "conversationList.ts": sources["conversationList.ts"] + " `Chat ${identity}`"}),
-        (package, {**sources, "trees.ts": sources["trees.ts"].replace('meter.label === "7d"', "")}),
+        (package, {**sources, "trees.ts": sources["trees.ts"].replace("primarySevenDayMeter(usage.meters)", "")}),
         (package, {**sources, "trees.ts": sources["trees.ts"].replace('"█".repeat(filled)', "")}),
         (package, {**sources, "trees.ts": sources["trees.ts"].replace('command: "runtrol.showUsageDetails"', "")}),
         (package, {**sources, "trees.ts": sources["trees.ts"].replace("usageRows(this.state.usage", "")}),
