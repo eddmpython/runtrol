@@ -170,7 +170,13 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     client,
     integrationId: () => runtime.integrationId(),
     refreshRoots: () => controller.refreshAfterRootWidened(),
-    openFolders: () => (vscode.workspace.workspaceFolders ?? []).map((folder) => folder.uri.fsPath),
+    // The window's folders and every added project: a conversation listed under a project heading must also
+    // open, and opening is root-bounded, so adding a project is also asking for its folder (rootDenied
+    // otherwise, measured 2026-08-27 on a window that had codaro as a heading but not as a folder).
+    openFolders: () => [
+      ...(vscode.workspace.workspaceFolders ?? []).map((folder) => folder.uri.fsPath),
+      ...projectStore.all().map((record) => record.workspace),
+    ],
     warn: (message) => void vscode.window.showWarningMessage(message),
   });
   // One page owns the whole sidebar: projects with their conversations, the conversations outside every project,
@@ -544,6 +550,9 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
   );
   // Before the Runtime integration speaks: proving the daemon that answered is the installed generation
   // is what lets everything past the hello assume the daemon and this extension are the same build.
+  context.subscriptions.push(projectStore.onDidChange(() => {
+    void run(() => afterReady(() => rootFollowing.follow()));
+  }));
   // The public locator's native verification starts now; the private locator reads the control endpoint off
   // its answer instead of spawning `endpoint`, and `initialize` finds it settled. See `warmLocator`.
   void runtime.warmLocator();
