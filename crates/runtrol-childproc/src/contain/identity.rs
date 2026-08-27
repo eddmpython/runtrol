@@ -133,7 +133,7 @@ fn read_boot_id() -> Result<[u8; BOOT_ID_BYTES], SpawnError> {
             name.as_mut_ptr(),
             2,
             boottime.as_mut_ptr().cast(),
-            &mut size,
+            &raw mut size,
             std::ptr::null_mut(),
             0,
         )
@@ -144,8 +144,20 @@ fn read_boot_id() -> Result<[u8; BOOT_ID_BYTES], SpawnError> {
     // SAFETY: the complete-size result above states the kernel initialized every byte.
     let boottime = unsafe { boottime.assume_init() };
     let mut bytes = [0_u8; BOOT_ID_BYTES];
-    bytes[..8].copy_from_slice(&i64::from(boottime.tv_sec).to_le_bytes());
-    bytes[8..].copy_from_slice(&i64::from(boottime.tv_usec).to_le_bytes());
+    // `timeval` field widths differ per platform (Apple: i64 seconds, i32 microseconds; Linux: i64 both),
+    // so one of these widenings is the identity on some target and a real widening on another.
+    #[allow(
+        clippy::useless_conversion,
+        reason = "identity on the platforms whose fields are already i64"
+    )]
+    let seconds = i64::from(boottime.tv_sec);
+    #[allow(
+        clippy::useless_conversion,
+        reason = "identity on the platforms whose fields are already i64"
+    )]
+    let microseconds = i64::from(boottime.tv_usec);
+    bytes[..8].copy_from_slice(&seconds.to_le_bytes());
+    bytes[8..].copy_from_slice(&microseconds.to_le_bytes());
     Ok(bytes)
 }
 

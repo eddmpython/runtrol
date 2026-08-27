@@ -58,7 +58,9 @@ impl Child {
                 &raw mut master,
                 &raw mut slave,
                 core::ptr::null_mut(),
-                core::ptr::null(),
+                // Apple libc declares the termios argument `*mut`, glibc `*const`. A null `*mut` coerces to
+                // both, so the same call compiles on every Unix target.
+                core::ptr::null_mut(),
                 &raw mut size,
             )
         };
@@ -95,6 +97,11 @@ impl Child {
                 if libc::setsid() < 0 {
                     return Err(std::io::Error::last_os_error());
                 }
+                // The request type is `c_ulong` on Linux and `c_ulong` from a `u32` constant on Apple.
+                #[allow(
+                    clippy::cast_lossless,
+                    reason = "widening only on Apple; identity on Linux"
+                )]
                 if libc::ioctl(0, libc::TIOCSCTTY as _, 0) < 0 {
                     return Err(std::io::Error::last_os_error());
                 }
@@ -123,6 +130,10 @@ impl Child {
 
     /// Nothing to close beyond the child: the master reports end of stream once the slave's last holder
     /// exits. Present so both platforms have the same shape.
+    #[expect(
+        clippy::unused_self,
+        reason = "the Windows twin needs the handle; callers see one shape"
+    )]
     pub(super) fn finish(&self) {}
 
     pub(super) fn reader(&self) -> Result<Box<dyn Read + Send>, SpawnError> {
