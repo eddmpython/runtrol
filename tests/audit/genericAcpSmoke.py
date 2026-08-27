@@ -156,23 +156,27 @@ def command(binary: Path, env: dict[str, str], words: list[str]) -> str:
 
 def startDaemon(binary: Path, env: dict[str, str], home: Path) -> subprocess.Popen[str]:
     """Start this gate's daemon explicitly and wait until its endpoint is ready."""
+    # Spooled to a file, never a pipe: nothing reads this stream while the daemon runs, and a full pipe
+    # write-blocks the daemon itself (measured 2026-08-27: turning the trace switch on filled the 64 KiB
+    # pipe with heartbeats and froze the daemon mid-gate on two platforms).
+    diagnostics = tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace")
     daemon = subprocess.Popen(
         [str(binary), "daemon"],
         cwd=ROOT,
         env=env,
         stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        stdout=subprocess.DEVNULL,
+        stderr=diagnostics,
         text=True,
         encoding="utf-8",
         errors="replace",
     )
+    daemon.diagnostics = diagnostics  # type: ignore[attr-defined]
     ready = home / ("runtrol.redb" if sys.platform == "win32" else "runtime.locator.json")
     deadline = time.monotonic() + TURN_WAIT_S
     while time.monotonic() < deadline:
         if daemon.poll() is not None:
-            stdout, stderr = daemon.communicate()
-            detail = (stderr or stdout or "daemon exited without output").strip()
+            detail = (readDiagnostics(daemon) or "daemon exited without output").strip()
             raise Failed(f"the isolated daemon exited before it was ready: {detail}")
         if ready.exists():
             # The database opens just before the named pipe is bound on Windows. Give that final bind one scheduling
@@ -184,9 +188,18 @@ def startDaemon(binary: Path, env: dict[str, str], home: Path) -> subprocess.Pop
     stopDaemon(daemon)
     # The daemon's own words are the only evidence of why it never bound (measured 2026-08-27: two macOS
     # release-runner failures said nothing but "did not become ready").
-    said_out, said_err = daemon.communicate()
-    said = (said_err or said_out or "").strip()[-2000:]
+    said = readDiagnostics(daemon).strip()[-2000:]
     raise Failed(f"the isolated daemon did not become ready; it said:\n{said or '(nothing)'}")
+
+
+def readDiagnostics(daemon: subprocess.Popen[str]) -> str:
+    """What the daemon wrote to its spooled stderr so far."""
+    spool = getattr(daemon, "diagnostics", None)
+    if spool is None:
+        return ""
+    spool.flush()
+    spool.seek(0)
+    return spool.read()
 
 
 def stopDaemon(daemon: subprocess.Popen[str]) -> None:
