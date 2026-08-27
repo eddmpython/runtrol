@@ -387,7 +387,22 @@ fn validate_endpoint(
     } else {
         socket_name.is_some_and(is_generation_socket_name)
     };
-    if !endpoint.is_absolute() || endpoint.parent() != Some(expected_parent) || !named_as_expected {
+    // Identity, not spelling: macOS reaches one directory as both `/tmp/...` and `/private/tmp/...`, and a
+    // daemon that canonicalized its home writes the socket under the second spelling while a client that was
+    // handed the first would refuse it (measured 2026-08-27 on the macOS CI hosts). Canonicalizing both sides
+    // compares the directories themselves; a parent that cannot be resolved falls back to the exact spelling,
+    // which can only make the check stricter.
+    let same_parent = endpoint.parent() == Some(expected_parent)
+        || match (
+            endpoint
+                .parent()
+                .and_then(|parent| parent.canonicalize().ok()),
+            expected_parent.canonicalize().ok(),
+        ) {
+            (Some(socket_parent), Some(state_parent)) => socket_parent == state_parent,
+            _ => false,
+        };
+    if !endpoint.is_absolute() || !same_parent || !named_as_expected {
         // The three facts ride along because the bare sentence proved undiagnosable: a macOS CI failure
         // repeated twice on 2026-08-27 and nothing said whether the name, the parent, or absoluteness broke.
         return Err(LocatorError::Unsafe(format!(
