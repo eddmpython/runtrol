@@ -94,6 +94,10 @@ const providers = path.join(runtrolHome, "providers");
 const pathKey = Object.keys(process.env).find((name) => name.toLowerCase() === "path") ?? "PATH";
 const coreEnvironment = runtimeState.environment;
 coreEnvironment.RUNTROL_ACP_FIXTURE_UNIQUE_SESSIONS = "1";
+// The daemon's close path narrates its steps on stderr under this switch (`serve.rs`), and this harness is the
+// only reader of that stderr: a close that exceeds the CLI timeout is then diagnosed from the last step named
+// instead of from the two words ETIMEDOUT carries.
+coreEnvironment.RUNTROL_CLOSE_TRACE = "1";
 coreEnvironment[pathKey] = `${path.dirname(fixture)}${path.delimiter}${process.env[pathKey] ?? ""}`;
 let daemon = null;
 let daemonStderr = "";
@@ -362,7 +366,12 @@ function startManagedSession(workspace) {
   });
   const session = started.stdout.trim();
   if (started.status !== 0 || !session) {
-    throw new Error(`cannot start a hot ACP fixture session:\n${started.stdout}${started.stderr}`);
+    // A start that hangs to the CLI timeout has empty output; what the daemon said meanwhile is the only
+    // evidence of where it stopped answering (measured 2026-08-27 on the Linux host harness).
+    const why = started.error ? String(started.error.code ?? started.error.message) : "";
+    throw new Error(
+      `cannot start a hot ACP fixture session: ${why}\n${started.stdout}${started.stderr}\nCore stderr:\n${daemonStderr}`,
+    );
   }
   managedSessions.push(session);
 }
