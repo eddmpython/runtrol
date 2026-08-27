@@ -455,7 +455,12 @@ struct AutomaticUpdateNotice {
 )]
 pub(crate) fn close_trace(step: &str) {
     if std::env::var_os("RUNTROL_CLOSE_TRACE").is_some_and(|value| value == "1") {
-        eprintln!("runtrol close trace: {step}");
+        static BEGAN: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+        let elapsed = BEGAN
+            .get_or_init(std::time::Instant::now)
+            .elapsed()
+            .as_millis();
+        eprintln!("runtrol close trace: +{elapsed}ms {step}");
     }
 }
 
