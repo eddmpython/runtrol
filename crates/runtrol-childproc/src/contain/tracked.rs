@@ -488,11 +488,39 @@ pub(super) fn prepare_bootstrap_descriptors<const N: usize>(
 }
 
 #[cfg(unix)]
+fn wait_for_bootstrap(status: &std::os::unix::net::UnixStream) -> Result<(), SpawnError> {
+    // This wait is synchronous and runs on the daemon's one async thread: while it lasts, nothing else in the
+    // daemon runs, including the control accept loop. The breadcrumb pair exists to prove or refute that these
+    // waits are the silent stalls the Unix CI hosts show (`start` and `close --now` timing out with the daemon
+    // saying nothing); the elapsed figure is printed on the way out so one slow keeper names itself.
+    let bootstrap_began = std::time::Instant::now();
+    contain_trace("contain: bootstrap wait began");
+    let waited = wait_for_bootstrap_inner(status);
+    contain_trace(&format!(
+        "contain: bootstrap wait ended after {} ms",
+        bootstrap_began.elapsed().as_millis()
+    ));
+    waited
+}
+
+/// One containment step on stderr, only when `RUNTROL_CLOSE_TRACE=1` asks for it (the CI harness does).
+#[cfg(unix)]
+#[expect(
+    clippy::print_stderr,
+    reason = "the breadcrumb exists to reach the harness's captured stderr, and only when RUNTROL_CLOSE_TRACE=1 asks for it"
+)]
+fn contain_trace(step: &str) {
+    if std::env::var_os("RUNTROL_CLOSE_TRACE").is_some_and(|value| value == "1") {
+        eprintln!("runtrol {step}");
+    }
+}
+
+#[cfg(unix)]
 #[expect(
     unsafe_code,
     reason = "bounded waiting for an inherited pipe requires Unix poll"
 )]
-fn wait_for_bootstrap(status: &std::os::unix::net::UnixStream) -> Result<(), SpawnError> {
+fn wait_for_bootstrap_inner(status: &std::os::unix::net::UnixStream) -> Result<(), SpawnError> {
     use std::io::Read as _;
     use std::os::fd::AsRawFd as _;
 
