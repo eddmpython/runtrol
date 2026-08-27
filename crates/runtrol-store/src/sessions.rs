@@ -329,7 +329,12 @@ impl Store {
                     source: Box::new(error.into()),
                 })?;
         }
-        commit_timed(write, "committing a cursor")
+        // Untraced on purpose: one line per event batch across every hot stream is the volume that filled a
+        // harness pipe (2026-08-28); the session and flush commits carry the timing that matters.
+        write.commit().map_err(|error| StoreError::Engine {
+            doing: "committing a cursor",
+            source: Box::new(error.into()),
+        })
     }
 
     /// Read where a session's event stream had reached.
@@ -396,6 +401,20 @@ impl Store {
                 source: Box::new(error.into()),
             })?;
         Ok(write)
+    }
+
+    /// Whether any relaxed commit landed since the last group flush, readable without touching the engine.
+    ///
+    /// The daemon asks this on its async thread before reaching for a blocking worker: an idle daemon must
+    /// neither fsync nor keep a pool thread alive (measured 2026-08-28: an unconditional 400 ms flush task
+    /// pushed the macOS idle footprint past its budget through the worker it kept spawning).
+    #[must_use]
+    pub fn needs_flush(&self) -> bool {
+        self.relaxed_commits
+            .load(std::sync::atomic::Ordering::Acquire)
+            != self
+                .flushed_commits
+                .load(std::sync::atomic::Ordering::Acquire)
     }
 
     /// Make everything committed so far durable with one fsync, off whatever thread calls this.

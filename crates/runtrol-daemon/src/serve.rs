@@ -1006,6 +1006,11 @@ async fn serve_surfaces(
         background.push(connections.spawn(async move {
             loop {
                 tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+                // Asked here, before any worker is involved: an idle daemon must not keep a blocking-pool
+                // thread alive for flushes it has nothing to flush.
+                if !flushing.store.needs_flush() {
+                    continue;
+                }
                 let store = Arc::clone(&flushing);
                 let flushed =
                     tokio::task::spawn_blocking(move || store.store.flush_durably()).await;
