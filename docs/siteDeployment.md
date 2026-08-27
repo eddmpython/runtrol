@@ -46,9 +46,9 @@ The preview is a development surface. It binds only `127.0.0.1` and sends `cache
 `npm --prefix site run build` deletes only the generated `site/dist` and `pwa/dist`, runs the phone app build, copies the site sources and the listed brand files, copies the phone app output under `app/`, writes `.nojekyll`, and then checks the result:
 
 - every listed brand file and the `app/` route are referenced by the built `index.html`;
-- the whole output is at most 250,000 bytes.
+- the whole output is at most 600,000 bytes.
 
-The first public deployment was 77,429 bytes. The current landing plus phone app is about 223,000 bytes; the animated hero and the Lucide paths cost roughly 40 KB of that. Raising the budget is a deliberate decision, not a side effect of a large asset.
+The first public deployment was 77,429 bytes. The reviewed browser terminal moved the landing plus phone app to about 568,000 bytes because xterm is shipped locally instead of loaded from a CDN. The 600,000 byte ceiling leaves bounded headroom while keeping the complete public surface self-contained. Raising it again is a deliberate decision, not a side effect of a large asset.
 
 Main content, product status, install instructions, the Marketplace link, and the phone app link are all present in the static HTML. JavaScript adds language switching, theme switching, the hero animation, and release discovery; without it the page still says everything that matters.
 

@@ -45,7 +45,8 @@ async function totalBytes(path) {
 }
 
 const bytes = await totalBytes(outputRoot);
-const budget = 250_000;
+// The reviewed phone terminal vendors xterm so the public Runtime stream is usable without a CDN.
+const budget = 600_000;
 if (bytes > budget) {
   throw new Error(`site output ${bytes} bytes exceeds ${budget} byte budget`);
 }

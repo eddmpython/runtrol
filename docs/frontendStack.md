@@ -28,7 +28,7 @@ All public surfaces must satisfy these rules:
 
 ## Landing implementation
 
-[`site/`](../site/) contains the dependency-free source. `build.mjs` copies only the reviewed source and canonical brand assets into `site/dist`, creates `.nojekyll`, and rejects output above 250,000 bytes. `test.mjs` verifies the English static default, four locale dictionaries, the live Marketplace route, latest-release native VSIX selection, CDN independence, and forbidden punctuation. It also proves that five injected defects fail before the valid source passes.
+[`site/`](../site/) contains the dependency-free source. `build.mjs` copies only the reviewed source and canonical brand assets into `site/dist`, creates `.nojekyll`, and rejects output above 600,000 bytes. The ceiling includes the locally vendored xterm browser terminal so the phone surface needs no CDN at runtime. `test.mjs` verifies the English static default, four locale dictionaries, the live Marketplace route, latest-release native VSIX selection, CDN independence, and forbidden punctuation. It also proves that five injected defects fail before the valid source passes.
 
 The landing uses one source object for the repository and latest-release endpoint. A manual download becomes active only when the GitHub API returns a `.vsix` asset, and `release-assets.mjs` matches the runtime operating system and architecture to one of the six native packages. An unknown target opens the tagged release instead of guessing. The page never hardcodes a release version. The same build copies the reviewed PWA output to `/app/` and measures both surfaces against the one byte budget.
 
