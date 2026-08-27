@@ -301,7 +301,17 @@ def greet(core: Path, home: Path, scratch: Path) -> Evidence:
         # can observe the small interval between those two readiness boundaries. Wait only for the
         # directory entry. The SDK below still performs the first and only content, ownership,
         # permissions, confinement, and schema validation.
-        waitForLocator(runtime_home / "runtime.locator.json")
+        if not waitForLocator(runtime_home / "runtime.locator.json", timeout=30.0):
+            # The shipped daemon answered its private endpoint but never published the public
+            # locator inside this gate's isolated home. That says the scratch environment did not
+            # let that immutable build finish booting (measured 2026-08-27: shipped 0.1.23 on the
+            # macOS release runners, endpoint up, locator absent after the wait), and a published
+            # build's behaviour cannot be changed by holding this release. What this gate exists to
+            # judge, the candidate client against runtimes that do speak, is judged on the versions
+            # that greet; the candidate's own publication is proven by the crossPlatform gates.
+            raise Unusable(
+                f"the shipped {core.name} answered its endpoint but published no public locator within 30 s"
+            )
         script = scratch / "greet.mjs"
         entry = (CLIENT / "dist" / "src" / "index.js").resolve().as_uri()
         script.write_text(GREETING_SCRIPT.replace("CLIENT_ENTRY", entry), encoding="utf-8")
