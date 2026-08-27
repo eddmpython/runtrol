@@ -442,7 +442,11 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     ),
     vscode.commands.registerCommand(
       "runtrol.openConversation",
-      () => run(() => afterReady(() => controller.openConversation())),
+      // The sidebar page names the row it was asked to open; selection is what opens a row's terminal, so a
+      // named row selects (and therefore opens) even in a window that has never selected anything. Without the
+      // argument (the keybinding, the palette) the command still means "the selected conversation's tab".
+      (item) => run(() => afterReady(() =>
+        item instanceof ConversationItem ? controller.select(item) : controller.openConversation())),
     ),
     vscode.commands.registerCommand(
       "runtrol.renameSession",
