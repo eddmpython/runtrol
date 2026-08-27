@@ -228,6 +228,11 @@ where
 fn supervisor_runtime() -> std::io::Result<tokio::runtime::Runtime> {
     tokio::runtime::Builder::new_current_thread()
         .max_blocking_threads(MAX_BLOCKING_THREADS)
+        // Blocking workers retire after one idle second instead of the default ten. The Unix spawn path and
+        // every durable session write run on those workers now, and a worker that lingers is a thread stack
+        // held by an idle daemon: on the macOS host that alone straddled the idle footprint budget, passing
+        // or failing by about a mebibyte depending on the clock (measured 2026-08-28).
+        .thread_keep_alive(std::time::Duration::from_secs(1))
         .enable_all()
         .build()
 }
