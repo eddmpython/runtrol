@@ -17,7 +17,22 @@ copy of a conversation.
 4. Open the Runtrol symbol in the Activity Bar.
 
 The Marketplace package includes the native Runtime for the selected platform. Keep each coding-agent CLI installed
-and authenticated through its own official flow. No model API key or manual Runtime path is required.
+and authenticated through its own official flow. No Core path is required for a Marketplace installation, and no
+model API key is ever entered into Studio.
+
+## Updates
+
+Marketplace installations use VS Code's built-in extension updates. VS Code checks for releases and updates enabled
+extensions automatically. Its default update delay is two hours, and an immediate update is available from the
+extension's **Update** action.
+
+A manually installed VSIX has automatic updates disabled by VS Code. If an older Runtrol copy came from a VSIX,
+open the extension's Manage menu and enable **Auto Update**, or uninstall it and install the Marketplace version once.
+Runtrol never downloads or replaces extension packages outside VS Code's signed Marketplace flow.
+
+An extension update does not take ownership of live conversations. The Runtime lives at one extension-global managed
+path, and an upgrade reconnects to the exact Runtime generation that owns each terminal after the Extension Host
+restarts.
 
 ## One sidebar
 
