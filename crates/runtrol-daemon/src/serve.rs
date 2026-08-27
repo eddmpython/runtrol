@@ -472,6 +472,8 @@ pub(crate) fn close_trace(step: &str) {
 /// The handler allocates, which a signal handler must not in general; under the harness switch, on a
 /// thread that is already stuck, the worst case is a daemon the harness was about to fail anyway.
 mod stall_watchdog {
+    #[cfg(unix)]
+    use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static LAST_BEAT_MS: AtomicU64 = AtomicU64::new(0);
@@ -495,7 +497,7 @@ mod stall_watchdog {
     pub(super) fn arm() {}
 
     #[cfg(unix)]
-    static RUNTIME_THREAD: AtomicU64 = AtomicU64::new(0);
+    static RUNTIME_THREAD: AtomicUsize = AtomicUsize::new(0);
 
     #[cfg(unix)]
     #[expect(
@@ -523,7 +525,8 @@ mod stall_watchdog {
         // SAFETY: `pthread_self` has no preconditions, and `signal` installs a plain `extern "C"` handler for a
         // signal nothing else in this process uses.
         unsafe {
-            RUNTIME_THREAD.store(libc::pthread_self() as u64, Ordering::Release);
+            // `usize` on both Unix families: a `c_ulong` on Linux, a pointer on macOS; either way a real cast.
+            RUNTIME_THREAD.store(libc::pthread_self() as usize, Ordering::Release);
             libc::signal(
                 libc::SIGUSR1,
                 print_runtime_backtrace as extern "C" fn(libc::c_int) as libc::sighandler_t,
