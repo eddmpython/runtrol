@@ -57,7 +57,7 @@ if (bundled.status !== 0) {
   throw new Error(`test extension build failed:\n${bundled.stdout}${bundled.stderr}`);
 }
 
-const temporary = await mkdtemp(path.join(os.tmpdir(), "runtrol-eye-window-"));
+const temporary = await mkdtemp(path.join(os.tmpdir(), "rve-"));
 const mutatingProjectEntries = new Set([
   "fleetEye",
   "missionAutoFlightEye",

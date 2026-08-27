@@ -36,7 +36,7 @@ const fixture = path.resolve(fixtureArgument);
 await Promise.all([access(baselineArchive), access(currentArchive), access(fixture)]);
 
 const temporaryRoot = process.platform === "darwin" ? "/tmp" : os.tmpdir();
-const temporary = await mkdtemp(path.join(temporaryRoot, "runtrol-vscode-upgrade-"));
+const temporary = await mkdtemp(path.join(temporaryRoot, "rvu-"));
 const userData = path.join(temporary, "user-data");
 const extensions = path.join(temporary, "extensions");
 const verifier = path.join(temporary, "verifier");
