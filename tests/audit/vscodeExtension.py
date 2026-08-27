@@ -42,26 +42,17 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
     views = contributes.get("views") if isinstance(contributes, dict) else None
     view_containers = contributes.get("viewsContainers") if isinstance(contributes, dict) else None
     runtrol_views = views.get("runtrol") if isinstance(views, dict) else None
-    usage_view = next(
-        (
-            entry
-            for entry in runtrol_views
-            if isinstance(entry, dict) and entry.get("id") == "runtrol.usage"
-        ),
-        None,
-    ) if isinstance(runtrol_views, list) else None
     if (
-        not isinstance(usage_view, dict)
-        or usage_view.get("visibility") != "visible"
-        or usage_view.get("name") != "Agent Usage"
-        or usage_view.get("type") != "webview"
+        not isinstance(runtrol_views, list)
+        or len(runtrol_views) != 1
+        or not isinstance(runtrol_views[0], dict)
+        or runtrol_views[0].get("id") != "runtrol.sidebar"
+        or runtrol_views[0].get("type") == "webview"
     ):
-        found.append(
-            "every installed CLI's status and progress bars must be expanded at the bottom of the Runtrol sidebar"
-        )
+        found.append("Runtrol must contribute one unified native sidebar view")
     welcome_entries = contributes.get("viewsWelcome") if isinstance(contributes, dict) else None
     welcomes = welcome_entries if isinstance(welcome_entries, list) else []
-    def welcome_for(when: str, token: str, view: str = "runtrol.projects") -> bool:
+    def welcome_for(when: str, token: str, view: str = "runtrol.sidebar") -> bool:
         return any(
             isinstance(entry, dict)
             and entry.get("view") == view
@@ -69,14 +60,6 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             and token in str(entry.get("contents", ""))
             for entry in welcomes
         )
-
-    # Each section says its own empty state: Projects invites adding one, Conversations invites starting one
-    # that belongs nowhere.
-    has_ready_welcome = welcome_for(
-        "runtrol.hasUsableProvider", "command:runtrol.createProject"
-    ) and welcome_for(
-        "runtrol.hasUsableProvider", "command:runtrol.startSession", "runtrol.conversations"
-    )
 
     # An empty list has more than one reason and each needs its own sentence. Measured 2026-08-26 on the
     # operator's window: a Core this window could not reach was drawn as "No coding-agent CLI was found on
@@ -91,8 +74,7 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
         "runtrol.coreReach == reached && runtrol.isVerifyingProvider", "Checking"
     )
     if not (
-        has_ready_welcome
-        and has_missing_welcome
+        has_missing_welcome
         and has_verifying_welcome
         and has_unreachable_welcome
         and has_connecting_welcome
@@ -111,13 +93,9 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             and str(entry.get("group", "")).startswith("navigation")
         } if isinstance(title_entries, list) else set()
 
-    # Two sections, and each keeps only the actions that belong to it. Projects adds a project and switches
-    # to a conversation; Conversations starts one that belongs to no project. Everything else is overflow,
-    # because a title bar that grows stops being readable at the width people actually keep the sidebar.
-    if title_navigation("runtrol.projects") != {"runtrol.createProject", "runtrol.switchSession"}:
-        found.append("the Projects title bar must keep exactly add-project and switch visible")
-    if title_navigation("runtrol.conversations") != {"runtrol.startSession"}:
-        found.append("the Conversations title bar must keep exactly the new-conversation action visible")
+    # The one header keeps only the two creation actions. Everything else stays in overflow.
+    if title_navigation("runtrol.sidebar") != {"runtrol.createProject", "runtrol.startSession"}:
+        found.append("the unified sidebar title must keep exactly project and conversation creation visible")
     item_context = menus.get("view/item/context") if isinstance(menus, dict) else None
     winner_entries = item_context if isinstance(item_context, list) else []
     # The guard is the contract: deletion is offered only where the provider reported a deletion surface, and it
@@ -126,7 +104,7 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
     delete_entry = any(
         isinstance(entry, dict)
         and entry.get("command") == "runtrol.deleteConversation"
-        and entry.get("when") == "view =~ /^runtrol\\.(projects|conversations)$/ && viewItem =~ /\\.delete/"
+        and entry.get("when") == "view == runtrol.sidebar && viewItem =~ /\\.delete/"
         and str(entry.get("group", "")).startswith("inline")
         for entry in winner_entries
     )
@@ -142,7 +120,7 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             "runtrol.deleteConversation",
         }
         and str(entry.get("group", "")).startswith("inline")
-        and "conversations" in str(entry.get("when", ""))
+        and "runtrol.sidebar" in str(entry.get("when", ""))
     ]
     if conversation_inline != ["runtrol.deleteConversation"]:
         found.append("a conversation row must expose one inline X for real deletion and no other buttons")
@@ -157,6 +135,20 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
     # replaced a catalogue of services this product had never measured, advertised at the foot of the sidebar.
     if "runtrol.setUpServices" not in command_ids or "onCommand:runtrol.setUpServices" not in activations:
         found.append("the usage section must have one activatable set-up command")
+    if "onView:runtrol.sidebar" not in activations:
+        found.append("the unified sidebar view must activate the extension")
+    usage_detail_entry = any(
+        isinstance(entry, dict)
+        and entry.get("command") == "runtrol.showUsageDetails"
+        and entry.get("when") == "view == runtrol.sidebar && viewItem =~ /^runtrol\\.usage\\./"
+        and str(entry.get("group", "")).startswith("inline")
+        for entry in winner_entries
+    )
+    if "runtrol.showUsageDetails" not in command_ids or not usage_detail_entry:
+        found.append("each compact usage row must expose one inline details action")
+    colors = contributes.get("colors") if isinstance(contributes, dict) else None
+    if not any(isinstance(entry, dict) and entry.get("id") == "runtrol.accent" for entry in colors or []):
+        found.append("the native first-run actions must use the declared Runtrol accent")
 
     all_source = "\n".join(sources.values())
     forbidden = {
@@ -221,7 +213,7 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             found.append(f"runtimeClient.ts repeats system locator validation through `{token}`")
     if "conversationDetail" in sources.get("trees.ts", ""):
         found.append("a conversation tree row must not derive or display state, age, service, or project detail")
-    if "providerMark" in sources.get("usageDisplay.ts", "") or "providerMark" in sources.get("usageViewWebview.ts", ""):
+    if "providerMark" in sources.get("usageDisplay.ts", ""):
         found.append("Agent Usage must render the provider's declared glyph instead of invented text initials")
     if "`Chat ${" in sources.get("conversationList.ts", ""):
         found.append("a conversation title must never expose a shortened internal session identifier")
@@ -236,8 +228,8 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             found.append(f"no chat container may be contributed to the {container_kind}; the conversation is a terminal tab")
     for view_group, entries in (views.items() if isinstance(views, dict) else []):
         for entry in entries if isinstance(entries, list) else []:
-            if isinstance(entry, dict) and entry.get("type") == "webview" and entry.get("id") != "runtrol.usage":
-                found.append(f"{view_group} contributes a webview view {entry.get('id')}; only Agent Usage is a webview")
+            if isinstance(entry, dict) and entry.get("type") == "webview":
+                found.append(f"{view_group} contributes a webview view {entry.get('id')}; the unified sidebar is native")
 
     required = {
         "core/framing.ts": [
@@ -257,8 +249,11 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             "afterReady",
             "selfApproveIntegration(client, pendingId, signature)",
             'initializationStage = "runtime:bootstrap"',
-            'executeCommand("runtrol.usage.focus")',
+            'executeCommand("runtrol.sidebar.focus")',
             '"runtrol.setUpServices"',
+            '"runtrol.showUsageDetails"',
+            "await controller.signInProvider(provider)",
+            "await controller.fixService(provider)",
         ],
         "providerHealth.ts": [
             "the installed executable has not completed a verified probe",
@@ -297,42 +292,16 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             '"runtrol.hasUsableProvider"',
             '"runtrol.isVerifyingProvider"',
             "awaitsVerification",
-        ],
-                "usageView.ts": [
-            "implements vscode.WebviewViewProvider",
-            "private gauges:",
-            "usageRowsEqual(this.rows, next)",
-            "Usage refresh failed: ${why}. Showing the last report.",
-            "usageViewAction(message)",
-            "isBroken(provider)",
-            "setup: this.setupOpen ? this.setup : []",
-            "this.postSnapshot()",
-            "enableScripts: true",
-            "img-src ${webview.cspSource}",
-            'data-icon-base="${iconBase}"',
-            '"resources", "provider-icons"',
-        ],
-        "usageViewWebview.ts": [
-            'document.createElement("progress")',
-            "bar.max = 100",
-            "bar.value = meter.percent",
-            'bar.setAttribute("aria-label"',
-            'vscode.postMessage({ type, providerId: row.providerId })',
-            'vscode.postMessage({ type: "setUp", providerId: row.providerId }',
-            "usage.replaceChildren",
-            ".textContent =",
-            'return /^[a-z0-9-]{1,64}$/u.test(value) ? value : "sparkle"',
-            "image.src = `${iconBase}/${iconName(declared)}.svg`",
-            "const fallback = `${iconBase}/sparkle.svg`",
-        ],
-        "usageViewMessage.ts": [
-            "export function usageViewAction",
-            "record.providerId.length <= 256",
-        ],
-        "usageView.css": [
-            "progress::-webkit-progress-value",
-            ".usage-row.limit-reached",
-            "var(--vscode-progressBar-background",
+            "export class UsageItem",
+            'meter.label === "7d"',
+            "Math.max(0, Math.min(100, percent))",
+            '"█".repeat(filled)',
+            'command: "runtrol.showUsageDetails"',
+            "this.tooltip = usage.tooltip",
+            'new vscode.ThemeColor("runtrol.accent")',
+            'if (this.part === "all")',
+            "usageRows(this.state.usage",
+            "this.items = [...choices, ...actions, ...headings, ...looseRows, ...usage]",
         ],
         "usageDisplay.ts": [
             'provider.installation.state !== "missing"',
@@ -454,112 +423,69 @@ def selftest() -> int:
         return 2
     package = {
         "engines": {"vscode": "^1.106.0"},
-        "activationEvents": [
-            "onCommand:runtrol.setUpServices",
-        ],
+        "activationEvents": ["onView:runtrol.sidebar", "onCommand:runtrol.setUpServices"],
         "contributes": {
-            "viewsContainers": {
-                "activitybar": [],
-            },
-            "views": {
-                "runtrol": [
-                    {
-                        "id": "runtrol.usage",
-                        "name": "Agent Usage",
-                        "type": "webview",
-                        "visibility": "visible",
-                    }
-                ],
-            },
+            "viewsContainers": {"activitybar": [{"id": "runtrol", "title": "Runtrol"}]},
+            "views": {"runtrol": [{"id": "runtrol.sidebar", "name": "Runtrol"}]},
             "viewsWelcome": [
                 {
-                    "view": "runtrol.projects",
+                    "view": "runtrol.sidebar",
                     "contents": "Cannot reach the Runtrol Core. (command:runtrol.refresh)",
                     "when": "runtrol.coreReach == unreachable",
                 },
                 {
-                    "view": "runtrol.projects",
+                    "view": "runtrol.sidebar",
                     "contents": "Connecting to the Runtrol Core...",
                     "when": "runtrol.coreReach == connecting",
                 },
                 {
-                    "view": "runtrol.projects",
+                    "view": "runtrol.sidebar",
                     "contents": "Look again (command:runtrol.refresh)",
                     "when": "runtrol.coreReach == reached && !runtrol.hasUsableProvider && !runtrol.isVerifyingProvider",
                 },
                 {
-                    "view": "runtrol.projects",
+                    "view": "runtrol.sidebar",
                     "contents": "Checking",
                     "when": "runtrol.coreReach == reached && runtrol.isVerifyingProvider",
                 },
-                {
-                    "view": "runtrol.projects",
-                    "contents": "Add Project (command:runtrol.createProject)",
-                    "when": "runtrol.hasUsableProvider",
-                },
-                {
-                    "view": "runtrol.conversations",
-                    "contents": "New Conversation (command:runtrol.startSession)",
-                    "when": "runtrol.hasUsableProvider",
-                },
             ],
             "commands": [
-                {"command": "runtrol.scheduleMission"},
-                {"command": "runtrol.cancelMissionSchedule"},
                 {"command": "runtrol.setUpServices"},
-                {
-                    "command": "runtrol.deleteConversation",
-                    "title": "Delete Conversation",
-                    "icon": "$(close)",
-                },
+                {"command": "runtrol.showUsageDetails"},
+                {"command": "runtrol.deleteConversation", "icon": "$(close)"},
             ],
             "menus": {
                 "view/title": [
                     {
                         "command": "runtrol.startSession",
-                        "when": "view == runtrol.conversations",
+                        "when": "view == runtrol.sidebar",
                         "group": "navigation@0",
                     },
                     {
                         "command": "runtrol.createProject",
-                        "when": "view == runtrol.projects",
+                        "when": "view == runtrol.sidebar",
                         "group": "navigation@1",
                     },
                     {
                         "command": "runtrol.switchSession",
-                        "when": "view == runtrol.projects",
-                        "group": "navigation@2",
+                        "when": "view == runtrol.sidebar",
+                        "group": "1_attention@3",
                     },
                 ],
                 "view/item/context": [
                     {
-                        "command": "runtrol.reviewMissionLanding",
-                    },
-                    {
-                        "command": "runtrol.reviewMissionLanding",
-                        "when": (
-                            "/^runtrol\\.missionTask\\.passed(\\.session)?\\.chooseOne\\.integrating$/"
-                        ),
-                    },
-                    {
-                        "command": "runtrol.recoverInterruptedMission",
-                        "when": (
-                            "/^runtrol\\.mission\\.blocked(\\.chooseOne)?(\\.autoFlight)?$/"
-                        ),
-                    },
-                    {
-                        "command": "runtrol.scheduleMission",
-                    },
-                    {
-                        "command": "runtrol.cancelMissionSchedule",
-                    },
-                    {
                         "command": "runtrol.deleteConversation",
-                        "when": "view =~ /^runtrol\\.(projects|conversations)$/ && viewItem =~ /\\.delete/",
+                        "when": "view == runtrol.sidebar && viewItem =~ /\\.delete/",
                         "group": "inline@1",
                     },
-                ]
+                    {
+                        "command": "runtrol.showUsageDetails",
+                        "when": "view == runtrol.sidebar && viewItem =~ /^runtrol\\.usage\\./",
+                        "group": "inline@0",
+                    },
+                ],
             },
+            "colors": [{"id": "runtrol.accent"}],
         },
     }
     sources = {
@@ -576,8 +502,9 @@ def selftest() -> int:
         "extension.ts": (
             "afterReady selfApproveIntegration(client, pendingId, signature) "
             'initializationStage = "runtime:bootstrap" missionController.startAutoFlights() '
-            'executeCommand("runtrol.usage.focus") '
-            '"runtrol.setUpServices"'
+            'executeCommand("runtrol.sidebar.focus") '
+            '"runtrol.setUpServices" "runtrol.showUsageDetails" '
+            "await controller.signInProvider(provider) await controller.fixService(provider)"
         ),
         "providerHealth.ts": (
             "the installed executable has not completed a verified probe "
@@ -599,30 +526,13 @@ def selftest() -> int:
             'canDelete(conversation, capabilities) '
             'this.revealCurrentProject() '
             'this.state.incompleteDiscovery this.state.coreReach Cannot reach the Runtrol Core. '
-            '"runtrol.hasUsableProvider" "runtrol.isVerifyingProvider" awaitsVerification'
-        ),
-        "usageView.ts": (
-            "implements vscode.WebviewViewProvider private gauges: "
-            '"Usage refresh failed: ${why}. Showing the last report." '
-            "usageRowsEqual(this.rows, next) usageViewAction(message) isBroken(provider) "
-            'setup: this.setupOpen ? this.setup : [] this.postSnapshot() enableScripts: true '
-            'img-src ${webview.cspSource} data-icon-base="${iconBase}" '
-            '"resources", "provider-icons"'
-        ),
-        "usageViewWebview.ts": (
-            'document.createElement("progress") bar.max = 100 bar.value = meter.percent '
-            'bar.setAttribute("aria-label" vscode.postMessage({ type, providerId: row.providerId }) '
-            'vscode.postMessage({ type: "setUp", providerId: row.providerId } usage.replaceChildren .textContent = '
-            'return /^[a-z0-9-]{1,64}$/u.test(value) ? value : "sparkle" '
-            'image.src = `${iconBase}/${iconName(declared)}.svg` '
-            'const fallback = `${iconBase}/sparkle.svg`'
-        ),
-        "usageViewMessage.ts": (
-            "export function usageViewAction record.providerId.length <= 256"
-        ),
-        "usageView.css": (
-            "progress::-webkit-progress-value .usage-row.limit-reached "
-            "var(--vscode-progressBar-background"
+            '"runtrol.hasUsableProvider" "runtrol.isVerifyingProvider" awaitsVerification '
+            'export class UsageItem meter.label === "7d" '
+            'Math.max(0, Math.min(100, percent)) "█".repeat(filled) '
+            'command: "runtrol.showUsageDetails" this.tooltip = usage.tooltip '
+            'new vscode.ThemeColor("runtrol.accent") if (this.part === "all") '
+            'usageRows(this.state.usage '
+            'this.items = [...choices, ...actions, ...headings, ...looseRows, ...usage]'
         ),
         "usageDisplay.ts": (
             'provider.installation.state !== "missing" detail: "Not signed in · Sign in" '
@@ -674,47 +584,44 @@ def selftest() -> int:
         print("[vscodeExtension --selftest] FAIL. the green fixture was rejected.", file=sys.stderr)
         return 2
 
-    hidden_usage = json.loads(json.dumps(package))
-    hidden_usage["contributes"]["views"]["runtrol"][0]["visibility"] = "collapsed"
-    non_progress_usage = json.loads(json.dumps(package))
-    non_progress_usage["contributes"]["views"]["runtrol"][0].pop("type")
-    # The chat surface growing back: a container in the panel, or a second webview view of ours.
+    split_view = json.loads(json.dumps(package))
+    split_view["contributes"]["views"]["runtrol"].append({"id": "runtrol.usage", "name": "Usage"})
+    webview_sidebar = json.loads(json.dumps(package))
+    webview_sidebar["contributes"]["views"]["runtrol"][0]["type"] = "webview"
     chat_container = json.loads(json.dumps(package))
     chat_container["contributes"]["viewsContainers"]["panel"] = [{"id": "runtrolPanel", "title": "Chat"}]
-    chat_webview = json.loads(json.dumps(package))
-    chat_webview["contributes"]["views"]["runtrol"].append({"id": "runtrol.conversation", "name": "Chat", "type": "webview"})
     cluttered_toolbar = json.loads(json.dumps(package))
     cluttered_toolbar["contributes"]["menus"]["view/title"].append({
         "command": "runtrol.arrangeConversationGrid",
-        "when": "view == runtrol.projects",
+        "when": "view == runtrol.sidebar",
         "group": "navigation@3",
     })
     merged_welcomes = json.loads(json.dumps(package))
     merged_welcomes["contributes"]["viewsWelcome"] = [
         {
-            "view": "runtrol.projects",
+            "view": "runtrol.sidebar",
             "contents": "No coding-agent CLI was found. (command:runtrol.refresh)",
         }
     ]
     broad_delete = json.loads(json.dumps(package))
     for entry in broad_delete["contributes"]["menus"]["view/item/context"]:
         if entry.get("command") == "runtrol.deleteConversation":
-            entry["when"] = r"view =~ /^runtrol\.(projects|conversations)$/"
+            entry["when"] = "view == runtrol.sidebar"
     cluttered_conversation = json.loads(json.dumps(package))
     cluttered_conversation["contributes"]["menus"]["view/item/context"].append({
         "command": "runtrol.closeSession",
-        "when": "view =~ /^runtrol\\.(projects|conversations)$/ && viewItem =~ /^runtrol\\.conversation\\.live/",
+        "when": "view == runtrol.sidebar && viewItem =~ /^runtrol\\.conversation\\.live/",
         "group": "inline@2",
     })
     mutations = [
         ({**package, "dependencies": {"some-runtime": "1"}}, sources),
-        (hidden_usage, sources),
-        (non_progress_usage, sources),
+        (split_view, sources),
+        (webview_sidebar, sources),
         (chat_container, sources),
-        (chat_webview, sources),
         (cluttered_toolbar, sources),
         (merged_welcomes, sources),
         (broad_delete, sources),
+        (cluttered_conversation, sources),
         ({**package, "activationEvents": []}, sources),
         ({**package, "contributes": {"viewsContainers": {"activitybar": []}}}, sources),
         ({"engines": {"vscode": "^1.100.0"}, "contributes": {"viewsContainers": {"activitybar": [], "secondarySidebar": []}}}, sources),
@@ -731,19 +638,12 @@ def selftest() -> int:
         ),
         (package, {**sources, "conversationIcon.ts": sources["conversationIcon.ts"].replace("provider-icons", "brand")}),
         (package, {**sources, "conversationList.ts": sources["conversationList.ts"] + " `Chat ${identity}`"}),
-        (package, {**sources, "usageViewWebview.ts": sources["usageViewWebview.ts"].replace('document.createElement("progress")', "")}),
-        (package, {**sources, "usageViewWebview.ts": sources["usageViewWebview.ts"].replace("image.src", "")}),
-        (package, {**sources, "usageViewWebview.ts": sources["usageViewWebview.ts"].replace("const fallback", "")}),
-        (package, {**sources, "usageViewWebview.ts": sources["usageViewWebview.ts"].replace("bar.max = 100", "")}),
-        (package, {**sources, "usageViewWebview.ts": sources["usageViewWebview.ts"].replace("bar.value = meter.percent", "")}),
-        (package, {**sources, "usageViewWebview.ts": sources["usageViewWebview.ts"].replace('bar.setAttribute("aria-label"', "")}),
-        (package, {**sources, "usageViewWebview.ts": sources["usageViewWebview.ts"] + " providerMark"}),
-        (package, {**sources, "usageView.ts": sources["usageView.ts"].replace("img-src", "")}),
-        (package, {**sources, "usageView.ts": sources["usageView.ts"].replace("data-icon-base", "")}),
-        (package, {**sources, "usageView.ts": sources["usageView.ts"].replace("Usage refresh failed", "")}),
-        (package, {**sources, "usageView.ts": sources["usageView.ts"].replace("usageRowsEqual(this.rows, next)", "false")}),
+        (package, {**sources, "trees.ts": sources["trees.ts"].replace('meter.label === "7d"', "")}),
+        (package, {**sources, "trees.ts": sources["trees.ts"].replace('"█".repeat(filled)', "")}),
+        (package, {**sources, "trees.ts": sources["trees.ts"].replace('command: "runtrol.showUsageDetails"', "")}),
+        (package, {**sources, "trees.ts": sources["trees.ts"].replace("usageRows(this.state.usage", "")}),
+        (package, {**sources, "extension.ts": sources["extension.ts"].replace('executeCommand("runtrol.sidebar.focus")', "")}),
         (package, {**sources, "stateRows.ts": sources["stateRows.ts"].replace("discoveryNotice", "")}),
-        (package, {**sources, "usageViewMessage.ts": sources["usageViewMessage.ts"].replace("record.providerId.length <= 256", "true")}),
         (package, {**sources, "trees.ts": sources["trees.ts"].replace("conversationIcon(extensionUri, conversation.serviceIcon)", "")}),
         (package, {**sources, "trees.ts": sources["trees.ts"].replace('new vscode.ThemeIcon("sync~spin")', "")}),
         (package, {**sources, "trees.ts": sources["trees.ts"] + " view.description"}),
@@ -916,8 +816,6 @@ def run() -> int:
         for name in (
             "extension.js",
             "pairingQrVendor.js",
-            "usageView.js",
-            "usageView.css",
         )
     ]
     for bundle in bundles:
@@ -926,10 +824,6 @@ def run() -> int:
     qr_bundle = EXTENSION / "dist" / "pairingQrVendor.js"
     if qr_bundle.is_file() and qr_bundle.stat().st_size > 32 * 1024:
         failures.append(f"{qr_bundle.relative_to(ROOT)} exceeds its pairing-only 32 KiB budget")
-    for name in ("usageView.js", "usageView.css"):
-        usage_bundle = EXTENSION / "dist" / name
-        if usage_bundle.is_file() and usage_bundle.stat().st_size > 16 * 1024:
-            failures.append(f"{usage_bundle.relative_to(ROOT)} exceeds its fixed usage-view 16 KiB budget")
     extension_bundle = EXTENSION / "dist" / "extension.js"
     if extension_bundle.is_file() and "RUNTROL_VSCODE_REAL_PROVIDER_JOURNEY" in extension_bundle.read_text(
         encoding="utf-8"

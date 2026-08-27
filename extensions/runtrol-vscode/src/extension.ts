@@ -21,7 +21,7 @@ import {
   selfApproveIntegration,
 } from "./integrationAdministration";
 import { journeyApi, type JourneyApi } from "./journeyApi";
-import { isProjectless, projectlessRoot } from "./projectlessWorkspace";
+import { projectlessRoot } from "./projectlessWorkspace";
 import { ProjectStore } from "./projects";
 import { isBroken } from "./providerHealth";
 import { managePhones, pairPhone, reviewPhonePairings } from "./pairingAdministration";
@@ -35,11 +35,11 @@ import { workspaceCovers, workspaceIdentity } from "./workspaceCollision";
 import type { Conversation } from "./conversationList";
 import { rememberedList, rememberList } from "./listMemory";
 import { rememberedUsage, rememberUsage } from "./usageMemory";
-import { UsageView } from "./usageView";
+import { setupRows } from "./usageDisplay";
 import { WorkspaceRootFollowing } from "./workspaceRoots";
 import { conversationIcon } from "./conversationIcon";
 import { TerminalTabs } from "./terminalTabs";
-import { ConversationItem, ConversationsTree, ProjectItem, ServiceChoiceItem, icon } from "./trees";
+import { ConversationItem, ConversationsTree, ProjectItem, ServiceChoiceItem, UsageItem, icon } from "./trees";
 
 declare const RUNTROL_INCLUDE_TEST_JOURNEY: boolean;
 
@@ -157,28 +157,16 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     openFolders: () => (vscode.workspace.workspaceFolders ?? []).map((folder) => folder.uri.fsPath),
     warn: (message) => void vscode.window.showWarningMessage(message),
   });
-  // The sidebar is two sections in a fixed order: the projects a person added, then the conversations that
-  // belong to no project. One provider stood up twice, so both halves answer from the same list.
-  const projectsTree = new ConversationsTree("projects", state, projectStore, agentTools, context.extensionUri);
-  const conversations = new ConversationsTree("loose", state, projectStore, agentTools, context.extensionUri);
-  const usage = new UsageView(context.extensionUri, {
-    usage: () => runtime.providersUsage(),
-    providers: () => state.providers,
-    now: () => Date.now(),
-    fix: (provider) => afterReady(() => controller.fixService(provider)),
-    signIn: (provider) => afterReady(async () => controller.signInProvider(provider)),
-    setUp: (provider) => afterReady(() => controller.setUpService(provider)),
-    dispatch: (action) => void run(action),
-  });
+  // One native list owns the whole sidebar. Projects remain real parents, loose conversations sit beside them,
+  // and each installed CLI contributes only its seven-day usage line at the bottom.
+  const sidebar = new ConversationsTree("all", state, projectStore, agentTools, context.extensionUri);
 
   context.subscriptions.push(
     state,
     controller,
     agentTools,
-    projectsTree,
-    conversations,
-    usage,
-    vscode.window.registerFileDecorationProvider(conversations.decorations),
+    sidebar,
+    vscode.window.registerFileDecorationProvider(sidebar.decorations),
     vscode.commands.registerCommand(
       "runtrol.refresh",
       () => run(() => afterReady(() => controller.refreshChats())),
@@ -186,8 +174,7 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     vscode.commands.registerCommand(
       "runtrol.startSessionWith",
       (item: ServiceChoiceItem) => run(() => afterReady(async () => {
-        projectsTree.clearServiceChoice();
-        conversations.clearServiceChoice();
+        sidebar.clearServiceChoice();
         await controller.startSessionWith(item.providerId, item.workspace);
       })),
     ),
@@ -386,11 +373,58 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
       }),
     ),
     vscode.commands.registerCommand(
-      // The plus on the usage section's title. It shows the list in the panel itself; nothing is asked at the
-      // top of the window, because the reader's eye is already at the bottom of the sidebar. Pressing it again
-      // puts the list away.
       "runtrol.setUpServices",
-      () => usage.toggleSetup(),
+      () => run(() => afterReady(async () => {
+        const picked = await vscode.window.showQuickPick(
+          setupRows(state.providers).map((row) => ({
+            label: row.name,
+            description: row.state === "ready" ? "Ready" : row.detail,
+            detail: row.state === "ready" ? row.detail : undefined,
+            providerId: row.providerId,
+            actionable: row.actionable,
+          })),
+          {
+            title: "Coding services",
+            placeHolder: "Choose a service that needs setup",
+          },
+        );
+        if (!picked?.actionable) return;
+        const provider = state.providers.find((candidate) => candidate.providerId === picked.providerId);
+        if (!provider) return;
+        if (provider.account?.status === "signedOut") {
+          await controller.signInProvider(provider);
+        } else if (isBroken(provider)) {
+          await controller.fixService(provider);
+        } else {
+          await controller.setUpService(provider);
+        }
+      })),
+    ),
+    vscode.commands.registerCommand(
+      "runtrol.showUsageDetails",
+      (item: unknown) => run(() => afterReady(async () => {
+        if (!(item instanceof UsageItem)) return;
+        const provider = state.providers.find(
+          (candidate) => candidate.providerId === item.usage.providerId,
+        );
+        const action = item.usage.state === "signedOut"
+          ? "Sign in"
+          : item.usage.state === "unavailable"
+            ? "Fix"
+            : "Set up services";
+        const chosen = await vscode.window.showInformationMessage(
+          item.usage.tooltip.replaceAll("\n", " · "),
+          action,
+        );
+        if (chosen !== action) return;
+        if (action === "Sign in" && provider) {
+          await controller.signInProvider(provider);
+        } else if (action === "Fix" && provider) {
+          await controller.fixService(provider);
+        } else {
+          await vscode.commands.executeCommand("runtrol.setUpServices");
+        }
+      })),
     ),
     vscode.commands.registerCommand(
       "runtrol.selectSession",
@@ -456,7 +490,7 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     vscode.commands.registerCommand(
       "runtrol.explainListing",
       () => {
-        const reasons = conversations.listingReasons();
+        const reasons = sidebar.listingReasons();
         void vscode.window.showInformationMessage(
           reasons
             ? `Not every chat is listed. ${reasons}`
@@ -510,7 +544,7 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     // Under the usage strip, where it stays. The count is what this window can see running: those are the
     // conversations the older generation is still holding, and when the last one ends the installed build takes
     // over. Saying it without a number would leave the reader with no idea whether this is seconds or an hour.
-    usage.setUpdateNotice(updating
+    sidebar.setUpdateNotice(updating
       ? updateNotice(state.sessions.length)
       : null);
   }).then(() => runtime.initialize());
@@ -536,34 +570,15 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
       settleReady?.(error);
     },
   );
-  context.subscriptions.push(
-  );
-  projectsTree.offerServices(offerServices);
-  conversations.offerServices(offerServices);
-  // A choice for a project is drawn under Projects; a choice for no project under Conversations. The section
-  // that asked is the section that answers.
+  sidebar.offerServices(offerServices);
   controller.chooseService = (workspace) => {
-    if (isProjectless(workspace, state.projectlessRoot)) {
-      projectsTree.clearServiceChoice();
-      conversations.chooseService(workspace);
-      void vscode.commands.executeCommand("runtrol.conversations.focus");
-    } else {
-      conversations.clearServiceChoice();
-      projectsTree.chooseService(workspace);
-      void vscode.commands.executeCommand("runtrol.projects.focus");
-    }
+    sidebar.chooseService(workspace);
+    void vscode.commands.executeCommand("runtrol.sidebar.focus");
   };
-  const projectsView = vscode.window.createTreeView("runtrol.projects", {
-    treeDataProvider: projectsTree,
+  const sidebarView = vscode.window.createTreeView("runtrol.sidebar", {
+    treeDataProvider: sidebar,
   });
-  projectsTree.bindView(projectsView);
-  const conversationsView = vscode.window.createTreeView("runtrol.conversations", {
-    treeDataProvider: conversations,
-  });
-  conversations.bindView(conversationsView);
-  const usageRegistration = vscode.window.registerWebviewViewProvider("runtrol.usage", usage, {
-    webviewOptions: { retainContextWhenHidden: false },
-  });
+  sidebar.bindView(sidebarView);
   // Whether this window knows the views this build declares.
   //
   // The editor reads a container's set of views when the window opens and keeps it: a view this build
@@ -571,37 +586,12 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
   // and the sidebar that results reads as broken rather than as behind. The focus command the editor makes
   // for each declared view is the honest test, because it exists exactly when the registration does.
   void vscode.commands.getCommands(true).then((known) => {
-    if (known.includes("runtrol.projects.focus")) return;
-    usage.setStaleWindow(
-      "This window opened before this version of Runtrol. Open a new window to see Projects, and to lose the empty sections this one is still holding.",
+    if (known.includes("runtrol.sidebar.focus")) return;
+    sidebar.setStaleWindow(
+      "This window opened before the unified Runtrol sidebar was registered. Open a new window to use it.",
     );
   });
-  let revealingUsage = false;
-  const ensureUsageVisible = async (): Promise<void> => {
-    if (usage.visible || revealingUsage || !(projectsView.visible || conversationsView.visible)) return;
-    revealingUsage = true;
-    try {
-      await vscode.commands.executeCommand("runtrol.usage.focus");
-      await vscode.commands.executeCommand("runtrol.projects.focus");
-    } finally {
-      revealingUsage = false;
-    }
-  };
-  context.subscriptions.push(
-    usageRegistration,
-    projectsView.onDidChangeVisibility((event) => {
-      if (event.visible) void ensureUsageVisible();
-    }),
-    conversationsView.onDidChangeVisibility((event) => {
-      if (event.visible) void ensureUsageVisible();
-    }),
-    state.onDidChange((change) => {
-      if (change === "rows") usage.sessionsChanged();
-      if (change === "usage") usage.usageChanged(state.usage);
-    }),
-  );
-  if (projectsView.visible || conversationsView.visible) void ensureUsageVisible();
-  context.subscriptions.push(projectsView, conversationsView);
+  context.subscriptions.push(sidebarView);
   void run(() => lifecycle);
   void run(async () => {
     await lifecycle;
@@ -759,9 +749,9 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
         state,
         afterReady,
         context.extensionMode,
-        (sessionId) => conversations.revealSession(sessionId),
-        (key) => conversations.revealConversation(key),
-        () => conversations.treeItemIdsForJourney(),
+        (sessionId) => sidebar.revealSession(sessionId),
+        (key) => sidebar.revealConversation(key),
+        () => sidebar.treeItemIdsForJourney(),
       )
       : undefined,
   };

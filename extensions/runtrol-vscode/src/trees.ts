@@ -17,6 +17,7 @@ import type { ProjectRecord } from "./projects";
 import { awaitsVerification, isUsable } from "./providerHealth";
 import type { ProviderCapabilities } from "./runtimeTypes";
 import { type CoreReach, RuntimeState } from "./state";
+import { usageRows, type UsageMeter, type UsageRow } from "./usageDisplay";
 
 /// One conversation, as one row.
 ///
@@ -136,14 +137,74 @@ export class ServiceChoiceItem extends vscode.TreeItem {
   }
 }
 
-export type ChatTreeItem = ConversationItem | ProjectItem | ServiceChoiceItem;
-
-/// Which half of the sidebar one tree draws.
+/// One installed CLI's seven-day position, kept to one native tree line.
 ///
-/// The sidebar is two sections in a fixed order (`docs/vscodeSurface.md`): Projects, then the
-/// conversations that belong to no project. VS Code makes a section a view, so this is one provider stood up
-/// twice rather than two providers that would answer "what conversations exist" separately.
-export type SidebarPart = "projects" | "loose";
+/// Every other window and the complete provider report remain in the hover. The row's vertical menu opens the same
+/// detail as a popup, so the permanent sidebar spends no extra height on account telemetry.
+export class UsageItem extends vscode.TreeItem {
+  constructor(readonly usage: UsageRow, extensionUri: vscode.Uri | null = null) {
+    super(usage.name, vscode.TreeItemCollapsibleState.None);
+    this.id = usage.key;
+    const weekly = weeklyMeter(usage.meters);
+    this.description = weekly
+      ? `7d  ${progress(weekly.percent)}  ${weekly.percent}%`
+      : usage.state === "unavailable"
+        ? "Unavailable"
+        : usage.state === "signedOut"
+          ? "Sign in"
+          : "7d  No report";
+    this.contextValue = `runtrol.usage.${usage.state}`;
+    this.tooltip = usage.tooltip;
+    this.iconPath = usage.reached
+      ? new vscode.ThemeIcon("warning", new vscode.ThemeColor("notificationsWarningIcon.foreground"))
+      : extensionUri
+        ? conversationIcon(extensionUri, usage.icon)
+        : new vscode.ThemeIcon(usage.icon);
+    this.command = {
+      command: "runtrol.showUsageDetails",
+      title: "Show usage details",
+      arguments: [this],
+    };
+    this.accessibilityInformation = {
+      label: `${usage.name}, ${weekly ? `seven day usage ${weekly.percent} percent` : usage.detail}`,
+    };
+  }
+}
+
+/// One first-run action inside the unified list, used only while no conversation or project row exists.
+export class SidebarActionItem extends vscode.TreeItem {
+  constructor(kind: "project" | "conversation") {
+    super(kind === "project" ? "Add a project" : "New conversation", vscode.TreeItemCollapsibleState.None);
+    this.id = `runtrol.action.${kind}`;
+    this.description = kind === "project" ? "Bring its conversations" : "Start without a project";
+    this.contextValue = "runtrol.sidebarAction";
+    this.iconPath = new vscode.ThemeIcon(
+      kind === "project" ? "new-folder" : "comment-discussion",
+      new vscode.ThemeColor("runtrol.accent"),
+    );
+    this.command = {
+      command: kind === "project" ? "runtrol.createProject" : "runtrol.startSession",
+      title: kind === "project" ? "Add a project" : "Start a conversation",
+    };
+  }
+}
+
+function weeklyMeter(meters: readonly UsageMeter[]): UsageMeter | null {
+  return meters.find((meter) => meter.label === "7d" || meter.label.startsWith("7d ")) ?? null;
+}
+
+function progress(percent: number): string {
+  const filled = Math.round(Math.max(0, Math.min(100, percent)) / 12.5);
+  return `${"█".repeat(filled)}${"░".repeat(8 - filled)}`;
+}
+
+export type ChatTreeItem = ConversationItem | ProjectItem | ServiceChoiceItem | SidebarActionItem | UsageItem;
+
+/// Which compatibility shape one tree draws.
+///
+/// Production uses `all`: projects, projectless conversations, and compact usage rows in one native view. The
+/// narrower parts remain only for bounded unit fixtures while older stored view state ages out.
+export type SidebarPart = "all" | "projects" | "loose";
 
 /// Pinned conversations first, in the order the list already had. Pinning is the person's own placement, so
 /// it lifts a row inside its own section and never out of it.
@@ -275,6 +336,8 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
   /// choice is drawn as rows in this very view.
   private choosingFor: string | null = null;
   private services: (() => readonly { providerId: string; displayName: string; icon: string }[]) | null = null;
+  private updateNotice: string | null = null;
+  private staleWindow: string | null = null;
 
   constructor(
     private readonly part: SidebarPart,
@@ -329,6 +392,20 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
     this.updateWelcomeContext();
     this.revealCurrentProject();
     this.revealOpenConversation();
+  }
+
+  /// Keep one bounded Runtime update sentence on the unified view.
+  setUpdateNotice(notice: string | null): void {
+    if (this.staleWindow !== null || notice === this.updateNotice) return;
+    this.updateNotice = notice;
+    this.updateViewMessage();
+  }
+
+  /// Explain the one window-reload case where VS Code still holds deleted view registrations.
+  setStaleWindow(notice: string | null): void {
+    if (notice === this.staleWindow) return;
+    this.staleWindow = notice;
+    this.updateViewMessage();
   }
 
   getTreeItem(element: ChatTreeItem): vscode.TreeItem {
@@ -440,11 +517,16 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
   /// view's welcome never appeared, and the sidebar showed one silent empty project with no reason given. The
   /// only place that said anything was the usage strip, in words about our own internals.
   private updateCoreNotice(): void {
+    this.updateViewMessage();
+  }
+
+  private updateViewMessage(): void {
     const view = this.view;
     if (!view) return;
-    view.message = this.state.coreReach === "unreachable"
-      ? "Cannot reach the Runtrol Core. Your conversations are still on this machine; this window is trying again."
-      : undefined;
+    view.message = this.staleWindow
+      ?? (this.state.coreReach === "unreachable"
+        ? "Cannot reach the Runtrol Core. Your conversations are still on this machine; this window is trying again."
+        : this.updateNotice ?? undefined);
   }
 
   /// Distinguish a healthy first run from a machine with no usable coding service, and both of those from a
@@ -589,16 +671,34 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
     for (const group of groups) {
       const heading = new ProjectItem(group, this.agentTools?.enabled(group.workspace) ?? false);
       headings.push(heading);
-      // Pinned conversations lead their own project rather than the whole panel. With the sidebar split in
-      // two, lifting a row above every heading would take it out of the place it belongs to, and one
-      // conversation drawn in two places carries the same identity, which a tree refuses.
+      // Pinned conversations lead their own project. Lifting a row above every heading would take it out of the
+      // place it belongs to, and one conversation drawn in two places carries the same identity, which a tree
+      // refuses.
       grouped.set(group.key, pinnedFirst(group.rows));
       // The parent map is the cheap half and reveal needs it immediately, so it is built now. The rows
       // themselves wait until something asks to draw them.
       for (const row of group.rows) parents.set(row.key, heading);
     }
-    this.items = [...choices, ...headings];
-    this.flat = [];
+    if (this.part === "all") {
+      const looseRows = pinnedFirst(loose(rows)).map((row) => new ConversationItem(
+        row,
+        this.state.providerCapabilities(row.providerId),
+        this.extensionUri,
+      ));
+      const actions = headings.length === 0
+        && looseRows.length === 0
+        && this.state.coreReach === "reached"
+        && this.state.providers.some(isUsable)
+        ? [new SidebarActionItem("project"), new SidebarActionItem("conversation")]
+        : [];
+      const usage = usageRows(this.state.usage, this.state.providers, Date.now())
+        .map((row) => new UsageItem(row, this.extensionUri));
+      this.items = [...choices, ...actions, ...headings, ...looseRows, ...usage];
+      this.flat = looseRows;
+    } else {
+      this.items = [...choices, ...headings];
+      this.flat = [];
+    }
     this.parents = parents;
     this.grouped = grouped;
   }

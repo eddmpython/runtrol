@@ -64,17 +64,6 @@ await Promise.all([
     sourcemap: false,
     logLevel: "info",
   }),
-  build({
-    entryPoints: [path.join(extensionRoot, "src/usageViewWebview.ts")],
-    outfile: path.join(dist, "usageView.js"),
-    bundle: true,
-    platform: "browser",
-    format: "iife",
-    target: "es2022",
-    minify: true,
-    sourcemap: false,
-    logLevel: "info",
-  }),
 ]);
 
 async function buildProviderIcons() {

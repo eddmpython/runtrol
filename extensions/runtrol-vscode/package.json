@@ -67,8 +67,7 @@
   "main": "./dist/extension.js",
   "icon": "resources/icon.png",
   "activationEvents": [
-    "onView:runtrol.projects",
-    "onView:runtrol.conversations",
+    "onView:runtrol.sidebar",
     "onCommand:runtrol.refresh",
     "onCommand:runtrol.restartExtensionHost",
     "onCommand:runtrol.checkProviderUpdates",
@@ -112,18 +111,8 @@
     "views": {
       "runtrol": [
         {
-          "id": "runtrol.projects",
-          "name": "Projects"
-        },
-        {
-          "id": "runtrol.conversations",
-          "name": "Conversations"
-        },
-        {
-          "id": "runtrol.usage",
-          "name": "Agent Usage",
-          "type": "webview",
-          "visibility": "visible"
+          "id": "runtrol.sidebar",
+          "name": "Runtrol"
         }
       ]
     },
@@ -156,6 +145,12 @@
         "command": "runtrol.setUpServices",
         "title": "Set Up Coding Services",
         "icon": "$(add)",
+        "category": "Runtrol"
+      },
+      {
+        "command": "runtrol.showUsageDetails",
+        "title": "Show Usage Details",
+        "icon": "$(kebab-vertical)",
         "category": "Runtrol"
       },
       {
@@ -501,77 +496,77 @@
       "view/title": [
         {
           "command": "runtrol.setUpServices",
-          "when": "view == runtrol.usage",
-          "group": "navigation@0"
+          "when": "view == runtrol.sidebar",
+          "group": "2_services@0"
         },
         {
           "command": "runtrol.startSession",
-          "when": "view == runtrol.conversations",
+          "when": "view == runtrol.sidebar",
           "group": "navigation@0"
         },
         {
           "command": "runtrol.createProject",
-          "when": "view == runtrol.projects",
+          "when": "view == runtrol.sidebar",
           "group": "navigation@1"
         },
         {
           "command": "runtrol.openNextWaiting",
-          "when": "view == runtrol.projects",
+          "when": "view == runtrol.sidebar",
           "group": "1_attention@1"
         },
         {
           "command": "runtrol.openConversation",
-          "when": "view == runtrol.projects",
+          "when": "view == runtrol.sidebar",
           "group": "1_attention@2"
         },
         {
           "command": "runtrol.switchSession",
-          "when": "view == runtrol.projects",
-          "group": "navigation@2"
+          "when": "view == runtrol.sidebar",
+          "group": "1_attention@3"
         },
         {
           "command": "runtrol.refresh",
-          "when": "view == runtrol.projects",
+          "when": "view == runtrol.sidebar",
           "group": "1_new@2"
         },
         {
           "command": "runtrol.checkProviderUpdates",
-          "when": "view == runtrol.projects",
+          "when": "view == runtrol.sidebar",
           "group": "2_services@1"
         },
         {
           "command": "runtrol.pairPhone",
-          "when": "view == runtrol.projects",
+          "when": "view == runtrol.sidebar",
           "group": "3_devices@1"
         },
         {
           "command": "runtrol.managePhones",
-          "when": "view == runtrol.projects",
+          "when": "view == runtrol.sidebar",
           "group": "3_devices@2"
         },
         {
           "command": "runtrol.reviewIntegrations",
-          "when": "view == runtrol.projects",
+          "when": "view == runtrol.sidebar",
           "group": "4_access@1"
         },
         {
           "command": "runtrol.manageIntegrations",
-          "when": "view == runtrol.projects",
+          "when": "view == runtrol.sidebar",
           "group": "4_access@2"
         },
         {
           "command": "runtrol.reviewRuntimeRequests",
-          "when": "view == runtrol.projects",
+          "when": "view == runtrol.sidebar",
           "group": "4_access@3"
         },
         {
           "command": "runtrol.restartExtensionHost",
-          "when": "view == runtrol.projects",
+          "when": "view == runtrol.sidebar",
           "group": "5_recover@1"
         },
         {
           "command": "runtrol.explainListing",
-          "when": "view == runtrol.projects && runtrol.listingIncomplete",
+          "when": "view == runtrol.sidebar && runtrol.listingIncomplete",
           "group": "3_info@1"
         }
       ],
@@ -579,154 +574,157 @@
         {
           "command": "runtrol.newConversationInProject",
           "group": "inline@1",
-          "when": "view == runtrol.projects && viewItem =~ /^runtrol\\.project/"
+          "when": "view == runtrol.sidebar && viewItem =~ /^runtrol\\.project/"
         },
         {
           "command": "runtrol.enableAgentTools",
           "group": "inline@3",
-          "when": "view == runtrol.projects && viewItem =~ /^runtrol\\.project\\..*\\.noTools/"
+          "when": "view == runtrol.sidebar && viewItem =~ /^runtrol\\.project\\..*\\.noTools/"
         },
         {
           "command": "runtrol.openProjectWorkspace",
           "group": "inline@2",
-          "when": "view == runtrol.projects && viewItem =~ /^runtrol\\.project\\.created/"
+          "when": "view == runtrol.sidebar && viewItem =~ /^runtrol\\.project\\.created/"
         },
         {
           "command": "runtrol.pinProject",
           "group": "inline@4",
-          "when": "view == runtrol.projects && viewItem =~ /^runtrol\\.project\\.created.*\\.pinnable$/"
+          "when": "view == runtrol.sidebar && viewItem =~ /^runtrol\\.project\\.created.*\\.pinnable$/"
         },
         {
           "command": "runtrol.unpinProject",
           "group": "inline@4",
-          "when": "view == runtrol.projects && viewItem =~ /^runtrol\\.project\\.created.*\\.pinned$/"
+          "when": "view == runtrol.sidebar && viewItem =~ /^runtrol\\.project\\.created.*\\.pinned$/"
         },
         {
           "command": "runtrol.renameProject",
           "group": "1_manage@1",
-          "when": "view == runtrol.projects && viewItem =~ /^runtrol\\.project\\.created/"
+          "when": "view == runtrol.sidebar && viewItem =~ /^runtrol\\.project\\.created/"
         },
         {
           "command": "runtrol.removeProject",
           "group": "1_manage@2",
-          "when": "view == runtrol.projects && viewItem =~ /^runtrol\\.project\\.created/"
+          "when": "view == runtrol.sidebar && viewItem =~ /^runtrol\\.project\\.created/"
         },
         {
           "command": "runtrol.disableAgentTools",
           "group": "1_manage@3",
-          "when": "view == runtrol.projects && viewItem =~ /^runtrol\\.project\\..*\\.tools/"
+          "when": "view == runtrol.sidebar && viewItem =~ /^runtrol\\.project\\..*\\.tools/"
         },
         {
           "command": "runtrol.openProjectWorkspace",
           "group": "2_window@1",
-          "when": "view == runtrol.projects && viewItem =~ /^runtrol\\.project\\.created/"
+          "when": "view == runtrol.sidebar && viewItem =~ /^runtrol\\.project\\.created/"
         },
         {
           "command": "runtrol.renameSession",
-          "when": "view =~ /^runtrol\\.(projects|conversations)$/ && viewItem =~ /^runtrol\\.conversation/",
+          "when": "view == runtrol.sidebar && viewItem =~ /^runtrol\\.conversation/",
           "group": "1_manage@1"
         },
         {
           "command": "runtrol.renameSession",
-          "when": "view =~ /^runtrol\\.(projects|conversations)$/ && viewItem =~ /^runtrol\\.conversation/",
+          "when": "view == runtrol.sidebar && viewItem =~ /^runtrol\\.conversation/",
           "group": "inline@2"
         },
         {
           "command": "runtrol.openWorkspace",
-          "when": "view =~ /^runtrol\\.(projects|conversations)$/ && viewItem =~ /^runtrol\\.conversation/",
+          "when": "view == runtrol.sidebar && viewItem =~ /^runtrol\\.conversation/",
           "group": "2_window@1"
         },
         {
           "command": "runtrol.archiveConversation",
-          "when": "view =~ /^runtrol\\.(projects|conversations)$/ && viewItem =~ /\\.archive/",
+          "when": "view == runtrol.sidebar && viewItem =~ /\\.archive/",
           "group": "1_manage@2"
         },
         {
           "command": "runtrol.deleteConversation",
-          "when": "view =~ /^runtrol\\.(projects|conversations)$/ && viewItem =~ /\\.delete/",
+          "when": "view == runtrol.sidebar && viewItem =~ /\\.delete/",
           "group": "inline@3"
         },
         {
           "command": "runtrol.pinConversation",
-          "when": "view =~ /^runtrol\\.(projects|conversations)$/ && viewItem =~ /^runtrol\\.conversation\\..*\\.pinnable$/",
+          "when": "view == runtrol.sidebar && viewItem =~ /^runtrol\\.conversation\\..*\\.pinnable$/",
           "group": "inline@1"
         },
         {
           "command": "runtrol.unpinConversation",
-          "when": "view =~ /^runtrol\\.(projects|conversations)$/ && viewItem =~ /^runtrol\\.conversation\\..*\\.pinned$/",
+          "when": "view == runtrol.sidebar && viewItem =~ /^runtrol\\.conversation\\..*\\.pinned$/",
           "group": "inline@1"
         },
         {
           "command": "runtrol.closeSession",
-          "when": "view =~ /^runtrol\\.(projects|conversations)$/ && viewItem =~ /^runtrol\\.conversation\\.live/",
+          "when": "view == runtrol.sidebar && viewItem =~ /^runtrol\\.conversation\\.live/",
           "group": "1_manage@3"
         },
         {
           "command": "runtrol.allowFromRow",
           "group": "inline@0",
-          "when": "view =~ /^runtrol\\.(projects|conversations)$/ && viewItem =~ /^runtrol\\.conversation\\.live(\\.|$).*needsYou/"
+          "when": "view == runtrol.sidebar && viewItem =~ /^runtrol\\.conversation\\.live(\\.|$).*needsYou/"
         },
         {
           "command": "runtrol.declineFromRow",
           "group": "inline@0",
-          "when": "view =~ /^runtrol\\.(projects|conversations)$/ && viewItem =~ /^runtrol\\.conversation\\.live(\\.|$).*needsYou/"
+          "when": "view == runtrol.sidebar && viewItem =~ /^runtrol\\.conversation\\.live(\\.|$).*needsYou/"
         },
         {
           "command": "runtrol.answerFromRow",
           "group": "1_answer@0",
-          "when": "view =~ /^runtrol\\.(projects|conversations)$/ && viewItem =~ /^runtrol\\.conversation\\.live(\\.|$).*needsYou/"
+          "when": "view == runtrol.sidebar && viewItem =~ /^runtrol\\.conversation\\.live(\\.|$).*needsYou/"
         },
         {
           "command": "runtrol.signInFromRow",
           "group": "inline@0",
-          "when": "view =~ /^runtrol\\.(projects|conversations)$/ && viewItem =~ /^runtrol\\.conversation\\.live(\\.|$).*signIn/"
+          "when": "view == runtrol.sidebar && viewItem =~ /^runtrol\\.conversation\\.live(\\.|$).*signIn/"
         },
         {
           "command": "runtrol.moveProjectUp",
-          "when": "view == runtrol.projects && viewItem =~ /^runtrol\\.project\\.created/",
+          "when": "view == runtrol.sidebar && viewItem =~ /^runtrol\\.project\\.created/",
           "group": "1_manage@0"
         },
         {
           "command": "runtrol.moveProjectDown",
-          "when": "view == runtrol.projects && viewItem =~ /^runtrol\\.project\\.created/",
+          "when": "view == runtrol.sidebar && viewItem =~ /^runtrol\\.project\\.created/",
           "group": "1_manage@0"
+        },
+        {
+          "command": "runtrol.showUsageDetails",
+          "when": "view == runtrol.sidebar && viewItem =~ /^runtrol\\.usage\\./",
+          "group": "inline@0"
         }
       ]
     },
     "viewsWelcome": [
       {
-        "view": "runtrol.projects",
+        "view": "runtrol.sidebar",
         "contents": "Cannot reach the Runtrol Core.\n\nThe conversations on this machine are still there; this window just lost the connection.\n[Try again](command:runtrol.refresh)",
         "when": "runtrol.coreReach == unreachable"
       },
       {
-        "view": "runtrol.projects",
+        "view": "runtrol.sidebar",
         "contents": "Connecting to the Runtrol Core...",
         "when": "runtrol.coreReach == connecting"
       },
       {
-        "view": "runtrol.projects",
+        "view": "runtrol.sidebar",
         "contents": "Checking the installed coding-agent CLI...",
         "when": "runtrol.coreReach == reached && runtrol.isVerifyingProvider"
       },
       {
-        "view": "runtrol.projects",
+        "view": "runtrol.sidebar",
         "contents": "No coding-agent CLI was found on this machine.\n\nRuntrol supervises the CLIs you already have. Install one, then reopen this view.\n[Look again](command:runtrol.refresh)",
         "when": "runtrol.coreReach == reached && !runtrol.hasUsableProvider && !runtrol.isVerifyingProvider"
-      },
+      }
+    ],
+    "colors": [
       {
-        "view": "runtrol.projects",
-        "contents": "No projects yet.\n\nAdd a folder and its conversations come with it.\n[Add Project](command:runtrol.createProject)",
-        "when": "runtrol.hasUsableProvider"
-      },
-      {
-        "view": "runtrol.conversations",
-        "contents": "No conversations outside a project.\n\n[New Conversation](command:runtrol.startSession)",
-        "when": "runtrol.hasUsableProvider"
-      },
-      {
-        "view": "runtrol.usage",
-        "contents": "No connected CLI."
+        "id": "runtrol.accent",
+        "description": "Runtrol accent for primary sidebar actions.",
+        "defaults": {
+          "dark": "#F56565",
+          "light": "#D94848",
+          "highContrast": "#FF8A80",
+          "highContrastLight": "#B42323"
+        }
       }
     ],
     "configuration": {
