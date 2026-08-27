@@ -7,7 +7,7 @@ tools. Runtrol does not add a planner, prompt, transcript store, or autonomous l
 
 ## User contract
 
-1. Open the Runtrol Conversations view.
+1. Open the Runtrol sidebar.
 2. Select **Enable Agent Tools for This Project** on a project heading. The inline sparkle is the one-click entry.
 3. The heading says `Agent Tools` when the project is ready. The state is restored from Core after an Extension Host
    restart, including projects outside the current window.
