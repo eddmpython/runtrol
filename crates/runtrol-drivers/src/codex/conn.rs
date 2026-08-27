@@ -239,7 +239,7 @@ impl Connection {
         client: &str,
         version: &str,
     ) -> Result<Self, ProviderError> {
-        let (child, child_guard, stdin, stdout) = spawn(provider, program, contained_by)?;
+        let (child, child_guard, stdin, stdout) = spawn(provider, program, contained_by).await?;
         let pid = child.id();
 
         let stdin = Arc::new(Mutex::new(stdin));
@@ -501,7 +501,7 @@ impl InitializationIo for Connection {
 }
 
 /// Start the child and take its streams.
-fn spawn(
+async fn spawn(
     provider: ProviderId,
     program: &Program,
     contained_by: &Containment,
@@ -520,6 +520,7 @@ fn spawn(
         .kill_on_drop(true);
     let (mut child, child_guard) = command
         .spawn(contained_by)
+        .await
         .map_err(|error| spawn_error(provider, program, error))?;
 
     let missing = |what: &str| ProviderError::Spawn {

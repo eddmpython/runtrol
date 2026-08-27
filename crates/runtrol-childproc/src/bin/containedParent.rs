@@ -215,10 +215,7 @@ fn supervising_parent(directory: &str) -> ! {
     command.stdin(Stdio::null());
     command.stdout(Stdio::piped());
     command.stderr(Stdio::null());
-    let spawned = {
-        let _entered = runtime.enter();
-        command.spawn(&containment)
-    };
+    let spawned = runtime.block_on(command.spawn(&containment));
     let (mut child, _child_guard) = match spawned {
         Ok(spawned) => spawned,
         Err(error) => {
@@ -298,10 +295,7 @@ fn verify_exit_status(directory: &str) -> Result<(), String> {
     command.stdout(Stdio::null());
     command.stderr(Stdio::inherit());
     command.kill_on_drop(true);
-    let spawned = {
-        let _entered = runtime.enter();
-        command.spawn(&containment)
-    };
+    let spawned = runtime.block_on(command.spawn(&containment));
     let (mut child, mut guard) =
         spawned.map_err(|error| format!("could not start the exiting provider: {error}"))?;
     let status = runtime
@@ -327,10 +321,7 @@ fn verify_explicit_stop(directory: &str) -> Result<(), String> {
     command.stdout(Stdio::null());
     command.stderr(Stdio::inherit());
     command.kill_on_drop(true);
-    let spawned = {
-        let _entered = runtime.enter();
-        command.spawn(&containment)
-    };
+    let spawned = runtime.block_on(command.spawn(&containment));
     let (mut child, mut guard) =
         spawned.map_err(|error| format!("could not start the long-lived provider: {error}"))?;
     runtime
@@ -391,10 +382,7 @@ fn verify_spawn_failure(directory: &str) -> Result<(), String> {
     command.stdout(Stdio::null());
     command.stderr(Stdio::inherit());
     command.kill_on_drop(true);
-    let spawned = {
-        let _entered = runtime.enter();
-        command.spawn(&containment)
-    };
+    let spawned = runtime.block_on(command.spawn(&containment));
     let error = match spawned {
         Ok(_) => return Err("an absent provider unexpectedly started".to_owned()),
         Err(error) => error.to_string(),

@@ -78,7 +78,8 @@ pub(super) async fn list(
             .as_ref()
             .map(runtrol_provider::AbsPath::as_std_path),
         contained_by,
-    )?;
+    )
+    .await?;
     let outcome = async {
         let initialized = connection.initialized().await?;
         list_pages(&mut connection, &query, &initialized).await

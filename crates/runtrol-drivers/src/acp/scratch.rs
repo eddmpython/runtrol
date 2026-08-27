@@ -39,7 +39,7 @@ pub(super) struct ScratchConnection {
 }
 
 impl ScratchConnection {
-    pub(super) fn start(
+    pub(super) async fn start(
         provider: ProviderId,
         program: &Program,
         transport_argv: &[Box<str>],
@@ -70,6 +70,7 @@ impl ScratchConnection {
             .kill_on_drop(true);
         let (mut child, child_guard) = command
             .spawn(contained_by)
+            .await
             .map_err(|error| spawn_error(provider, program, error))?;
         let missing = |what: &str| ProviderError::Spawn {
             provider,

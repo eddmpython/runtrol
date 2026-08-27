@@ -188,13 +188,33 @@ impl TrackedCommand {
     ///
     /// [`SpawnError::Containment`] when durable publication or bootstrap execution fails, and [`SpawnError::Io`]
     /// when the operating system refuses the process spawn.
-    pub fn spawn(
+    #[cfg_attr(
+        windows,
+        expect(
+            clippy::unused_async,
+            reason = "the await lives in the Unix containment arm; the signature is one contract on both platforms"
+        )
+    )]
+    pub async fn spawn(
         self,
         containment: &Containment,
     ) -> Result<(TrackedChild, ChildGuard), SpawnError> {
         #[cfg(unix)]
         if let Some(registry) = &containment.recovery {
-            return self.spawn_bootstrap(registry);
+            // Off the runtime thread, whole. The bootstrap path is synchronous on purpose (locks, durable
+            // records, fsyncs, one keeper handshake), and on a contended CI disk those fsyncs held the
+            // daemon's only async thread for 14.5 s in one piece (measured 2026-08-27 by the heartbeat
+            // trace): every accept, greeting, and close request waited behind one provider spawn. A worker
+            // thread pays that price alone; the registry is an `Arc` handle, so the move is a clone.
+            let registry = registry.clone();
+            return match tokio::task::spawn_blocking(move || self.spawn_bootstrap(&registry)).await
+            {
+                Ok(spawned) => spawned,
+                Err(worker) => Err(SpawnError::Containment {
+                    doing: "waiting for the provider spawn worker",
+                    detail: worker.to_string(),
+                }),
+            };
         }
         self.spawn_direct(containment)
     }

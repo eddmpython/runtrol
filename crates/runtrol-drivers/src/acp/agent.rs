@@ -112,6 +112,7 @@ impl AcpAgent {
             .kill_on_drop(true);
         let (mut child, child_guard) = command
             .spawn(contained_by)
+            .await
             .map_err(|error| spawn_error(provider, program, error))?;
         let missing = |what: &str| ProviderError::Spawn {
             provider,

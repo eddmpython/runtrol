@@ -165,7 +165,7 @@ async fn capture_exchange(
     if let Some(directory) = directory {
         command.current_dir(directory.as_std_path());
     }
-    let (mut child, mut child_guard) = command.spawn(contained_by)?;
+    let (mut child, mut child_guard) = command.spawn(contained_by).await?;
     let writing = match input {
         Some(bytes) => {
             let stdin = child.stdin.take().ok_or_else(|| SpawnError::Io {

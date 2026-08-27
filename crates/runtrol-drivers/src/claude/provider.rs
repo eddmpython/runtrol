@@ -414,7 +414,8 @@ impl Provider for ClaudeProvider {
             &self.available_flags,
             &self.unavailable_flags,
             replay,
-        )?;
+        )
+        .await?;
         Ok(Box::new(agent))
     }
 }

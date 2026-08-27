@@ -120,7 +120,7 @@ impl ClaudeAgent {
     ///
     /// [`ProviderError::BinNotFound`] when the CLI is not installed, [`ProviderError::Spawn`] when it cannot be
     /// started, [`ProviderError::Unsupported`] when an argument cannot be passed at all.
-    pub(crate) fn start(
+    pub(crate) async fn start(
         provider: ProviderId,
         program: &Program,
         intent: &OpenIntent,
@@ -149,6 +149,7 @@ impl ClaudeAgent {
             .kill_on_drop(true);
         let (mut child, child_guard) = command
             .spawn(contained_by)
+            .await
             .map_err(|error| spawn_error(provider, program, error))?;
 
         let missing = |what: &str| ProviderError::Spawn {

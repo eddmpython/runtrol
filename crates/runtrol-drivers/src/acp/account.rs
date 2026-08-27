@@ -54,7 +54,7 @@ pub(super) async fn read(
     contained_by: &Containment,
 ) -> Result<AccountReport, ProviderError> {
     let mut connection =
-        ScratchConnection::start(provider, program, transport_argv, None, contained_by)?;
+        ScratchConnection::start(provider, program, transport_argv, None, contained_by).await?;
     let outcome = async {
         connection.initialized().await?;
         let answer = ask(&mut connection, &identity.method).await?;

@@ -23,7 +23,7 @@ which = { workspace = true, features = ["real-sys"] }
 thiserror = { workspace = true }
 # Asking a CLI a question needs a child process and a deadline. `time` is what makes a hung CLI a reported
 # timeout instead of a hang in whatever asked.
-tokio = { workspace = true, features = ["io-util", "macros", "process", "time"] }
+tokio = { workspace = true, features = ["io-util", "macros", "process", "rt", "time"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt", "macros"] }
