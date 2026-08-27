@@ -60,7 +60,10 @@ async function verifyInstalledPackage(resultPath: string): Promise<void> {
 
   currentStage = "activating-installed-extension";
   const api = await within(extension.activate() as Promise<ExtensionApi>, 10_000, "installed extension activation");
-  await within(api.ready, 15_000, "bundled Core discovery");
+  // Forty-five seconds, not fifteen: this is the first daemon of a fresh home, and it binds first and
+  // assembles afterwards, so on a storming CI disk the first assembly legitimately outlives a short budget
+  // (measured 2026-08-27: both Linux and Windows matrix jobs tripped here while the daemon was healthy).
+  await within(api.ready, 45_000, "bundled Core discovery");
   currentStage = "refreshing-through-bundled-core";
   await within(api.refresh(), 5_000, "installed extension refresh");
   await within(
