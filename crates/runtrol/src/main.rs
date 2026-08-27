@@ -225,8 +225,16 @@ where
 }
 
 /// Build the runtime shared by command, endpoint, and daemon personalities.
+///
+/// Two workers, not one: on a single worker, any task that fails to yield starves the accept loop and every
+/// control read with it, and the daemon goes silent while still alive. Measured 2026-08-27 on the CI hosts
+/// with 8 hot streaming sessions: `start` and `close --now` timed out at 15 s with the close breadcrumbs
+/// never printing, which places the stall before the connection was even read. A second worker keeps the
+/// control plane answerable while one worker is deep in session output, at the cost of one thread stack;
+/// the idle-footprint gate holds the price to account.
 fn supervisor_runtime() -> std::io::Result<tokio::runtime::Runtime> {
-    tokio::runtime::Builder::new_current_thread()
+    tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
         .max_blocking_threads(MAX_BLOCKING_THREADS)
         .enable_all()
         .build()
