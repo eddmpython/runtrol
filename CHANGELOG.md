@@ -10,6 +10,17 @@ and refactoring that no user can observe do not belong here.
 
 ## [Unreleased]
 
+### Fixed
+
+- The Runtime no longer goes quiet under load: starting or closing a conversation used to wait behind another
+  session's process spawn or a durable session write on the Runtime's single control thread, which on slow disks
+  meant commands timing out while the daemon looked healthy. Spawns and session writes now run on worker threads.
+
+- Right after an update, a command that briefly could not reach the Runtime could start a second daemon that
+  silently took over the socket and answered nobody. A daemon now refuses to bind an address that still answers.
+
+- Thirty conversations starting at once no longer each probe the same coding CLI; the first probe is shared.
+
 ## [0.1.25] - 2026-08-27
 
 ### Fixed
