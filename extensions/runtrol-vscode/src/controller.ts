@@ -1223,7 +1223,9 @@ export class Controller implements vscode.Disposable {
   private async memoryLoop(signal: AbortSignal): Promise<void> {
     while (!signal.aborted && !this.disposed) {
       await abortableDelay(MEMORY_POLL_MS, signal);
-      if (signal.aborted || this.state.coreReach !== "reached") continue;
+      // Waits out a foreground action: the poll shares the client's one serialised lane with whatever the
+      // person is doing, and a memory figure is the last thing worth making a click wait behind.
+      if (signal.aborted || this.state.coreReach !== "reached" || this.nativeDiscoveryPauseDepth > 0) continue;
       try {
         const [sessions, terminals] = await Promise.all([
           this.runtime.listSessionsNow(),
