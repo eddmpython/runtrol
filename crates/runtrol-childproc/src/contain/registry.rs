@@ -113,8 +113,45 @@ impl Drop for SpawnPermit<'_> {
     }
 }
 
+/// Reap every sibling guard directory whose generation no longer runs. See the crate-level
+/// `sweep_stale_guard_directories` for the argument; this is its Unix body.
+pub(super) fn sweep_stale(root: &Path, keep: &Path) {
+    let Ok(read) = std::fs::read_dir(root) else {
+        return;
+    };
+    for entry in read.flatten() {
+        let path = entry.path();
+        if path == keep || !path.is_dir() {
+            continue;
+        }
+        // Taken without waiting: a held lock means a living generation or keeper, which is not ours to touch.
+        let Ok(registry) = Registry::try_open(&path) else {
+            continue;
+        };
+        // ok: recovery over a dead generation's records is best effort. What it cannot reap it keeps for the
+        // next sweep, exactly as the shared directory's open-time pass kept ambiguous records.
+        drop(registry.recover());
+        if registry
+            .scan_entries()
+            .is_ok_and(|scan| scan.entries.is_empty() && scan.errors.is_empty())
+        {
+            drop(registry);
+            drop(std::fs::remove_dir_all(&path));
+        }
+    }
+}
+
 impl Registry {
+    /// Open without waiting: refuse at once when another process holds the directory's lock.
+    fn try_open(directory: &Path) -> Result<Self, SpawnError> {
+        Self::open_with(directory, LockWait::None)
+    }
+
     pub(super) fn open(directory: &Path) -> Result<Self, SpawnError> {
+        Self::open_with(directory, LockWait::Bounded)
+    }
+
+    fn open_with(directory: &Path, wait: LockWait) -> Result<Self, SpawnError> {
         use std::os::unix::fs::{DirBuilderExt as _, PermissionsExt as _};
 
         std::fs::DirBuilder::new()
@@ -134,7 +171,7 @@ impl Registry {
             .mode(0o600)
             .open(directory.join(LOCK_FILE))
             .map_err(|error| io_failure("opening the guard lock", error))?;
-        lock_exclusive(&lock)?;
+        lock_exclusive(&lock, wait)?;
         sync_directory(&directory)?;
         Ok(Self {
             inner: Arc::new(RegistryInner {
@@ -973,11 +1010,20 @@ fn group_has_executing_members(group: u32) -> Result<bool, SpawnError> {
     Ok(false)
 }
 
+/// Whether a lock attempt may wait for an earlier holder.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LockWait {
+    /// Refuse at once: the caller is probing whether anything alive still holds the directory.
+    None,
+    /// Wait up to the lock budget for an earlier child bootstrap to let go.
+    Bounded,
+}
+
 #[expect(
     unsafe_code,
     reason = "an inherited advisory lock requires the Unix flock system call"
 )]
-fn lock_exclusive(file: &File) -> Result<(), SpawnError> {
+fn lock_exclusive(file: &File, wait: LockWait) -> Result<(), SpawnError> {
     let deadline = Instant::now() + LOCK_BUDGET;
     loop {
         // SAFETY: `file` owns a valid descriptor and `flock` neither retains nor closes it.
@@ -991,6 +1037,12 @@ fn lock_exclusive(file: &File) -> Result<(), SpawnError> {
             .is_some_and(|code| code == libc::EWOULDBLOCK || code == libc::EAGAIN)
         {
             return Err(io_failure("locking the guard directory", error));
+        }
+        if wait == LockWait::None {
+            return Err(failure(
+                "locking the guard directory",
+                "another process holds this guard directory",
+            ));
         }
         if Instant::now() >= deadline {
             return Err(failure(

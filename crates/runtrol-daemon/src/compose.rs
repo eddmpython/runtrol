@@ -404,9 +404,18 @@ impl Composed {
         };
 
         let store = Store::open(home.paths().database())?;
-        let containment = Arc::new(Containment::establish_tracked(
-            home.paths().process_guards().as_std_path(),
-        )?);
+        // One guard directory per generation. The registry holds an exclusive flock on its directory for the
+        // daemon's whole life, so two generations sharing one directory meant the second could never establish
+        // containment: it waited ten seconds on the first's lock and failed, and on macOS and Linux an upgrade
+        // with a live session never started at all (measured 2026-08-27 by the upgrade journey on every Unix
+        // target while Windows, which has no such lock, passed). The store above is already exclusive, so within
+        // one generation's directory the recovery ordering argument is unchanged; directories whose generation
+        // is gone are swept here, which is the same reap the shared directory got on open.
+        let generation = crate::generations::GenerationIdentity::of_this_executable()?;
+        let guard_root = home.paths().process_guards().as_std_path().to_owned();
+        let guard_directory = guard_root.join(generation.tag());
+        runtrol_childproc::sweep_stale_guard_directories(&guard_root, &guard_directory);
+        let containment = Arc::new(Containment::establish_tracked(&guard_directory)?);
         let registry = load(&home, builtin);
         let isolated_workspaces = crate::isolated_workspace::IsolatedWorkspaceController::open(
             home.paths().isolated_workspaces().clone(),

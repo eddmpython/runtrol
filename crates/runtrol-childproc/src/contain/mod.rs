@@ -118,6 +118,25 @@ enum Inner {
     Nothing,
 }
 
+/// Reap every guard directory under `root` whose owning generation no longer runs.
+///
+/// Each daemon generation owns one guard directory and holds its `.spawn.lock` for its whole life; the lock
+/// is also inherited by that generation's keepers. A directory whose lock can be taken without waiting
+/// therefore belongs to a generation with no daemon and no keeper left, and its records are exactly what the
+/// shared-directory recovery pass used to reap on open: groups that outlived an unclean exit. `keep` is the
+/// calling generation's own directory and is never touched. Failures are deliberately quiet per directory: a
+/// sweep is a favour to a dead sibling, and refusing to start over one is the outage this sweep exists to end.
+///
+/// On Windows this does nothing: the job object is the unclean-exit boundary and no durable directory exists.
+pub fn sweep_stale_guard_directories(root: &std::path::Path, keep: &std::path::Path) {
+    #[cfg(unix)]
+    registry::sweep_stale(root, keep);
+    #[cfg(windows)]
+    {
+        _ = (root, keep);
+    }
+}
+
 impl Containment {
     /// A containment that holds nothing.
     ///

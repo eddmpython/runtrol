@@ -50,6 +50,7 @@ pub use argv::{MAX_ARGUMENT_LEN, check_all, check_one};
 pub use console_window::hide_console_window;
 #[cfg(unix)]
 pub use contain::bootstrap_if_requested;
+pub use contain::sweep_stale_guard_directories;
 pub use contain::{ChildGuard, Containment, Strength, TrackedCommand};
 pub use error::SpawnError;
 pub use footprint::resident_bytes;
