@@ -10,6 +10,14 @@ and refactoring that no user can observe do not belong here.
 
 ## [Unreleased]
 
+## [0.1.29] - 2026-08-28
+
+### Added
+
+- Runtime writes one line to `native-deletions.log` in its home whenever it removes a conversation from a
+  coding service's own store, naming the integration that asked, the conversation and the folder. Deleting was
+  already reversible by hand; now it is also answerable.
+
 ## [0.1.28] - 2026-08-28
 
 ### Fixed
