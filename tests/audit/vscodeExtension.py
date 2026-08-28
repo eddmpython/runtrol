@@ -439,6 +439,11 @@ def selftest() -> int:
                         "group": "navigation@1",
                     },
                     {
+                        "command": "runtrol.moreActions",
+                        "when": "view == runtrol.sidebar",
+                        "group": "navigation@2",
+                    },
+                    {
                         "command": "runtrol.switchSession",
                         "when": "view == runtrol.sidebar",
                         "group": "1_attention@3",
@@ -452,6 +457,9 @@ def selftest() -> int:
         "core/framing.ts": (
             "MAX_FRAME_BYTES MAX_QUEUED_FRAMES MAX_QUEUED_BYTES setImmediate "
             "this.socket.end()"
+        ),
+        "terminalTabs.ts": (
+            "this.opening = setInterval(() => { clearInterval"
         ),
         "conversationIcon.ts": (
             'vscode.Uri.joinPath(extensionUri, "resources", "provider-icons", `${icon}.svg`) '
@@ -551,8 +559,13 @@ def selftest() -> int:
             'MissionScheduleLine ask: "missionSchedule" replaces_schedule_id ask: "missionScheduleCancel"'
         ),
     }
-    if sourceViolations(package, sources):
-        print("[vscodeExtension --selftest] FAIL. the green fixture was rejected.", file=sys.stderr)
+    rejected = sourceViolations(package, sources)
+    if rejected:
+        # Say which one. A self-test that only says the fixture was rejected sends the next reader hunting
+        # through every contract entry by hand, which is what it cost to find this line.
+        print("[vscodeExtension --selftest] FAIL. the green fixture was rejected:", file=sys.stderr)
+        for violation in rejected:
+            print(f"  - {violation}", file=sys.stderr)
         return 2
 
     second_view = json.loads(json.dumps(package))
@@ -600,8 +613,8 @@ def selftest() -> int:
         (package, {**sources, "sidebarView.ts": sources["sidebarView.ts"].replace("usageRows(this.state.usage", "")}),
         (package, {**sources, "sidebarView.ts": sources["sidebarView.ts"].replace("Cannot reach the Runtrol Core.", "")}),
         (package, {**sources, "sidebarPage.ts": sources["sidebarPage.ts"].replace('row.canDelete ? action("runtrol.deleteConversation"', "")}),
-        (package, {**sources, "sidebarPage.ts": sources["sidebarPage.ts"].replace("themeColorVar(row.color)", "")}),
-        (package, {**sources, "sidebarPage.ts": sources["sidebarPage.ts"].replace("ci-kebab-vertical", "")}),
+        (package, {**sources, "sidebarPage.ts": sources["sidebarPage.ts"].replace(".conv .glyph-slot.working::after", "")}),
+        (package, {**sources, "sidebarPage.ts": sources["sidebarPage.ts"].replace("--runtrol-running: var(--vscode-charts-blue", "")}),
         (package, {**sources, "extension.ts": sources["extension.ts"].replace('executeCommand("runtrol.sidebar.focus")', "")}),
         (package, {**sources, "stateRows.ts": sources["stateRows.ts"].replace("discoveryNotice", "")}),
         (

@@ -384,7 +384,7 @@ class RuntimeTerminal implements vscode.Pseudoterminal {
     if (!this.opening) return;
     clearInterval(this.opening);
     this.opening = null;
-    this.writeEmitter.fire(`[2J[H${SHOW_CURSOR}`);
+    this.writeEmitter.fire(`\x1b[2J\x1b[H${SHOW_CURSOR}`);
   }
 
   private async connect(): Promise<void> {

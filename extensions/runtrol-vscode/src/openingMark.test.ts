@@ -29,13 +29,13 @@ test("the mark is four arms and a quarter turn moves each one to the next corner
 test("a frame is painted in the middle of the pane, whatever its size", () => {
   const wide = paintMark(0, 120, 40);
   // Clear first: the pane may have been resized, and half of an old block left behind reads as a defect.
-  assert.ok(wide.startsWith("[2J"));
+  assert.ok(wide.startsWith("\x1b[2J"));
   // A 120x40 pane puts the three-row block at row 18 and its five columns at 57, which is its middle.
-  assert.ok(wide.includes("[18;57H"), wide.slice(0, 60));
-  assert.ok(wide.includes("[20;57H"), "the block's last line");
+  assert.ok(wide.includes("\x1b[18;57H"), wide.slice(0, 60));
+  assert.ok(wide.includes("\x1b[20;57H"), "the block's last line");
   // A pane too small for the block still gets a frame rather than an escape with a zero or negative position.
   const tiny = paintMark(0, 2, 1);
-  assert.ok(tiny.includes("[1;1H"));
+  assert.ok(tiny.includes("\x1b[1;1H"));
   assert.ok(!tiny.includes("[0;"));
   assert.ok(!tiny.includes("-"));
 });
