@@ -154,8 +154,8 @@ impl NativeSessionCatalogue {
 /// One provider-native conversation to delete, through the provider's own surface.
 ///
 /// A conversation is removed either through the CLI's own command (codex `thread/delete`, cline `history
-/// delete`) or, for a store a driver already reads under its contract, by that driver moving the conversation
-/// out of the store reversibly (claude). runtrol holds no copy and interprets no content: it removes the entry
+/// delete`) or, for a store a driver already reads under its contract, by that driver permanently removing the
+/// exact provider-owned records (claude). runtrol holds no copy and interprets no content: it removes the entry
 /// the operator asked to remove, and the provider's store stays the record of what exists. A provider with
 /// neither surface says so and the conversation stays where it is. The folder travels with the request because
 /// a CLI that scopes its store by folder is asked in that folder.

@@ -39,6 +39,32 @@ use crate::native_catalogue::{
     NativeSessionArchival, NativeSessionCatalogue, NativeSessionDeletion, NativeSessionQuery,
 };
 
+/// A provider-verified operating-system process to native-conversation binding.
+///
+/// This is transport metadata only. It lets Runtime bind a terminal opened before the provider minted its native
+/// identity without parsing terminal output or reading conversation content.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NativeProcessBinding {
+    /// Operating-system process identity whose start generation the provider driver already validated.
+    pub pid: u32,
+    /// Provider-owned conversation identity held by that exact process.
+    pub native: NativeSessionId,
+}
+
+/// Provider-owned process roster, separated into existence and current model activity.
+///
+/// `live` answers whether a provider process still owns the conversation. `active` is the subset whose model is
+/// answering now. Neither collection carries terminal bytes or conversation content.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct NativeProcessActivity {
+    /// Conversations owned by a still-running provider process, regardless of turn state.
+    pub live: Vec<NativeSessionId>,
+    /// Live conversations whose model is answering now.
+    pub active: Vec<NativeSessionId>,
+    /// Exact process bindings available from the provider's bounded live-process roster.
+    pub processes: Vec<NativeProcessBinding>,
+}
+
 /// One coding CLI, as runtrol talks to it.
 ///
 /// Stateless and built once per provider at boot, so constructing one must not spawn anything or ask anything.
@@ -139,6 +165,20 @@ pub trait Provider: Send + Sync + 'static {
         Ok(Vec::new())
     }
 
+    /// Which conversations have a provider process now, and which of those are answering.
+    ///
+    /// The default preserves source compatibility with older drivers: activity they already report also proves
+    /// the process is live. A driver with a cheap provider-owned process roster should override this method so
+    /// idle and waiting processes are discovered without opening or reading a conversation.
+    async fn native_process_activity(&self) -> Result<NativeProcessActivity, ProviderError> {
+        let active = self.active_native_sessions().await?;
+        Ok(NativeProcessActivity {
+            live: active.clone(),
+            active,
+            processes: Vec::new(),
+        })
+    }
+
     /// Whether [`Self::native_sessions`] answers a query with no folder by naming every
     /// conversation this provider knows about, wherever it happened.
     ///
@@ -158,8 +198,8 @@ pub trait Provider: Send + Sync + 'static {
     ///
     /// The default refuses: a driver written before this existed has not said its provider can do it, and
     /// deleting is the one act a surface must never guess at. A driver that can either asks its CLI's own delete
-    /// command, or, for a store it already reads under its contract, moves the conversation out of that store
-    /// reversibly. It removes the entry the operator asked to remove and interprets no content; the provider's
+    /// command, or permanently removes the exact provider-owned records from a store it already reads under its
+    /// contract. It removes the entry the operator asked to remove and interprets no content; the provider's
     /// store stays the record of what exists.
     ///
     /// # Errors

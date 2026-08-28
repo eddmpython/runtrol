@@ -1984,6 +1984,11 @@ fn providers_of(composed: &Composed) -> Vec<ProviderLine> {
                 KindStatus::Unavailable { why } => Some(why.into()),
                 KindStatus::Unknown => Some("nothing in this build declares that kind".into()),
             },
+            terminal_commands: provider
+                .manifest
+                .tui
+                .as_ref()
+                .map_or_else(Vec::new, |_| provider.manifest.bin.names.clone()),
         })
         .collect()
 }

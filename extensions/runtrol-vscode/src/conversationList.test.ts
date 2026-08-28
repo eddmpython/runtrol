@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { performance } from "node:perf_hooks";
 import test from "node:test";
 
 import {
@@ -9,13 +10,14 @@ import {
   conversations,
   elapsed,
   loose,
+  nativeProcessKey,
   needsYou,
   nextNeedingYou,
   projectDetail,
   projects,
 } from "./conversationList";
 import type { ProjectRecord } from "./projects";
-import type { NativeChatLine, ProviderLine, SessionLine } from "./runtimeTypes";
+import type { NativeChatLine, ProviderLine, SessionLine, TerminalDescriptor } from "./runtimeTypes";
 import { workspaceIdentity } from "./workspaceCollision";
 
 const NOW = Date.parse("2026-08-17T12:00:00Z");
@@ -133,7 +135,7 @@ test("a conversation Runtrol does not host reads as working while its service wr
     new Map(),
     [],
     new Set(),
-    new Set(["n9"]),
+    new Set([nativeProcessKey("codex", "n9")]),
   );
   assert.equal(busy[0]?.activity, "working");
   // Named by the service's own identity, not by the row key: the answer comes from the service's store.
@@ -149,9 +151,112 @@ test("a conversation Runtrol does not host reads as working while its service wr
     new Map(),
     [],
     new Set(),
-    new Set(["someone-else"]),
+    new Set([nativeProcessKey("codex", "someone-else")]),
   );
   assert.equal(other[0]?.activity, "saved");
+});
+
+test("an externally running provider conversation is live but never auto-resumed", () => {
+  const key = nativeProcessKey("codex", "n9");
+  const [row] = conversations(
+    [],
+    PROVIDERS,
+    [nativeChat({ nativeSessionId: "n9", title: "Already running elsewhere" })],
+    null,
+    null,
+    new Map(),
+    new Map(),
+    new Set(),
+    new Map(),
+    [],
+    new Set(),
+    new Set(),
+    new Set([key]),
+  );
+
+  assert.equal(row?.live, true);
+  assert.equal(row?.canOpen, false, "clicking must not create a duplicate resume process");
+  assert.match(row?.blocked ?? "", /running in another terminal/u);
+});
+
+test("a daemon-owned terminal is the exact attach target and keeps the provider title", () => {
+  const terminal = {
+    terminalId: "terminal-1",
+    runtimeGeneration: "generation-1",
+    providerId: "codex",
+    workspace: BETA,
+    nativeSessionId: "n9",
+    processState: "running",
+    openedAtMs: NOW,
+    terminalGeneration: 7,
+    geometry: { columns: 120, rows: 40 },
+    memoryBytes: 1024,
+  } as TerminalDescriptor;
+  const [row] = conversations(
+    [],
+    PROVIDERS,
+    [nativeChat({ nativeSessionId: "n9", title: "Provider supplied title" })],
+    null,
+    null,
+    new Map(),
+    new Map(),
+    new Set(),
+    new Map(),
+    [],
+    new Set(),
+    new Set(),
+    new Set(),
+    [terminal],
+  );
+
+  assert.equal(row?.title, "Provider supplied title");
+  assert.equal(row?.hostedTerminal, terminal);
+  assert.equal(row?.canOpen, true);
+});
+
+test("a full terminal index becomes sidebar rows within the fifty millisecond p95 budget", () => {
+  const count = 256;
+  const chats = Array.from({ length: count }, (_, index) => nativeChat({
+    providerId: "codex",
+    nativeSessionId: `native-${index}`,
+    title: `Conversation ${index}`,
+  }));
+  const terminals = chats.map((chat, index) => ({
+    terminalId: `terminal-${index}`,
+    runtimeGeneration: "generation-1",
+    providerId: chat.providerId,
+    workspace: chat.cwd,
+    nativeSessionId: chat.nativeSessionId,
+    processState: "running",
+    openedAtMs: NOW + index,
+    terminalGeneration: 1,
+    geometry: { columns: 120, rows: 40 },
+    memoryBytes: null,
+  } as TerminalDescriptor));
+  const apply = () => conversations(
+    [],
+    PROVIDERS,
+    chats,
+    null,
+    null,
+    new Map(),
+    new Map(),
+    new Set(),
+    new Map(),
+    [],
+    new Set(),
+    new Set(),
+    new Set(),
+    terminals,
+  );
+  assert.equal(apply().length, count);
+  const samples = Array.from({ length: 100 }, () => {
+    const started = performance.now();
+    apply();
+    return performance.now() - started;
+  }).sort((left, right) => left - right);
+  const p95 = samples[Math.floor(samples.length * 0.95)] ?? Number.POSITIVE_INFINITY;
+  assert.ok(p95 <= 50, `sidebar row application p95 was ${p95.toFixed(2)} ms`);
 });
 
 test("one list holds supervised sessions and provider-owned chats alike", () => {

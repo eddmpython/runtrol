@@ -92,6 +92,12 @@ pub const MODEL_PREPARATION_BUDGET_MS: u64 = 300_000;
 /// starving every other provider's catalogue.
 pub(crate) const NATIVE_LISTING_SLOTS: usize = 4;
 
+/// Shared freshness window for the cheap external-process roster.
+///
+/// Studio asks every 250 ms. A shorter cache keeps one window's worst-case discovery at that same interval while
+/// coalescing overlapping windows to at most five provider roster scans per second.
+pub(crate) const NATIVE_ACTIVITY_CACHE_MS: u64 = 200;
+
 /// The discovery gates, together because they bound the same class of work.
 ///
 /// `lanes` holds one preparation mutex per registered provider. Preparation was one global mutex once, and a
@@ -115,6 +121,10 @@ pub(crate) struct DiscoveryGates {
     /// The one lane for identities outside the registry, so an unknown provider still has exactly one.
     unknown: Arc<tokio::sync::Mutex<()>>,
     pub(crate) listing: tokio::sync::Semaphore,
+    /// Latest content-free provider process roster, shared by every local window.
+    native_activity: tokio::sync::Mutex<
+        BTreeMap<ProviderId, (std::time::Instant, runtrol_provider::NativeProcessActivity)>,
+    >,
 }
 
 impl DiscoveryGates {
@@ -129,6 +139,7 @@ impl DiscoveryGates {
             lanes: tokio::sync::Mutex::new(BTreeMap::new()),
             unknown: Arc::new(tokio::sync::Mutex::new(())),
             listing: tokio::sync::Semaphore::new(NATIVE_LISTING_SLOTS),
+            native_activity: tokio::sync::Mutex::new(BTreeMap::new()),
         }
     }
 
@@ -144,6 +155,29 @@ impl DiscoveryGates {
         let lane = Arc::new(tokio::sync::Mutex::new(()));
         lanes.insert(provider, Arc::downgrade(&lane));
         lane
+    }
+
+    /// One still-fresh process roster previously measured for this provider.
+    pub(crate) async fn cached_native_activity(
+        &self,
+        provider: ProviderId,
+    ) -> Option<runtrol_provider::NativeProcessActivity> {
+        let cache = self.native_activity.lock().await;
+        let (measured_at, activity) = cache.get(&provider)?;
+        (measured_at.elapsed() < Duration::from_millis(NATIVE_ACTIVITY_CACHE_MS))
+            .then(|| activity.clone())
+    }
+
+    /// Publish one provider roster for all windows after its provider lane measured it.
+    pub(crate) async fn remember_native_activity(
+        &self,
+        provider: ProviderId,
+        activity: runtrol_provider::NativeProcessActivity,
+    ) {
+        self.native_activity
+            .lock()
+            .await
+            .insert(provider, (std::time::Instant::now(), activity));
     }
 }
 
@@ -171,6 +205,11 @@ async fn repair_own_agent_tools(composed: Arc<Composed>) {
 }
 
 async fn prewarm_providers(composed: Arc<Composed>, discovering: Arc<DiscoveryGates>) {
+    // Windows can return only the complete working set. Do that after daemon assembly but before the deliberate
+    // warm-up, so discarded startup pages stay out while the provider paths this task exists to warm remain hot.
+    #[cfg(windows)]
+    runtrol_childproc::footprint::release_unused_memory();
+
     // Two at a time, deliberately gentle: each meeting starts up to a few CLI processes, and measured
     // 2026-08-20, warming all five at once saturated the machine at the exact moment the operator's own
     // first request arrives, making that request slower than the cold it hides. A racing real request
@@ -198,9 +237,8 @@ async fn prewarm_providers(composed: Arc<Composed>, discovering: Arc<DiscoveryGa
         });
     }
     while meetings.join_next().await.is_some() {}
-    // The meetings parsed help texts and built throwaway drivers; hand allocator pages back where the platform
-    // exposes that exact operation. Windows' primitive empties the whole working set, including live code that this
-    // warm-up exists to keep ready, so real session cleanup remains its release boundary there.
+    // Other platforms expose allocator-specific relief, so they can return discarded provider buffers without
+    // evicting the live code this warm-up intentionally touched.
     #[cfg(not(windows))]
     runtrol_childproc::footprint::release_unused_memory();
 }
@@ -2096,6 +2134,111 @@ async fn converse_inner(
             continue;
         }
 
+        // A transparent provider shim is a terminal view from this point on. It is admitted only on the owner-local
+        // pipe, registers the daemon-owned PTY before the provider process starts, and never enters the structured
+        // session owner. The exact argv is local operator input, not a public or paired-device capability.
+        if let Request::TerminalOpen {
+            provider,
+            arguments: Some(arguments),
+            workspace,
+            cols,
+            rows,
+            ..
+        } = &request
+            && conversation.greeted()
+        {
+            if !conversation.caller().is_at_the_machine() {
+                drop(
+                    write(
+                        &mut connection,
+                        &refuse("exact provider invocations are accepted only from a local owner terminal"),
+                    )
+                    .await,
+                );
+                return;
+            }
+            if composed.draining.load(std::sync::atomic::Ordering::Acquire) {
+                drop(write(&mut connection, &refuse(DRAINING_REFUSAL)).await);
+                return;
+            }
+            let Ok(provider) = ProviderId::parse(provider) else {
+                drop(write(&mut connection, &refuse("the provider identity is invalid")).await);
+                return;
+            };
+            let workspace = match AbsPath::canonicalize(workspace.as_ref()) {
+                Ok(workspace) if workspace.as_std_path().is_dir() => workspace,
+                Ok(_) | Err(_) => {
+                    drop(
+                        write(
+                            &mut connection,
+                            &refuse("the brokered provider working directory is not an existing directory"),
+                        )
+                        .await,
+                    );
+                    return;
+                }
+            };
+            let arguments = arguments
+                .iter()
+                .map(|argument| String::from(argument.as_ref()))
+                .collect();
+            let opened = {
+                let _provider_lane = discovering.lane(provider).await.lock_owned().await;
+                let prepared =
+                    match crate::provider_prepare::prepared_terminal_driver(&composed, provider)
+                        .await
+                    {
+                        Ok(prepared) => prepared,
+                        Err(error) => {
+                            drop(write(&mut connection, &refuse(error.message())).await);
+                            return;
+                        }
+                    };
+                let Some(program) = prepared.terminal_program else {
+                    drop(
+                        write(
+                            &mut connection,
+                            &refuse("the provider publishes no prepared terminal program"),
+                        )
+                        .await,
+                    );
+                    return;
+                };
+                crate::terminal_surface::open_brokered(
+                    &composed, provider, workspace, *cols, *rows, arguments, program,
+                )
+                .await
+            };
+            let (terminal_id, terminal, attachment) = match opened {
+                Ok(opened) => opened,
+                Err(error) => {
+                    drop(write(&mut connection, &refuse(&error.to_string())).await);
+                    return;
+                }
+            };
+            let Some(hosted) = composed.terminals.lock().await.hosted(terminal_id) else {
+                drop(
+                    write(
+                        &mut connection,
+                        &refuse("the brokered terminal ended before its first viewer attached"),
+                    )
+                    .await,
+                );
+                return;
+            };
+            let control = crate::runtime_terminal::LocalTerminalControl::for_hosted(&hosted);
+            relay_local_broker(
+                &mut connection,
+                &composed,
+                terminal_id,
+                terminal,
+                attachment,
+                Some(control),
+            )
+            .await;
+            return;
+        }
+
         // Refused before a slot is reserved or a provider process started: a draining generation opens
         // nothing new, and the successor is already listening for exactly this request.
         if matches!(request, Request::Start { .. } | Request::Resume { .. })
@@ -2642,6 +2785,145 @@ async fn relay(connection: &mut SurfaceConnection, mut watching: runtrol_core::S
             return;
         }
     }
+}
+
+/// Carry one owner-local terminal invocation as the first viewer of the daemon-owned PTY.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one local relay orders the screen, live bytes, lag replacement, exit, exact input, and resize"
+)]
+async fn relay_local_broker(
+    connection: &mut SurfaceConnection,
+    composed: &Composed,
+    terminal_id: runtrol_provider::TerminalId,
+    terminal: runtrol_core::terminal::Terminal,
+    mut attachment: runtrol_core::terminal::Attachment,
+    control: Option<crate::runtime_terminal::LocalTerminalControl>,
+) {
+    let writable = control.is_some();
+    let relayed = async {
+        if write(
+            connection,
+            &Response::TerminalOpened {
+                terminal: terminal_id,
+                pid: terminal.pid(),
+                writable,
+            },
+        )
+        .await
+        .is_err()
+        {
+            return;
+        }
+        if write(
+            connection,
+            &Response::TerminalOutput {
+                bytes: attachment.snapshot.to_vec().into(),
+            },
+        )
+        .await
+        .is_err()
+        {
+            return;
+        }
+        loop {
+            let exit_code = *attachment.exited.borrow();
+            if let Some(code) = exit_code {
+                drop(write(connection, &Response::TerminalExited { code }).await);
+                return;
+            }
+            tokio::select! {
+                output = attachment.live.recv() => match output {
+                    Ok(bytes) => {
+                        if write(
+                            connection,
+                            &Response::TerminalOutput { bytes: bytes.to_vec().into() },
+                        )
+                        .await
+                        .is_err()
+                        {
+                            return;
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                        attachment = terminal.attach().await;
+                        if write(connection, &Response::TerminalLagged {}).await.is_err()
+                            || write(
+                                connection,
+                                &Response::TerminalOutput {
+                                    bytes: attachment.snapshot.to_vec().into(),
+                                },
+                            )
+                            .await
+                            .is_err()
+                        {
+                            return;
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
+                },
+                changed = attachment.exited.changed() => {
+                    if changed.is_err() {
+                        return;
+                    }
+                }
+                incoming = connection.recv() => {
+                    let Ok(Some(frame)) = incoming else {
+                        return;
+                    };
+                    let request = match serde_json::from_slice::<Request>(&frame) {
+                        Ok(request) => request,
+                        Err(error) => {
+                            if write(connection, &refuse(&error.to_string())).await.is_err() {
+                                return;
+                            }
+                            continue;
+                        }
+                    };
+                    let Some(control) = control.as_ref() else {
+                        if write(
+                            connection,
+                            &refuse("this viewer is read-only while another terminal owns input"),
+                        )
+                        .await
+                        .is_err()
+                        {
+                            return;
+                        }
+                        continue;
+                    };
+                    let result = match request {
+                        Request::TerminalInput { bytes } => composed
+                            .runtime_terminals
+                            .write_local(composed, control, bytes.as_ref())
+                            .await,
+                        Request::TerminalResize { cols, rows } => composed
+                            .runtime_terminals
+                            .resize_local(composed, control, cols, rows)
+                            .await,
+                        _ => {
+                            if write(
+                                connection,
+                                &refuse("a brokered terminal view accepts only input and resize frames"),
+                            )
+                            .await
+                            .is_err()
+                            {
+                                return;
+                            }
+                            continue;
+                        }
+                    };
+                    if let Err(error) = result
+                        && write(connection, &refuse(error.message)).await.is_err()
+                    {
+                        return;
+                    }
+                }
+            }
+        }
+    };
+    relayed.await;
 }
 
 /// Relay coalesced current session snapshots, each projected to what this caller may see.

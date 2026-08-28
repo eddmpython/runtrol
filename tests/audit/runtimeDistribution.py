@@ -45,6 +45,8 @@ def sourceProblems(tool: str, workflow: str) -> list[str]:
         "Runtime locator exists",
         "runtimeOwnedStateRemoved",
         "providerStateTouched",
+        "RUNTROL_PROVIDER_SHIM_PATH",
+        "Provider command shim installation failed",
         "sdkArtifacts",
         "pythonArtifacts",
         "PYTHON_WHEEL_GLOBS",
@@ -142,6 +144,7 @@ def selftest() -> int:
             "GitHub Sigstore artifact attestation SHA256SUMS ZIP_TIME",
             "os.replace(temporary, output) runtime.install.json Runtime locator exists",
             "runtimeOwnedStateRemoved providerStateTouched",
+            "RUNTROL_PROVIDER_SHIM_PATH Provider command shim installation failed",
             "sdkArtifacts pythonArtifacts PYTHON_WHEEL_GLOBS",
         )
     )
@@ -240,8 +243,7 @@ def installedJourney(package, scratch: Path) -> None:
         target = "linux-x64"
         executable = "runtrol"
     binary = scratch / executable
-    binary.write_bytes((b"MZ" if sys.platform == "win32" else b"\x7fELF") + b"i" * (1024 * 1024))
-    binary.chmod(0o755)
+    buildInstallerFixture(binary, scratch)
     archive = scratch / package.archiveName(target)
     package.writeArchive(target, binary, archive)
     unpacked = scratch / "unpacked"
@@ -266,6 +268,8 @@ def installedJourney(package, scratch: Path) -> None:
         installed = local / "RuntrolRuntime" / "versions" / package.workspaceVersion() / executable
         if installed.read_bytes() != binary.read_bytes():
             raise RuntimeError("the Windows installer changed Runtime bytes")
+        if not (local / "RuntrolRuntime" / "shims" / ".fixture-shims").is_file():
+            raise RuntimeError("the Windows installer did not invoke Runtime shim discovery")
         locator = local / "runtrol" / "runtime.locator.json"
         locator.write_text("{}", encoding="utf-8")
         runExpectFailure(
@@ -315,6 +319,8 @@ def installedJourney(package, scratch: Path) -> None:
     installed = installRoot / "versions" / package.workspaceVersion() / executable
     if installed.read_bytes() != binary.read_bytes():
         raise RuntimeError("the Unix installer changed Runtime bytes")
+    if not (installRoot / "shims" / ".fixture-shims").is_file():
+        raise RuntimeError("the Unix installer did not invoke Runtime shim discovery")
     expectedState = home / "Library" / "Application Support" / "runtrol" if sys.platform == "darwin" else stateRoot / "runtrol"
     locator = expectedState / "runtime.locator.json"
     locator.write_text("{}", encoding="utf-8")
@@ -326,6 +332,52 @@ def installedJourney(package, scratch: Path) -> None:
     if installRoot.exists() or expectedState.exists() or (binRoot / "runtrol").exists():
         raise RuntimeError("the Unix uninstaller left Runtrol-owned state")
     verifyUninstallResult(result)
+
+
+def buildInstallerFixture(binary: Path, scratch: Path) -> None:
+    """Compile an executable that proves the generated installer invokes ``runtrol shims``."""
+    compiler = shutil.which("rustc")
+    if compiler is None:
+        raise RuntimeError("runtimeDistribution needs rustc for its isolated installer fixture")
+    source = scratch / "installer-fixture.rs"
+    source.write_text(
+        r'''
+fn main() {
+    let mut arguments = std::env::args_os().skip(1);
+    if arguments.next().as_deref() != Some(std::ffi::OsStr::new("shims")) {
+        std::process::exit(2);
+    }
+    let Some(directory) = arguments.next() else {
+        std::process::exit(2);
+    };
+    let directory = std::path::PathBuf::from(directory);
+    if std::fs::create_dir_all(&directory).is_err()
+        || std::fs::write(directory.join(".fixture-shims"), b"invoked").is_err()
+    {
+        std::process::exit(2);
+    }
+}
+''',
+        encoding="utf-8",
+    )
+    completed = subprocess.run(
+        [compiler, str(source), "-o", str(binary)],
+        check=False,
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=30,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError(f"cannot compile the installer fixture: {completed.stderr.strip()}")
+    minimum = 1024 * 1024
+    size = binary.stat().st_size
+    if size < minimum:
+        with binary.open("ab") as executable:
+            executable.write(b"\0" * (minimum - size))
+    binary.chmod(0o755)
 
 
 def runChecked(command: list[str], environment: dict[str, str]) -> str:

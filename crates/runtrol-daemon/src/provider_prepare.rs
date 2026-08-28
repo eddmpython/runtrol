@@ -49,6 +49,22 @@ pub(crate) async fn prepared_driver(
     composed: &Composed,
     id: ProviderId,
 ) -> Result<PreparedDriver, ProviderPreparationError> {
+    prepare_driver(composed, id, false).await
+}
+
+/// Prepare a driver while retaining the exact executable for an immediate terminal launch.
+pub(crate) async fn prepared_terminal_driver(
+    composed: &Composed,
+    id: ProviderId,
+) -> Result<PreparedDriver, ProviderPreparationError> {
+    prepare_driver(composed, id, true).await
+}
+
+async fn prepare_driver(
+    composed: &Composed,
+    id: ProviderId,
+    retain_terminal_program: bool,
+) -> Result<PreparedDriver, ProviderPreparationError> {
     let provider = id.as_str();
     let Some(declared) = composed.registry.get(id) else {
         return Err(ProviderPreparationError::new(format!(
@@ -112,7 +128,7 @@ pub(crate) async fn prepared_driver(
     let encoded_facts = serde_json::to_vec(&probed.bin)
         .map_err(|error| ProviderPreparationError::new(error.to_string()))?;
     let binary_identity: [u8; 32] = Sha256::digest(encoded_facts).into();
-    let terminal_program = program.clone();
+    let terminal_program = retain_terminal_program.then(|| program.clone());
     Ok(PreparedDriver {
         driver: make(&DriverContext {
             provider: id,
@@ -126,7 +142,7 @@ pub(crate) async fn prepared_driver(
             contained_by: Arc::clone(&composed.containment),
         }),
         binary_identity,
-        terminal_program: Some(terminal_program),
+        terminal_program,
     })
 }
 

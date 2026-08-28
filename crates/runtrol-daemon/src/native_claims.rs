@@ -244,6 +244,86 @@ impl NativeLiveClaimRegistry {
         }
     }
 
+    /// Bind the provider identity minted after an unnamed terminal process started.
+    ///
+    /// The same conflict scan as a native resume runs before the local claim changes, so a late provider roster
+    /// observation cannot create a second owner for a conversation already claimed elsewhere.
+    pub(crate) fn bind_terminal_native(
+        &self,
+        terminal: TerminalId,
+        provider_id: &str,
+        native_session_id: &str,
+        workspace: &str,
+    ) -> Result<bool, TerminalClaimError> {
+        let mut state = self.state.write().map_err(|_| TerminalClaimError::State)?;
+        let existing = state
+            .terminals
+            .get(&terminal)
+            .cloned()
+            .ok_or(TerminalClaimError::State)?;
+        if existing.provider_id.as_ref() != provider_id || existing.workspace.as_ref() != workspace
+        {
+            return Err(TerminalClaimError::State);
+        }
+        if existing.native_session_id.as_deref() == Some(native_session_id) {
+            return Ok(false);
+        }
+        if existing.native_session_id.is_some() {
+            return Err(TerminalClaimError::State);
+        }
+        for claim in state
+            .structured
+            .values()
+            .chain(state.pending_terminals.values())
+            .chain(
+                state
+                    .terminals
+                    .iter()
+                    .filter(|(id, _)| **id != terminal)
+                    .map(|(_, claim)| claim),
+            )
+            .chain(state.remote.values().flatten())
+        {
+            if let Some(error) =
+                claim_conflict(provider_id, Some(native_session_id), workspace, claim)
+            {
+                return Err(error);
+            }
+        }
+        let claim = state
+            .terminals
+            .get_mut(&terminal)
+            .ok_or(TerminalClaimError::State)?;
+        claim.native_session_id = Some(native_session_id.into());
+        Ok(true)
+    }
+
+    /// Whether a live process claim makes one provider-native mutation unsafe.
+    ///
+    /// An exact native identity blocks itself. A same-provider claim whose identity has not been minted yet blocks
+    /// mutations in its workspace conservatively, because deleting underneath that original process would violate
+    /// the non-destructive ownership boundary before the provider roster can bind it.
+    pub(crate) fn blocks_native_mutation(
+        &self,
+        provider_id: &str,
+        native_session_id: &str,
+        workspace: &str,
+    ) -> Result<bool, TerminalClaimError> {
+        let state = self.state.read().map_err(|_| TerminalClaimError::State)?;
+        Ok(state
+            .structured
+            .values()
+            .chain(state.pending_terminals.values())
+            .chain(state.terminals.values())
+            .chain(state.remote.values().flatten())
+            .any(|claim| {
+                claim.provider_id.as_ref() == provider_id
+                    && (claim.native_session_id.as_deref() == Some(native_session_id)
+                        || (claim.native_session_id.is_none()
+                            && claim.workspace.as_ref() == workspace))
+            }))
+    }
+
     /// Replace one peer generation's complete inherited claim set.
     pub(crate) fn replace_remote(&self, generation: &str, claims: Vec<GenerationLiveClaimLine>) {
         if let Ok(mut state) = self.state.write() {
@@ -416,6 +496,97 @@ mod tests {
             .expect("fresh structured claim");
         assert!(matches!(terminal, TerminalClaimAdmission::Reserved(_)));
         structured.commit();
+    }
+
+    #[test]
+    fn a_provider_roster_can_bind_an_unresolved_terminal_once() {
+        let registry = NativeLiveClaimRegistry::default();
+        let terminal_id = TerminalId::now();
+        let TerminalClaimAdmission::Reserved(terminal) = registry
+            .reserve_terminal(terminal_id, "example", None, "/work")
+            .expect("fresh terminal claim")
+        else {
+            panic!("fresh terminal unexpectedly joined");
+        };
+        terminal.commit().expect("committed terminal claim");
+
+        assert!(
+            registry
+                .bind_terminal_native(terminal_id, "example", "native", "/work")
+                .expect("provider identity binds")
+        );
+        assert!(
+            !registry
+                .bind_terminal_native(terminal_id, "example", "native", "/work")
+                .expect("the same binding is idempotent")
+        );
+        let claims = registry.snapshot_except(None);
+        assert_eq!(
+            claims
+                .first()
+                .and_then(|claim| claim.native_session_id.as_deref()),
+            Some("native")
+        );
+    }
+
+    #[test]
+    fn a_late_identity_binding_cannot_take_an_existing_native_claim() {
+        let registry = NativeLiveClaimRegistry::default();
+        registry
+            .reserve_structured(SessionId::now(), "example", Some("native"), "/work")
+            .expect("structured claim")
+            .commit();
+        let terminal_id = TerminalId::now();
+        let TerminalClaimAdmission::Reserved(terminal) = registry
+            .reserve_terminal(terminal_id, "example", None, "/work")
+            .expect("fresh unresolved terminal claim")
+        else {
+            panic!("fresh terminal unexpectedly joined");
+        };
+        terminal.commit().expect("committed terminal claim");
+
+        assert!(matches!(
+            registry.bind_terminal_native(terminal_id, "example", "native", "/work"),
+            Err(TerminalClaimError::StructuredBusy)
+        ));
+    }
+
+    #[test]
+    fn live_and_identity_pending_claims_block_native_mutation() {
+        let registry = NativeLiveClaimRegistry::default();
+        registry
+            .reserve_structured(SessionId::now(), "example", Some("exact"), "/one")
+            .expect("structured claim")
+            .commit();
+        let terminal_id = TerminalId::now();
+        let TerminalClaimAdmission::Reserved(terminal) = registry
+            .reserve_terminal(terminal_id, "example", None, "/two")
+            .expect("identity-pending terminal")
+        else {
+            panic!("fresh terminal unexpectedly joined");
+        };
+        terminal.commit().expect("committed terminal claim");
+
+        assert!(
+            registry
+                .blocks_native_mutation("example", "exact", "/elsewhere")
+                .expect("registry answers")
+        );
+        assert!(
+            registry
+                .blocks_native_mutation("example", "another", "/two")
+                .expect("registry answers")
+        );
+        assert!(
+            !registry
+                .blocks_native_mutation("example", "another", "/three")
+                .expect("registry answers")
+        );
+        assert!(
+            !registry
+                .blocks_native_mutation("other", "exact", "/one")
+                .expect("registry answers")
+        );
     }
 
     #[test]

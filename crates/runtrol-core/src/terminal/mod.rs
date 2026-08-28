@@ -38,21 +38,31 @@ const EXIT_POLL: Duration = Duration::from_millis(100);
 /// How long after the exit the terminal is kept so its last frame can drain (measured on Windows: the
 /// console host flushes a beat after the client ends, and releasing on the exit itself loses that frame).
 const EXIT_SETTLE: Duration = Duration::from_millis(250);
-/// The largest screen a viewer may ask for. The screen model costs about 36 bytes a cell (measured), so this
-/// bounds one terminal's screen at roughly 3.5 MiB; a viewer naming 65535 by 65535 would otherwise ask for
-/// 150 GiB and end the daemon. No real viewer is wider than this.
+/// The largest screen width a viewer may ask for.
 const MAX_COLS: u16 = 500;
-/// As above, for rows.
+/// The largest screen height before the total-cell ceiling is applied.
 const MAX_ROWS: u16 = 200;
+/// Maximum cells in one shared screen model.
+///
+/// The parser keeps a primary and a lazily allocated alternate grid. Both grids, both bounded chunk queues, and
+/// their slot metadata are included in [`MAX_SHARED_TERMINAL_STATE_BYTES`].
+const MAX_CELLS: u32 = 25_000;
+
+/// Maximum steady heap state owned by one central terminal, excluding the provider process itself.
+///
+/// This is a release contract, not a description. The structural test below accounts for both screen grids, the
+/// reader queue, and the viewer fan-out at their simultaneous maxima. A dependency layout change that no longer
+/// fits must reduce another bound instead of silently raising this one.
+pub const MAX_SHARED_TERMINAL_STATE_BYTES: usize = 3 * 1024 * 1024;
 
 /// A viewer's size, made safe: never zero in either direction (the screen model panics on an empty
 /// screen) and never larger than [`MAX_COLS`] by [`MAX_ROWS`].
 #[must_use]
 pub fn bounded_size(size: PtySize) -> PtySize {
-    PtySize {
-        cols: size.cols.clamp(2, MAX_COLS),
-        rows: size.rows.clamp(1, MAX_ROWS),
-    }
+    let cols = size.cols.clamp(2, MAX_COLS);
+    let rows = size.rows.clamp(1, MAX_ROWS);
+    let rows = rows.min(u16::try_from(MAX_CELLS / u32::from(cols)).unwrap_or(1));
+    PtySize { cols, rows }
 }
 
 /// Everything a terminal is opened with. The provider's manifest supplies the arguments and environment.
@@ -419,7 +429,7 @@ mod tests {
             }),
             PtySize {
                 cols: MAX_COLS,
-                rows: MAX_ROWS
+                rows: 50
             }
         );
         assert_eq!(
@@ -431,6 +441,48 @@ mod tests {
                 cols: 120,
                 rows: 40
             }
+        );
+        assert!(
+            u32::from(
+                bounded_size(PtySize {
+                    cols: MAX_COLS,
+                    rows: MAX_ROWS,
+                })
+                .cols
+            ) * u32::from(
+                bounded_size(PtySize {
+                    cols: MAX_COLS,
+                    rows: MAX_ROWS,
+                })
+                .rows
+            ) <= MAX_CELLS
+        );
+    }
+
+    #[test]
+    fn shared_terminal_state_has_a_hard_memory_budget() {
+        const SCREEN_GRIDS: usize = 2;
+        const CHUNK_QUEUES: usize = 2;
+        const MAX_CELL_BYTES: usize = 40;
+
+        let cell_bytes = std::mem::size_of::<vt100::Cell>();
+        assert!(
+            cell_bytes <= MAX_CELL_BYTES,
+            "vt100 cell grew to {cell_bytes} bytes; reduce the screen bound or remeasure the contract"
+        );
+        let screen_cells = usize::try_from(MAX_CELLS).expect("cell ceiling fits usize")
+            * cell_bytes
+            * SCREEN_GRIDS;
+        let screen_rows =
+            usize::from(MAX_ROWS) * std::mem::size_of::<Vec<vt100::Cell>>() * SCREEN_GRIDS;
+        let chunk_payloads = RING_CHUNKS * CHUNK_BYTES * CHUNK_QUEUES;
+        let chunk_slots = RING_CHUNKS * std::mem::size_of::<Bytes>() * CHUNK_QUEUES;
+        let fixed_state = std::mem::size_of::<State>() + CHUNK_BYTES;
+        let structural_maximum =
+            screen_cells + screen_rows + chunk_payloads + chunk_slots + fixed_state;
+        assert!(
+            structural_maximum <= MAX_SHARED_TERMINAL_STATE_BYTES,
+            "central terminal state needs {structural_maximum} bytes, over the {MAX_SHARED_TERMINAL_STATE_BYTES} byte contract"
         );
     }
 
@@ -496,5 +548,84 @@ mod tests {
             "the late viewer's snapshot carries the screen: {snapshot:?}"
         );
         assert!(snapshot.ends_with(std::str::from_utf8(mouse::VIEWER_MOUSE_ON).expect("ascii")));
+    }
+
+    #[tokio::test]
+    async fn two_viewers_write_to_the_same_hosted_process() {
+        let (shell, arguments, line_end) = if cfg!(windows) {
+            (
+                "cmd",
+                vec![
+                    "/q".to_owned(),
+                    "/d".to_owned(),
+                    "/v:on".to_owned(),
+                    "/c".to_owned(),
+                    "set /p first=& set /p second=& echo !first!-!second!".to_owned(),
+                ],
+                "\r\n",
+            )
+        } else {
+            (
+                "sh",
+                vec![
+                    "-c".to_owned(),
+                    "IFS= read -r first; IFS= read -r second; printf '%s-%s\\n' \"$first\" \"$second\""
+                        .to_owned(),
+                ],
+                "\n",
+            )
+        };
+        let program = runtrol_childproc::resolve(shell).expect("the platform shell resolves");
+        let cwd = AbsPath::canonicalize(std::env::temp_dir().to_str().expect("utf-8 temp dir"))
+            .expect("the temp dir is absolute");
+        let first_view = Terminal::open(&TerminalLaunch {
+            program: &program,
+            arguments,
+            cwd: &cwd,
+            env: Vec::new(),
+            env_unset: Vec::new(),
+            size: PtySize { cols: 80, rows: 24 },
+        })
+        .expect("the shell opens on a hosted terminal");
+        let second_view = first_view.clone();
+        let mut attachment = first_view.attach().await;
+
+        first_view
+            .input(format!("first{line_end}").as_bytes())
+            .await
+            .expect("the first viewer writes");
+        second_view
+            .input(format!("second{line_end}").as_bytes())
+            .await
+            .expect("the second viewer writes");
+
+        let mut output = Vec::new();
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                tokio::select! {
+                    received = attachment.live.recv() => {
+                        if let Ok(chunk) = received {
+                            output.extend_from_slice(&chunk);
+                            if String::from_utf8_lossy(&output).contains("first-second") {
+                                break;
+                            }
+                        }
+                    }
+                    changed = attachment.exited.changed() => {
+                        changed.expect("the exit channel lives");
+                        if attachment.exited.borrow().is_some() {
+                            break;
+                        }
+                    }
+                }
+            }
+        })
+        .await
+        .expect("both inputs are handled within the deadline");
+        assert!(
+            String::from_utf8_lossy(&output).contains("first-second"),
+            "both viewers reached one process: {:?}",
+            String::from_utf8_lossy(&output)
+        );
     }
 }

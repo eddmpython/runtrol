@@ -24,12 +24,13 @@ import type { StudioRuntimeClient } from "./runtimeClient";
 /// a phone) share one screen and one keyboard.
 export class TerminalTabs implements vscode.Disposable {
   private readonly open = new Map<string, vscode.Terminal>();
+  /// The extension PTY behind each tab, which owns the public name-change event for active and inactive tabs.
+  private readonly hosts = new Map<vscode.Terminal, RuntimeTerminal>();
   /// Conversations opened here that no service has described yet, by the tab showing each one.
   private readonly started = new Map<vscode.Terminal, StartedConversation>();
   private nextStarted = 0;
   private readonly closing: vscode.Disposable;
-  private readonly focusing: vscode.Disposable;
-  /// The name this tab is currently showing, so a rename runs once rather than on every focus.
+  /// The name this tab is currently showing, so repeated row snapshots emit no duplicate name change.
   private readonly named = new Map<vscode.Terminal, string>();
 
   constructor(
@@ -59,13 +60,7 @@ export class TerminalTabs implements vscode.Disposable {
       // would leave a conversation on screen that nothing on this machine can open.
       if (this.started.delete(terminal)) this.startedChanged();
       this.named.delete(terminal);
-    });
-    // A tab cannot be renamed through the API, and the editor's own rename command acts on the active terminal.
-    // So the name is corrected the moment a person looks at the tab, which is the only moment it matters and the
-    // only one that steals no focus. A conversation opened before its service named it is called after its
-    // folder until then (operator, 2026-08-28: the service gave it a name and the tab kept the old one).
-    this.focusing = vscode.window.onDidChangeActiveTerminal((terminal) => {
-      if (terminal) void this.correctName(terminal);
+      this.hosts.delete(terminal);
     });
   }
 
@@ -91,12 +86,11 @@ export class TerminalTabs implements vscode.Disposable {
     this.startedChanged();
     // The tab now has a name to wear. Only the active tab can be renamed, and it is the active one whenever
     // the person is sitting in the conversation they just started, which is the whole of this moment.
-    const active = vscode.window.activeTerminal;
-    if (active && moved.includes(active)) void this.correctName(active);
+    for (const terminal of moved) this.correctName(terminal);
   }
 
-  /// Rename the active tab to the conversation's current name, once.
-  private async correctName(terminal: vscode.Terminal): Promise<void> {
+  /// Rename any tab to the conversation's current name through its public pseudoterminal event.
+  private correctName(terminal: vscode.Terminal): void {
     const key = this.keyOf(terminal);
     if (key === null) return;
     const current = this.nameOf(key);
@@ -106,8 +100,10 @@ export class TerminalTabs implements vscode.Disposable {
       this.named.set(terminal, wanted);
       return;
     }
+    const host = this.hosts.get(terminal);
+    if (!host) return;
     this.named.set(terminal, wanted);
-    await vscode.commands.executeCommand("workbench.action.terminal.renameWithArg", { name: wanted });
+    host.setName(wanted);
   }
 
   /// Which conversation a tab is showing, by the key the sidebar uses for it.
@@ -121,8 +117,14 @@ export class TerminalTabs implements vscode.Disposable {
 
   /// Show the conversation's terminal: the tab that already shows it, or a new one beside the active editor.
   show(conversation: Conversation, preserveFocus: boolean): vscode.Terminal {
-    const existing = this.open.get(conversation.key);
+    const existing = this.open.get(conversation.key)
+      ?? (conversation.hostedKey ? this.open.get(conversation.hostedKey) : undefined);
     if (existing) {
+      if (!this.open.has(conversation.key)) {
+        if (conversation.hostedKey) this.open.delete(conversation.hostedKey);
+        this.open.set(conversation.key, existing);
+      }
+      this.correctName(existing);
       existing.show(preserveFocus);
       return existing;
     }
@@ -133,7 +135,7 @@ export class TerminalTabs implements vscode.Disposable {
     });
     // The tab is named for the conversation and coloured for its project. The name answers "which conversation",
     // the colour answers "whose project", and the two together fit in the width a tab actually has.
-    const colour = conversation.projectless ? null : tabColorId(conversation.workspace);
+    const colour = conversation.projectless ? null : tabColorId(conversation.homeWorkspace);
     const terminal = vscode.window.createTerminal({
       name: tabName(conversation.title),
       iconPath: tabIcon(colour, () => this.iconFor(conversation)),
@@ -143,6 +145,7 @@ export class TerminalTabs implements vscode.Disposable {
       isTransient: true,
     });
     this.open.set(conversation.key, terminal);
+    this.hosts.set(terminal, pty);
     terminal.show(preserveFocus);
     return terminal;
   }
@@ -158,6 +161,7 @@ export class TerminalTabs implements vscode.Disposable {
     const pty = new RuntimeTerminal(this.runtime, {
       provider: providerId,
       native: null,
+      hosted: null,
       workspace,
       blocked: null,
     }, () => this.serviceWrote(startedKey), async () => null);
@@ -178,6 +182,7 @@ export class TerminalTabs implements vscode.Disposable {
       title: name,
       startedAtMs: Date.now(),
     });
+    this.hosts.set(terminal, pty);
     this.startedChanged();
     terminal.show(false);
     return terminal;
@@ -191,6 +196,25 @@ export class TerminalTabs implements vscode.Disposable {
   /// The conversations this window opened that no service has described yet.
   startedConversations(): StartedConversation[] {
     return [...this.started.values()];
+  }
+
+  /// Move tabs opened from an identity-pending hosted row onto the provider's stable conversation key.
+  ///
+  /// The terminal index is published before the provider store has a title. When that title arrives the row changes
+  /// identity, but the PTY does not: this rekeys the existing tab instead of opening a second viewer.
+  reconcileHosted(rows: readonly Conversation[]): void {
+    for (const row of rows) {
+      let terminal = this.open.get(row.key);
+      if (!terminal && row.hostedKey && row.hostedKey !== row.key) {
+        terminal = this.open.get(row.hostedKey);
+      }
+      if (!terminal) continue;
+      if (!this.open.has(row.key)) {
+        if (row.hostedKey) this.open.delete(row.hostedKey);
+        this.open.set(row.key, terminal);
+      }
+      this.correctName(terminal);
+    }
   }
 
   /// Spread the open conversation tabs over editor groups: each tab after the first moves to a group of
@@ -209,15 +233,16 @@ export class TerminalTabs implements vscode.Disposable {
 
   dispose(): void {
     this.closing.dispose();
-    this.focusing.dispose();
     for (const terminal of this.open.values()) terminal.dispose();
     this.open.clear();
+    this.hosts.clear();
   }
 }
 
 type Target = {
   provider: string;
   native: { nativeSessionId: string; adoptionToken: string } | null;
+  hosted: { runtimeGeneration: string; terminalId: string } | null;
   workspace: string;
   blocked: string | null;
 };
@@ -232,8 +257,14 @@ function targetOf(conversation: Conversation): Target {
   return {
     provider: conversation.providerId,
     native,
+    hosted: conversation.hostedTerminal
+      ? {
+          runtimeGeneration: conversation.hostedTerminal.runtimeGeneration,
+          terminalId: conversation.hostedTerminal.terminalId,
+        }
+      : null,
     workspace: conversation.workspace,
-    blocked: conversation.session?.nativeSessionId && !native
+    blocked: !conversation.hostedTerminal && conversation.session?.nativeSessionId && !native
       ? "This conversation has no current provider resume proof for the public Runtime terminal."
       : null,
   };
@@ -260,23 +291,23 @@ function tabIcon(colour: string | null, service: () => vscode.ThemeIcon | vscode
 
 /// Whether a refusal is the control lease being gone rather than the action being wrong.
 ///
-/// Named by the Runtime, so the word is matched rather than guessed at. A lease can end by expiring or by
-/// another window taking control, and both are answered the same way: ask for control again.
+/// Named by the Runtime, so the word is matched rather than guessed at. Leases are independent per view, but this
+/// view can still hold an expired generation or race its own reconnect. Both are answered by asking again.
 function leaseLost(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return message.includes("leaseExpired")
     || message.includes("the terminal control lease expired or was released")
-    // Two windows of one profile share an integration, so they share the lease: whichever renews it last
-    // leaves the other holding a stale generation, and the Runtime names that `controlConflict`. Asking again
-    // is how this window takes control back, which is the same answer as an expiry.
+    // A reconnect or overlapping mutation in this same view may leave an older lease generation behind.
     || message.includes("controlConflict");
 }
 
 class RuntimeTerminal implements vscode.Pseudoterminal {
   private readonly writeEmitter = new vscode.EventEmitter<string>();
   private readonly closeEmitter = new vscode.EventEmitter<number | void>();
+  private readonly nameEmitter = new vscode.EventEmitter<string>();
   readonly onDidWrite = this.writeEmitter.event;
   readonly onDidClose = this.closeEmitter.event;
+  readonly onDidChangeName = this.nameEmitter.event;
   private view: TerminalView | null = null;
   private lease: TerminalControlLease | null = null;
   private decoder = new TextDecoder("utf-8");
@@ -314,6 +345,11 @@ class RuntimeTerminal implements vscode.Pseudoterminal {
 
   close(): void {
     this.detach(true);
+  }
+
+  /// Change the VS Code tab name without focusing it or replacing this view.
+  setName(name: string): void {
+    if (!this.closed) this.nameEmitter.fire(name);
   }
 
   handleInput(data: string): void {
@@ -432,6 +468,12 @@ class RuntimeTerminal implements vscode.Pseudoterminal {
   /// Read the view until the service ends. A transport break reattaches only to the exact recorded generation and
   /// starts again from its replacement screen snapshot. It never repeats terminal input or redirects the identity.
   private openOnce(geometry: { columns: number; rows: number }): Promise<TerminalView> {
+    if (this.target.hosted) {
+      return this.runtime.attachTerminal(
+        this.target.hosted.runtimeGeneration,
+        this.target.hosted.terminalId,
+      );
+    }
     return this.runtime.openTerminal({
       requestId: newMutationRequestId(),
       providerId: this.target.provider,
@@ -506,7 +548,7 @@ class RuntimeTerminal implements vscode.Pseudoterminal {
         // The lease lives thirty seconds and is renewed when something is sent, so a conversation nobody typed
         // into for longer answers the next keystroke with `leaseExpired`. That is recoverable and used to reach
         // the person as a red line in their conversation instead (operator, 2026-08-28, with a picture). Another
-        // window may also have taken control, and asking again is how this window takes it back.
+        // reconnect in this view may also have replaced its generation, and asking again is the exact recovery.
         if (!leaseLost(error)) throw error;
         this.lease = null;
         await action(view, await this.ensureControl(view));

@@ -8,6 +8,7 @@ import type {
   ProviderLine,
   ProviderUsageGauge,
   SessionLine,
+  TerminalDescriptor,
   WatchCursor,
 } from "./runtimeTypes";
 import { NO_ACTIVITY, type SessionActivity } from "./sessionActivity";
@@ -75,6 +76,10 @@ export class RuntimeState implements vscode.Disposable {
   private memoryByNative: ReadonlyMap<string, number> = new Map();
   /// Conversations the service is writing to right now that Runtrol does not host, by native identity.
   private activeNative: ReadonlySet<string> = new Set();
+  /// Conversations owned by a provider process that Runtrol observed but did not create or attach.
+  private observedNative: ReadonlySet<string> = new Set();
+  /// Daemon-owned terminals delivered by the structural terminal-index watch.
+  private terminalRows: readonly TerminalDescriptor[] = [];
   private remember: ((catalogues: readonly NativeChatCatalogue[]) => void) | null = null;
   private rememberUsage: ((usage: readonly ProviderUsageGauge[]) => void) | null = null;
 
@@ -160,6 +165,8 @@ export class RuntimeState implements vscode.Disposable {
       this.started,
       new Set(this.streaming.keys()),
       this.activeNative,
+      this.observedNative,
+      this.terminalRows,
     );
     return this.conversationRows;
   }
@@ -213,6 +220,26 @@ export class RuntimeState implements vscode.Disposable {
   setNativeActivity(active: ReadonlySet<string>): void {
     if (sameMembers(active, this.activeNative)) return;
     this.activeNative = active;
+    this.conversationRows = null;
+    this.changedEmitter.fire("rows");
+  }
+
+  /// Replace the cheap provider process roster. These rows are live but not writable until an official attach
+  /// channel exists, so selecting one must never start a duplicate resume process.
+  setObservedNative(live: ReadonlySet<string>): void {
+    if (sameMembers(live, this.observedNative)) return;
+    this.observedNative = live;
+    this.conversationRows = null;
+    this.changedEmitter.fire("rows");
+  }
+
+  /// Replace the hosted terminal registry. Process birth and exit arrive here by push, never by the memory poll.
+  setTerminals(terminals: readonly TerminalDescriptor[]): void {
+    if (
+      terminals.length === this.terminalRows.length
+      && terminals.every((terminal, index) => terminalRowEqual(terminal, this.terminalRows[index]))
+    ) return;
+    this.terminalRows = terminals;
     this.conversationRows = null;
     this.changedEmitter.fire("rows");
   }
@@ -414,4 +441,18 @@ function sameEntries(left: ReadonlyMap<string, number>, right: ReadonlyMap<strin
     if (right.get(key) !== value) return false;
   }
   return true;
+}
+
+function terminalRowEqual(left: TerminalDescriptor, right: TerminalDescriptor | undefined): boolean {
+  return right !== undefined
+    && left.terminalId === right.terminalId
+    && left.terminalGeneration === right.terminalGeneration
+    && left.runtimeGeneration === right.runtimeGeneration
+    && left.providerId === right.providerId
+    && left.nativeSessionId === right.nativeSessionId
+    && left.workspace === right.workspace
+    && left.processState === right.processState
+    && left.openedAtMs === right.openedAtMs
+    && left.geometry.columns === right.geometry.columns
+    && left.geometry.rows === right.geometry.rows;
 }

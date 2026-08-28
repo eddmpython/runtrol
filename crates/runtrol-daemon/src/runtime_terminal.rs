@@ -49,7 +49,7 @@ impl Default for TerminalRuntimeAdapter {
 
 #[derive(Default)]
 struct TerminalAuthorityState {
-    leases: BTreeMap<TerminalId, ActiveLease>,
+    leases: BTreeMap<(TerminalId, String), ActiveLease>,
     mutations: BTreeMap<MutationKey, StoredMutation>,
 }
 
@@ -59,6 +59,25 @@ struct ActiveLease {
     terminal_generation: u64,
     lease_generation: u64,
     expires_at_ms: u64,
+}
+
+/// Connection-bound identity for one local view of a brokered terminal.
+///
+/// Local views do not occupy the public integration lease. The daemon serializes every byte stream at the
+/// shared PTY, so the originating terminal and authenticated Runtime viewers can write to the same process.
+pub(crate) struct LocalTerminalControl {
+    terminal_id: TerminalId,
+    terminal_generation: u64,
+}
+
+impl LocalTerminalControl {
+    /// Bind the first local viewer to the exact process generation it opened.
+    pub(crate) fn for_hosted(hosted: &HostedTerminal) -> Self {
+        Self {
+            terminal_id: hosted.id,
+            terminal_generation: hosted.generation,
+        }
+    }
 }
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -218,7 +237,7 @@ impl TerminalRuntimeAdapter {
         })?;
         let prepared = {
             let _lane = discovering.lane(provider).await.lock_owned().await;
-            crate::provider_prepare::prepared_driver(composed, provider)
+            crate::provider_prepare::prepared_terminal_driver(composed, provider)
                 .await
                 .map_err(|_| {
                     TerminalRuntimeFailure::new(
@@ -323,6 +342,10 @@ impl TerminalRuntimeAdapter {
                         "a draining legacy Runtime generation cannot export native live claims",
                     )
                 }
+                TerminalOpenError::NoRoom { .. } => TerminalRuntimeFailure::new(
+                    RuntimeErrorKind::ResourceExhausted,
+                    "the bounded hosted terminal process table is full",
+                ),
                 TerminalOpenError::Provider(_) => TerminalRuntimeFailure::new(
                     RuntimeErrorKind::ProviderUnavailable,
                     "the provider terminal could not be opened",
@@ -441,21 +464,17 @@ impl TerminalRuntimeAdapter {
     ) -> Result<Option<TerminalControlLease>, TerminalRuntimeFailure> {
         let now = WallMs::now().as_millis();
         let mut state = self.state.lock().await;
-        retire_expired_lease(&mut state, hosted.id, now);
-        if let Some(active) = state.leases.get(&hosted.id) {
-            return if active.owner == owner {
-                Ok(Some(public_lease(hosted.id, active)?))
-            } else {
-                Ok(None)
-            };
-        }
+        prune_expired_leases(&mut state, now);
+        ensure_lease_capacity(&state)?;
         let active = new_lease(owner, hosted.generation)?;
         let public = public_lease(hosted.id, &active)?;
-        state.leases.insert(hosted.id, active);
+        state
+            .leases
+            .insert((hosted.id, active.lease_id.clone()), active);
         Ok(Some(public))
     }
 
-    /// Acquire the one current terminal control lease.
+    /// Acquire this integration's current terminal control lease.
     pub(crate) async fn acquire(
         &self,
         composed: &Composed,
@@ -487,17 +506,14 @@ impl TerminalRuntimeAdapter {
         let mut state = self.state.lock().await;
         let now = WallMs::now().as_millis();
         prune_mutations(&mut state, now);
-        retire_expired_lease(&mut state, terminal_id, now);
-        if state.leases.contains_key(&terminal_id) {
-            return Err(TerminalRuntimeFailure::new(
-                RuntimeErrorKind::ControlConflict,
-                "another integration controls the terminal",
-            ));
-        }
+        prune_expired_leases(&mut state, now);
+        ensure_lease_capacity(&state)?;
         ensure_mutation_capacity(&state)?;
         let active = new_lease(authority.key, hosted.generation)?;
         let public = public_lease(terminal_id, &active)?;
-        state.leases.insert(terminal_id, active);
+        state
+            .leases
+            .insert((terminal_id, active.lease_id.clone()), active);
         state.mutations.insert(
             key,
             StoredMutation {
@@ -571,7 +587,7 @@ impl TerminalRuntimeAdapter {
         prune_mutations(&mut state, now);
         ensure_mutation_capacity(&state)?;
         let _active = current_lease_mut(&mut state, terminal_id, authority.key, params, now)?;
-        state.leases.remove(&terminal_id);
+        state.leases.remove(&(terminal_id, params.lease_id.clone()));
         remember_done(&mut state, key, fingerprint, now);
         Ok(())
     }
@@ -700,9 +716,82 @@ impl TerminalRuntimeAdapter {
             )
         })?;
         remember_done(&mut state, key, fingerprint, now);
-        state.leases.remove(&terminal_id);
+        state
+            .leases
+            .retain(|(leased_terminal, _), _| *leased_terminal != terminal_id);
         drop(state);
         composed.terminals.lock().await.mark_stopping(terminal_id);
+        Ok(())
+    }
+
+    /// Write exact bytes from the local terminal that owns the brokered invocation.
+    pub(crate) async fn write_local(
+        &self,
+        composed: &Composed,
+        control: &LocalTerminalControl,
+        bytes: &[u8],
+    ) -> Result<(), TerminalRuntimeFailure> {
+        if bytes.len() > MAX_TERMINAL_WRITE_BYTES {
+            return Err(TerminalRuntimeFailure::new(
+                RuntimeErrorKind::ResourceExhausted,
+                "terminal input exceeds the public byte limit",
+            ));
+        }
+        let hosted = composed
+            .terminals
+            .lock()
+            .await
+            .hosted(control.terminal_id)
+            .ok_or_else(|| {
+                TerminalRuntimeFailure::new(
+                    RuntimeErrorKind::TerminalGone,
+                    "the brokered terminal has ended",
+                )
+            })?;
+        validate_local_generation(&hosted, control)?;
+        hosted.terminal.input(bytes).await.map_err(|_| {
+            TerminalRuntimeFailure::new(
+                RuntimeErrorKind::OutcomeUnknown,
+                "the brokered terminal input outcome is unknown",
+            )
+        })
+    }
+
+    /// Resize the shared PTY from the local terminal that owns the brokered invocation.
+    pub(crate) async fn resize_local(
+        &self,
+        composed: &Composed,
+        control: &LocalTerminalControl,
+        cols: u16,
+        rows: u16,
+    ) -> Result<(), TerminalRuntimeFailure> {
+        validate_geometry(TerminalGeometry {
+            columns: cols,
+            rows,
+        })?;
+        let hosted = composed
+            .terminals
+            .lock()
+            .await
+            .hosted(control.terminal_id)
+            .ok_or_else(|| {
+                TerminalRuntimeFailure::new(
+                    RuntimeErrorKind::TerminalGone,
+                    "the brokered terminal has ended",
+                )
+            })?;
+        validate_local_generation(&hosted, control)?;
+        hosted
+            .terminal
+            .resize(runtrol_childproc::PtySize { cols, rows })
+            .await
+            .map_err(|_| {
+                TerminalRuntimeFailure::new(
+                    RuntimeErrorKind::OutcomeUnknown,
+                    "the brokered terminal resize outcome is unknown",
+                )
+            })?;
+        composed.terminals.lock().await.publish_geometry_change();
         Ok(())
     }
 
@@ -755,7 +844,11 @@ impl TerminalRuntimeAdapter {
 
     /// Retire all control authority for an ended terminal.
     pub(crate) async fn terminal_ended(&self, terminal_id: TerminalId) {
-        self.state.lock().await.leases.remove(&terminal_id);
+        self.state
+            .lock()
+            .await
+            .leases
+            .retain(|(leased_terminal, _), _| *leased_terminal != terminal_id);
     }
 }
 
@@ -1029,14 +1122,18 @@ fn public_lease(
     })
 }
 
-fn retire_expired_lease(state: &mut TerminalAuthorityState, terminal_id: TerminalId, now: u64) {
-    if state
-        .leases
-        .get(&terminal_id)
-        .is_some_and(|lease| lease.expires_at_ms <= now)
-    {
-        state.leases.remove(&terminal_id);
+fn prune_expired_leases(state: &mut TerminalAuthorityState, now: u64) {
+    state.leases.retain(|_, lease| lease.expires_at_ms > now);
+}
+
+fn ensure_lease_capacity(state: &TerminalAuthorityState) -> Result<(), TerminalRuntimeFailure> {
+    if state.leases.len() >= usize::from(MAX_IDEMPOTENCY_RECORDS) {
+        return Err(TerminalRuntimeFailure::new(
+            RuntimeErrorKind::ResourceExhausted,
+            "the bounded terminal control lease table is full",
+        ));
     }
+    Ok(())
 }
 
 fn current_lease_mut<'a>(
@@ -1054,9 +1151,15 @@ fn current_lease_mut<'a>(
         params.lease_generation,
         now,
     )?;
-    state.leases.get_mut(&terminal_id).ok_or_else(|| {
-        TerminalRuntimeFailure::new(RuntimeErrorKind::LeaseExpired, "the terminal lease expired")
-    })
+    state
+        .leases
+        .get_mut(&(terminal_id, params.lease_id.clone()))
+        .ok_or_else(|| {
+            TerminalRuntimeFailure::new(
+                RuntimeErrorKind::LeaseExpired,
+                "the terminal lease expired",
+            )
+        })
 }
 
 fn validate_lease_fields(
@@ -1067,8 +1170,8 @@ fn validate_lease_fields(
     lease_generation: u64,
     now: u64,
 ) -> Result<(), TerminalRuntimeFailure> {
-    retire_expired_lease(state, terminal_id, now);
-    let Some(active) = state.leases.get(&terminal_id) else {
+    prune_expired_leases(state, now);
+    let Some(active) = state.leases.get(&(terminal_id, lease_id.to_owned())) else {
         return Err(TerminalRuntimeFailure::new(
             RuntimeErrorKind::LeaseExpired,
             "the terminal control lease expired or was released",
@@ -1081,6 +1184,19 @@ fn validate_lease_fields(
         return Err(TerminalRuntimeFailure::new(
             RuntimeErrorKind::ControlConflict,
             "the supplied terminal control lease is not current",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_local_generation(
+    hosted: &HostedTerminal,
+    control: &LocalTerminalControl,
+) -> Result<(), TerminalRuntimeFailure> {
+    if hosted.id != control.terminal_id || hosted.generation != control.terminal_generation {
+        return Err(TerminalRuntimeFailure::new(
+            RuntimeErrorKind::TerminalGone,
+            "the brokered terminal process generation has ended",
         ));
     }
     Ok(())
@@ -1127,5 +1243,30 @@ mod tests {
             &grant,
             &[AppScope::SessionStart, AppScope::SessionOutputRead]
         ));
+    }
+
+    #[test]
+    fn two_views_of_one_integration_hold_independent_writer_leases_for_one_pty() {
+        let terminal = TerminalId::now();
+        let owner = IntegrationKey::from_bytes([1; 16]);
+        let first_lease = new_lease(owner, 7).expect("the first lease is allocated");
+        let second_lease = new_lease(owner, 7).expect("the second lease is allocated");
+        let first_id = first_lease.lease_id.clone();
+        let second_id = second_lease.lease_id.clone();
+        let mut state = TerminalAuthorityState::default();
+        state
+            .leases
+            .insert((terminal, first_id.clone()), first_lease);
+        state
+            .leases
+            .insert((terminal, second_id.clone()), second_lease);
+
+        assert!(validate_lease_fields(&mut state, terminal, owner, &first_id, 1, 0).is_ok());
+        assert!(validate_lease_fields(&mut state, terminal, owner, &second_id, 1, 0).is_ok());
+        assert_eq!(
+            state.leases.len(),
+            2,
+            "both viewers still write to the one PTY"
+        );
     }
 }

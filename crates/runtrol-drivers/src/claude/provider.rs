@@ -235,8 +235,8 @@ impl Provider for ClaudeProvider {
                  flag, so a new choice applies from the next session",
             ),
             // The CLI publishes no delete command, but the driver already reads this store to name conversations
-            // (the catalogue above); deleting is that same contract carried to its end. The conversation is
-            // moved out of the store, reversibly (into `runtrol-deleted`), under the delete scope the Runtime
+            // (the catalogue above); deleting is that same contract carried to its end. The driver permanently
+            // removes the complete measured artifact set and verifies absence under the delete scope the Runtime
             // grants only from the machine. Said available so the surface offers the act that now exists.
             native_session_delete: ProviderCapability::available(
                 ProviderCapabilitySource::DriverContract,
@@ -290,16 +290,44 @@ impl Provider for ClaudeProvider {
             })?
     }
 
+    async fn native_process_activity(
+        &self,
+    ) -> Result<runtrol_provider::NativeProcessActivity, ProviderError> {
+        let roster = self.roster.clone();
+        let provider = self.id;
+        // One small roster scan names both process existence and the busy subset. Keeping this off the reactor
+        // makes the 250 ms observation clock independent of filesystem latency.
+        tokio::task::spawn_blocking(move || roster.activity(provider))
+            .await
+            .map_err(|join| ProviderError::Protocol {
+                provider,
+                doing: "reading which conversations this CLI's live processes own",
+                detail: join.to_string(),
+            })?
+    }
+
     async fn delete_native_session(
         &self,
         deletion: NativeSessionDeletion,
     ) -> Result<(), ProviderError> {
         let store = self.store.clone();
+        let roster = self.roster.clone();
         let provider = self.id;
         let native = deletion.native.as_str().to_owned();
-        // A directory move on disk: blocking work, kept off the reactor so a slow disk cannot stall every other
-        // provider's answer.
-        tokio::task::spawn_blocking(move || store.delete(&native))
+        // Bounded history rewrite and filesystem removal: blocking work, kept off the reactor so a slow disk
+        // cannot stall every other provider's answer.
+        tokio::task::spawn_blocking(move || {
+            if roster
+                .owns_live(provider, &native)
+                .map_err(|error| std::io::Error::other(error.to_string()))?
+            {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::WouldBlock,
+                    "the provider still has this conversation open; close its live process before deleting it",
+                ));
+            }
+            store.delete(&native)
+        })
             .await
             .map_err(|join| ProviderError::Protocol {
                 provider,

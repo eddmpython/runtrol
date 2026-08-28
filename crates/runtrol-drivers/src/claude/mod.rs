@@ -20,6 +20,7 @@
 pub mod agent;
 mod approval;
 pub mod bound;
+mod deletion;
 mod home;
 mod limits;
 pub mod map;
@@ -27,7 +28,6 @@ mod models;
 pub mod provider;
 mod roster;
 mod store;
-mod trash;
 
 pub use agent::ClaudeAgent;
 pub use bound::{BoundFlag, BoundFrame, CONSULT, CONTROL, FLAGS, FRAMES, TERMINAL};

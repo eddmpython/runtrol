@@ -162,7 +162,7 @@ fn read_boot_id() -> Result<[u8; BOOT_ID_BYTES], SpawnError> {
 }
 
 #[cfg(target_os = "linux")]
-fn start_of(pid: u32) -> Result<Option<u64>, SpawnError> {
+pub(crate) fn start_of(pid: u32) -> Result<Option<u64>, SpawnError> {
     let path = format!("/proc/{pid}/stat");
     let text = match std::fs::read_to_string(&path) {
         Ok(text) => text,
@@ -239,7 +239,7 @@ fn bsd_info(pid: u32) -> Result<Option<libc::proc_bsdinfo>, SpawnError> {
 }
 
 #[cfg(target_os = "macos")]
-fn start_of(pid: u32) -> Result<Option<u64>, SpawnError> {
+pub(crate) fn start_of(pid: u32) -> Result<Option<u64>, SpawnError> {
     let Some(info) = bsd_info(pid)? else {
         return Ok(None);
     };

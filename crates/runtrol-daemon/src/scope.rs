@@ -397,6 +397,7 @@ mod tests {
             },
             Request::TerminalOpen {
                 provider: "example".into(),
+                arguments: None,
                 native: Some("n".into()),
                 workspace: "/work".into(),
                 cols: 120,

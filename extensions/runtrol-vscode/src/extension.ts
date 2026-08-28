@@ -24,6 +24,7 @@ import { journeyApi, type JourneyApi } from "./journeyApi";
 import { projectlessRoot } from "./projectlessWorkspace";
 import { ProjectStore } from "./projects";
 import { isBroken } from "./providerHealth";
+import { materializeProviderShims } from "./providerShims";
 import { managePhones, pairPhone, reviewPhonePairings } from "./pairingAdministration";
 import type { RemoteConnection } from "./protocol";
 import { SelectionStore } from "./selectionStore";
@@ -87,6 +88,15 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     () => runtime.warmLocator().then((listed) => listed?.controlEndpoint ?? null),
   );
   const client = new CoreClient(locator);
+  const providerShimDirectory = vscode.Uri.joinPath(
+    context.globalStorageUri,
+    "provider-shims",
+  ).fsPath;
+  // Every integrated terminal opened after activation resolves manifest-declared provider commands through the
+  // transparent bridge. The wrapper removes this leading directory before starting Core, so Core resolves the real
+  // provider executable and never recurses through its own shim.
+  context.environmentVariableCollection.prepend("PATH", `${providerShimDirectory}${path.delimiter}`);
+  context.environmentVariableCollection.replace("RUNTROL_PROVIDER_SHIM_PATH", providerShimDirectory);
   const agentTools = new AgentToolsController(() => locator.runtimeExecutable());
   let initializationStage = "runtime:bootstrap";
   runtime = new StudioRuntimeClient(
@@ -169,7 +179,9 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
   // rebuild that drops the placeholder is the moment the tab can move onto the real one, and it is the same
   // event that repaints the sidebar, so no row can be clicked before its tab has moved.
   context.subscriptions.push(state.onDidChange((change) => {
-    if (change === "rows") terminals.retire(namedPlaceholders(state.conversations, terminals.startedConversations()));
+    if (change !== "rows") return;
+    terminals.retire(namedPlaceholders(state.conversations, terminals.startedConversations()));
+    terminals.reconcileHosted(state.conversations);
   }));
   controller = new Controller(context, client, runtime, state, selection, projectStore, terminals);
   const offerServices = (): readonly { providerId: string; displayName: string; icon: string }[] =>
@@ -598,6 +610,9 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
       // After ready rather than at enrollment, so a window opened onto a not-yet-approved folder catches up on
       // its own activation, which is the same physical act the first enrollment trusted.
       void run(() => rootFollowing.follow());
+      void run(async () => {
+        await materializeProviderShims(await locator.runtimeExecutable(), providerShimDirectory);
+      });
     },
     (error: unknown) => {
       // Activation itself failed. If nothing was ever listed the Core never answered, so say that rather than

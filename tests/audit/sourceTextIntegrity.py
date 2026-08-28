@@ -87,11 +87,21 @@ def trackedSources() -> list[Path]:
         capture_output=True,
         check=True,
     )
+    deleted = subprocess.run(
+        ["git", "ls-files", "-z", "--deleted"],
+        cwd=ROOT,
+        capture_output=True,
+        check=True,
+    )
     names = listed.stdout.decode("utf-8", "surrogateescape").split("\0")
+    deleted_names = frozenset(
+        deleted.stdout.decode("utf-8", "surrogateescape").split("\0")
+    )
     return [
         ROOT / name
         for name in names
         if name
+        and name not in deleted_names
         and Path(name).suffix.lower() in SOURCE_SUFFIXES
         and not any(marker in f"/{name}" for marker in VENDORED)
     ]

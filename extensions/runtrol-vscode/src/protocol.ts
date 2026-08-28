@@ -5,6 +5,7 @@ export type PrivateProviderLine = {
   display_name: string;
   usable: boolean;
   why_not: string | null;
+  terminal_commands?: string[];
 };
 
 export type ProviderUpdateState = "current" | "available" | "observeOnly" | "notInstalled" | "unconfirmed";

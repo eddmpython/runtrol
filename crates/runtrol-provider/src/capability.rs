@@ -95,8 +95,8 @@ pub struct ProviderCapabilities {
     ///
     /// Said up front so a surface offers the act only where it exists. Some CLIs publish a delete command
     /// (codex `thread/delete`, cline `history delete`); for a store a driver already reads to name
-    /// conversations, that same contract removes an entry reversibly (claude). A provider with neither says so
-    /// before anybody clicks.
+    /// conversations, that same contract may permanently remove the exact records (claude). A provider with
+    /// neither says so before anybody clicks.
     pub native_session_delete: ProviderCapability,
     /// A stored provider-native conversation can be archived through the provider's own surface.
     pub native_session_archive: ProviderCapability,

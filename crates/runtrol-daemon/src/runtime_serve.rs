@@ -2232,6 +2232,9 @@ async fn mutate_native_session(
         Ok(workspace) => workspace.path,
         Err(failure) => return inventory_failure(id, failure),
     };
+    if let Some(refusal) = refuse_live_native_claim(&id, composed, provider, &native, &workspace) {
+        return refusal;
+    }
     if let Some(refusal) = refuse_supervised(id.clone(), sessions, &authority, provider, &native) {
         return refusal;
     }
@@ -2304,6 +2307,33 @@ async fn mutate_native_session(
     }
 }
 
+/// A provider process or unresolved launch owns the mutation boundary until it stops.
+fn refuse_live_native_claim(
+    id: &JsonRpcId,
+    composed: &Composed,
+    provider: runtrol_provider::ProviderId,
+    native: &runtrol_provider::NativeSessionId,
+    workspace: &runtrol_provider::AbsPath,
+) -> Option<Answer> {
+    match composed.native_claims.blocks_native_mutation(
+        provider.as_str(),
+        native.as_str(),
+        workspace.as_str(),
+    ) {
+        Ok(false) => None,
+        Ok(true) => Some(Answer::plain(
+            id.clone(),
+            RuntimeErrorKind::NativeConversationBusy,
+            "the provider-native conversation has a live process claim; stop its original session before mutating it",
+        )),
+        Err(_) => Some(Answer::plain(
+            id.clone(),
+            RuntimeErrorKind::RuntimeUnavailable,
+            "the native live-claim registry is unavailable",
+        )),
+    }
+}
+
 /// Refuse to change a conversation Runtime is supervising: the process would answer to a store that moved
 /// under it. Named so the mutation path reads as its three steps rather than carrying the guard inline.
 fn refuse_supervised(
@@ -2363,27 +2393,60 @@ async fn native_activity(
     let walked = tokio::time::timeout(
         Duration::from_millis(crate::serve::MODEL_PREPARATION_BUDGET_MS),
         async {
-            let prepared = {
-                let _lane = discovering.lane(provider).await.lock_owned().await;
-                crate::provider_prepare::prepared_driver(composed, provider).await
-            };
+            let _lane = discovering.lane(provider).await.lock_owned().await;
+            if let Some(activity) = discovering.cached_native_activity(provider).await {
+                return Ok(activity);
+            }
+            let prepared = crate::provider_prepare::prepared_driver(composed, provider).await;
             let prepared = prepared.map_err(|_| ())?;
-            prepared
+            let activity = prepared
                 .driver
-                .active_native_sessions()
+                .native_process_activity()
                 .await
-                .map_err(|_| ())
+                .map_err(|_| ())?;
+            discovering
+                .remember_native_activity(provider, activity.clone())
+                .await;
+            Ok(activity)
         },
     )
     .await;
     match walked {
-        Ok(Ok(active)) => Answer::success(
-            id,
-            &runtrol_runtime_protocol::NativeActivity {
-                provider_id: runtrol_runtime_protocol::ProviderId::new(provider.as_str()),
-                active: active.iter().map(ToString::to_string).collect(),
-            },
-        ),
+        Ok(Ok(activity)) => {
+            // A fresh provider terminal starts before the provider mints its native identity. Its own cheap
+            // process roster is the provider-neutral, content-free proof that binds that identity back to the
+            // exact PTY. Publishing the table change makes every window replace the project placeholder with the
+            // provider title without opening a second process or parsing the screen.
+            let binding = {
+                let mut terminals = composed.terminals.lock().await;
+                activity.processes.iter().try_for_each(|process| {
+                    terminals.bind_native_process(
+                        &composed.native_claims,
+                        provider,
+                        process.pid,
+                        process.native.as_str(),
+                    )?;
+                    Ok::<(), crate::native_claims::TerminalClaimError>(())
+                })
+            };
+            if let Err(error) = binding {
+                return Answer::plain(
+                    id,
+                    RuntimeErrorKind::SessionConflict,
+                    &format!(
+                        "the provider process identity conflicts with a live session claim: {error}"
+                    ),
+                );
+            }
+            Answer::success(
+                id,
+                &runtrol_runtime_protocol::NativeActivity {
+                    provider_id: runtrol_runtime_protocol::ProviderId::new(provider.as_str()),
+                    live: activity.live.iter().map(ToString::to_string).collect(),
+                    active: activity.active.iter().map(ToString::to_string).collect(),
+                },
+            )
+        }
         Ok(Err(())) => Answer::plain(
             id,
             RuntimeErrorKind::ProviderUnavailable,

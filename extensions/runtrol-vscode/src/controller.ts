@@ -1,7 +1,8 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 
-import { PUBLIC_LIMITS, type PublicInputBlock } from "@runtrol/runtime-client";
+import { PUBLIC_LIMITS, type NativeActivity, type PublicInputBlock } from "@runtrol/runtime-client";
+import type { TerminalIndexSnapshot } from "@runtrol/runtime-client";
 import * as vscode from "vscode";
 
 import type { TerminalTabs } from "./terminalTabs";
@@ -24,8 +25,8 @@ import type {
   WorkspaceAccess,
 } from "./runtimeTypes";
 import type { Conversation } from "./conversationList";
-import { attentionCount, nextNeedingYou, projects } from "./conversationList";
-import { conversationDeletion } from "./conversationDeletion";
+import { attentionCount, nativeProcessKey, nextNeedingYou, projects } from "./conversationList";
+import { conversationDeletion, deletionQuestion } from "./conversationDeletion";
 import { archivalQuestion, conversationArchival } from "./conversationArchival";
 import { awaitsVerification, isUsable, unaskedUsable } from "./providerHealth";
 import type { HelpOffer, ServiceTrouble } from "./serviceHelp";
@@ -100,6 +101,10 @@ export class Controller implements vscode.Disposable {
   /// One provider probe at a time. Each spawns a CLI, so the queue is what keeps activation answerable.
   private verificationTail: Promise<void> = Promise.resolve();
   private readonly isolatedWorkspaces: IsolatedWorkspaces;
+  /// Native identity last seen for each pushed hosted terminal, used to refresh a catalogue only on discovery.
+  private hostedTerminalIdentities = new Map<string, string | null>();
+  private nativeActivityByProvider = new Map<string, ReadonlySet<string>>();
+  private nativeActiveByProvider = new Map<string, ReadonlySet<string>>();
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -187,7 +192,11 @@ export class Controller implements vscode.Disposable {
       ?? this.state.sessions.find((session) => session.hot)
       ?? null;
     if (selected) {
-      await this.selectForInitialization(selected);
+      // Restoring a highlight is not permission to start a provider process. In particular a remembered cold
+      // conversation must not turn window activation into an implicit resume, and a hot conversation may belong
+      // to a terminal host outside this window. The terminal index watch paints live ownership; an editor tab opens
+      // only after an explicit row action.
+      this.state.select(selected.sessionId);
     }
     this.startSessionIndexWatch();
     this.startProviderVerification(inventory.providers.providers);
@@ -456,32 +465,6 @@ export class Controller implements vscode.Disposable {
 
   private selectConversation(conversation: Conversation): Promise<void> {
     return this.select(conversation);
-  }
-
-  private selectForInitialization(value: SessionLine): Promise<void> {
-    let applied = false;
-    let resolveApplied: () => void = () => undefined;
-    let rejectApplied: (error: unknown) => void = () => undefined;
-    const ready = new Promise<void>((resolve, reject) => {
-      resolveApplied = resolve;
-      rejectApplied = reject;
-    });
-    const selected = this.selectionTail.then(() => this.selectNow(value, false, () => {
-      applied = true;
-      resolveApplied();
-    }));
-    this.selectionTail = selected.catch(() => undefined);
-    void selected.catch((error: unknown) => {
-      if (!applied) {
-        rejectApplied(error);
-        return;
-      }
-      this.say(
-        `Cannot remember the selected session: ${error instanceof Error ? error.message : String(error)}`,
-        "warning",
-      );
-    });
-    return ready;
   }
 
   private async selectNow(
@@ -1046,19 +1029,13 @@ export class Controller implements vscode.Disposable {
       void vscode.window.showInformationMessage(decision.why);
       return;
     }
-    if (decision.kind === "forgetSupervised") {
-      if (!row.session) return;
-      // A pointer to a conversation the service no longer lists names nothing: forgetting it is the whole
-      // deletion, and a question about it would be a question about nothing. Only an agent working right
-      // now is worth a word first, because forgetting stops it mid-turn.
-      if (row.session.lifecycle === "hotRunning") {
-        await this.close(row.session);
-        return;
-      }
-      await this.closeResolvedSession(row.session, false);
-      void vscode.window.showInformationMessage(`Deleted ${row.title} from Runtrol.`);
-      return;
-    }
+    const question = deletionQuestion(row, decision.serviceName);
+    const choice = await vscode.window.showWarningMessage(
+      question.message,
+      { modal: true, detail: question.detail },
+      question.button,
+    );
+    if (choice !== question.button) return;
     const title = row.title;
     const serviceName = row.serviceName;
     await this.deleteNativeWithoutAsking(row);
@@ -1077,6 +1054,7 @@ export class Controller implements vscode.Disposable {
   async deleteNativeWithoutAsking(row: Conversation): Promise<void> {
     const native = row.native;
     if (!native) throw new Error(`${row.title} has nothing left to delete`);
+    if (row.live) throw new Error(`Stop ${row.title} before permanently deleting it`);
     if (row.session && this.state.sessions.some((session) => session.sessionId === row.session?.sessionId)) {
       await this.closeResolvedSession(row.session, row.session.lifecycle === "hotRunning");
     }
@@ -1218,6 +1196,7 @@ export class Controller implements vscode.Disposable {
     this.indexAbort = abort;
     void this.sessionIndexLoop(abort.signal);
     void this.memoryLoop(abort.signal);
+    void this.nativeActivityLoop(abort.signal);
   }
 
   /// Ask the Runtime every few seconds what each conversation's process holds in memory.
@@ -1247,7 +1226,6 @@ export class Controller implements vscode.Disposable {
           }
         }
         this.state.setMemory(bySession, byNative);
-        await this.pollNativeActivity(signal);
       } catch (error) {
         // Reported nowhere on purpose: the index watch owns the reachability verdict and says so in its own
         // words; a missed memory round changes no row and the next round asks again.
@@ -1302,6 +1280,10 @@ export class Controller implements vscode.Disposable {
             watching,
             (usage) => this.state.replaceUsage(usage.providers),
           ),
+          this.runtime.watchTerminals(
+            (terminals) => this.applyTerminalIndex(terminals),
+            watching,
+          ),
         ]).finally(() => connected.abort());
         retryMs = 250;
       } catch (error) {
@@ -1316,6 +1298,46 @@ export class Controller implements vscode.Disposable {
       await abortableDelay(retryMs, signal);
       retryMs = Math.min(retryMs * 2, 5_000);
     }
+  }
+
+  /// Observe provider-owned processes that began outside a Runtrol surface on a bounded fast clock.
+  ///
+  /// Providers answer from their small live-process roster, not from a conversation catalogue. Brokered processes
+  /// still take the zero-poll terminal index path; this clock exists only for an already external owner that cannot
+  /// publish into the daemon registry itself.
+  private async nativeActivityLoop(signal: AbortSignal): Promise<void> {
+    while (!signal.aborted && !this.disposed) {
+      await abortableDelay(NATIVE_ACTIVITY_POLL_MS, signal);
+      if (signal.aborted || this.state.coreReach !== "reached" || this.nativeDiscoveryPauseDepth > 0) continue;
+      try {
+        await this.pollNativeActivity(signal);
+      } catch (error) {
+        if (signal.aborted) return;
+        void error;
+      }
+    }
+  }
+
+  /// Apply one daemon-owned terminal registry snapshot immediately.
+  ///
+  /// A placeholder row is derived synchronously from this snapshot. Provider catalogue discovery then replaces its
+  /// project fallback with the provider title without delaying the first sidebar update.
+  private applyTerminalIndex(snapshot: TerminalIndexSnapshot): void {
+    this.state.setTerminals(snapshot.terminals);
+    const next = new Map<string, string | null>();
+    const changedProviders = new Set<string>();
+    for (const terminal of snapshot.terminals) {
+      if (terminal.processState !== "running") continue;
+      const key = `${terminal.runtimeGeneration}:${terminal.terminalId}`;
+      const native = terminal.nativeSessionId ?? null;
+      next.set(key, native);
+      if (!this.hostedTerminalIdentities.has(key) || this.hostedTerminalIdentities.get(key) !== native) {
+        changedProviders.add(terminal.providerId);
+      }
+    }
+    this.hostedTerminalIdentities = next;
+    for (const providerId of changedProviders) this.deferNativeDiscovery(providerId, true);
+    if (changedProviders.size > 0) this.scheduleNativeDiscoveries();
   }
 
   private applyListing(
@@ -1407,31 +1429,65 @@ export class Controller implements vscode.Disposable {
     }
   }
 
-  /// Ask each usable service which of its conversations it wrote to a moment ago.
+  /// Ask each usable service which provider-owned processes are live and which are answering.
   ///
   /// The panel can see a turn running in a conversation it hosts, because those bytes pass through it. It
-  /// cannot see one in a conversation started in the person's own terminal, and on a real machine that is most
-  /// of them (measured on the operator's window 2026-08-28: a session was answering and every row read as
-  /// idle). The Runtime answers this by asking the service's own store what it wrote lately, which costs a
-  /// directory walk and opens nothing, so it rides the same slow poll as the memory figures.
+  /// cannot see one in a conversation started outside the transparent broker. Runtime answers this from the
+  /// provider's bounded live-process roster and validates the recorded process identities with the operating
+  /// system. This dedicated 250 ms compatibility clock does not list stored conversations. Newly observed native
+  /// identities trigger one targeted catalogue refresh so the placeholder can acquire the provider's title.
   private async pollNativeActivity(signal: AbortSignal): Promise<void> {
     const providers = this.state.providers.filter(isUsable);
     if (providers.length === 0) {
+      this.nativeActivityByProvider.clear();
+      this.nativeActiveByProvider.clear();
       this.state.setNativeActivity(new Set());
+      this.state.setObservedNative(new Set());
       return;
     }
-    const answers = await Promise.all(providers.map(async (provider) => {
-      // One service that cannot answer must not blank the others: an empty answer is what "nothing running"
-      // looks like, and that is the honest reading of a question this service could not take.
+    const answers = await Promise.all(providers.map(async (
+      provider,
+    ): Promise<readonly [string, NativeActivity]> => {
+      // A transient provider or transport failure is not evidence that an original process exited. Keep that
+      // provider's last bounded observation while every provider that did answer advances independently.
       try {
-        return await this.runtime.nativeActivity(provider.providerId);
+        return [provider.providerId, await this.runtime.nativeActivity(provider.providerId)];
       } catch (error) {
         if (signal.aborted) throw error;
-        return [];
+        return [provider.providerId, {
+          providerId: provider.providerId,
+          live: [...(this.nativeActivityByProvider.get(provider.providerId) ?? [])],
+          active: [...(this.nativeActiveByProvider.get(provider.providerId) ?? [])],
+        }];
       }
     }));
     if (signal.aborted || this.disposed) return;
-    this.state.setNativeActivity(new Set(answers.flat()));
+    const active = new Set<string>();
+    const live = new Set<string>();
+    const next = new Map<string, ReadonlySet<string>>();
+    const nextActive = new Map<string, ReadonlySet<string>>();
+    let discovered = false;
+    for (const [providerId, activity] of answers) {
+      const providerLive = new Set(activity.live ?? activity.active);
+      const providerActive = new Set(activity.active);
+      next.set(providerId, providerLive);
+      nextActive.set(providerId, providerActive);
+      let providerDiscovered = false;
+      for (const nativeId of providerLive) {
+        live.add(nativeProcessKey(providerId, nativeId));
+        if (!this.nativeActivityByProvider.get(providerId)?.has(nativeId)) providerDiscovered = true;
+      }
+      for (const nativeId of providerActive) active.add(nativeProcessKey(providerId, nativeId));
+      if (providerDiscovered) {
+        discovered = true;
+        this.deferNativeDiscovery(providerId, true);
+      }
+    }
+    this.nativeActivityByProvider = next;
+    this.nativeActiveByProvider = nextActive;
+    this.state.setNativeActivity(active);
+    this.state.setObservedNative(live);
+    if (discovered) this.scheduleNativeDiscoveries();
   }
 
   private loadNativeChats(providerId: string, force: boolean): Promise<void> {
@@ -1859,6 +1915,7 @@ function normalizePath(value: string): string {
 }
 
 const MEMORY_POLL_MS = 5_000;
+const NATIVE_ACTIVITY_POLL_MS = 250;
 
 function abortableDelay(milliseconds: number, signal: AbortSignal): Promise<void> {
   if (signal.aborted) {

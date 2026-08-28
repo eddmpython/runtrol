@@ -137,8 +137,15 @@ Verify the archive provenance with `gh attestation verify` and verify unpacked f
 installation.
 
 Run `{install}` from this directory to install the verified version for the current user. Installation does not add a
-system service or require administrator rights. The first explicit Runtime command starts the shared daemon and
-publishes its owner-only locator.
+system service or require administrator rights. It asks the installed Runtime to discover provider command names,
+which starts the shared user daemon if it is not already serving and publishes its owner-only locator. The installer
+then creates provider-neutral command shims from those runtime-discovered manifests. A new shell that puts the shim
+directory before the provider commands makes its original terminal the first viewer of the same daemon-owned PTY
+every Runtrol window can attach to.
+
+An already-running provider process that did not pass through a shim is never killed, migrated, or silently resumed.
+Runtime may observe its provider-owned process identity, but joins its existing byte stream only when the provider or
+terminal host publishes an official attach channel.
 
 Run `{uninstall}` to remove the installed Runtime executable and Runtrol-owned locator, grant, cache, and session
 pointer state. Uninstall refuses while a Runtime locator exists. It never reads or removes provider binaries,
@@ -155,7 +162,8 @@ if ($actual -ne '{executableHash}') {{ throw 'Runtime executable checksum mismat
 $productRoot = Join-Path $env:LOCALAPPDATA 'RuntrolRuntime'
 $versionRoot = Join-Path $productRoot 'versions\\{version}'
 $binRoot = Join-Path $productRoot 'bin'
-New-Item -ItemType Directory -Force -Path $versionRoot,$binRoot | Out-Null
+$shimRoot = Join-Path $productRoot 'shims'
+New-Item -ItemType Directory -Force -Path $versionRoot,$binRoot,$shimRoot | Out-Null
 $installed = Join-Path $versionRoot 'runtrol.exe'
 $temporary = "$installed.new-$PID"
 Copy-Item -LiteralPath $source -Destination $temporary
@@ -177,7 +185,21 @@ $rule = New-Object Security.AccessControl.FileSystemAccessRule($identity,'FullCo
 $acl.SetAccessRule($rule)
 Set-Acl -LiteralPath $recordTemporary -AclObject $acl
 Move-Item -Force -LiteralPath $recordTemporary -Destination $recordPath
-Write-Output "Installed Runtrol Runtime {version}. Add $binRoot to the current-user PATH if it is not already present."
+& $installed shims $shimRoot | Out-Null
+if ($LASTEXITCODE -ne 0) {{ throw 'Provider command shim installation failed' }}
+$profileLocal = [Environment]::GetFolderPath('LocalApplicationData')
+$usesProfileLocal = [IO.Path]::GetFullPath($env:LOCALAPPDATA) -ieq [IO.Path]::GetFullPath($profileLocal)
+if ($usesProfileLocal) {{
+  $userPath = [Environment]::GetEnvironmentVariable('Path','User')
+  if ($null -eq $userPath) {{ $userPath = '' }}
+  $remaining = @($userPath -split ';' | Where-Object {{ $_ -and $_ -ine $shimRoot -and $_ -ine $binRoot }})
+  $nextPath = (@($shimRoot,$binRoot) + $remaining) -join ';'
+  [Environment]::SetEnvironmentVariable('Path',$nextPath,'User')
+  [Environment]::SetEnvironmentVariable('RUNTROL_PROVIDER_SHIM_PATH',$shimRoot,'User')
+  Write-Output "Installed Runtrol Runtime {version}. New terminals route declared provider commands through $shimRoot."
+}} else {{
+  Write-Output "Installed Runtrol Runtime {version} in a redirected local profile. Prepend $shimRoot and $binRoot to PATH for new terminals."
+}}
 """
 
 
@@ -189,6 +211,20 @@ $stateRoot = Join-Path $env:LOCALAPPDATA 'runtrol'
 $locator = Join-Path $stateRoot 'runtime.locator.json'
 if (Test-Path -LiteralPath $locator) { throw 'Runtime locator exists. Review active sessions and integrations, stop Runtime, and remove only a verified stale locator before uninstalling.' }
 if ((Split-Path -Leaf $productRoot) -ne 'RuntrolRuntime' -or (Split-Path -Leaf $stateRoot) -ne 'runtrol') { throw 'Refusing an unexpected uninstall path' }
+$binRoot = Join-Path $productRoot 'bin'
+$shimRoot = Join-Path $productRoot 'shims'
+$profileLocal = [Environment]::GetFolderPath('LocalApplicationData')
+$usesProfileLocal = [IO.Path]::GetFullPath($env:LOCALAPPDATA) -ieq [IO.Path]::GetFullPath($profileLocal)
+if ($usesProfileLocal) {
+  $userPath = [Environment]::GetEnvironmentVariable('Path','User')
+  if ($null -ne $userPath) {
+    $remaining = @($userPath -split ';' | Where-Object { $_ -and $_ -ine $shimRoot -and $_ -ine $binRoot })
+    [Environment]::SetEnvironmentVariable('Path',($remaining -join ';'),'User')
+  }
+  if ([Environment]::GetEnvironmentVariable('RUNTROL_PROVIDER_SHIM_PATH','User') -ieq $shimRoot) {
+    [Environment]::SetEnvironmentVariable('RUNTROL_PROVIDER_SHIM_PATH',$null,'User')
+  }
+}
 if (Test-Path -LiteralPath $productRoot) { Remove-Item -Recurse -Force -LiteralPath $productRoot }
 if (Test-Path -LiteralPath $stateRoot) { Remove-Item -Recurse -Force -LiteralPath $stateRoot }
 $result = [ordered]@{schema=1;status='removed';runtimeOwnedStateRemoved=$true;providerStateTouched=$false} | ConvertTo-Json -Compress
@@ -209,8 +245,9 @@ fi
 [ "$actual" = "{executableHash}" ] || {{ echo 'Runtime executable checksum mismatch' >&2; exit 1; }}
 product_root="${{RUNTROL_INSTALL_ROOT:-$HOME/.local/share/runtrol}}"
 bin_root="${{RUNTROL_BIN_DIR:-$HOME/.local/bin}}"
+shim_root="$product_root/shims"
 version_root="$product_root/versions/{version}"
-mkdir -p "$version_root" "$bin_root"
+mkdir -p "$version_root" "$bin_root" "$shim_root"
 temporary="$version_root/runtrol.new-$$"
 cp "$source_binary" "$temporary"
 chmod 755 "$temporary"
@@ -228,7 +265,10 @@ record_temporary="$state_root/runtime.install.json.new-$$"
 printf '%s' '{{"executable":"'"$version_root/runtrol"'","runtimeVersion":"{version}","schema":1,"sha256":"{executableHash}","target":"{target}"}}' > "$record_temporary"
 chmod 600 "$record_temporary"
 mv -f "$record_temporary" "$state_root/runtime.install.json"
-printf '%s\\n' "Installed Runtrol Runtime {version}. Add $bin_root to PATH if it is not already present."
+"$version_root/runtrol" shims "$shim_root" >/dev/null
+printf '%s\\n' "Installed Runtrol Runtime {version}. Add these lines to your shell startup file:"
+printf '%s\\n' "export RUNTROL_PROVIDER_SHIM_PATH=\"$shim_root\""
+printf '%s\\n' "export PATH=\"$shim_root:$bin_root:\\$PATH\""
 """
 
 

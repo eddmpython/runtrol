@@ -40,7 +40,7 @@
 //! unwraps the launcher and reports honestly that it landed on an interpreter.
 
 use core::fmt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use runtrol_provider::AbsPath;
 
@@ -274,21 +274,89 @@ fn locate(program: &str) -> Result<AbsPath, SpawnError> {
         if resolved.as_std_path().is_dir() {
             return Err(SpawnError::NotExecutable { path: resolved });
         }
+        if crate::shims::is_owned_provider_shim(resolved.as_std_path()) {
+            return Err(SpawnError::NotFound {
+                program: program.to_owned(),
+                searched: "the path as given is a Runtrol provider shim, not a provider executable"
+                    .to_owned(),
+            });
+        }
         return Ok(resolved);
     }
 
     // Looked up the way a shell would. Not written by hand: `PATHEXT` ordering, quoted `PATH` entries, and
     // the executable bit on Unix are each easy to get subtly wrong, and getting them wrong means running
     // the wrong program.
-    let found = which::which(program).map_err(|_| SpawnError::NotFound {
-        program: program.to_owned(),
-        searched: searched_description(),
-    })?;
+    let current = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let mut search = provider_filtered_path();
+    let found = loop {
+        let joined = std::env::join_paths(&search).map_err(|_| SpawnError::NotFound {
+            program: program.to_owned(),
+            searched: "the provider search path contains an invalid entry".to_owned(),
+        })?;
+        let found =
+            which::which_in(program, Some(joined), &current).map_err(|_| SpawnError::NotFound {
+                program: program.to_owned(),
+                searched: searched_description(),
+            })?;
+        if !crate::shims::is_owned_provider_shim(&found) {
+            break found;
+        }
+        let Some(parent) = found.parent() else {
+            return Err(SpawnError::NotFound {
+                program: program.to_owned(),
+                searched: "the only match is a Runtrol provider shim".to_owned(),
+            });
+        };
+        let before = search.len();
+        search.retain(|candidate| !same_search_directory(candidate, parent));
+        if search.len() == before {
+            return Err(SpawnError::NotFound {
+                program: program.to_owned(),
+                searched: "the only match is a Runtrol provider shim".to_owned(),
+            });
+        }
+    };
 
     AbsPath::from_os(&found).map_err(|error| SpawnError::Io {
         path: found.display().to_string(),
         detail: error.to_string(),
     })
+}
+
+/// Current search path with only Runtrol-owned transparent launcher directories removed.
+fn provider_filtered_path() -> Vec<PathBuf> {
+    let excluded = std::env::var_os(crate::shims::PROVIDER_SHIM_PATH_ENV).unwrap_or_default();
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let excluded: Vec<PathBuf> = std::env::split_paths(&excluded).collect();
+    std::env::split_paths(&path)
+        .filter(|candidate| {
+            !excluded
+                .iter()
+                .any(|shim| same_search_directory(candidate, shim))
+        })
+        .collect()
+}
+
+#[cfg(windows)]
+fn same_search_directory(left: &Path, right: &Path) -> bool {
+    left.to_string_lossy()
+        .eq_ignore_ascii_case(&right.to_string_lossy())
+        || match (std::fs::canonicalize(left), std::fs::canonicalize(right)) {
+            (Ok(left), Ok(right)) => left
+                .to_string_lossy()
+                .eq_ignore_ascii_case(&right.to_string_lossy()),
+            (Err(_), _) | (_, Err(_)) => false,
+        }
+}
+
+#[cfg(unix)]
+fn same_search_directory(left: &Path, right: &Path) -> bool {
+    left == right
+        || match (std::fs::canonicalize(left), std::fs::canonicalize(right)) {
+            (Ok(left), Ok(right)) => left == right,
+            (Err(_), _) | (_, Err(_)) => false,
+        }
 }
 
 /// Where a lookup would have looked, for the operator to read.

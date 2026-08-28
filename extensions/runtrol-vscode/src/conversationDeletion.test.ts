@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { canDelete, conversationDeletion } from "./conversationDeletion";
+import { canDelete, conversationDeletion, deletionQuestion } from "./conversationDeletion";
 import type { Conversation } from "./conversationList";
 import type { NativeChatLine, ProviderCapabilities, SessionLine } from "./runtimeTypes";
 
@@ -32,6 +32,8 @@ function row(overrides: Partial<Conversation> = {}): Conversation {
     pinned: false,
     session: null,
     native,
+    hostedTerminal: null,
+    hostedKey: null,
     canOpen: true,
     blocked: null,
     ...overrides,
@@ -55,17 +57,19 @@ function capabilities(
   } as ProviderCapabilities;
 }
 
-test("a supervised provider-owned conversation is still deleted by the provider", () => {
+test("a live provider process must be stopped separately before permanent deletion", () => {
   const session = { sessionId: "s1" } as SessionLine;
-  assert.deepEqual(
-    conversationDeletion(row({ session }), capabilities({ availability: "available" })),
-    { kind: "deleteNative", serviceName: "Codex" },
+  const decision = conversationDeletion(
+    row({ session, live: true }),
+    capabilities({ availability: "available" }),
   );
+  assert.equal(decision.kind, "unsupported");
+  assert.ok(decision.kind === "unsupported" && decision.why.startsWith("Stop "));
 });
 
-test("a supervised conversation without a provider identity only forgets its pointer", () => {
+test("a supervised pointer without a provider identity is closed rather than called deleted", () => {
   const session = { sessionId: "s1" } as SessionLine;
-  assert.deepEqual(conversationDeletion(row({ session, native: null }), null), { kind: "forgetSupervised" });
+  assert.equal(conversationDeletion(row({ session, native: null }), null).kind, "unsupported");
 });
 
 test("a provider-owned conversation is deleted by the provider only where it says it can", () => {
@@ -73,6 +77,13 @@ test("a provider-owned conversation is deleted by the provider only where it say
     conversationDeletion(row(), capabilities({ availability: "available", provenance: "officialProtocol" })),
     { kind: "deleteNative", serviceName: "Codex" },
   );
+});
+
+test("permanent deletion names the conversation, provider, and absence of a recovery copy", () => {
+  const question = deletionQuestion(row(), "Codex");
+  assert.equal(question.message, "Permanently delete Refactor the parser from Codex?");
+  assert.equal(question.button, "Delete permanently");
+  assert.match(question.detail, /no recovery copy/);
 });
 
 test("a provider that publishes no deletion is told apart up front, in its own words", () => {
@@ -88,10 +99,10 @@ test("a provider that publishes no deletion is told apart up front, in its own w
 });
 
 test("canDelete is the one truth the row affordance and the click share", () => {
-  // An orphan pointer: runtrol supervises it, but the service no longer lists it. Deletable (forget the
-  // pointer), and the row must therefore carry the delete affordance. This is the case that regressed.
+  // An orphan pointer has no exact provider record to remove. Closing it is not permanent conversation deletion.
   const session = { sessionId: "s1", lifecycle: "hotIdle" } as SessionLine;
-  assert.equal(canDelete(row({ session, native: null }), null), true);
+  assert.equal(canDelete(row({ session, native: null }), null), false);
+  assert.equal(canDelete(row({ session, live: true }), capabilities({ availability: "available" })), false);
   // A provider-owned conversation is deletable only where the service says it can be.
   assert.equal(canDelete(row(), capabilities({ availability: "available" })), true);
   assert.equal(canDelete(row(), capabilities({ availability: "unsupported", why: "no method" })), false);

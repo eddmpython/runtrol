@@ -109,13 +109,12 @@ provider for every conversation it will name, which four of the five measured CL
 because their own listing treats the working directory as a filter rather than a required argument.
 Each returned row carries its own folder, so grouping stays a fact the provider reported.
 
-`providers/nativeActivity` names which of one provider's conversations have a model answering right
-now, and nothing else: one provider identity in, a list of that provider's own conversation identities
-out. It is separate from the catalogue because a panel asks it on a short clock and a catalogue is not
-cheap (a listing reads every stored conversation's head; naming what is running does not open one).
-How a provider knows is its own business. The measured driver reads the CLI's own record of its running
-processes and asks the operating system whether each is still there, so the answer is about a turn that
-is running rather than about a file that changed lately.
+`providers/nativeActivity` returns the native identities owned by live processes and the subset whose model is
+answering now. It is separate from the catalogue because a panel asks it on a 250 ms compatibility clock and a
+catalogue is not cheap. A listing reads every stored conversation's head; the activity request reads only the
+provider's bounded process roster. The measured driver validates both PID and kernel process-start identity, so a
+stale roster file cannot alias a reused PID. Runtime may use the same content-free binding internally to attach a
+provider-minted native identity to the exact daemon-owned PTY process.
 
 A folderless request is answered on the owner-only local endpoint, where a caller already holds
 machine-wide authority through the private administration wire, and where the managed session index
@@ -154,6 +153,10 @@ Native conversation ownership is one atomic claim shared by structured sessions 
 receives `nativeConversationBusy`, `terminalAlreadyLive`, or `legacyGenerationBusy` as appropriate. Each terminal
 descriptor carries both its Runtime generation and terminal generation. Reconnect attaches only to that exact Runtime
 generation; an unavailable owner returns `terminalGenerationUnavailable` and is never redirected.
+
+A terminal control lease is scoped to one view, integration, terminal generation, and lease generation. Multiple
+authorized views may hold independent leases for the same terminal. Their writes are serialized by the single PTY
+writer. Expiry or release in one view cannot revoke or stale another view's lease.
 
 ## Streams
 

@@ -18,7 +18,7 @@ thiserror = { workspace = true }
 serde_json = { workspace = true }
 # Reaching a daemon waits: for the one that was just started to begin answering, and for a pipe instance to be
 # replaced. `time` is that waiting, and `rt` is what an asynchronous connection needs to be driven at all.
-tokio = { workspace = true, features = ["rt", "time"] }
+tokio = { workspace = true, features = ["io-std", "io-util", "rt", "time"] }
 
 [dev-dependencies]
 # Reaching a daemon is asynchronous, so its tests need somewhere for that to run.

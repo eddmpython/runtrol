@@ -1124,10 +1124,18 @@
     },
     "NativeActivity": {
       "additionalProperties": false,
-      "description": "The conversations of one provider with a model answering in them right now.",
+      "description": "The conversations of one provider owned by live processes and the subset answering right now.",
       "properties": {
         "active": {
           "description": "Native identities answering now, in no particular order.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "live": {
+          "default": [],
+          "description": "Native identities owned by a still-running provider process, in no particular order.",
           "items": {
             "type": "string"
           },

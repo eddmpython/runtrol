@@ -29,7 +29,9 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::PathBuf;
 
-use runtrol_provider::{NativeSessionId, ProviderError, ProviderId};
+use runtrol_provider::{
+    NativeProcessActivity, NativeProcessBinding, NativeSessionId, ProviderError, ProviderId,
+};
 use serde::Deserialize;
 
 use crate::claude::home::{HomeProblem, config_directory};
@@ -45,6 +47,13 @@ const RECORD_EXTENSION: &str = "json";
 /// is not the small record this reads, so it is stepped over rather than parsed.
 const MAX_RECORD_BYTES: u64 = 64 * 1024;
 
+/// Maximum directory entries one compatibility observation will inspect.
+///
+/// A normal provider roster has one small record and one key per live process. Walking an attacker-sized or
+/// corrupted directory four times a second would violate both the CPU and latency contracts, so the driver fails
+/// the observation and Studio retains its last bounded answer instead.
+const MAX_ROSTER_ENTRIES: usize = 1024;
+
 /// What the CLI calls a process of itself while a model is answering in it.
 const BUSY: &str = "busy";
 
@@ -54,6 +63,9 @@ const BUSY: &str = "busy";
 struct Record {
     /// The operating system process that wrote this record.
     pid: u32,
+    /// Kernel-recorded start value, which prevents a stale roster file from aliasing a reused PID.
+    #[serde(default)]
+    proc_start: Option<String>,
     /// The conversation that process is in, named the way the stored conversation is named.
     session_id: String,
     /// What the process is doing. Absent in a record written before the CLI had the field.
@@ -97,6 +109,54 @@ impl ClaudeRoster {
         &self,
         provider: ProviderId,
     ) -> Result<Vec<NativeSessionId>, ProviderError> {
+        Ok(self.activity(provider)?.active)
+    }
+
+    /// Every conversation owned by a live CLI process and the subset answering now, from one bounded scan.
+    pub(super) fn activity(
+        &self,
+        provider: ProviderId,
+    ) -> Result<NativeProcessActivity, ProviderError> {
+        let records = self.live_records(provider)?;
+        // A conversation continued in a second process is named by two records, so each answer is a set.
+        let mut live = BTreeSet::new();
+        let mut active = BTreeSet::new();
+        let mut processes = Vec::new();
+        for entry in records {
+            let Ok(native) = NativeSessionId::new(entry.session_id.as_str()) else {
+                // An invalid provider identity cannot match a catalogue row or become a claim key. Other
+                // valid roster records remain usable, and the provider may replace this record next round.
+                continue;
+            };
+            live.insert(native.clone());
+            if entry.status.as_deref() == Some(BUSY) {
+                active.insert(native.clone());
+            }
+            processes.push(NativeProcessBinding {
+                pid: entry.pid,
+                native,
+            });
+        }
+        Ok(NativeProcessActivity {
+            live: live.into_iter().collect(),
+            active: active.into_iter().collect(),
+            processes,
+        })
+    }
+
+    /// Whether any still-live process of this CLI owns the selected conversation, regardless of turn state.
+    pub(super) fn owns_live(
+        &self,
+        provider: ProviderId,
+        native: &str,
+    ) -> Result<bool, ProviderError> {
+        Ok(self
+            .live_records(provider)?
+            .iter()
+            .any(|entry| entry.session_id == native))
+    }
+
+    fn live_records(&self, provider: ProviderId) -> Result<Vec<Record>, ProviderError> {
         let Ok(sessions) = &self.sessions else {
             return Ok(Vec::new());
         };
@@ -112,9 +172,13 @@ impl ClaudeRoster {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
             Err(error) => return Err(read_failure(error)),
         };
-        // A conversation continued in a second process is named by two records, so the answer is a set.
-        let mut running = BTreeSet::new();
-        for record in records {
+        let mut live = Vec::new();
+        for (index, record) in records.enumerate() {
+            if index >= MAX_ROSTER_ENTRIES {
+                return Err(read_failure(std::io::Error::other(format!(
+                    "the process roster exceeds its {MAX_ROSTER_ENTRIES} entry observation bound"
+                ))));
+            }
             let record = record.map_err(read_failure)?;
             let path = record.path();
             if path.extension().and_then(|extension| extension.to_str()) != Some(RECORD_EXTENSION) {
@@ -129,6 +193,9 @@ impl ClaudeRoster {
                 continue;
             }
             let Ok(text) = fs::read_to_string(&path) else {
+                // The provider replaces and rewrites these small records. A path may disappear or become
+                // temporarily unreadable between metadata and read; the next 250 ms observation retries it.
+                // Treating the entire roster as absent would hide every other live conversation.
                 continue;
             };
             let Ok(entry) = serde_json::from_str::<Record>(&text) else {
@@ -137,18 +204,18 @@ impl ClaudeRoster {
                 // Reporting it would turn the CLI's own write into an error about the panel.
                 continue;
             };
-            if entry.status.as_deref() != Some(BUSY) {
-                continue;
-            }
-            if !runtrol_childproc::alive(entry.pid) {
-                continue;
-            }
-            let Ok(native) = NativeSessionId::new(entry.session_id.as_str()) else {
-                continue;
+            let alive = match entry.proc_start.as_deref() {
+                Some(start) => start
+                    .parse::<u64>()
+                    .is_ok_and(|start| runtrol_childproc::matches_process_start(entry.pid, start)),
+                None => runtrol_childproc::alive(entry.pid),
             };
-            running.insert(native);
+            if !alive {
+                continue;
+            }
+            live.push(entry);
         }
-        Ok(running.into_iter().collect())
+        Ok(live)
     }
 }
 
@@ -176,6 +243,12 @@ mod tests {
     fn record(pid: u32, session: &str, status: &str) -> String {
         format!(
             "{{\"pid\":{pid},\"sessionId\":\"{session}\",\"cwd\":\"/work\",\"status\":\"{status}\",\"updatedAt\":1}}"
+        )
+    }
+
+    fn record_with_start(pid: u32, session: &str, status: &str, start: &str) -> String {
+        format!(
+            "{{\"pid\":{pid},\"procStart\":\"{start}\",\"sessionId\":\"{session}\",\"cwd\":\"/work\",\"status\":\"{status}\",\"updatedAt\":1}}"
         )
     }
 
@@ -225,6 +298,45 @@ mod tests {
     }
 
     #[test]
+    fn one_scan_separates_live_process_ownership_from_model_activity() {
+        let mine = std::process::id();
+        let busy = "aaaaaaaa-0000-4000-8000-000000000011";
+        let idle = "aaaaaaaa-0000-4000-8000-000000000012";
+        let waiting = "aaaaaaaa-0000-4000-8000-000000000013";
+        let (_kept, roster) = roster(&[
+            ("11.json", record(mine, busy, "busy")),
+            ("12.json", record(mine, idle, "idle")),
+            ("13.json", record(mine, waiting, "waiting")),
+        ]);
+
+        let activity = roster.activity(claude()).expect("the roster is readable");
+        let live: Vec<String> = activity.live.iter().map(ToString::to_string).collect();
+        let active: Vec<String> = activity.active.iter().map(ToString::to_string).collect();
+        assert_eq!(
+            live,
+            vec![busy.to_owned(), idle.to_owned(), waiting.to_owned()]
+        );
+        assert_eq!(active, vec![busy.to_owned()]);
+        assert_eq!(activity.processes.len(), 3);
+    }
+
+    #[test]
+    fn a_stale_record_cannot_alias_a_reused_process_identifier() {
+        let mine = std::process::id();
+        let session = "aaaaaaaa-0000-4000-8000-000000000099";
+        let (_kept, roster) = roster(&[("99.json", record_with_start(mine, session, "busy", "0"))]);
+
+        assert!(
+            roster
+                .activity(claude())
+                .expect("the roster is readable")
+                .live
+                .is_empty(),
+            "the current process did not start at the stale record's zero identity"
+        );
+    }
+
+    #[test]
     fn one_conversation_taken_over_by_a_second_process_is_named_once() {
         let mine = std::process::id();
         let session = "bbbbbbbb-0000-4000-8000-000000000001";
@@ -237,6 +349,18 @@ mod tests {
             running.len(),
             1,
             "a conversation is one row however many processes it has had"
+        );
+    }
+
+    #[test]
+    fn an_idle_live_process_still_owns_its_conversation_for_deletion() {
+        let mine = std::process::id();
+        let session = "bbbbbbbb-0000-4000-8000-000000000099";
+        let (_kept, roster) = roster(&[("12.json", record(mine, session, "idle"))]);
+        assert!(
+            roster
+                .owns_live(claude(), session)
+                .expect("the roster is readable")
         );
     }
 

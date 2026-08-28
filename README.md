@@ -2,12 +2,20 @@
 
 > [!IMPORTANT]
 > **최상위 제품 강행 원칙: Runtrol 사이드바 한 화면만으로 이 PC의 모든 연결된 에이전트 CLI, 현재 프로젝트, 실제 대화명, 실행 중인 항목의 회전 에이전트 아이콘과 사용량을 클릭 없이 파악하고 관리할 수 있어야 한다. 이 정보가 다른 탭, 접힌 뷰, 반복 라벨이나 잘못된 계층 뒤에 숨으면 릴리즈할 수 없다.**
+>
+> **왜 한 화면이어야 하는가?** 사용자가 실행 위치를 찾아다니는 순간 세션 동기화가 아니라 창 관리가 되기 때문이다.
 
-**설치형 코딩 에이전트 CLI를 한 로컬 Runtime에 연결하고, 어떤 앱에서도 같은 공개 계약으로 운영한다.**
+설치 뒤 Runtime 상태는 한 명령으로 확인한다.
 
-한국어 | [English](README_EN.md) | [中文](README_ZH.md) | [日本語](README_JA.md)
+```powershell
+runtrol status --json
+```
+
+**설치형 코딩 에이전트 CLI를 한 로컬 Runtime에 연결하고, 어떤 앱에서도 같은 공개 계약으로 운영한다.** 한국어 | [English](README_EN.md) | [中文](README_ZH.md) | [日本語](README_JA.md)
 
 **[제품 사이트](https://eddmpython.github.io/runtrol/)** · [Marketplace 설치](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio) · [휴대폰 앱](https://eddmpython.github.io/runtrol/app/)
+
+## 지금 되는 것
 
 > 상태: **Runtrol Runtime, 공개 Rust, TypeScript, Python 클라이언트와 대표 GUI Runtrol Studio가 서 있다.**
 > Studio 사이드바는 프로젝트, 대화, 첫 실행 행동, 서비스별 7일 사용량을 한 네이티브 목록에 둔다.
@@ -18,8 +26,11 @@
 > - 프로젝트를 폴더로 추가하면 그 폴더의 대화가 서비스를 가리지 않고 한 번에 딸려 온다. 순서는 바꿀 수 있고
 >   목록은 어느 창에서 열어도 같다.
 > - 새 대화는 누른 자리에서 서비스를 고른다. 편집기 상단으로 눈이 끌려가지 않는다.
-> - 대화를 누르면 그 CLI 자신의 화면이 편집기 탭으로 열리고 바로 타이핑해서 답이 온다. 탭은 그 대화의 이름을
->   달고 프로젝트의 색을 쓴다.
+> - 대화를 누르면 그 CLI 자신의 화면이 편집기 탭으로 열리고 바로 타이핑해서 답이 온다. 살아 있는 대화는 새로
+>   resume하지 않고 데몬이 가진 정확한 PTY에 붙는다. 탭은 provider가 지은 대화명을 달고 프로젝트의 색을 쓴다.
+> - 새 터미널의 provider 명령은 설치된 투명 브리지를 지나 원래 터미널과 모든 Runtrol 창이 같은 프로세스, 같은
+>   출력, 같은 입력 순서를 본다. 브리지 밖에서 이미 돌던 프로세스는 보존하고 중복 resume을 막으며, 공식 attach
+>   통로가 없으면 외부 실행 상태를 정직하게 표시한다.
 > - 대화 행에서 고정, 이름 변경, 삭제를 한다. 삭제는 서비스 자신의 삭제 표면을 부르므로 실제로 지워진다.
 > - 사용량은 서비스별 한 줄에서 실제 7일 창만 먼저 보이고, 호버나 세로 메뉴를 열면 서비스가 보고한 모든
 >   제한 창과 초기화 시각이 나온다. 숫자가 없으면 만들지 않고 왜 없는지로 말한다.
@@ -52,7 +63,7 @@ Code-hot workspace는 bounded 상태를 유지한다. streaming과 background �
 ### 변하지 않는 핵심
 
 - **기능과 속도는 하나의 계약이다.** 기능이 많아져도 기다림과 버벅임은 허용하지 않는다. 보이는 지연, frame drop, 입력 지연은 출시를 막는 버그다.
-- **멀티세션 비용은 세션 수에 비례하지 않는다.** 15개 세션은 일상 운용 기준이고 30개는 release gate 부하다. 논리 세션은 더 많이 존재할 수 있지만 hot process는 최대 8개, active renderer와 full stream은 정확히 하나다. 선택 세션 고정, 즉시 검색, 안정 정렬, workspace 전환은 30개에서도 같은 조작이어야 한다.
+- **멀티세션 비용은 세션 수에 비례하지 않는다.** 15개 세션은 일상 운용 기준이고 30개는 release gate 부하다. 논리 세션은 더 많이 존재할 수 있지만 hot process는 최대 8개다. 대화마다 provider process, PTY, bounded ring, screen은 정확히 하나이고 여러 renderer는 그것을 복제하지 않고 함께 본다. 선택 세션 고정, 즉시 검색, 안정 정렬, workspace 전환은 30개에서도 같은 조작이어야 한다.
 - **멀티에이전트는 provider-neutral이다.** 지원되는 설치형 CLI를 자동 발견하고 한 목록과 같은 조작법으로 운영한다. 새 provider는 core 수정 없이 manifest 또는 driver로 추가한다.
 - **에이전트가 저장소를 자율적으로 변경한다.** provider CLI가 작업과 대화를 소유하고 runtrol은 session, workspace, worktree, process lifecycle, collision boundary만 감독한다.
 - **대화 선택과 workspace 전환을 결박한다.** session 선택 즉시 대화와 파일 맥락을 전환하고, 실제 편집이 필요할 때만 정확한 workspace 또는 worktree를 Code-hot으로 승격한다. 대화 본문을 읽어 경로를 추측하지 않는다.
@@ -89,7 +100,7 @@ Code-hot workspace는 bounded 상태를 유지한다. streaming과 background �
 [tests/audit/northStar/board.toml](tests/audit/northStar/board.toml) 이고, `northStarBoard` 게이트가
 계산하며 `readmeParity` 게이트가 4 개 언어 README 를 그 계산 결과와 대조한다.
 
-**기반 층.** 축마다 하나만 성립하고, 이것이 천장이다.
+**기반 층.** 축마다 하나만 성립하고, 성립한 기반 층이 그 축의 천장이다.
 
 | 기반 층 | 점수 | 성립 조건 |
 |---|---:|---|
@@ -193,6 +204,8 @@ Rust 는 목적이 아니라 위 표의 세 축을 위한 수단이다.
 그 축들을 게이트로 못박지 않으면 Rust 를 쓴 의미가 사라진다.
 
 ## 구조
+
+제품 코어, 공개 클라이언트, 대표 GUI와 계약 게이트는 다음 경계로 나뉜다.
 
 | | | |
 |---|---|---|

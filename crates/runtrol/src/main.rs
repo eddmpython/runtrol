@@ -37,6 +37,15 @@ enum Personality {
     AgentToolsMcp,
     /// Enable or inspect Agent Tools locally.
     AgentToolsCommand(Vec<String>),
+    /// Carry one exact provider invocation through the daemon-owned terminal.
+    TerminalBridge {
+        /// Runtime-discovered provider identity.
+        provider: String,
+        /// Exact words after the provider command.
+        arguments: Vec<String>,
+    },
+    /// Materialize runtime-discovered transparent provider launchers.
+    ProviderShims(std::path::PathBuf),
     /// Administer public Runtime integrations from an owner terminal.
     Administration(Vec<String>),
     /// Ask the daemon something and print the answer.
@@ -53,6 +62,9 @@ const RUNTIME_LOCATOR_ARGUMENT: &str = "runtime-locator";
 
 /// The word that lists every daemon generation of this home. Starts nothing.
 const STATUS_ARGUMENT: &str = "status";
+
+/// The private entry point used by transparent provider command shims.
+const TERMINAL_BRIDGE_ARGUMENT: &str = "bridge";
 
 /// Blocking pipe operations admitted by the daemon at one time on Windows.
 ///
@@ -104,6 +116,11 @@ fn main() -> ExitCode {
         Personality::Status { json } => run(status_reporting(json)),
         Personality::AgentToolsMcp => run(agent_tools_serving()),
         Personality::AgentToolsCommand(words) => run(agent_tools_commanding(&words)),
+        Personality::TerminalBridge {
+            provider,
+            arguments,
+        } => run(bridging(&provider, &arguments)),
+        Personality::ProviderShims(directory) => run(shimming(&directory)),
         Personality::Administration(words) => run(administering(&words)),
         Personality::Command(words) => run(commanding(&words)),
         Personality::Usage(message) => {
@@ -135,10 +152,119 @@ fn choose(words: &[String]) -> Personality {
         },
         Some("mcp") => Personality::AgentToolsMcp,
         Some("tools") => Personality::AgentToolsCommand(words.get(1..).unwrap_or_default().to_vec()),
+        Some(word) if word == TERMINAL_BRIDGE_ARGUMENT => match words.get(1) {
+            Some(provider) => Personality::TerminalBridge {
+                provider: provider.clone(),
+                arguments: words.get(2..).unwrap_or_default().to_vec(),
+            },
+            None => Personality::Usage("runtrol bridge <provider> [arguments...]".to_owned()),
+        },
+        Some("shims") => match words.get(1..) {
+            Some([directory]) => Personality::ProviderShims(directory.into()),
+            _ => Personality::Usage("runtrol shims <dedicated-directory>".to_owned()),
+        },
         Some(_) if runtrol_cli::is_administration(words) => {
             Personality::Administration(words.to_vec())
         }
         Some(_) => Personality::Command(words.to_vec()),
+    }
+}
+
+/// Materialize the command names declared by every usable terminal provider.
+fn shimming(directory: &std::path::Path) -> impl FnOnce(&tokio::runtime::Runtime) -> ExitCode {
+    move |runtime| {
+        let Some((executable, address)) = own_generation() else {
+            return ExitCode::FAILURE;
+        };
+        let providers = match runtime.block_on(runtrol_cli::bridge_providers(&address, &executable))
+        {
+            Ok(providers) => providers,
+            Err(error) => {
+                report(&error.to_string());
+                return ExitCode::FAILURE;
+            }
+        };
+        let declarations: Vec<_> = providers
+            .iter()
+            .map(|provider| runtrol_childproc::ProviderShim {
+                provider: &provider.id,
+                command_names: &provider.command_names,
+            })
+            .collect();
+        match runtrol_childproc::materialize_provider_shims(directory, &executable, &declarations) {
+            Ok(written) => {
+                say(&format!(
+                    "{} provider command shims are ready in {}",
+                    written.len(),
+                    directory.display(),
+                ));
+                ExitCode::SUCCESS
+            }
+            Err(error) => {
+                report(&error.to_string());
+                ExitCode::FAILURE
+            }
+        }
+    }
+}
+
+/// Be the first local viewer of one daemon-owned provider terminal.
+fn bridging(
+    provider: &str,
+    arguments: &[String],
+) -> impl FnOnce(&tokio::runtime::Runtime) -> ExitCode {
+    move |runtime| {
+        if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
+            report(
+                "a provider terminal bridge requires attached standard input and output terminals",
+            );
+            return ExitCode::FAILURE;
+        }
+        let terminal = match runtrol_childproc::LocalTerminal::acquire() {
+            Ok(terminal) => terminal,
+            Err(error) => {
+                report(&format!("cannot acquire the invoking terminal: {error}"));
+                return ExitCode::FAILURE;
+            }
+        };
+        let initial = match terminal.size() {
+            Ok(size) => size,
+            Err(error) => {
+                drop(terminal);
+                report(&format!("cannot read the invoking terminal size: {error}"));
+                return ExitCode::FAILURE;
+            }
+        };
+        let here = match std::env::current_dir() {
+            Ok(here) => here.to_string_lossy().into_owned(),
+            Err(error) => {
+                drop(terminal);
+                report(&format!("cannot tell which directory this is: {error}"));
+                return ExitCode::FAILURE;
+            }
+        };
+        let Some((executable, address)) = own_generation() else {
+            drop(terminal);
+            return ExitCode::FAILURE;
+        };
+        let carried = runtime.block_on(runtrol_cli::bridge(
+            &address,
+            &executable,
+            provider,
+            arguments,
+            &here,
+            (initial.cols, initial.rows),
+            || terminal.size().map(|size| (size.cols, size.rows)),
+        ));
+        drop(terminal);
+        match carried {
+            Ok(0) => ExitCode::SUCCESS,
+            Ok(_) => ExitCode::FAILURE,
+            Err(error) => {
+                report(&error.to_string());
+                ExitCode::FAILURE
+            }
+        }
     }
 }
 

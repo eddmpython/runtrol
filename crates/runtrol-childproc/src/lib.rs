@@ -43,12 +43,14 @@ pub mod contain;
 pub mod error;
 pub mod footprint;
 pub mod handoff;
+pub mod local_terminal;
 pub mod pty;
 pub mod resolve;
 pub mod run;
+pub mod shims;
 pub mod stall;
 
-pub use alive::alive;
+pub use alive::{alive, matches_process_start};
 pub use argv::{MAX_ARGUMENT_LEN, check_all, check_one};
 pub use console_window::hide_console_window;
 #[cfg(unix)]
@@ -58,7 +60,9 @@ pub use contain::{ChildGuard, Containment, Strength, TrackedCommand};
 pub use error::SpawnError;
 pub use footprint::resident_bytes;
 pub use handoff::keep_handles_to_ourselves;
+pub use local_terminal::{LocalTerminal, LocalTerminalSize};
 pub use pty::{PtyChild, PtySize, PtySpawn};
 pub use resolve::{LauncherKept, Program, ProgramKind, resolve};
 pub use run::{MAX_OUTPUT_BYTES, Output, capture, capture_in, capture_with_input};
+pub use shims::{PROVIDER_SHIM_PATH_ENV, ProviderShim, ShimError, materialize_provider_shims};
 pub use stall::arm_stall_backtrace;

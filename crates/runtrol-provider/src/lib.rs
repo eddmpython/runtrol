@@ -41,7 +41,7 @@ pub use account::{
     AccountLimits, AccountReport, AccountStatus, LimitsAbsent, MAX_ACCOUNT_TOKEN_BYTES,
     account_token,
 };
-pub use agent::{Agent, Provider};
+pub use agent::{Agent, NativeProcessActivity, NativeProcessBinding, Provider};
 pub use capability::{
     ProviderCapabilities, ProviderCapability, ProviderCapabilitySource, ProviderCapabilityState,
 };

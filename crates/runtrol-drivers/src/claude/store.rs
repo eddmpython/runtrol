@@ -48,8 +48,8 @@ use runtrol_provider::{
 };
 
 use crate::catalogue::{bounded, under};
+use crate::claude::deletion;
 use crate::claude::home::{HomeProblem, config_directory};
-use crate::claude::trash;
 
 /// Where the CLI keeps one directory per folder it has run in.
 const PROJECTS_DIRECTORY: &str = "projects";
@@ -210,19 +210,16 @@ impl ClaudeStore {
         }
     }
 
-    /// Move one stored conversation out of the store, reversibly.
+    /// Permanently remove one stored conversation and its complete measured artifact set.
     ///
     /// runtrol reads this store to name conversations (the driver contract on the catalogue); deleting is that
-    /// same contract carried to its lifecycle end. The conversation file and its side-transcript directory are
-    /// moved into `runtrol-deleted`, a sibling of `projects` the listing never walks, rather than erased, so the
-    /// act is reversible by hand and the provider's store stays the record of what exists. A name the store no
-    /// longer holds is already in the asked-for state and answers as done. Reachable only under the delete scope
-    /// the Runtime grants from the machine.
+    /// same contract carried to its lifecycle end. Transcript, side transcripts, and prompt-history rows carrying
+    /// the selected native identity are removed. A same-identity remnant from Runtrol's retired reversible trash is
+    /// removed too. A name the store no longer holds is already in the asked-for state and answers as done.
     ///
     /// # Errors
     ///
-    /// The underlying filesystem error when the move cannot be made: a file the CLI still holds open, a store
-    /// that could not be located, or a trash that could not be created.
+    /// The underlying filesystem error when a complete rewrite, removal, or final absence check cannot finish.
     pub(super) fn delete(&self, native: &str) -> std::io::Result<()> {
         let projects = self.projects.as_ref().map_err(|_| {
             std::io::Error::new(
@@ -230,11 +227,8 @@ impl ClaudeStore {
                 "the stored conversation directory could not be located",
             )
         })?;
-        let Some(file) = conversation_path(projects, native) else {
-            return Ok(());
-        };
-        // The move itself lives in `trash`, which is the driver's only writer of this store.
-        trash::discard(projects, &file, native)
+        // The removal itself lives in `deletion`, which is the driver's only writer of this store.
+        deletion::remove(projects, native)
     }
 }
 
@@ -884,7 +878,7 @@ mod tests {
     }
 
     #[test]
-    fn deleting_moves_the_conversation_and_its_sidecar_into_the_reversible_trash() {
+    fn deleting_permanently_removes_the_conversation_sidecar_and_history_rows() {
         let scratch = Scratch::new("delete");
         let projects = scratch.0.join("projects");
         let folder = projects.join("some-folder");
@@ -894,25 +888,27 @@ mod tests {
         let sidecar = folder.join(ALPHA);
         fs::create_dir_all(&sidecar).expect("the sidecar directory is created");
         fs::write(sidecar.join("agent-1.jsonl"), b"{}\n").expect("a sidecar record is written");
+        scratch.history(&[
+            history_record(Some(ALPHA), "remove this row"),
+            history_record(Some(BETA), "keep this row"),
+        ]);
 
         ClaudeStore::at(projects.clone())
             .delete(ALPHA)
             .expect("the conversation is deleted");
 
-        // Gone from the store, so gone from every listing.
         assert!(!file.exists(), "the conversation file left the store");
         assert!(!sidecar.exists(), "the sidecar directory left the store");
-        // Kept in the trash, a sibling of projects, so it can be restored by hand.
-        let trash = scratch.0.join("runtrol-deleted");
+        let history = fs::read_to_string(scratch.0.join(HISTORY_FILE))
+            .expect("the rewritten prompt history is readable");
         assert!(
-            trash
-                .join(format!("{ALPHA}.{CONVERSATION_EXTENSION}"))
-                .is_file(),
-            "the conversation file is in the trash"
+            !history.contains(ALPHA),
+            "the deleted identity left history"
         );
+        assert!(history.contains(BETA), "unrelated prompt history remains");
         assert!(
-            trash.join(ALPHA).is_dir(),
-            "the sidecar directory is in the trash"
+            !scratch.0.join("runtrol-deleted").exists(),
+            "permanent deletion creates no recovery trash"
         );
 
         // Deleting again, with the conversation already gone, is the asked-for state and succeeds.

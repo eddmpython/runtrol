@@ -28,11 +28,22 @@ pub fn alive(pid: u32) -> bool {
     platform::alive(pid)
 }
 
+/// Whether `pid` is alive and its kernel-recorded start value matches `expected_start`.
+///
+/// The value uses the platform's native process-start unit: Windows `FILETIME`, Linux clock ticks, and macOS
+/// microseconds. A caller should use this only with a record written from the same platform. When the operating
+/// system refuses identity inspection, this returns the conservative live answer so a stale observation cannot
+/// authorize a duplicate process start or deletion.
+#[must_use]
+pub fn matches_process_start(pid: u32, expected_start: u64) -> bool {
+    platform::matches_process_start(pid, expected_start)
+}
+
 #[cfg(windows)]
 mod platform {
-    use windows_sys::Win32::Foundation::{CloseHandle, WAIT_TIMEOUT};
+    use windows_sys::Win32::Foundation::{CloseHandle, FILETIME, WAIT_TIMEOUT};
     use windows_sys::Win32::System::Threading::{
-        OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, WaitForSingleObject,
+        GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, WaitForSingleObject,
     };
 
     /// Standard synchronization access right removed from the generated windows-sys 0.61 constants.
@@ -80,6 +91,49 @@ mod platform {
         waited == WAIT_TIMEOUT
     }
 
+    #[expect(
+        unsafe_code,
+        reason = "process creation time and liveness are Windows kernel queries with no safe wrapper"
+    )]
+    pub(super) fn matches_process_start(pid: u32, expected_start: u64) -> bool {
+        let rights = SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION;
+        // SAFETY: arguments are plain values, and the returned handle is checked before use.
+        let process = unsafe { OpenProcess(rights, 0, pid) };
+        if process.is_null() {
+            return std::io::Error::last_os_error().raw_os_error() == Some(ACCESS_DENIED);
+        }
+        // SAFETY: the checked handle was opened with synchronization rights and the zero timeout cannot block.
+        let waited = unsafe { WaitForSingleObject(process, 0) };
+        if waited != WAIT_TIMEOUT {
+            // SAFETY: this function owns the checked handle and closes it exactly once.
+            let _closed = unsafe { CloseHandle(process) };
+            return false;
+        }
+
+        let mut creation = FILETIME::default();
+        let mut exit = FILETIME::default();
+        let mut kernel = FILETIME::default();
+        let mut user = FILETIME::default();
+        // SAFETY: each pointer names a fully allocated writable `FILETIME`, and the checked handle has query
+        // rights. Values are read only when the call succeeds.
+        let queried = unsafe {
+            GetProcessTimes(
+                process,
+                &raw mut creation,
+                &raw mut exit,
+                &raw mut kernel,
+                &raw mut user,
+            )
+        };
+        // SAFETY: this function owns the checked handle and closes it exactly once after the final query.
+        let _closed = unsafe { CloseHandle(process) };
+        if queried == 0 {
+            return true;
+        }
+        let actual = (u64::from(creation.dwHighDateTime) << 32) | u64::from(creation.dwLowDateTime);
+        actual == expected_start
+    }
+
     /// The refusal that means "you may not look", which is not the same as "there is nothing there".
     const ACCESS_DENIED: i32 = 5;
 }
@@ -112,6 +166,14 @@ mod platform {
         // without that file keep the older answer, where an unreaped child reads as running until its parent
         // collects it.
         !linux_zombie(pid)
+    }
+
+    pub(super) fn matches_process_start(pid: u32, expected_start: u64) -> bool {
+        match crate::contain::identity::start_of(pid) {
+            Ok(Some(actual)) => actual == expected_start && alive(pid),
+            Ok(None) => false,
+            Err(_) => alive(pid),
+        }
     }
 
     /// Whether Linux reports this process as exited and not yet collected.

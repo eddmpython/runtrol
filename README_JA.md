@@ -52,7 +52,7 @@ streaming と background 作業が入力、スクロール、セッション切�
 ### 変わらない中核
 
 - **機能と速度は一つの契約である。** 機能が増えても待ち時間や引っかかりを許さない。目に見える遅延、frame drop、入力遅延は release を止めるバグである。
-- **マルチセッションの費用はセッション数に比例しない。** 15 セッションを日常運用の基準、30 セッションを release gate の負荷とする。論理セッションはさらに存在できるが、hot process は最大 8 個、active renderer と full stream は正確に一つである。選択セッションの固定、即時検索、安定した並び順、workspace 切り替えは 30 セッションでも同じ操作で行う。
+- **マルチセッションの費用はセッション数に比例しない。** 15 セッションを日常運用の基準、30 セッションを release gate の負荷とする。論理セッションはさらに存在できるが、hot process は最大 8 個である。各会話の provider process、PTY、bounded ring、screen は正確に一つで、複数の renderer は複製せず共有する。選択セッションの固定、即時検索、安定した並び順、workspace 切り替えは 30 セッションでも同じ操作で行う。
 - **マルチエージェントは provider-neutral である。** 対応するインストール済み CLI を自動検出し、一つの一覧と同じ操作法で運用する。新しい provider は core を変更せず manifest または driver で追加する。
 - **エージェントがリポジトリを自律的に変更する。** provider CLI が作業と会話を所有し、runtrol は session、workspace、worktree、process lifecycle、collision boundary だけを監督する。
 - **会話選択と workspace 切り替えを結び付ける。** session 選択時に会話とファイル文脈を即座に切り替え、実際の編集が必要な時だけ正確な workspace または worktree を Code-hot にする。会話本文から path を推測しない。

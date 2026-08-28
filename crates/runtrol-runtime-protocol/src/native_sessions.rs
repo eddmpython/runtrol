@@ -46,12 +46,15 @@ pub struct NativeActivityParams {
     pub provider_id: ProviderId,
 }
 
-/// The conversations of one provider with a model answering in them right now.
+/// The conversations of one provider owned by live processes and the subset answering right now.
 #[derive(Clone, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct NativeActivity {
     /// The provider asked about.
     pub provider_id: ProviderId,
+    /// Native identities owned by a still-running provider process, in no particular order.
+    #[serde(default)]
+    pub live: Vec<String>,
     /// Native identities answering now, in no particular order.
     pub active: Vec<String>,
 }

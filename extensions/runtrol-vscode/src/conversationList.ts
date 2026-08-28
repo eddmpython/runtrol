@@ -117,6 +117,8 @@ export function conversations(
   /// their bytes never pass through us; the Runtime names them by asking each service what its own running
   /// processes are doing.
   activeNative: ReadonlySet<string> = new Set(),
+  /// Conversations owned by a provider process outside the daemon's PTY registry.
+  observedNative: ReadonlySet<string> = new Set(),
   /// Daemon-owned provider terminals, pushed at process birth and exit.
   terminals: readonly TerminalDescriptor[] = [],
 ): Conversation[] {
@@ -142,6 +144,10 @@ export function conversations(
       : sessionKey;
     const legacyKey = key === sessionKey ? null : sessionKey;
     const hosted = terminalByConversation.get(key) ?? null;
+    const externalKey = session.nativeSessionId
+      ? nativeProcessKey(session.providerId, session.nativeSessionId)
+      : null;
+    const observed = externalKey !== null && observedNative.has(externalKey) && hosted === null;
     if (hosted) claimedTerminals.add(terminalKey(hosted));
     claimed.add(key);
     rows.push(supervised(
@@ -156,8 +162,9 @@ export function conversations(
       pinnedKeys.has(key) || (legacyKey !== null && pinnedKeys.has(legacyKey)),
       renamedTitles.get(key) ?? (legacyKey === null ? undefined : renamedTitles.get(legacyKey)),
       legacyKey,
-      streaming.has(key),
+      streaming.has(key) || (externalKey !== null && activeNative.has(externalKey)),
       hosted,
+      observed,
     ));
   }
   for (const [key, chat] of nativeByKey) {
@@ -173,8 +180,9 @@ export function conversations(
       projectlessRoot,
       pinnedKeys.has(key),
       renamedTitles.get(key),
-      activeNative.has(chat.nativeSessionId),
+      activeNative.has(nativeProcessKey(chat.providerId, chat.nativeSessionId)),
       hosted,
+      observedNative.has(nativeProcessKey(chat.providerId, chat.nativeSessionId)) && hosted === null,
     ));
   }
   // A provider process is visible immediately, even before its own store publishes a conversation identity and
@@ -453,6 +461,11 @@ function conversationKey(providerId: string, nativeSessionId: string): string {
   return `chat:${encodeURIComponent(providerId)}:${encodeURIComponent(nativeSessionId)}`;
 }
 
+/// Provider-qualified identity for the cheap live-process roster.
+export function nativeProcessKey(providerId: string, nativeSessionId: string): string {
+  return `${encodeURIComponent(providerId)}:${encodeURIComponent(nativeSessionId)}`;
+}
+
 function supervised(
   session: SessionLine,
   native: NativeChatLine | null,
@@ -467,6 +480,7 @@ function supervised(
   legacyKey: string | null,
   streaming: boolean,
   hosted: TerminalDescriptor | null,
+  observedExternal: boolean,
 ): Conversation {
   const homeWorkspace = isolatedWorkspaceHomes.get(workspaceIdentity(session.workspace)) ?? session.workspace;
   const projectless = isProjectless(homeWorkspace, projectlessRoot);
@@ -487,15 +501,17 @@ function supervised(
     activity: streaming ? "working" : activityOf(session),
     tool: activity.tool,
     signInNeeded: activity.signInNeeded,
-    live: session.hot || hosted !== null,
+    live: session.hot || hosted !== null || observedExternal,
     open: session.sessionId === selectedSessionId,
     pinned,
     session,
     native,
     hostedTerminal: hosted,
     hostedKey: hosted ? terminalKey(hosted) : null,
-    canOpen: true,
-    blocked: null,
+    canOpen: !observedExternal || hosted !== null,
+    blocked: observedExternal && hosted === null
+      ? "This provider process is running in another terminal and exposes no attach channel."
+      : null,
   };
 }
 
@@ -508,6 +524,7 @@ function providerOwned(
   name: string | undefined,
   working: boolean,
   hosted: TerminalDescriptor | null,
+  observedExternal: boolean,
 ): Conversation {
   const resumable = chat.resume === "available" && Boolean(chat.adoptionToken);
   const projectless = isProjectless(chat.cwd, projectlessRoot);
@@ -527,15 +544,21 @@ function providerOwned(
     activity: working ? "working" : "saved",
     tool: null,
     signInNeeded: false,
-    live: hosted !== null,
+    live: hosted !== null || observedExternal,
     open: false,
     pinned,
     session: null,
     native: chat,
     hostedTerminal: hosted,
     hostedKey: hosted ? terminalKey(hosted) : null,
-    canOpen: hosted !== null || resumable,
-    blocked: hosted !== null || resumable ? null : "This coding service cannot reopen this conversation.",
+    canOpen: hosted !== null || (!observedExternal && resumable),
+    blocked: hosted !== null
+      ? null
+      : observedExternal
+        ? "This provider process is running in another terminal and exposes no attach channel."
+        : resumable
+          ? null
+          : "This coding service cannot reopen this conversation.",
   };
 }
 

@@ -42,6 +42,12 @@ rows share that list instead of occupying separate VS Code view headers.
 - Add a project folder and its provider-owned conversations appear below it.
 - Conversations outside added projects remain ordinary top-level rows.
 - Start, open, pin, rename, archive, close, or delete through the provider capabilities Runtime discovered.
+- Opening a Studio window never continues or resumes a conversation. Live terminals attach to their exact process;
+  cold conversations start only after an explicit open action.
+- Provider commands started in a new integrated terminal pass through Runtime's transparent shim and appear in every
+  open sidebar as the same PTY stream. A later provider title replaces the project placeholder in the row and tab.
+- A process already running outside that broker is preserved and shown as external. Studio blocks duplicate resume
+  and attaches only when the provider or original terminal host publishes an official channel.
 - A working conversation spins its coding-service icon without adding a permanent status sentence.
 - Every installed service contributes one compact `7d` usage row. Hover shows every reported limit window, plan,
   reset time, and report age. Press the row or its vertical menu action for the same keyboard-accessible detail.

@@ -91,6 +91,20 @@ the newest generation, retries input, or falls back to private IPC.
 Closing a tab detaches the viewer. Runtime keeps the provider terminal alive until its CLI exits or an authorized
 explicit stop occurs. Split, grid, focus, and full-screen behavior belong to VS Code.
 
+Studio activation never opens, continues, or resumes a conversation. It restores only the selected row and starts
+the provider, session, and terminal index watches. A live terminal row attaches to its exact Runtime and terminal
+generation; a cold provider-owned row starts only after the operator explicitly opens it.
+
+Provider terminals started through an installed transparent command shim appear through the terminal index watch
+without a catalogue poll. If the provider mints an identity and title after launch, Runtime binds the provider's
+verified process record to that PTY and Studio rekeys the existing row and tab in place. The provider title replaces
+the project placeholder, while the project colour remains on both the row and tab.
+
+A process already running outside the broker appears as live when a provider publishes a cheap process roster. Studio
+does not attempt a duplicate resume. Without an official provider or terminal-host attach channel, the row states that
+it is running in another terminal and cannot be opened from this surface. Studio's 250 ms compatibility requests are
+coalesced by Runtime's provider-specific 200 ms cache, so adding windows does not multiply roster filesystem scans.
+
 No published Studio version before this public terminal contract persisted a private terminal attachment identity,
 so there is no discoverable legacy tab to migrate. Runtime's native claim registry and `legacyGenerationBusy` error
 protect any older live owner without inventing a client-side bridge.
@@ -99,7 +113,8 @@ protect any older live owner without inventing a client-side bridge.
 
 - Fifteen sessions are the daily-use baseline and 30 sessions are the release load.
 - At most eight sessions own hot provider processes.
-- One selected session owns the foreground subscription and full renderer.
+- Each visible tab renders its own bounded view of one central PTY stream. Runtime never duplicates the provider
+  process, output ring, or screen state per window.
 - Conversation and project ordering is stable and does not jump because turn state changes.
 - Search uses project, provider, state, and workspace metadata without reading conversation content.
 - Selecting a cold row resumes through the provider-native identity in its exact workspace.

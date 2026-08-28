@@ -355,6 +355,10 @@ pub enum Request {
     TerminalOpen {
         /// Which CLI.
         provider: Box<str>,
+        /// Exact local argv after the provider command, when this request came from the transparent execution
+        /// bridge. Absent for ordinary surface opens, which use the manifest's new or resume declaration.
+        #[serde(default)]
+        arguments: Option<Vec<Box<str>>>,
         /// The provider's own name for the conversation to reopen, or none for a fresh one.
         #[serde(default)]
         native: Option<Box<str>>,
@@ -671,6 +675,9 @@ pub enum Response {
         terminal: TerminalId,
         /// The process id of the hosted CLI.
         pid: u32,
+        /// Whether this originating terminal owns the one current input lease.
+        #[serde(default)]
+        writable: bool,
     },
 
     /// Bytes the hosted CLI wrote to its terminal, exactly as written.
@@ -854,6 +861,11 @@ pub struct ProviderLine {
     /// A sentence rather than a flag, because "this build has no driver for that protocol" and "nothing declares that
     /// kind" send the operator in different directions.
     pub why_not: Option<Box<str>>,
+    /// Bare executable names whose interactive invocation can enter the transparent terminal bridge.
+    ///
+    /// Runtime-discovered from the provider manifest. Empty when the provider has no terminal surface.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub terminal_commands: Vec<Box<str>>,
 }
 
 /// One pending public Runtime integration proposal for local presentation.
@@ -1779,12 +1791,14 @@ mod tests {
                     display_name: "Claude Code".into(),
                     usable: true,
                     why_not: None,
+                    terminal_commands: vec!["claude".into(), "claude.cmd".into()],
                 },
                 ProviderLine {
                     id: "something".into(),
                     display_name: "Something Else".into(),
                     usable: false,
                     why_not: Some("this build has no driver for that protocol".into()),
+                    terminal_commands: Vec::new(),
                 },
             ],
             device: None,

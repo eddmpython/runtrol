@@ -241,8 +241,8 @@ impl Layout {
 
     /// Where every conversation removed from a coding service's own store is named, with who asked.
     ///
-    /// A deletion is the one write this Runtime makes to a store it does not own, and `runtrol-deleted` keeps
-    /// the file but says nothing about who or when. Measured 2026-08-28: eight conversations were found there
+    /// A deletion is the one write this Runtime makes to a store it does not own. Its retired reversible-trash
+    /// implementation kept the file but said nothing about who or when. Measured 2026-08-28: eight conversations were found there
     /// and the answer had to be reconstructed from file times and a stale catalogue, and still was not reached.
     #[must_use]
     pub const fn native_deletions(&self) -> &AbsPath {

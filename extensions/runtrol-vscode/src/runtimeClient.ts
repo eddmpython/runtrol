@@ -15,6 +15,7 @@ import {
   type EventCursor,
   type IntegrationGrant,
   type ManagedSessionList,
+  type NativeActivity,
   type PendingApproval,
   type ProviderList,
   type PublicInputBlock,
@@ -300,14 +301,13 @@ export class StudioRuntimeClient implements vscode.Disposable {
     return this.read((runtime) => runtime.sessions().list());
   }
 
-  /// The conversations of one service with a model answering in them right now.
+  /// The live conversations of one service and the subset with a model answering right now.
   ///
-  /// The only way this panel can say a conversation is running when Runtrol did not start it, which is most of
-  /// them for a person who also uses their CLI in a terminal. Asked on the same slow poll as the memory
-  /// figures because it is the same kind of fact: it moves without anything structural changing.
-  async nativeActivity(providerId: string): Promise<readonly string[]> {
-    const answered = await this.read((runtime) => runtime.providers().nativeActivity(providerId));
-    return answered.active;
+  /// This is the bounded compatibility path for processes that began outside the transparent broker. The provider
+  /// answers from its small process roster, and Studio asks it on the dedicated fast activity clock rather than
+  /// walking the stored conversation catalogue or sharing the memory sampling clock.
+  async nativeActivity(providerId: string): Promise<NativeActivity> {
+    return this.read((runtime) => runtime.providers().nativeActivity(providerId));
   }
 
   async models(providerId: string): Promise<RuntimeModelCatalog> {
@@ -799,9 +799,9 @@ export class StudioRuntimeClient implements vscode.Disposable {
 
   /// Follow the daemon's hosted-terminal registry as an event stream.
   ///
-  /// This is the discovery hot path for provider processes launched through a transparent terminal bridge. It is
-  /// separate from the five-second memory sampling loop: process birth and exit are structural facts and reach the
-  /// sidebar without waiting for a clock.
+  /// This is the discovery hot path for provider processes launched through a transparent terminal bridge. Process
+  /// birth and exit are structural facts and reach the sidebar without waiting for either the activity clock or
+  /// the memory sampling clock.
   async watchTerminals(
     snapshot: (terminals: TerminalIndexSnapshot) => void,
     signal: AbortSignal,

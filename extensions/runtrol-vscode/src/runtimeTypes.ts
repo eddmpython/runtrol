@@ -13,6 +13,7 @@ export type {
   RuntimeReasoningChoice as ReasoningChoice,
   SessionDescriptor as SessionLine,
   SessionWorkspaceAccess as WorkspaceAccess,
+  TerminalDescriptor,
 } from "@runtrol/runtime-client";
 
 import type {

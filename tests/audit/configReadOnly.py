@@ -35,6 +35,8 @@ CRATES = ROOT / "crates"
 MAY_MUTATE_DISK = {
     "crates/runtrol-childproc/src/contain/registry.rs": "owns runtrol's durable Unix process guards",
     "crates/runtrol-childproc/src/contain/tracked.rs": "owns runtrol's Unix bootstrap handoff files",
+    "crates/runtrol-childproc/src/shims.rs": "owns only Runtrol-marked provider command shims in "
+    "the installation-selected shim directory and refuses every foreign entry",
     "crates/runtrol-core/src/home/mod.rs": "creates runtrol's own state directories",
     "crates/runtrol-core/src/probe/cache.rs": "atomically replaces runtrol's disposable probe cache",
     "crates/runtrol-ipc/src/transport.rs": "creates and removes runtrol's local Unix socket",
@@ -61,13 +63,11 @@ MAY_MUTATE_DISK = {
     "crates/runtrol-security/src/root_identity.rs": "opens an approved directory read-only for its "
     "kernel-issued Windows file identity and never writes provider or workspace data",
     # The one reviewed write into a provider's own store, and the only entry here that is not runtrol data.
-    # Claude Code publishes no delete command (measured 2.1.241), so a conversation the operator removes from
-    # the list is moved into `runtrol-deleted`, a sibling of `projects` that no listing walks: nothing is
-    # erased, only the exact conversation chosen is touched, and the surface is reachable only under the delete
-    # scope granted at the machine. It is a file of its own so that this approval covers eighty lines that do
-    # nothing else, rather than the fifteen-hundred-line reader beside it.
-    "crates/runtrol-drivers/src/claude/trash.rs": "moves one operator-chosen Claude conversation out of "
-    "the CLI's own listing into a reversible sibling directory, and writes nothing else",
+    # Claude Code publishes no delete command (measured 2.1.241), so the driver removes only the complete
+    # measured artifact set of the operator-selected native identity and verifies absence. It creates no
+    # recovery copy and remains reachable only under the machine-granted delete scope.
+    "crates/runtrol-drivers/src/claude/deletion.rs": "permanently removes one operator-chosen Claude "
+    "conversation, its sidecar and history rows, then verifies that the native identity is absent",
 }
 MAY_MUTATE_PREFIXES = {
     "crates/runtrol-store/src/": "the database crate owns runtrol's session pointer store",

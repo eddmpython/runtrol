@@ -2,8 +2,8 @@
 //!
 //! # Why the record exists
 //!
-//! Deleting a native conversation moves it into `runtrol-deleted` and says nothing else: not when, not which
-//! integration asked, not which folder they named. On 2026-08-28 eight conversations were found there, and
+//! An older deletion implementation moved native conversations into `runtrol-deleted` and said nothing else:
+//! not when, not which integration asked, not which folder they named. On 2026-08-28 eight conversations were found there, and
 //! reconstructing who had done it from file times and a stale catalogue took a session and still did not reach
 //! an answer. When six more went the same way the next day, this record named the integration and the minute
 //! for each one, and the cause was found in the time it takes to read six lines.
