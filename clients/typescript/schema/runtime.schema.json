@@ -1146,7 +1146,7 @@
     },
     "NativeActivityParams": {
       "additionalProperties": false,
-      "description": "Ask which of one provider's conversations have a model answering right now.\n\nSeparate from the catalogue because it is asked often and the catalogue is not cheap: on the machine this\nwas measured, naming every stored conversation costs 121 ms. How a provider knows is its own business\n(Claude Code publishes a roster of its own running processes and what each one is doing); what the answer\nmeans is the same for every provider, and it is how the panel shows a turn running in a conversation\nRuntrol did not start.",
+      "description": "Ask which of one provider's conversations have a model answering right now.\n\nSeparate from the catalogue because it is asked often and the catalogue is not cheap: on the machine this\nwas measured, naming every stored conversation costs 121 ms. How a provider knows is its own business, and\na driver that cannot tell says nothing rather than guessing; what the answer means is the same for every\nprovider, and it is how the panel shows a turn running in a conversation Runtrol did not start.",
       "properties": {
         "providerId": {
           "$ref": "#/$defs/ProviderId",

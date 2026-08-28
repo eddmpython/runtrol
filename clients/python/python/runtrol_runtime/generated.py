@@ -6,7 +6,7 @@ from typing import ForwardRef, Literal, NotRequired, Required, TypeAlias, TypedD
 
 JsonValue: TypeAlias = None | bool | int | float | str | list["JsonValue"] | dict[str, "JsonValue"]
 JsonObject: TypeAlias = dict[str, JsonValue]
-SCHEMA_SHA256 = 'b01e852cc859d71288b08b24acf7fe66466323bf25adc51776828324e0a12abe'
+SCHEMA_SHA256 = '66c8d0abbfbf751abff031caa4830be2dfc6b478359c1b2527b60663bcaa1f6a'
 
 AcquireControlParams = TypedDict('AcquireControlParams', {
     'expectedLifecycle': Required[ForwardRef('LifecycleState')],
