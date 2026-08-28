@@ -139,6 +139,11 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
   // The operator's own projects. Global state, because the panel manages the whole machine from any window.
   // Built before the controller because a draft's project picker offers them first.
   const projectStore = new ProjectStore(context.globalState);
+  // Another window may have added, renamed or removed a project while this one sat unfocused. The list is the
+  // machine's, so the moment this window is looked at is the moment it has to be current.
+  context.subscriptions.push(vscode.window.onDidChangeWindowState((window) => {
+    if (window.focused) projectStore.reload();
+  }));
   const watchLifecycle = new WatchLifecycleGate();
   // The sidebar's "what is it doing" word for every running conversation, page open or not.
   context.subscriptions.push(new ActivityWatcher(runtime, state, watchLifecycle));

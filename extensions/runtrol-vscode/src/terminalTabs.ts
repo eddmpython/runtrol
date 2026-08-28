@@ -7,6 +7,7 @@ import {
 import * as vscode from "vscode";
 import type { Conversation, StartedConversation } from "./conversationList";
 import { tabColorId } from "./projectColor";
+import { HIDE_CURSOR, MARK_FRAME_MS, paintMark, SHOW_CURSOR } from "./openingMark";
 import type { StudioRuntimeClient } from "./runtimeClient";
 
 /// The conversation surface: the coding service's own terminal interface, hosted by the Core on a pseudo
@@ -186,6 +187,8 @@ class RuntimeTerminal implements vscode.Pseudoterminal {
   /// the tab opens must not lose the first keys.
   private pending: Uint8Array[] = [];
   private pendingBytes = 0;
+  /// The mark turning in the middle of the pane until the service's own screen arrives.
+  private opening: ReturnType<typeof setInterval> | null = null;
 
   constructor(
     private readonly runtime: StudioRuntimeClient,
@@ -203,6 +206,7 @@ class RuntimeTerminal implements vscode.Pseudoterminal {
       columns: initialDimensions?.columns ?? 120,
       rows: initialDimensions?.rows ?? 40,
     };
+    this.startOpeningMark();
     void this.connect().catch((error: unknown) => this.fail(error));
   }
 
@@ -247,6 +251,25 @@ class RuntimeTerminal implements vscode.Pseudoterminal {
     });
   }
 
+  /// Turn the mark until there is something real to draw.
+  private startOpeningMark(): void {
+    if (this.opening) return;
+    let at = 0;
+    this.writeEmitter.fire(HIDE_CURSOR + paintMark(at, this.dimensions.columns, this.dimensions.rows));
+    this.opening = setInterval(() => {
+      at += 1;
+      this.writeEmitter.fire(paintMark(at, this.dimensions.columns, this.dimensions.rows));
+    }, MARK_FRAME_MS);
+  }
+
+  /// Stop and leave the pane clear. The cursor comes back because the CLI about to draw here expects it.
+  private stopOpeningMark(): void {
+    if (!this.opening) return;
+    clearInterval(this.opening);
+    this.opening = null;
+    this.writeEmitter.fire(`[2J[H${SHOW_CURSOR}`);
+  }
+
   private async connect(): Promise<void> {
     if (this.target.blocked) throw new Error(this.target.blocked);
     const geometry = this.dimensions;
@@ -265,6 +288,7 @@ class RuntimeTerminal implements vscode.Pseudoterminal {
     }
     this.view = view;
     this.lease = view.opened.controlLease ?? null;
+    this.stopOpeningMark();
     this.writeEmitter.fire(this.decoder.decode(view.initialScreen, { stream: true }));
     if (
       this.dimensions.columns !== geometry.columns
@@ -390,6 +414,7 @@ class RuntimeTerminal implements vscode.Pseudoterminal {
   private fail(error: unknown): void {
     if (this.closed) return;
     const message = error instanceof Error ? error.message : String(error);
+    this.stopOpeningMark();
     this.writeEmitter.fire(`\r\n\x1b[31m${message}\x1b[0m\r\n`);
     this.detach(false);
   }
@@ -404,6 +429,11 @@ class RuntimeTerminal implements vscode.Pseudoterminal {
   private detach(notifyRuntime: boolean): void {
     if (this.closed) return;
     this.closed = true;
+    // A tab closed while it was still opening leaves a timer drawing into an emitter nobody reads.
+    if (this.opening) {
+      clearInterval(this.opening);
+      this.opening = null;
+    }
     const view = this.view;
     this.view = null;
     this.lease = null;

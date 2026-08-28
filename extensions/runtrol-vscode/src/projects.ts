@@ -34,6 +34,17 @@ const STORAGE_KEY = "runtrol.projects";
 ///
 /// Global rather than per-workspace state, because the panel is one management surface for the whole machine:
 /// a project created in one window is the same project in every other.
+/// Whether two lists name the same projects, in the same order, with the same names and pins.
+function sameRecords(left: readonly ProjectRecord[], right: readonly ProjectRecord[]): boolean {
+  return left.length === right.length && left.every((record, index) => {
+    const other = right[index];
+    return other !== undefined
+      && record.key === other.key
+      && record.name === other.name
+      && record.pinned === other.pinned;
+  });
+}
+
 export class ProjectStore {
   private records: ProjectRecord[];
   private readonly listeners = new Set<() => void>();
@@ -44,6 +55,19 @@ export class ProjectStore {
 
   all(): readonly ProjectRecord[] {
     return this.records;
+  }
+
+  /// Take up what another window wrote, and say so when it changed anything.
+  ///
+  /// The list is one person's, not one window's: adding a project in one window and finding it missing in the
+  /// next is the same machine telling two stories (operator, 2026-08-28). The store is shared, but each window
+  /// reads it once at activation and then answers from memory, so the reading has to be asked for again. The
+  /// window's own focus is when to ask: it is the moment the person looks, and it costs one read.
+  reload(): void {
+    const stored = readRecords(this.memento.get(STORAGE_KEY));
+    if (sameRecords(stored, this.records)) return;
+    this.records = stored;
+    for (const listener of this.listeners) listener();
   }
 
   /// Announce every change once, after it is persisted. The tree redraws from `all()`.
