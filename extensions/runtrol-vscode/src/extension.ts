@@ -41,6 +41,7 @@ import { conversationIcon } from "./conversationIcon";
 import { TerminalTabs } from "./terminalTabs";
 import { ConversationItem, ProjectItem, ServiceChoiceItem, icon } from "./sidebarTargets";
 import { SIDEBAR_VIEW_ID, SidebarView } from "./sidebarView";
+import { showMoreActions } from "./moreActions";
 
 declare const RUNTROL_INCLUDE_TEST_JOURNEY: boolean;
 
@@ -500,6 +501,10 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     vscode.commands.registerCommand(
       "runtrol.closeSession",
       (item) => run(() => afterReady(() => controller.close(item))),
+    ),
+    vscode.commands.registerCommand(
+      "runtrol.moreActions",
+      () => run(() => showMoreActions(sidebar.listingReasons())),
     ),
     vscode.commands.registerCommand(
       "runtrol.explainListing",

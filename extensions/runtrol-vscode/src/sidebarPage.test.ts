@@ -44,6 +44,7 @@ function project(overrides: Partial<SidebarProjectRow>): SidebarProjectRow {
     collapsed: false,
     attention: 0,
     live: 0,
+    hidden: 0,
     agentTools: false,
     rows: [conversation({})],
     ...overrides,
@@ -58,7 +59,6 @@ function model(overrides: Partial<SidebarModel>): SidebarModel {
     usage: [],
     serviceChoice: null,
     firstRun: false,
-    menu: [{ command: "runtrol.refresh", label: "Look again" }],
     ...overrides,
   };
 }
@@ -121,13 +121,14 @@ test("row keys are unique and in page order, which is what the eye test reads", 
   assert.deepEqual(keys, ["project:app", "claude:one", "codex:loose"]);
 });
 
-test("the vertical-dots menu lists the rare actions and the page escapes what services said", () => {
+test("the page spends no row on a menu, and escapes what services said", () => {
   const html = sidebarHtml(model({
-    menu: [{ command: "runtrol.pairPhone", label: "Pair a phone" }],
     loose: [conversation({ key: "x", title: "<script>alert(1)</script>", hue: null })],
   }), assets);
-  assert.ok(html.includes('class="ci ci-kebab-vertical"'));
-  assert.ok(html.includes('data-command="runtrol.pairPhone"'));
+  // The rare actions live behind the title bar's own `⋮` now. A strip inside the page spent a whole row of a
+  // 200px panel on one button, which is the row the operator asked about on 2026-08-28.
+  assert.ok(!html.includes("menu-bar"));
+  assert.ok(!html.includes('class="ci ci-kebab-vertical"'));
   assert.ok(!html.includes("<script>alert(1)</script>"));
   assert.ok(html.includes("&lt;script&gt;alert(1)&lt;/script&gt;"));
   assert.ok(html.includes("script-src 'nonce-n0nce'"));

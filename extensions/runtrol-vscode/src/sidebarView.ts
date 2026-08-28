@@ -26,7 +26,6 @@ import {
   rowKeys,
   sidebarHtml,
   type SidebarConversationRow,
-  type SidebarMenuItem,
   type SidebarModel,
   type SidebarNotice,
   type SidebarProjectRow,
@@ -39,6 +38,14 @@ import { usageRows } from "./usageDisplay";
 export const SIDEBAR_VIEW_ID = "runtrol.sidebar";
 
 const COLLAPSED_KEY = "runtrol.sidebar.collapsedProjects";
+const EXPANDED_KEY = "runtrol.sidebar.expandedProjects";
+
+/// How many conversations a project shows before the rest wait behind "Show all".
+///
+/// Five, because a machine with several projects is the case that matters: one project with forty
+/// conversations pushed every other project off the screen, and the panel is meant to show the machine
+/// (operator, 2026-08-28).
+const ROWS_PER_PROJECT = 5;
 
 export type ProjectsPort = {
   all(): readonly ProjectRecord[];
@@ -59,20 +66,6 @@ export type UsageActions = {
 type ServiceOffer = () => readonly { providerId: string; displayName: string; icon: string }[];
 
 /// Everything rare enough to live behind the vertical dots rather than in the title bar.
-const MENU: readonly SidebarMenuItem[] = [
-  { command: "runtrol.openNextWaiting", label: "Open the next conversation waiting for you" },
-  { command: "runtrol.switchSession", label: "Switch conversation..." },
-  { command: "runtrol.refresh", label: "Look again" },
-  { command: "runtrol.setUpServices", label: "Set up coding services" },
-  { command: "runtrol.checkProviderUpdates", label: "Check for service updates" },
-  { command: "runtrol.pairPhone", label: "Pair a phone" },
-  { command: "runtrol.managePhones", label: "Manage phones" },
-  { command: "runtrol.reviewIntegrations", label: "Review Runtime integrations" },
-  { command: "runtrol.manageIntegrations", label: "Manage Runtime integrations" },
-  { command: "runtrol.reviewRuntimeRequests", label: "Review Runtime requests" },
-  { command: "runtrol.restartExtensionHost", label: "Restart the Extension Host" },
-];
-
 export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposable {
   private view: vscode.WebviewView | null = null;
   private readonly subscriptions: { dispose(): void }[] = [];
@@ -84,6 +77,7 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
   private updateNotice: string | null = null;
   private staleWindow: string | null = null;
   private collapsed: Set<string>;
+  private expanded: Set<string>;
   private usableProvider: boolean | null = null;
   private verifyingProvider: boolean | null = null;
   private reach: string | null = null;
@@ -98,6 +92,7 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
     private readonly report: (error: unknown) => void,
   ) {
     this.collapsed = new Set(context.workspaceState.get<string[]>(COLLAPSED_KEY, []));
+    this.expanded = new Set(context.workspaceState.get<string[]>(EXPANDED_KEY, []));
     this.subscriptions.push(
       state.onDidChange((change) => {
         if (change === "selection") return;
@@ -195,6 +190,14 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
       await this.context.workspaceState.update(COLLAPSED_KEY, [...this.collapsed]);
       return;
     }
+    if (type === "expand") {
+      const { key } = message as { key?: unknown };
+      if (typeof key !== "string") return;
+      this.expanded.add(key);
+      await this.context.workspaceState.update(EXPANDED_KEY, [...this.expanded]);
+      this.render();
+      return;
+    }
     if (type === "reorder") {
       const { keys } = message as { keys?: unknown };
       if (!Array.isArray(keys) || !keys.every((key) => typeof key === "string")) return;
@@ -287,7 +290,7 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
       attention: group.attention,
       live: group.live,
       agentTools: this.agentTools.enabled(group.workspace),
-      rows: pinnedFirst(group.rows).map((row) => this.conversationRow(row, rowHueClass(group.workspace))),
+      ...this.rowsOf(group),
     }));
     const looseRows = pinnedFirst(loose(rows)).map((row) => this.conversationRow(row, null));
     const usage: UsageChip[] = usageChips(usageRows(this.state.usage, this.state.providers, Date.now()));
@@ -301,9 +304,16 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
       usage,
       serviceChoice: this.serviceChoice(),
       firstRun,
-      menu: this.state.incompleteDiscovery
-        ? [{ command: "runtrol.explainListing", label: "Why is the list incomplete?" }, ...MENU]
-        : MENU,
+    };
+  }
+
+  /// The rows this project shows now, and how many are waiting behind "Show all".
+  private rowsOf(group: ProjectGroup): { rows: SidebarConversationRow[]; hidden: number } {
+    const ordered = pinnedFirst(group.rows);
+    const shown = this.expanded.has(group.key) ? ordered : ordered.slice(0, ROWS_PER_PROJECT);
+    return {
+      rows: shown.map((row) => this.conversationRow(row, rowHueClass(group.workspace))),
+      hidden: ordered.length - shown.length,
     };
   }
 
@@ -363,10 +373,9 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
     if (this.updateNotice) {
       notices.push({ tone: "info", text: this.updateNotice, command: null, label: null });
     }
-    const history = this.state.discoveryNotice;
-    if (history) {
-      notices.push({ tone: "info", text: history, command: "runtrol.explainListing", label: "Why" });
-    }
+    // The services' own "history is partial" sentence is not pushed here. It sat above every list taking a
+    // line to say something no one acts on, and the same answer is one click away in the title bar's menu
+    // ("Why is the list incomplete?"). Operator, 2026-08-28.
     return notices;
   }
 

@@ -385,6 +385,12 @@
         "title": "Move Project Down",
         "icon": "$(arrow-down)",
         "category": "Runtrol"
+      },
+      {
+        "command": "runtrol.moreActions",
+        "title": "More Actions...",
+        "icon": "$(kebab-vertical)",
+        "category": "Runtrol"
       }
     ],
     "keybindings": [
@@ -498,6 +504,11 @@
           "command": "runtrol.createProject",
           "when": "view == runtrol.sidebar",
           "group": "navigation@1"
+        },
+        {
+          "command": "runtrol.moreActions",
+          "when": "view == runtrol.sidebar",
+          "group": "navigation@2"
         }
       ]
     },

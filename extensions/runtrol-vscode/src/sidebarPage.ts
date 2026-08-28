@@ -3,8 +3,8 @@
 /// One page, three zones with visible edges: projects (each a folder that collapses, its conversations under it),
 /// conversations that belong to no project, and one usage chip per installed service. The title bar above the
 /// page is VS Code's, and it carries the two actions that start things: add a project, start a conversation. Every
-/// other action lives on the row it belongs to and appears on hover, or in the vertical-dots menu at the top of
-/// the page. This is the shape the operator fixed in `docs/vscodeSurface.md`; the native tree could draw
+/// other action lives on the row it belongs to and appears on hover, or behind the `⋮` in the title bar the
+/// editor draws above this page (`moreActions.ts`). This is the shape the operator fixed in `docs/vscodeSurface.md`; the native tree could draw
 /// neither the edges between zones nor the gauges nor the row density it asks for.
 ///
 /// Everything here is a pure function of a `SidebarModel` the host builds. The page posts back what was pressed
@@ -50,6 +50,8 @@ export type SidebarProjectRow = {
   readonly live: number;
   readonly agentTools: boolean;
   readonly rows: readonly SidebarConversationRow[];
+  /// How many of this project's conversations are waiting behind "Show all".
+  readonly hidden: number;
 };
 
 export type SidebarNotice = {
@@ -57,11 +59,6 @@ export type SidebarNotice = {
   readonly text: string;
   readonly command: string | null;
   readonly label: string | null;
-};
-
-export type SidebarMenuItem = {
-  readonly command: string;
-  readonly label: string;
 };
 
 export type SidebarServiceChoice = {
@@ -77,7 +74,6 @@ export type SidebarModel = {
   readonly serviceChoice: SidebarServiceChoice | null;
   /// Nothing to list and a service to start with: the page offers the two first actions as rows.
   readonly firstRun: boolean;
-  readonly menu: readonly SidebarMenuItem[];
 };
 
 export type SidebarAssets = UsageStripAssets;
@@ -118,7 +114,6 @@ export function sidebarHtml(model: SidebarModel, assets: SidebarAssets): string 
 <style nonce="${assets.nonce}">${STYLE}${HUE_STYLE}${USAGE_STYLE}</style>
 </head>
 <body>
-${menuHtml(model.menu)}
 ${model.notices.map(noticeHtml).join("")}
 ${model.serviceChoice ? serviceChoiceHtml(model.serviceChoice, assets) : ""}
 ${model.firstRun ? firstRunHtml() : ""}
@@ -148,7 +143,7 @@ ${model.projects.map((project) => projectHtml(project, assets)).join("")}
 ${usageChipsMarkup(model.usage, assets)}
 ${usagePanelsMarkup(model.usage)}
 </section>`;
-  return `${projects}${loose}${usage}`;
+  return `<div class="scroll">${projects}${loose}</div>${usage}`;
 }
 
 function projectHtml(project: SidebarProjectRow, assets: SidebarAssets): string {
@@ -176,7 +171,20 @@ ${action("runtrol.removeProject", "Remove from the sidebar (the folder stays)", 
 ${badges}
 ${actions}
 </div>
-<div class="rows">${project.rows.map((row) => conversationHtml(row, assets)).join("")}</div>
+<div class="rows">${project.rows.map((row) => conversationHtml(row, assets)).join("")}${moreHtml(project)}</div>
+</div>`;
+}
+
+/// The row that stands for the conversations this project is not showing yet.
+///
+/// A project with forty conversations used to push every other project off the screen, and the panel is the
+/// machine's, not one project's (operator, 2026-08-28). Nothing is hidden without saying how much.
+function moreHtml(project: SidebarProjectRow): string {
+  if (project.hidden <= 0) return "";
+  const many = project.hidden === 1 ? "1 more conversation" : `${project.hidden} more conversations`;
+  return `<div class="row more" role="button" tabindex="0" data-kind="more" data-key="${escapeHtml(project.key)}">
+<span class="bar"></span>
+<span class="more-label">Show all (${many})</span>
 </div>`;
 }
 
@@ -197,7 +205,7 @@ function conversationHtml(row: SidebarConversationRow, assets: SidebarAssets): s
   // tooltip floating beside the hover actions reads as clutter (operator, 2026-08-27).
   return `<div class="row conv${row.canOpen ? "" : " blocked"}${row.pinned ? " pinned" : ""}" role="button" tabindex="0" data-kind="conversation" data-key="${escapeHtml(row.key)}"${row.blocked ? ` title="${escapeHtml(row.blocked)}"` : ""}>
 <span class="bar${row.hue ? ` ${row.hue}` : ""}"></span>
-<img class="glyph${row.activity === "working" ? " working" : ""}" src="${escapeHtml(iconUri)}" alt="${escapeHtml(row.serviceName)}" draggable="false">
+<span class="glyph-slot${row.activity === "working" ? " working" : ""}"><img class="glyph${row.activity === "working" ? " working" : ""}" src="${escapeHtml(iconUri)}" alt="${escapeHtml(row.serviceName)}" draggable="false"></span>
 <span class="title">${escapeHtml(row.title)}</span>
 ${dot}
 ${row.memory ? `<span class="memory" title="Memory the provider process holds now">${escapeHtml(row.memory)}</span>` : ""}
@@ -248,51 +256,38 @@ function firstRunHtml(): string {
 </div>`;
 }
 
-function menuHtml(items: readonly SidebarMenuItem[]): string {
-  if (items.length === 0) return "";
-  return `<div class="menu-bar">
-<button class="menu-button" type="button" id="menu" aria-haspopup="menu" aria-expanded="false" title="More"><i class="ci ci-kebab-vertical" aria-hidden="true"></i></button>
-<div class="menu" id="menu-list" role="menu" hidden>
-${items.map((item) => `<button class="menu-item" type="button" role="menuitem" data-command="${item.command}">${escapeHtml(item.label)}</button>`).join("")}
-</div>
-</div>`;
-}
-
 // Codicon glyphs the page uses, as inline masks over the theme foreground: the webview cannot load the editor's
 // icon font, and an <img> would not follow the theme colour. Each is the codicon outline in a 16-unit box.
 const STYLE = `
 :root { color-scheme: light dark; }
-body { margin: 0; padding: 0 0 8px; color: var(--vscode-sideBar-foreground, var(--vscode-foreground)); background: transparent; font: var(--vscode-font-size) var(--vscode-font-family); user-select: none; }
+body { margin: 0; padding: 0; height: 100vh; box-sizing: border-box; display: flex; flex-direction: column; overflow: hidden; color: var(--vscode-sideBar-foreground, var(--vscode-foreground)); background: transparent; font: var(--vscode-font-size) var(--vscode-font-family); user-select: none; }
 button { font: inherit; color: inherit; }
-.menu-bar { position: sticky; top: 0; z-index: 2; display: flex; justify-content: flex-end; padding: 2px 6px 0; background: var(--vscode-sideBar-background); }
-.menu-button { border: 0; background: transparent; padding: 2px; border-radius: 4px; cursor: pointer; opacity: 0.8; }
-.menu-button:hover, .menu-button[aria-expanded="true"] { background: var(--vscode-toolbar-hoverBackground); opacity: 1; }
-.menu { position: absolute; right: 6px; top: 22px; min-width: 200px; padding: 4px; border: 1px solid var(--vscode-menu-border, var(--vscode-widget-border)); border-radius: 6px; background: var(--vscode-menu-background, var(--vscode-editorWidget-background)); color: var(--vscode-menu-foreground, inherit); box-shadow: 0 4px 12px rgba(0,0,0,0.25); }
-.menu-item { display: block; width: 100%; text-align: left; border: 0; background: transparent; padding: 4px 8px; border-radius: 4px; cursor: pointer; }
-.menu-item:hover, .menu-item:focus-visible { background: var(--vscode-menu-selectionBackground, var(--vscode-list-hoverBackground)); color: var(--vscode-menu-selectionForeground, inherit); outline: none; }
-.notice { margin: 6px 8px 0; padding: 6px 8px; border-radius: 4px; font-size: 12px; background: var(--vscode-editorWidget-background); border-left: 3px solid var(--vscode-widget-border); }
+.notice { margin: 4px 4px 0; padding: 4px 6px; border-radius: 4px; font-size: 12px; background: var(--vscode-editorWidget-background); border-left: 3px solid var(--vscode-widget-border); }
 .notice.warn { border-left-color: var(--vscode-editorWarning-foreground); }
 .notice.error { border-left-color: var(--vscode-errorForeground); }
 .notice-act { margin-left: 8px; border: 1px solid var(--vscode-button-border, transparent); border-radius: 3px; background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); padding: 1px 8px; cursor: pointer; }
-.choice { margin: 6px 8px 0; padding: 6px; border-radius: 6px; background: var(--vscode-editorWidget-background); border: 1px solid var(--vscode-widget-border); }
+.choice { margin: 4px 4px 0; padding: 6px; border-radius: 6px; background: var(--vscode-editorWidget-background); border: 1px solid var(--vscode-widget-border); }
 .choice-title { display: block; font-size: 11px; opacity: 0.7; margin: 0 0 4px 2px; }
 .choice-item { display: flex; align-items: center; gap: 6px; width: 100%; border: 0; border-radius: 4px; background: transparent; padding: 4px 6px; text-align: left; cursor: pointer; }
 .choice-item:hover, .choice-item:focus-visible { background: var(--vscode-list-hoverBackground); outline: none; }
 .choice-item img { width: 14px; height: 14px; }
-.first-run { display: grid; gap: 6px; padding: 10px 8px 4px; }
+.first-run { display: grid; gap: 6px; padding: 8px 4px 4px; }
 .first-act { display: grid; grid-template-columns: 20px 1fr; grid-template-rows: auto auto; column-gap: 8px; align-items: center; text-align: left; border: 1px solid var(--vscode-widget-border); border-radius: 6px; background: var(--vscode-editorWidget-background); padding: 8px 10px; cursor: pointer; }
 .first-act:hover, .first-act:focus-visible { border-color: var(--vscode-focusBorder); outline: none; }
 .first-act i { grid-row: 1 / span 2; }
 .first-act span { font-weight: 600; }
 .first-act small { opacity: 0.7; }
+/* The list scrolls and the usage strip does not: a person looking for how much is left should not have to
+   scroll a list of conversations to find it (operator, 2026-08-28). */
+.scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; }
 .zone { padding: 4px 0 2px; }
 .zone + .zone { border-top: 1px solid var(--vscode-sideBarSectionHeader-border, var(--vscode-widget-border)); margin-top: 4px; }
-.zone-title { margin: 4px 8px 2px; font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; opacity: 0.55; }
-.usage-zone { position: sticky; bottom: 0; background: var(--vscode-sideBar-background); padding-bottom: 4px; }
-.row { position: relative; display: flex; align-items: center; gap: 6px; min-height: 24px; padding: 2px 6px 2px 0; border-radius: 4px; cursor: pointer; outline: none; }
+.zone-title { margin: 4px 4px 2px; font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; opacity: 0.55; }
+.usage-zone { flex: none; background: var(--vscode-sideBar-background); padding-bottom: 4px; border-top: 1px solid var(--vscode-sideBarSectionHeader-border, var(--vscode-widget-border)); }
+.row { position: relative; display: flex; align-items: center; gap: 6px; min-height: 24px; padding: 2px 4px 2px 0; border-radius: 4px; cursor: pointer; outline: none; }
 .row:hover { background: var(--vscode-list-hoverBackground); }
 .row:focus-visible { box-shadow: inset 0 0 0 1px var(--vscode-focusBorder); }
-.row .bar { flex: none; width: 3px; align-self: stretch; border-radius: 2px; margin: 2px 4px 2px 6px; }
+.row .bar { flex: none; width: 3px; align-self: stretch; border-radius: 2px; margin: 2px 5px 2px 2px; }
 .project-row { font-weight: 600; }
 .project-row .chevron { flex: none; width: 10px; height: 10px; margin-right: -2px; background: currentColor; opacity: 0.6; -webkit-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M5 3l6 5-6 5z'/></svg>") center / contain no-repeat; mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M5 3l6 5-6 5z'/></svg>") center / contain no-repeat; transform: rotate(90deg); transition: transform 80ms; }
 .project.collapsed .project-row .chevron { transform: rotate(0deg); }
@@ -304,10 +299,16 @@ button { font: inherit; color: inherit; }
 .badge.attention { background: var(--vscode-notificationsWarningIcon-foreground); color: var(--vscode-sideBar-background); }
 .badge.live { background: var(--vscode-progressBar-background); color: var(--vscode-sideBar-background); }
 .badge.tools { background: transparent; border: 1px solid var(--vscode-widget-border); font-weight: 400; opacity: 0.8; }
-.conv .glyph { flex: none; width: 14px; height: 14px; }
-.conv .glyph.working { animation: spin 1.4s linear infinite; }
+.conv .glyph-slot { flex: none; position: relative; display: inline-flex; width: 14px; height: 14px; }
+.conv .glyph { width: 14px; height: 14px; }
+/* A turn is running. The icon turns, and a ring turns around it: the icon alone is 14px of slow rotation that
+   a reader scanning the list does not catch (operator, 2026-08-28: make it unmistakable). */
+.conv .glyph.working { animation: spin 1.1s linear infinite; }
+.conv .glyph-slot.working::after { content: ""; position: absolute; inset: -3px; border-radius: 50%; border: 1.5px solid transparent; border-top-color: var(--vscode-progressBar-background); border-right-color: var(--vscode-progressBar-background); animation: spin 0.9s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
-.conv .title { flex: 1 1 auto; min-width: 0; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; line-height: 1.3; word-break: break-word; }
+/* One line, and the tail fades out rather than ending in dots: the reader sees there is more without a
+   glyph spending width to say so, and two-line rows made the list hard to scan (operator, 2026-08-28). */
+.conv .title { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; line-height: 1.4; -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 20px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 20px), transparent); }
 .conv.blocked .title { opacity: 0.5; }
 .conv.pinned .title::before { content: ""; display: inline-block; width: 9px; height: 9px; margin-right: 4px; background: currentColor; opacity: 0.55; -webkit-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M10 1l5 5-3 1-2 2 1 4-3 1-2-4-4 4-1-1 4-4-4-2 1-3 4 1 2-2z'/></svg>") center / contain no-repeat; mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M10 1l5 5-3 1-2 2 1 4-3 1-2-4-4 4-1-1 4-4-4-2 1-3 4 1 2-2z'/></svg>") center / contain no-repeat; }
 .dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--vscode-descriptionForeground); opacity: 0.6; }
@@ -316,6 +317,8 @@ button { font: inherit; color: inherit; }
 .dot.attention { background: var(--vscode-notificationsWarningIcon-foreground); opacity: 1; }
 .dot.waitingOnQuota { background: var(--vscode-errorForeground); opacity: 1; }
 .dot.ready { background: var(--vscode-testing-iconPassed, var(--vscode-charts-green)); opacity: 0.9; }
+.more .more-label { flex: 1 1 auto; font-size: 11px; opacity: 0.65; }
+.more:hover .more-label { opacity: 1; }
 .memory { flex: none; font-size: 10px; font-variant-numeric: tabular-nums; opacity: 0.6; }
 .actions { flex: none; display: none; gap: 1px; margin-left: 2px; }
 .row:hover .actions, .row:focus-within .actions { display: inline-flex; }
@@ -366,11 +369,14 @@ const SCRIPT = `
       var choice = button.closest(".choice");
       var target = kind ? { kind: kind, key: key, workspace: choice ? choice.dataset.workspace : undefined } : targetOf(button);
       post({ type: "command", command: button.dataset.command, target: target });
-      closeMenu();
       return;
     }
     var row = rowOf(event.target);
-    if (!row) { closeMenu(); return; }
+    if (!row) return;
+    if (row.dataset.kind === "more") {
+      post({ type: "expand", key: row.dataset.key });
+      return;
+    }
     if (row.dataset.kind === "project") {
       var project = row.closest(".project");
       project.classList.toggle("collapsed");
@@ -383,7 +389,6 @@ const SCRIPT = `
   });
   document.addEventListener("keydown", function (event) {
     var row = rowOf(document.activeElement);
-    if (event.key === "Escape") { closeMenu(); return; }
     if (!row) return;
     if (event.key === "Enter" || event.key === " ") { event.preventDefault(); row.click(); return; }
     if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
@@ -393,22 +398,6 @@ const SCRIPT = `
     var next = rows[at + (event.key === "ArrowDown" ? 1 : -1)];
     if (next) next.focus();
   });
-  var menuButton = document.getElementById("menu");
-  var menuList = document.getElementById("menu-list");
-  function closeMenu() {
-    if (!menuButton || !menuList) return;
-    menuList.hidden = true;
-    menuButton.setAttribute("aria-expanded", "false");
-  }
-  if (menuButton && menuList) {
-    menuButton.addEventListener("click", function (event) {
-      event.stopPropagation();
-      var open = menuList.hidden;
-      menuList.hidden = !open;
-      menuButton.setAttribute("aria-expanded", open ? "true" : "false");
-      if (open) { var first = menuList.querySelector(".menu-item"); if (first) first.focus(); }
-    });
-  }
   var dragging = null;
   document.querySelectorAll('.project[draggable="true"]').forEach(function (project) {
     project.addEventListener("dragstart", function (event) {
@@ -454,8 +443,11 @@ const SCRIPT = `
       row.focus({ preventScroll: true });
     }
   });
-  if (typeof restored.scrollTop === "number") window.scrollTo(0, restored.scrollTop);
-  window.addEventListener("scroll", function () { vscode.setState({ scrollTop: window.scrollY }); });
+  var scroller = document.querySelector(".scroll");
+  if (scroller) {
+    if (typeof restored.scrollTop === "number") scroller.scrollTop = restored.scrollTop;
+    scroller.addEventListener("scroll", function () { vscode.setState({ scrollTop: scroller.scrollTop }); });
+  }
   post({ type: "ready" });
 })();
 `;

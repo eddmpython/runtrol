@@ -67,9 +67,15 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             and str(entry.get("group", "")).startswith("navigation")
         } if isinstance(title_entries, list) else set()
 
-    # The one header keeps only the two creation actions. Everything else stays in overflow.
-    if title_navigation("runtrol.sidebar") != {"runtrol.createProject", "runtrol.startSession"}:
-        found.append("the unified sidebar title must keep exactly project and conversation creation visible")
+    # The one header carries all three: create a conversation, add a project, and the vertical dots the rare
+    # actions live behind. They were a strip the page drew under the title bar, which spent a whole row of a
+    # narrow panel on one button (operator, 2026-08-28: "why make one more row when the first one is there").
+    if title_navigation("runtrol.sidebar") != {
+        "runtrol.createProject",
+        "runtrol.startSession",
+        "runtrol.moreActions",
+    }:
+        found.append("the sidebar title must carry exactly conversation, project and the more-actions dots")
     item_context = menus.get("view/item/context") if isinstance(menus, dict) else None
     if item_context:
         found.append("row actions are drawn by the sidebar page on hover; the manifest contributes no view/item/context menus")
@@ -221,16 +227,23 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             'aria-label="Projects"',
             'aria-label="Conversations"',
             'aria-label="Usage"',
-            # A project's colour reaches its heading and every conversation under it.
-            "themeColorVar(project.color)",
-            "themeColorVar(row.color)",
+            # A project's colour reaches its heading and every conversation under it, as a class the page's
+            # own stylesheet paints: the CSP allows styles only from the nonced block, so a colour written onto
+            # the element is dropped (2026-08-28).
+            'class="bar${project.hue',
+            'class="bar${row.hue',
+            ".row .bar.${hue.band}",
             # Row actions appear on hover, and deletion only where the provider reports it.
             ".row:hover .actions",
             'row.canDelete ? action("runtrol.deleteConversation"',
-            # The rare actions live behind the vertical dots, never in a second view.
-            "ci-kebab-vertical",
-            # Long names wrap rather than vanish; memory rides the row.
-            "-webkit-line-clamp: 2",
+            # A long name stays on one line and its tail fades; two-line rows made the list unreadable
+            # (operator, 2026-08-28). Memory rides the row.
+            "white-space: nowrap",
+            "mask-image: linear-gradient(to right",
+            # A running turn is unmistakable: the icon turns and a ring turns around it.
+            ".conv .glyph-slot.working::after",
+            # A project shows five conversations and says how many more there are.
+            'data-kind="more"',
             'class="memory"',
             "Content-Security-Policy",
             "script-src 'nonce-",
@@ -248,7 +261,8 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             '"runtrol.isVerifyingProvider"',
             "awaitsVerification",
             "this.state.incompleteDiscovery",
-            "projectColorId(group.workspace)",
+            "rowHueClass(group.workspace)",
+            "ROWS_PER_PROJECT",
             "canDelete(row, capabilities)",
         ],
         "usageStrip.ts": [
@@ -447,8 +461,10 @@ def selftest() -> int:
         ),
         "sidebarPage.ts": (
             'aria-label="Projects" aria-label="Conversations" aria-label="Usage" '
-            "themeColorVar(project.color) themeColorVar(row.color) .row:hover .actions "
-            'row.canDelete ? action("runtrol.deleteConversation" ci-kebab-vertical -webkit-line-clamp: 2 '
+            'class="bar${project.hue class="bar${row.hue .row .bar.${hue.band} '
+            '.row:hover .actions row.canDelete ? action("runtrol.deleteConversation" '
+            "white-space: nowrap mask-image: linear-gradient(to right "
+            '.conv .glyph-slot.working::after data-kind="more" '
             'class="memory" Content-Security-Policy script-src \'nonce-'
         ),
         "sidebarView.ts": (
@@ -456,7 +472,8 @@ def selftest() -> int:
             "Cannot reach the Runtrol Core. Connecting to the Runtrol Core... "
             "Checking the installed coding-agent CLI... No coding-agent CLI was found on this machine. "
             '"runtrol.hasUsableProvider" "runtrol.isVerifyingProvider" awaitsVerification '
-            "this.state.incompleteDiscovery projectColorId(group.workspace) canDelete(row, capabilities)"
+            "this.state.incompleteDiscovery rowHueClass(group.workspace) ROWS_PER_PROJECT "
+            "canDelete(row, capabilities)"
         ),
         "usageStrip.ts": (
             "export function usageChips primarySevenDayMeter(row.meters) "
