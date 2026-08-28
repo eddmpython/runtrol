@@ -10,6 +10,26 @@ and refactoring that no user can observe do not belong here.
 
 ## [Unreleased]
 
+## [0.1.30] - 2026-08-28
+
+### Changed
+
+- The sidebar spends its width on conversations. The title bar carries all three actions, so the strip that
+  held one button under it is gone; the sentence about partial history is gone with it, and its answer moved
+  into the title bar's menu. Everything below the header sits closer to the edges.
+- A conversation's name stays on one line and fades where it runs out of room, instead of wrapping to two.
+- A project shows five conversations and offers the rest behind one row, so one busy project cannot push the
+  others off the screen.
+- Usage stays at the bottom of the panel, and its detail gives each window's name a line of its own with the
+  progress underneath, so a model's name is never the part that gets cut.
+
+### Added
+
+- A conversation whose turn is running is marked by its icon turning, with a ring turning around it.
+- Opening a conversation draws the Runtrol mark turning in the middle of the tab until the service's own
+  screen arrives, so the wait is never a blank rectangle.
+- A project added, renamed or removed in one window shows up in the others when they are next looked at.
+
 ## [0.1.29] - 2026-08-28
 
 ### Added
