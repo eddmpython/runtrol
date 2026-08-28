@@ -111,14 +111,11 @@ function chip(providerId, name, percent, rings) {
     position: "Within limits",
     plan: "Max",
     age: "2 min ago",
-    meters: rings.map((ring) => ({
+    meters: rings.map((ring, at) => ({
       label: ring.label,
       percent: ring.percent,
-      used: null,
-      limit: null,
-      resetsAt: null,
-      governing: false,
-      model: null,
+      detail: at === 0 ? "resets in 3 days" : "",
+      governing: at === 0,
     })),
     action: null,
   };
@@ -171,7 +168,11 @@ const model = {
   ],
   loose: [conversation({ title: "폴더 없이 시작한 대화", hue: null, workspace: "" })],
   usage: [
-    chip("claude", "Claude Code", 32, [{ label: "7 days", percent: 32 }, { label: "5 hours", percent: 61 }]),
+    chip("claude", "Claude Code", 32, [
+      { label: "7 days", percent: 32 },
+      { label: "5 hours", percent: 61 },
+      { label: "claude-opus-5 weekly", percent: 74 },
+    ]),
     chip("codex", "Codex", 13, [{ label: "7 days", percent: 13 }]),
   ],
   serviceChoice: null,
@@ -193,6 +194,8 @@ let html = sidebarHtml(model, assets);
 // is dropped without a word, which is how the colour band came to be missing from the first picture this
 // harness took.
 html = html.replace("</head>", `<style nonce="${assets.nonce}">${THEME}</style></head>`);
+// One panel open, because a hover panel that nothing hovers is a state this harness could never show.
+html = html.replace('id="panel-0" hidden', 'id="panel-0"');
 const page = path.join(temporary, "sidebar.html");
 await writeFile(page, html, "utf8");
 

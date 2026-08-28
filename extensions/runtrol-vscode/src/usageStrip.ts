@@ -163,8 +163,8 @@ function panelHtml(chip: UsageChip, index: number): string {
   // only the window that is actually governing keeps its words (its reset is the one actionable fact here).
   const bars = chip.meters.map((meter) => `<div class="meter${meter.governing ? " governing" : ""}">
 <span class="label">${escapeHtml(meter.label)}</span>
-<span class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${meter.percent}" aria-label="${escapeHtml(`${meter.label} ${meter.percent} percent`)}"><span class="value" style="width:${meter.percent}%"></span></span>
 <span class="percent">${meter.percent}%</span>
+<span class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${meter.percent}" aria-label="${escapeHtml(`${meter.label} ${meter.percent} percent`)}"><span class="value" style="width:${meter.percent}%"></span></span>
 ${meter.governing ? `<span class="detail">${escapeHtml(meter.detail)}</span>` : ""}
 </div>`).join("");
   return `<section class="panel" id="panel-${index}" hidden>
@@ -206,10 +206,13 @@ body { margin: 0; padding: 6px 8px; color: var(--vscode-foreground); font: var(-
 .panel .plan { font-weight: 400; opacity: 0.75; }
 .panel p { margin: 0 0 4px; opacity: 0.9; }
 .panel .position.reached { color: var(--vscode-errorForeground); opacity: 1; }
-.meter { display: grid; grid-template-columns: 72px minmax(0, 1fr) 34px; gap: 2px 6px; align-items: center; margin: 3px 0; }
-.meter .label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 11px; }
+/* The name has the line, and the bar sits under it. A model window is named by its model, and a model name
+   does not fit beside a bar in a panel this wide: the column was 72px and the name was the part that
+   disappeared (operator, 2026-08-28). */
+.meter { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 1px 6px; align-items: baseline; margin: 5px 0; }
+.meter .label { min-width: 0; font-size: 11px; overflow-wrap: anywhere; }
 .meter.governing .label { font-weight: 600; }
-.meter .bar { display: block; height: 4px; border-radius: 2px; background: var(--vscode-widget-border, rgba(128,128,128,0.35)); overflow: hidden; }
+.meter .bar { grid-column: 1 / -1; display: block; height: 4px; border-radius: 2px; background: var(--vscode-widget-border, rgba(128,128,128,0.35)); overflow: hidden; }
 .meter .value { display: block; height: 100%; border-radius: 2px; background: var(--vscode-progressBar-background); }
 .meter .percent { font-variant-numeric: tabular-nums; text-align: right; font-size: 11px; }
 .meter .detail { grid-column: 1 / -1; font-size: 11px; opacity: 0.75; }
