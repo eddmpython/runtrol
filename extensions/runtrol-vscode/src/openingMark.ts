@@ -59,3 +59,27 @@ export const MARK_FRAME_MS = 160;
 /// Hide the cursor while the mark turns; a block cursor parked at the top left is not part of the picture.
 export const HIDE_CURSOR = "\x1b[?25l";
 export const SHOW_CURSOR = "\x1b[?25h";
+
+/// Whether a chunk the service wrote puts anything on the screen a person could see.
+///
+/// Escape sequences move the cursor, clear the screen and set colours without drawing a mark, and a screen
+/// handed back for a conversation that has not started is exactly that. The scan is deliberately shallow: it
+/// removes the escape sequences and asks whether any non-blank character is left. It never looks at what the
+/// characters say.
+export function hasVisibleText(text: string): boolean {
+  let visible = false;
+  let inEscape = false;
+  for (const character of text) {
+    if (character === "\x1b") {
+      inEscape = true;
+      continue;
+    }
+    if (inEscape) {
+      // A control sequence ends at its final byte; everything before it only steers the terminal.
+      if (character >= "@" && character <= "~") inEscape = false;
+      continue;
+    }
+    if (character > " ") visible = true;
+  }
+  return visible;
+}

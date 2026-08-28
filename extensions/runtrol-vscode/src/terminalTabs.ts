@@ -8,7 +8,7 @@ import * as vscode from "vscode";
 import type { Conversation, StartedConversation } from "./conversationList";
 import { tabColorId } from "./projectColor";
 import { tabName } from "./tabName";
-import { HIDE_CURSOR, MARK_FRAME_MS, paintMark, SHOW_CURSOR } from "./openingMark";
+import { HIDE_CURSOR, hasVisibleText, MARK_FRAME_MS, paintMark, SHOW_CURSOR } from "./openingMark";
 import type { StudioRuntimeClient } from "./runtimeClient";
 
 /// The conversation surface: the coding service's own terminal interface, hosted by the Core on a pseudo
@@ -290,10 +290,12 @@ class RuntimeTerminal implements vscode.Pseudoterminal {
   /// itself writes, and taking the mark down then left the same blank rectangle it exists to prevent
   /// (measured 2026-08-28, one click in a real window).
   private writeFromService(text: string): void {
-    if (text.length > 0) {
-      this.stopOpeningMark();
-      this.wrote();
-    }
+    if (text.length > 0) this.wrote();
+    // Only something a person can see takes the mark down. The Runtime answers with the terminal's screen as
+    // it stands, and for a conversation the service has not drawn yet that screen is escape sequences and
+    // blanks: taking the mark down on those put the empty rectangle back that the mark exists to prevent
+    // (measured 2026-08-28, one click in a real window).
+    if (hasVisibleText(text)) this.stopOpeningMark();
     this.writeEmitter.fire(text);
   }
 

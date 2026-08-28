@@ -336,7 +336,10 @@ button { font: inherit; color: inherit; }
    on hover the actions are what the person came for. */
 .tail { flex: none; position: relative; display: inline-flex; align-items: center; justify-content: flex-end; margin-left: 2px; }
 .memory { position: absolute; right: 2px; font-size: 10px; font-variant-numeric: tabular-nums; opacity: 0.6; background: inherit; }
-.actions { display: inline-flex; gap: 1px; visibility: hidden; }
+/* Always at the right edge of the row, never packed against the name: a person reaching for delete should
+   find it in the same place on every row (operator, 2026-08-28). */
+.actions { display: inline-flex; gap: 1px; margin-left: auto; visibility: hidden; }
+.conv .actions { margin-left: 0; }
 .row:hover .actions, .row:focus-within .actions { visibility: visible; }
 .row:hover .memory, .row:focus-within .memory { visibility: hidden; }
 .act { border: 0; background: transparent; padding: 2px; border-radius: 3px; cursor: pointer; opacity: 0.75; line-height: 0; }
