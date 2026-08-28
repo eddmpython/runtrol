@@ -139,19 +139,48 @@ fn labeled_registration(
 
 /// Whether a registered command is this runtrol's own earlier image rather than somebody else's program.
 ///
-/// Two things have to hold together, and neither alone is enough. The file has to be gone, because a program
-/// that is still there is still somebody's. And it has to have stood in the directory this executable runs
-/// from, which is the folder the extension keeps its Core images in and nobody else writes to.
+/// Three things have to hold together, and no two of them are enough.
+///
+/// The file has to be gone, because a program that is still there is still somebody's. It has to have stood in
+/// the directory this executable runs from, which is the folder the extension keeps its Core images in. And it
+/// has to be named the way the extension names those images: `runtrol-<digest>` plus this platform's
+/// extension, differing from ours only in the digest. Without the name, an absent program that merely happened
+/// to sit beside us would be taken over, which is somebody else's entry (caught by
+/// `labeled_readback_proves_only_the_exact_authority_free_entry`, 2026-08-28).
 fn superseded_runtrol(registered: &str, ours: &str) -> bool {
     let registered = std::path::Path::new(registered);
     let ours = std::path::Path::new(ours);
     if registered.exists() {
         return false;
     }
-    match (registered.parent(), ours.parent()) {
-        (Some(theirs), Some(mine)) => !mine.as_os_str().is_empty() && theirs == mine,
+    let (Some(theirs), Some(mine)) = (registered.parent(), ours.parent()) else {
+        return false;
+    };
+    if mine.as_os_str().is_empty() || theirs != mine {
+        return false;
+    }
+    match (registered.file_name(), ours.file_name()) {
+        (Some(theirs), Some(mine)) => {
+            managed_image_name(&theirs.to_string_lossy())
+                && managed_image_name(&mine.to_string_lossy())
+        }
         _ => false,
     }
+}
+
+/// Whether a file name is one the extension gives a Core image: `runtrol-<hex digest>`, and on Windows `.exe`.
+///
+/// The digest is what changes between one image and the next, so the name is the only part of the path that
+/// says "this was an image of ours" once the file itself is gone.
+fn managed_image_name(name: &str) -> bool {
+    let stem = name.strip_suffix(".exe").unwrap_or(name);
+    let Some(digest) = stem.strip_prefix("runtrol-") else {
+        return false;
+    };
+    !digest.is_empty()
+        && digest
+            .chars()
+            .all(|character| character.is_ascii_hexdigit())
 }
 
 fn one_labeled_value<'line>(lines: &[&'line str], label: &str) -> Result<&'line str, String> {
@@ -290,9 +319,22 @@ mod tests {
         // Gone, but from a folder we never write to: not ours to take over.
         let elsewhere = std::env::temp_dir()
             .join("someOtherPlace")
-            .join("runtrol.exe");
+            .join("runtrol-abc123.exe");
         assert!(!superseded_runtrol(
             elsewhere.to_str().expect("path"),
+            ours.to_str().expect("path")
+        ));
+        // Gone, and beside us, but not named the way the extension names our images. Somebody else's program
+        // that happened to sit in the same folder is still somebody else's.
+        let stranger_gone = folder.join("other.exe");
+        assert!(!superseded_runtrol(
+            stranger_gone.to_str().expect("path"),
+            ours.to_str().expect("path")
+        ));
+        // The name has to be the whole shape, digest and all: a bare stem is not one of ours.
+        let bare = folder.join("runtrol.exe");
+        assert!(!superseded_runtrol(
+            bare.to_str().expect("path"),
             ours.to_str().expect("path")
         ));
 
