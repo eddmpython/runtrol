@@ -122,6 +122,14 @@ test("row keys are unique and in page order, which is what the eye test reads", 
   assert.deepEqual(keys, ["project:app", "claude:one", "codex:loose"]);
 });
 
+test("a project says which branch its folder is on, and says nothing when it is not in a repository", () => {
+  const on = sidebarHtml(model({ projects: [project({ branch: "release/1.2" })] }), assets);
+  assert.ok(on.includes('class="badge branch"'));
+  assert.ok(on.includes("release/1.2"));
+  const off = sidebarHtml(model({ projects: [project({ branch: null })] }), assets);
+  assert.ok(!off.includes('class="badge branch"'), "a folder outside a repository carries no chip");
+});
+
 test("a project counts what it holds, and says how many wait behind the row that shows them", () => {
   const html = sidebarHtml(model({
     projects: [project({ rows: [conversation({ key: "a" })], hidden: 7 })],
