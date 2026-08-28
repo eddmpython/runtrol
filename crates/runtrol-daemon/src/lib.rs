@@ -25,6 +25,7 @@ pub mod generations;
 mod integration_admin;
 mod isolated_workspace;
 mod native_claims;
+mod native_deletions;
 mod pairing_admin;
 mod provider_prepare;
 mod provider_update;

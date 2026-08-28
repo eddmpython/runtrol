@@ -45,6 +45,7 @@ MAY_MUTATE_DISK = {
     "the update rename dance against its own disposable copy, never a provider file",
     "crates/runtrol-daemon/src/crash.rs": "the detached daemon's panic hook appends to its own "
     "bounded crash file inside the runtrol home",
+    "crates/runtrol-daemon/src/native_deletions.rs": "appends one bounded line per native conversation this Runtime removed, inside the runtrol home, so the next deletion is answerable",
     "crates/runtrol-daemon/src/generations.rs": "daemons own the locator of their own home: each writes "
     "only its own entry, under the home's advisory lock, by atomic rename",
     "crates/runtrol-daemon/src/isolated_workspace.rs": "owns the bounded ordinary-chat worktree registry "
