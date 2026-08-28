@@ -450,9 +450,9 @@ async fn line_of(composed: &Composed, direction: &Direction<'_>) -> ConsultLine 
     .await
     {
         Ok(Some(McpRegistrationState::ExactEnabled)) => line(ConsultState::Wired, None),
-        // Ours, but naming the image this build replaced. Not wired, and wiring again is what repairs it.
-        Ok(Some(McpRegistrationState::Superseded)) => line(ConsultState::Unwired, None),
-        Ok(None) => line(ConsultState::Unwired, None),
+        // Nothing of ours is wired: either there is no registration, or the one there names the image this
+        // build replaced. Both are repaired the same way, by wiring again.
+        Ok(Some(McpRegistrationState::Superseded) | None) => line(ConsultState::Unwired, None),
         Ok(Some(McpRegistrationState::ExactDisabled)) => line(
             ConsultState::Unsupported,
             Some(format!(
@@ -584,7 +584,9 @@ async fn change(composed: &Composed, from: &str, to: &str, how: Change) -> Respo
     };
     let already = match state {
         Some(McpRegistrationState::ExactEnabled) => true,
-        None => false,
+        // Nothing registered, or one naming the image this build replaced: both are treated as absent so the
+        // wiring below writes this executable in its place.
+        None | Some(McpRegistrationState::Superseded) => false,
         Some(McpRegistrationState::ExactDisabled) => {
             return refuse(&format!(
                 "the {name} registration is exact but disabled in {from}"
@@ -595,9 +597,6 @@ async fn change(composed: &Composed, from: &str, to: &str, how: Change) -> Respo
                 "{from} already has a different MCP entry named {name}; runtrol will not overwrite or remove it"
             ));
         }
-        // Ours from the image this build replaced. Treated as absent so the wiring below writes this
-        // executable in its place.
-        Some(McpRegistrationState::Superseded) => false,
     };
 
     let outcome = match how {

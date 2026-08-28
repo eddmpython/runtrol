@@ -548,6 +548,9 @@ async fn dispatch_public(
                 )
                 .await
             }
+            RuntimeMethod::ProvidersNativeActivity => {
+                native_activity(state, composed, discovering, id, params).await
+            }
             RuntimeMethod::SessionsList => sessions_list(state, composed, sessions, id, params),
             RuntimeMethod::SessionsWatchIndex => {
                 sessions_watch_index(state, composed, sessions, id, params)
@@ -929,7 +932,9 @@ fn required_scope(method: RuntimeMethod) -> Option<AppScope> {
         | RuntimeMethod::ProvidersUsage
         | RuntimeMethod::ProvidersGetCapabilities => Some(AppScope::ProviderRead),
         RuntimeMethod::ProvidersListModels => Some(AppScope::ModelRead),
-        RuntimeMethod::ProvidersListNativeSessions => Some(AppScope::SessionNativeDiscover),
+        RuntimeMethod::ProvidersListNativeSessions | RuntimeMethod::ProvidersNativeActivity => {
+            Some(AppScope::SessionNativeDiscover)
+        }
         RuntimeMethod::SessionsList
         | RuntimeMethod::SessionsWatchIndex
         | RuntimeMethod::SessionsGet
@@ -2319,6 +2324,79 @@ fn refuse_supervised(
     }
 }
 
+/// Name the conversations of one provider that were written in the last few seconds.
+///
+/// The panel asks this often, so it must stay the cheap question: the driver walks its own store for names and
+/// times and opens nothing. It is the only way Runtrol can say that a conversation it did not start is running,
+/// which is most of them for a person who also uses their CLI in a terminal (operator, 2026-08-28).
+///
+/// No folder filter and no per-row authorisation: an identity the caller was already shown by the catalogue,
+/// answered on the owner-only local endpoint, adds nothing the caller does not have. The same argument the
+/// machine-wide catalogue makes for itself (`docs/runtimeProtocol.md`).
+async fn native_activity(
+    state: &mut PublicState,
+    composed: &Composed,
+    discovering: &crate::serve::DiscoveryGates,
+    id: JsonRpcId,
+    params: serde_json::Value,
+) -> Answer {
+    let Ok(params) =
+        serde_json::from_value::<runtrol_runtime_protocol::NativeActivityParams>(params)
+    else {
+        return Answer::plain(
+            id,
+            RuntimeErrorKind::InvalidRequest,
+            "the native activity request is not shaped as this Runtime accepts",
+        );
+    };
+    if let Err(failure) = authorized(state, composed, Some(AppScope::SessionNativeDiscover)) {
+        return Answer::failure(id, failure);
+    }
+    let Ok(provider) = runtrol_provider::ProviderId::parse(params.provider_id.as_str()) else {
+        return Answer::plain(
+            id,
+            RuntimeErrorKind::InvalidRequest,
+            "the selected provider identity is invalid",
+        );
+    };
+    let within = Duration::from_millis(runtrol_runtime_protocol::NATIVE_ACTIVITY_WINDOW_MS);
+    let walked = tokio::time::timeout(
+        Duration::from_millis(crate::serve::MODEL_PREPARATION_BUDGET_MS),
+        async {
+            let prepared = {
+                let _lane = discovering.lane(provider).await.lock_owned().await;
+                crate::provider_prepare::prepared_driver(composed, provider).await
+            };
+            let prepared = prepared.map_err(|_| ())?;
+            prepared
+                .driver
+                .active_native_sessions(within)
+                .await
+                .map_err(|_| ())
+        },
+    )
+    .await;
+    match walked {
+        Ok(Ok(active)) => Answer::success(
+            id,
+            &runtrol_runtime_protocol::NativeActivity {
+                provider_id: runtrol_runtime_protocol::ProviderId::new(provider.as_str()),
+                active: active.iter().map(ToString::to_string).collect(),
+            },
+        ),
+        Ok(Err(())) => Answer::plain(
+            id,
+            RuntimeErrorKind::ProviderUnavailable,
+            "the selected provider could not say what it wrote lately",
+        ),
+        Err(_) => Answer::plain(
+            id,
+            RuntimeErrorKind::RuntimeUnavailable,
+            "naming what was written lately exceeded its bounded deadline",
+        ),
+    }
+}
+
 /// Who asked for a native mutation and the folder they named, for the record a deletion leaves behind.
 struct MutationOrigin<'a> {
     integration: &'a crate::runtime_auth::AuthorizedIntegration,
@@ -3357,6 +3435,7 @@ fn parse_session_operation(
         | RuntimeMethod::ProvidersGetCapabilities
         | RuntimeMethod::ProvidersListModels
         | RuntimeMethod::ProvidersListNativeSessions
+        | RuntimeMethod::ProvidersNativeActivity
         | RuntimeMethod::SessionsList
         | RuntimeMethod::SessionsWatchIndex
         | RuntimeMethod::SessionsGet
@@ -4077,6 +4156,7 @@ const fn method_needs_provider_refresh(method: RuntimeMethod) -> bool {
             | RuntimeMethod::ProvidersGetCapabilities
             | RuntimeMethod::ProvidersListModels
             | RuntimeMethod::ProvidersListNativeSessions
+            | RuntimeMethod::ProvidersNativeActivity
             | RuntimeMethod::SessionsStart
             | RuntimeMethod::SessionsAdoptNative
             | RuntimeMethod::SessionsResume

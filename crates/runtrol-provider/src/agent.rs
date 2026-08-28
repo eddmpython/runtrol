@@ -34,7 +34,7 @@ use crate::catalog::ModelCatalog;
 use crate::command::{AgentCommand, CloseMode, OpenIntent, Produced};
 use crate::error::ProviderError;
 use crate::event::ApprovalRequest;
-use crate::id::{ApprovalId, ProviderId, SessionId};
+use crate::id::{ApprovalId, NativeSessionId, ProviderId, SessionId};
 use crate::native_catalogue::{
     NativeSessionArchival, NativeSessionCatalogue, NativeSessionDeletion, NativeSessionQuery,
 };
@@ -114,6 +114,31 @@ pub trait Provider: Send + Sync + 'static {
         Ok(NativeSessionCatalogue::unsupported(
             "this driver does not provide official native session discovery",
         ))
+    }
+
+    /// Which of this provider's stored conversations were written in the last `within`, newest first.
+    ///
+    /// The one question the sidebar asks often, so it has to be the cheap one. A conversation whose transcript
+    /// is being written is a conversation whose model is answering, and that is the only signal Runtrol has for
+    /// a conversation it did not start itself: a person who runs a CLI in their own terminal still expects the
+    /// panel to show it working (operator, 2026-08-28, measured against a live turn that showed as idle).
+    ///
+    /// Answering must not read any conversation's content. On this machine a listing that reads each file's
+    /// head costs 121 ms and a walk that only asks the filesystem for names and times costs 23 ms, which is why
+    /// this is a separate question rather than a flag on the catalogue.
+    ///
+    /// # Errors
+    ///
+    /// Any [`ProviderError`] produced while reading the provider's own store.
+    ///
+    /// # Cancellation
+    ///
+    /// Dropping this future must synchronously begin cleanup of anything the walk created.
+    async fn active_native_sessions(
+        &self,
+        _within: core::time::Duration,
+    ) -> Result<Vec<NativeSessionId>, ProviderError> {
+        Ok(Vec::new())
     }
 
     /// Whether [`Self::native_sessions`] answers a query with no folder by naming every

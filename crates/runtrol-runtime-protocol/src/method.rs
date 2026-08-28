@@ -48,6 +48,9 @@ pub enum RuntimeMethod {
     /// Discover one root-scoped official provider-native session page.
     #[serde(rename = "providers/listNativeSessions")]
     ProvidersListNativeSessions,
+    /// Name the conversations of one provider written in the last few seconds, which is how a caller knows a
+    /// turn is running in a conversation this Runtime did not start.
+    ProvidersNativeActivity,
     /// Read the Runtime-managed session catalogue.
     #[serde(rename = "sessions/list")]
     SessionsList,
@@ -203,6 +206,7 @@ impl RuntimeMethod {
             Self::ProvidersGetCapabilities => "providers/getCapabilities",
             Self::ProvidersListModels => "providers/listModels",
             Self::ProvidersListNativeSessions => "providers/listNativeSessions",
+            Self::ProvidersNativeActivity => "providers/nativeActivity",
             Self::SessionsList => "sessions/list",
             Self::SessionsWatchIndex => "sessions/watchIndex",
             Self::SessionsGet => "sessions/get",
@@ -276,6 +280,7 @@ impl FromStr for RuntimeMethod {
             "providers/getCapabilities" => Ok(Self::ProvidersGetCapabilities),
             "providers/listModels" => Ok(Self::ProvidersListModels),
             "providers/listNativeSessions" => Ok(Self::ProvidersListNativeSessions),
+            "providers/nativeActivity" => Ok(Self::ProvidersNativeActivity),
             "sessions/list" => Ok(Self::SessionsList),
             "sessions/watchIndex" => Ok(Self::SessionsWatchIndex),
             "sessions/get" => Ok(Self::SessionsGet),
@@ -350,6 +355,7 @@ mod tests {
             RuntimeMethod::ProvidersGetCapabilities,
             RuntimeMethod::ProvidersListModels,
             RuntimeMethod::ProvidersListNativeSessions,
+            RuntimeMethod::ProvidersNativeActivity,
             RuntimeMethod::SessionsList,
             RuntimeMethod::SessionsWatchIndex,
             RuntimeMethod::SessionsGet,

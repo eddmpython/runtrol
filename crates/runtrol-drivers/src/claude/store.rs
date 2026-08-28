@@ -38,7 +38,7 @@ use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::time::UNIX_EPOCH;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use bytes::Bytes;
 use runtrol_provider::{
@@ -184,6 +184,82 @@ impl ClaudeStore {
 }
 
 impl ClaudeStore {
+    /// The conversations this CLI wrote in the last `within`.
+    ///
+    /// Names and times only. The listing above opens every file to read the folder it ran in and the title the
+    /// CLI gave it, which costs 121 ms on the operator's machine; this asks the filesystem for the directory
+    /// entries and their write times and costs 23 ms. A conversation whose transcript is being written is one
+    /// whose model is answering, and that is the whole question here.
+    ///
+    /// # Errors
+    ///
+    /// [`ProviderError::Protocol`] when the store exists and cannot be walked. A store that is not there yet
+    /// is an empty answer, the same as a store where nothing has been written lately.
+    pub(super) fn active(
+        &self,
+        provider: ProviderId,
+        within: Duration,
+    ) -> Result<Vec<NativeSessionId>, ProviderError> {
+        let Ok(projects) = &self.projects else {
+            return Ok(Vec::new());
+        };
+        let read_failure = |detail: std::io::Error| ProviderError::Protocol {
+            provider,
+            doing: "reading which conversations this CLI wrote lately",
+            detail: detail.to_string(),
+        };
+        let directories = match fs::read_dir(projects) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(read_failure(error)),
+        };
+        let now = SystemTime::now();
+        let mut active = Vec::new();
+        for project in directories {
+            let project = project.map_err(read_failure)?;
+            if !project.file_type().map_err(read_failure)?.is_dir() {
+                continue;
+            }
+            let files = match fs::read_dir(project.path()) {
+                Ok(files) => files,
+                // A project folder that disappeared between the two reads is not an error about the store.
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(read_failure(error)),
+            };
+            for file in files {
+                let file = file.map_err(read_failure)?;
+                let path = file.path();
+                if path.extension().and_then(|extension| extension.to_str())
+                    != Some(CONVERSATION_EXTENSION)
+                {
+                    continue;
+                }
+                let Ok(metadata) = file.metadata() else {
+                    continue;
+                };
+                let Ok(modified) = metadata.modified() else {
+                    continue;
+                };
+                let Ok(age) = now.duration_since(modified) else {
+                    // A write stamped in the future is a clock that moved, not a conversation from the future.
+                    continue;
+                };
+                if age > within {
+                    continue;
+                }
+                let Some(Ok(native)) = path
+                    .file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .map(NativeSessionId::new)
+                else {
+                    continue;
+                };
+                active.push(native);
+            }
+        }
+        Ok(active)
+    }
+
     /// The most recent message records of one stored conversation, for a resume to replay.
     ///
     /// A conversation the store does not hold (or a store that cannot be located) replays nothing, which is

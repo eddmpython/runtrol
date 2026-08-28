@@ -269,6 +269,23 @@ impl Provider for ClaudeProvider {
             })?
     }
 
+    async fn active_native_sessions(
+        &self,
+        within: core::time::Duration,
+    ) -> Result<Vec<runtrol_provider::NativeSessionId>, ProviderError> {
+        let store = self.store.clone();
+        let provider = self.id;
+        // Directory reads: blocking work, kept off the reactor so a slow disk cannot stall every other
+        // provider's answer. The walk asks for names and times and opens nothing.
+        tokio::task::spawn_blocking(move || store.active(provider, within))
+            .await
+            .map_err(|join| ProviderError::Protocol {
+                provider,
+                doing: "reading which conversations this CLI wrote lately",
+                detail: join.to_string(),
+            })?
+    }
+
     async fn delete_native_session(
         &self,
         deletion: NativeSessionDeletion,
