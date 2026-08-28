@@ -219,22 +219,27 @@ mod tests {
     }
 
     #[test]
-    fn a_process_that_exited_with_the_still_active_code_is_not_running() {
-        // 259 is `STILL_ACTIVE`, and it is also an exit code any program may return. Reading the exit code
-        // cannot tell the two apart while a handle to the exited process is held, and this test holds one:
-        // the `Child` is kept until after the question is asked. Measured 2026-08-28, this is what reported a
-        // conversation as running twenty minutes after its process had gone.
+    fn a_process_that_has_exited_is_not_running_even_while_its_parent_holds_it() {
+        // The child is asked about after it has exited, and this test is still holding it: that is the state
+        // in which Windows keeps handing back the exit code, and 259 is both `STILL_ACTIVE` and an ordinary
+        // exit code any program may return. Reading the code cannot tell those two apart. Measured
+        // 2026-08-28, that is what reported a conversation as running twenty minutes after its process ended.
+        //
+        // The exit code itself is only asserted where the trap exists. Unix carries an exit status in eight
+        // bits, so a shell asked for 259 exits with 3, and the platform has no such collision to fall into.
         let mut child = std::process::Command::new(exit_with_259().0)
             .args(exit_with_259().1)
             .spawn()
             .expect("a child that exits immediately");
         let pid = child.id();
         let status = child.wait().expect("the child is waited for");
-        assert_eq!(status.code(), Some(259), "the child exits with 259");
+        if cfg!(windows) {
+            assert_eq!(status.code(), Some(259), "the child exits with 259");
+        }
         assert!(!alive(pid), "an exited process is not running");
     }
 
-    /// A command that exits with 259 and nothing else, in the shell each platform ships.
+    /// A command that exits immediately with 259 where the platform can carry it, in the shell each one ships.
     fn exit_with_259() -> (&'static str, Vec<&'static str>) {
         if cfg!(windows) {
             ("cmd", vec!["/c", "exit 259"])
