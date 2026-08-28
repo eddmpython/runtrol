@@ -75,7 +75,20 @@ fn thread_of(key: usize) -> libc::pthread_t {
     libc::pthread_t::try_from(key).unwrap_or(0)
 }
 
-/// A thread id as a key: a pointer on the other Unix families, so a plain address.
+/// A thread id as a key on the other Unix families, where the type is already address sized.
+///
+/// The cast stays because this arm covers more than one family and they do not agree: the BSDs declare
+/// this as a pointer, where the cast is the conversion, and Apple's declares it as `usize` already, where
+/// the same cast is a no-op that clippy refuses. Written without the cast it stops compiling on a BSD;
+/// written with it, the refusal is answered where it happens and nowhere else. If Apple's declaration goes
+/// back to a pointer, this expectation goes unfulfilled and says so rather than hiding the change.
+#[cfg_attr(
+    target_vendor = "apple",
+    expect(
+        clippy::unnecessary_cast,
+        reason = "this family's `pthread_t` is already `usize`, and the sibling families' is not"
+    )
+)]
 #[cfg(all(unix, not(target_os = "linux")))]
 fn thread_key(thread: libc::pthread_t) -> usize {
     thread as usize
