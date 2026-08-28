@@ -19,6 +19,7 @@ function row(overrides: Partial<UsageRow>): UsageRow {
     position: "Within limits",
     plan: null,
     age: "Reported 2m ago",
+    unmetered: null,
     ...overrides,
   };
 }
@@ -119,4 +120,26 @@ test("a signed-out chip answers a click with the sign-in action and says so to a
 
 test("no installed service says so instead of drawing nothing", () => {
   assert.ok(usageStripHtml([], assets).includes("No coding service is installed yet."));
+});
+
+test("a service that answered with no number of its own is captioned in its own words", () => {
+  // Measured on a real account: one service answers about the plan and the period and states no percentage,
+  // because that account is metered by a team the operator cannot see. Captioning that "No report" says the
+  // service went quiet when it did the opposite.
+  const [chip] = usageChips([row({
+    providerId: "grok",
+    name: "Grok",
+    icon: "grok",
+    meters: [],
+    unmetered: "team-managed",
+    position: "team-managed",
+  })]);
+  assert.equal(chip?.caption, "team-managed");
+  assert.deepEqual(chip?.rings, []);
+  assert.equal(chip?.percent, null);
+});
+
+test("a service nobody has heard from is still captioned as that", () => {
+  const [chip] = usageChips([row({ meters: [], unmetered: null })]);
+  assert.equal(chip?.caption, "No report");
 });

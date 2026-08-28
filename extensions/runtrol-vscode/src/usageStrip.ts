@@ -77,6 +77,11 @@ export function usageChips(rows: readonly UsageRow[]): UsageChip[] {
 }
 
 /// The word under an empty ring. Short because the chip is narrow; the panel says the whole sentence.
+///
+/// A service that answered gets its own words. "No report" is true of a service nobody has heard from, and
+/// measured, one service answers about the plan and the period and states no percentage because that account
+/// is metered by a team: saying it made no report about the one thing it did report is the plainest way a
+/// usage surface can lie.
 function shortCaption(row: UsageRow): string {
   switch (row.state) {
     case "checking":
@@ -88,7 +93,7 @@ function shortCaption(row: UsageRow): string {
     case "disconnected":
       return "Offline";
     case "available":
-      return "No report";
+      return row.unmetered ?? "No report";
   }
 }
 

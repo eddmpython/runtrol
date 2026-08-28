@@ -51,6 +51,12 @@ export type UsageRow = {
   readonly plan: string | null;
   /// How old the last report is, or null when there is none.
   readonly age: string | null;
+  /// The service's own reason for publishing no number, when it gave one and there is no number.
+  ///
+  /// Measured: one service answers about the plan and the period and states no percentage at all, because
+  /// that account is metered by a team the operator cannot see. Without this the chip fell back to "No
+  /// report" about a service that had reported, which is the one thing a usage surface may never say.
+  readonly unmetered: string | null;
 };
 
 /// Whether publishing the next snapshot would change anything visible or actionable in the tree.
@@ -149,6 +155,7 @@ export function usageRows(
         cost: null,
         tooltip: `${name}: checking the installed CLI`,
         position: "Checking",
+        unmetered: null,
         plan: null,
         age: null,
       };
@@ -167,6 +174,7 @@ export function usageRows(
         cost: null,
         tooltip: why,
         position: why,
+        unmetered: null,
         plan: null,
         age: null,
       };
@@ -184,6 +192,8 @@ export function usageRows(
         cost: usageCost(gauge),
         tooltip: `${name}: disconnected; this is the last report\n${usageTooltip(name, gauge, nowMs)}`,
         position: "Disconnected; this is the last report",
+        // The account line is unknown for a service that is gone; the last report is all this row has.
+        unmetered: null,
         plan: null,
         age: reportAge(gauge, nowMs),
       };
@@ -203,6 +213,7 @@ export function usageRows(
         cost: gauge ? usageCost(gauge) : null,
         tooltip: `${name}: not signed in`,
         position: "Not signed in",
+        unmetered: null,
         plan: null,
         age: gauge ? reportAge(gauge, nowMs) : null,
       };
@@ -230,6 +241,7 @@ export function usageRows(
         position: usageAbsenceCause(account).replace(" · Sign in", ""),
         plan,
         age: null,
+        unmetered: unmeteredReason(account),
       };
     }
     return {
@@ -245,11 +257,43 @@ export function usageRows(
       providerId,
       cost: usageCost(gauge),
       tooltip: plan ? `${name}: ${plan}\n${usageTooltip(name, gauge, nowMs)}` : usageTooltip(name, gauge, nowMs),
-      position: gauge.reached ? "A limit is blocking right now" : "Within limits",
+      position: positionOf(gauge, account, nowMs),
       plan,
       age: reportAge(gauge, nowMs),
+      unmetered: metersOf(gauge, nowMs).length > 0 ? null : unmeteredReason(account),
     };
   });
+}
+
+/// Where the account stands, in one short clause.
+///
+/// A blocking limit first, because that is the fact acted on. Then, for a service that reported a window and
+/// no number for it, the service's own reason: "Within limits" about an account nobody can see the limits of
+/// is a claim this surface has no business making.
+export function positionOf(
+  gauge: ProviderUsageGauge,
+  account: ProviderLine["account"] | null | undefined,
+  nowMs: number,
+): string {
+  if (gauge.reached) return "A limit is blocking right now";
+  if (metersOf(gauge, nowMs).length === 0) {
+    const reason = unmeteredReason(account);
+    if (reason) return reason;
+  }
+  return "Within limits";
+}
+
+/// The service's own words for having no number, or null when it did not give any.
+///
+/// Only the service's own reason. A read that failed is ours to retry and is said elsewhere; putting it here
+/// would caption a chip with our failure as though it were the account's shape.
+export function unmeteredReason(account: ProviderLine["account"] | null | undefined): string | null {
+  return account?.limitsAbsent?.kind === "unmetered" ? account.limitsAbsent.why : null;
+}
+
+/// The bars this gauge can draw, which is what tells a service with no number from one with numbers.
+function metersOf(gauge: ProviderUsageGauge, nowMs: number): readonly UsageMeter[] {
+  return usageMeters(gauge, nowMs);
 }
 
 /// Why this row has no bar, in the fewest words that name a cause rather than a symptom.
