@@ -176,6 +176,16 @@ const model = {
       { label: "claude-opus-5 weekly", percent: 74 },
     ]),
     chip("codex", "Codex", 13, [{ label: "7 days", percent: 13 }]),
+    // A service that answered and has no number of its own: measured, one account is metered by a team and
+    // that CLI publishes no percentage for it at all. This is the state the caption used to call "No report",
+    // and it is only reachable in a picture from here.
+    {
+      ...chip("grok", "Grok", null, []),
+      caption: "team-managed",
+      position: "team-managed",
+      plan: "SuperGrok",
+      meters: [],
+    },
   ],
   serviceChoice: null,
   firstRun: false,
@@ -196,36 +206,48 @@ let html = sidebarHtml(model, assets);
 // is dropped without a word, which is how the colour band came to be missing from the first picture this
 // harness took.
 html = html.replace("</head>", `<style nonce="${assets.nonce}">${THEME}</style></head>`);
+// The page's own script asks the editor for its message channel before it does anything else. Outside a
+// webview that call throws, the script stops on its first line, and every zone it was going to reveal stays
+// hidden: the picture comes out empty and looks like a page that draws nothing. The stub answers the three
+// things the script uses and nothing else, and it goes in under the page's nonce like the theme does.
+html = html.replace("</head>", `<script nonce="${assets.nonce}">
+  window.acquireVsCodeApi = function () {
+    var state = {};
+    return {
+      postMessage: function () {},
+      getState: function () { return state; },
+      setState: function (next) { state = next; return next; },
+    };
+  };
+</script></head>`);
 // One panel open, because a hover panel that nothing hovers is a state this harness could never show.
 html = html.replace('id="panel-0" hidden', 'id="panel-0"');
 const page = path.join(temporary, "sidebar.html");
 await writeFile(page, html, "utf8");
 
-const chrome = "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
+const chrome = "C:\Program Files\Google\Chrome\Application\chrome.exe";
 const profile = path.join(temporary, "chrome");
-const browser = spawn(chrome, [
+
+// Photographed by the browser itself rather than by capturing its window.
+//
+// Measured 2026-08-28: photographing an `--app` window came back, some runs, with a title bar and a client
+// area of one flat colour. The page was right every time (its markup was in the file, and the same file drew
+// correctly when the browser took the picture), so the blank ones said "this page draws nothing" about a page
+// that drew everything. A picture that can be empty while its subject is correct is worse than no picture: it
+// is a finding nobody made, about a screen nobody then looked at again.
+const shot = spawn(chrome, [
   `--user-data-dir=${profile}`,
   "--no-first-run",
   "--no-default-browser-check",
+  // Still the same engine and the same stylesheet; only the shutter moved.
+  "--headless=new",
+  "--disable-gpu",
+  `--screenshot=${out}`,
   "--window-size=320,900",
-  "--window-position=40,40",
-  `--app=file:///${page.replaceAll("\\", "/")}`,
-], { detached: false, stdio: "ignore" });
-
-// The window has to exist and paint before it can be photographed. A short wait beats a poll here: the page
-// loads from disk with no network and no runtime, so it is ready as soon as Chrome has drawn once.
-await new Promise((resolve) => setTimeout(resolve, 3500));
-
-const capture = spawn("powershell.exe", [
-  "-NoProfile", "-ExecutionPolicy", "Bypass",
-  "-File", path.join(extensionRoot, "tooling", "capture-window.ps1"),
-  "-TitleMatch", "sidebar.html",
-  "-OutPath", out,
-], { stdio: "inherit" });
-const captured = await new Promise((resolve) => capture.on("close", resolve));
-
-browser.kill();
+  `file:///${page.replaceAll("\\", "/")}`,
+], { stdio: "ignore" });
+const captured = await new Promise((resolve) => shot.on("close", resolve));
 if (captured !== 0) {
-  throw new Error(`the sidebar page could not be photographed (capture exited ${captured})`);
+  throw new Error(`the sidebar page could not be photographed (chrome exited ${captured})`);
 }
 console.log(`sidebar eye -> ${out}`);
