@@ -116,13 +116,24 @@ export function sidebarHtml(model: SidebarModel, assets: SidebarAssets): string 
 <style nonce="${assets.nonce}">${STYLE}${HUE_STYLE}${USAGE_STYLE}</style>
 </head>
 <body>
-${model.notices.map(noticeHtml).join("")}
-${model.serviceChoice ? serviceChoiceHtml(model.serviceChoice, assets) : ""}
-${model.firstRun ? firstRunHtml() : ""}
-${zonesHtml(model, assets)}
+<div id="page">${sidebarBody(model, assets)}</div>
 <script nonce="${assets.nonce}">${SCRIPT}${USAGE_SCRIPT}</script>
 </body>
 </html>`;
+}
+
+/// Everything the page draws, without the document around it.
+///
+/// The host sends this on its own after the first paint instead of writing the document again. Replacing the
+/// document rebuilds every element, and the panel a person had opened, the row they had focused and the place
+/// they had scrolled to all go with it. The usage figures tick on their own clock, so a detail panel closed
+/// itself while the hand was still moving towards it, which is the mouse losing its way (operator, 2026-08-28)
+/// and is also the plainest kind of stutter this panel can have.
+export function sidebarBody(model: SidebarModel, assets: SidebarAssets): string {
+  return `${model.notices.map(noticeHtml).join("")}
+${model.serviceChoice ? serviceChoiceHtml(model.serviceChoice, assets) : ""}
+${model.firstRun ? firstRunHtml() : ""}
+${zonesHtml(model, assets)}`;
 }
 
 function zonesHtml(model: SidebarModel, assets: SidebarAssets): string {
@@ -290,6 +301,10 @@ button { font: inherit; color: inherit; }
 .first-act small { opacity: 0.7; }
 /* The list scrolls and the usage strip does not: a person looking for how much is left should not have to
    scroll a list of conversations to find it (operator, 2026-08-28). */
+/* The element a repaint replaces. It carries the page's column so that wrapping the content for repainting
+   does not change where anything sits: without this the usage zone stopped being the bottom of the panel and
+   floated up under the last conversation (measured 2026-08-28). */
+#page { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
 .scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; }
 .zone { padding: 4px 0 2px; }
 .zone + .zone { border-top: 1px solid var(--vscode-sideBarSectionHeader-border, var(--vscode-widget-border)); margin-top: 4px; }
@@ -439,6 +454,7 @@ const SCRIPT = `
     if (next) next.focus();
   });
   var dragging = null;
+  function bindProjects() {
   document.querySelectorAll('.project[draggable="true"]').forEach(function (project) {
     project.addEventListener("dragstart", function (event) {
       dragging = project;
@@ -470,8 +486,17 @@ const SCRIPT = `
       post({ type: "reorder", keys: keys });
     });
   });
+  }
+  bindProjects();
   window.addEventListener("message", function (event) {
     var message = event.data || {};
+    if (message.type === "paint") {
+      var page = document.getElementById("page");
+      if (page) page.innerHTML = message.body;
+      bindProjects();
+      if (window.__runtrolBindUsage) window.__runtrolBindUsage();
+      return;
+    }
     if (message.type === "reveal") {
       var row = document.querySelector('.row[data-key="' + CSS.escape(message.key) + '"]');
       if (!row) return;

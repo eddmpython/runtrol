@@ -25,6 +25,7 @@ import { ConversationItem, ProjectItem, ServiceChoiceItem } from "./sidebarTarge
 import {
   formatMemory,
   rowKeys,
+  sidebarBody,
   sidebarHtml,
   type SidebarConversationRow,
   type SidebarModel,
@@ -74,6 +75,10 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
   private view: vscode.WebviewView | null = null;
   private readonly subscriptions: { dispose(): void }[] = [];
   private lastRendered = "";
+  /// The nonce of the document currently in the view, or null while no document has been written. A repaint
+  /// changes only the body, so the head that carries the policy and the scripts has to stay the one written
+  /// here.
+  private documentNonce: string | null = null;
   private model: SidebarModel | null = null;
   private groups: readonly ProjectGroup[] = [];
   private choosingFor: string | null = null;
@@ -130,6 +135,7 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
       this.receive(message).catch(this.report);
     });
     this.lastRendered = "";
+    this.documentNonce = null;
     this.render();
   }
 
@@ -276,11 +282,19 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
     for (const row of model.loose) iconUri(row.icon);
     for (const chip of model.usage) iconUri(chip.icon);
     for (const service of model.serviceChoice?.services ?? []) iconUri(service.icon);
-    view.webview.html = sidebarHtml(model, {
+    const assets = {
       cspSource: view.webview.cspSource,
-      nonce: randomBytes(16).toString("base64url"),
+      nonce: this.documentNonce ?? randomBytes(16).toString("base64url"),
       iconUris: icons,
-    });
+    };
+    if (this.documentNonce === null) {
+      this.documentNonce = assets.nonce;
+      view.webview.html = sidebarHtml(model, assets);
+    } else {
+      // Only the content changes. The document, its scripts and everything they hold (the open detail panel,
+      // the focused row, the scroll position) stay exactly where the person left them.
+      void view.webview.postMessage({ type: "paint", body: sidebarBody(model, assets) });
+    }
     this.flushReveal();
   }
 

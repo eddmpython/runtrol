@@ -4,6 +4,7 @@ import { test } from "node:test";
 import {
   formatMemory,
   rowKeys,
+  sidebarBody,
   sidebarHtml,
   type SidebarConversationRow,
   type SidebarModel,
@@ -80,6 +81,22 @@ test("the three zones are drawn in order with their own titles, and the project 
   assert.ok(html.includes('data-kind="conversation" data-key="codex:loose"'));
   // Usage is absent when no service is installed: no empty zone.
   assert.ok(!html.includes('aria-label="Usage"'));
+});
+
+test("what the page draws is separable from the document, so a figure ticking never rebuilds it", () => {
+  // A repaint sends only this. If the document went with it, the panel a person had opened and the row they
+  // had focused would go too, and the usage figures tick on a clock nobody pressed.
+  const body = sidebarBody(model({}), assets);
+  assert.ok(!body.includes("<script"), "the body carries no script: the document's own stays live");
+  assert.ok(!body.includes("<style"), "the body carries no style: the nonced stylesheet stays live");
+  assert.ok(!body.includes("<!DOCTYPE"));
+  assert.ok(body.includes('data-kind="project" data-key="project:app"'));
+  // The document is that same body inside the shell the page needs once.
+  const html = sidebarHtml(model({}), assets);
+  assert.ok(html.includes(`<div id="page">${body}</div>`), "the first paint writes the same body");
+  // The page can find what to replace, and knows to rebind what it replaced.
+  assert.ok(html.includes('message.type === "paint"'));
+  assert.ok(html.includes("__runtrolBindUsage"));
 });
 
 test("a project's colour reaches its heading bar and every conversation under it", () => {

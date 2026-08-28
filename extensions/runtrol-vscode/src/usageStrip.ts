@@ -272,8 +272,10 @@ ${WIDTH_STYLE}
 export const USAGE_SCRIPT = `
 (function () {
   var vscode = window.__runtrolVsCodeApi || (window.__runtrolVsCodeApi = acquireVsCodeApi());
-  var chips = Array.prototype.slice.call(document.querySelectorAll(".chip"));
-  var panels = Array.prototype.slice.call(document.querySelectorAll(".panel"));
+  var chips = [];
+  var panels = [];
+  // Which panel the person opened. It lives outside the binding so that a repaint, which is a figure ticking
+  // and nothing they did, leaves their open panel open (2026-08-28).
   var pinned = null;
   // A hover preview must not move anything: scrolling the panel into view moved the chip out from under the
   // pointer, which closed the panel, which scrolled back and reopened it, and the strip flickered (2026-08-27).
@@ -287,6 +289,10 @@ export const USAGE_SCRIPT = `
     if (open) open.scrollIntoView({ block: "nearest" });
   }
   function settle() { show(pinned, true); }
+  function bind() {
+  chips = Array.prototype.slice.call(document.querySelectorAll(".chip"));
+  panels = Array.prototype.slice.call(document.querySelectorAll(".panel"));
+  if (pinned !== null && pinned >= chips.length) pinned = null;
   chips.forEach(function (chip, index) {
     chip.addEventListener("mouseenter", function () { if (pinned === null) show(index, false); });
     chip.addEventListener("focus", function () { if (pinned === null) show(index, true); });
@@ -302,16 +308,20 @@ export const USAGE_SCRIPT = `
   });
   var strip = document.querySelector(".chips");
   if (strip) strip.addEventListener("mouseleave", settle);
+  Array.prototype.slice.call(document.querySelectorAll(".action")).forEach(function (button) {
+    button.addEventListener("click", function () {
+      vscode.postMessage({ type: "action", action: button.dataset.action, providerId: button.dataset.provider });
+    });
+  });
+  show(pinned, false);
+  }
+  window.__runtrolBindUsage = bind;
+  bind();
   document.addEventListener("focusout", function (event) {
     if (!event.relatedTarget || !document.body.contains(event.relatedTarget)) settle();
   });
   document.addEventListener("keydown", function (event) {
     if (event.key === "Escape") { pinned = null; show(null, true); }
-  });
-  Array.prototype.slice.call(document.querySelectorAll(".action")).forEach(function (button) {
-    button.addEventListener("click", function () {
-      vscode.postMessage({ type: "action", action: button.dataset.action, providerId: button.dataset.provider });
-    });
   });
 })();
 `;
