@@ -10,6 +10,14 @@ and refactoring that no user can observe do not belong here.
 
 ## [Unreleased]
 
+## [0.1.31] - 2026-08-28
+
+### Fixed
+
+- The mark that turns while a conversation opens now stays until the service itself draws. It was taken down
+  when the Runtime answered, which is earlier: the answer carries an empty screen, so the tab went back to
+  being the blank rectangle the mark exists to prevent.
+
 ## [0.1.30] - 2026-08-28
 
 ### Changed
