@@ -10,6 +10,15 @@ and refactoring that no user can observe do not belong here.
 
 ## [Unreleased]
 
+## [0.1.33] - 2026-08-28
+
+### Added
+
+- A conversation the panel did not start now turns its icon while its service is answering. Runtime gained a
+  cheap question for it: which of a service's conversations were written in the last few seconds, answered by
+  walking the service's own store for names and times without opening a single transcript. Until now the panel
+  could only see a turn in a conversation it hosted, which on a real machine is the smaller half.
+
 ## [0.1.32] - 2026-08-28
 
 ### Fixed
