@@ -141,24 +141,6 @@ export function usagePanelsMarkup(chips: readonly UsageChip[]): string {
   return `<div class="panels">${chips.map((chip, index) => panelHtml(chip, index)).join("")}</div>`;
 }
 
-/// The whole strip as a standalone page, which is what the unit tests render.
-export function usageStripHtml(chips: readonly UsageChip[], assets: UsageStripAssets): string {
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${assets.cspSource}; style-src 'nonce-${assets.nonce}'; script-src 'nonce-${assets.nonce}'">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<style nonce="${assets.nonce}">${USAGE_STYLE}</style>
-</head>
-<body>
-${usageChipsMarkup(chips, assets)}
-${chips.length === 0 ? "" : usagePanelsMarkup(chips)}
-<script nonce="${assets.nonce}">${USAGE_SCRIPT}</script>
-</body>
-</html>`;
-}
-
 /// A bar's fill, as a class rather than as a `style` attribute.
 ///
 /// The page's policy allows styles from its own nonced block and from nowhere else, and a `style` attribute
@@ -202,11 +184,14 @@ ${chip.rings.length === 0 ? `<circle class="track" cx="13" cy="13" r="${RING_RAD
 function panelHtml(chip: UsageChip, index: number): string {
   // One sentence per window was read as noise (operator, 2026-08-27): a row is its bar and its percent, and
   // only the window that is actually governing keeps its words (its reset is the one actionable fact here).
+  //
+  // Those words sit on the name's line rather than under the bar. On their own line they made the governing
+  // window a three-line block among two-line ones, so the bars of one service stood at uneven distances
+  // (operator, 2026-08-28: close the gap between one service's bars). Beside the name they cost no line at all.
   const bars = chip.meters.map((meter) => `<div class="meter${meter.governing ? " governing" : ""}">
-<span class="label">${escapeHtml(meter.label)}</span>
+<span class="label"><span class="what">${escapeHtml(meter.label)}</span>${meter.governing && meter.resets ? `<span class="when">${escapeHtml(meter.resets)}</span>` : ""}</span>
 <span class="percent">${meter.percent}%</span>
 <span class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${meter.percent}" aria-label="${escapeHtml(`${meter.label} ${meter.percent} percent`)}"><span class="value ${widthClass(meter.percent)}"></span></span>
-${meter.governing ? `<span class="detail">${escapeHtml(meter.detail)}</span>` : ""}
 </div>`).join("");
   return `<section class="panel" id="panel-${index}" hidden>
 <h2>${escapeHtml(chip.name)}${chip.plan ? ` <span class="plan">${escapeHtml(chip.plan)}</span>` : ""}</h2>
@@ -226,8 +211,14 @@ export function escapeHtml(text: string): string {
     .replaceAll("'", "&#39;");
 }
 
+/// The strip's own rules. It owns its chips and its panel and nothing outside them.
+///
+/// It used to open with a `body` rule, from when the strip was a second webview with a document of its own.
+/// Folding it into the one page left that rule behind, last in the concatenation, where it quietly took the
+/// page's margin, padding, colour and background away from the page's own rule. The background it handed
+/// over was `transparent`, which is how the panel came to sit on the browser's dark canvas instead of the
+/// sidebar's colour. One element, one owner.
 export const USAGE_STYLE = `
-body { margin: 0; padding: 6px 8px; color: var(--vscode-foreground); font: var(--vscode-font-size) var(--vscode-font-family); background: transparent; }
 .empty { margin: 0; opacity: 0.8; }
 .chips { display: flex; flex-wrap: wrap; gap: 2px 6px; }
 .chip { display: flex; flex-direction: column; align-items: center; gap: 0; min-width: 38px; max-width: 86px; padding: 2px 3px 1px; border: 1px solid transparent; border-radius: 5px; background: transparent; color: inherit; cursor: pointer; }
@@ -255,14 +246,18 @@ body { margin: 0; padding: 6px 8px; color: var(--vscode-foreground); font: var(-
 /* The name has the line, and the bar sits under it. A model window is named by its model, and a model name
    does not fit beside a bar in a panel this wide: the column was 72px and the name was the part that
    disappeared (operator, 2026-08-28). */
-.meter { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 1px 6px; align-items: baseline; margin: 5px 0; }
-.meter .label { min-width: 0; font-size: 11px; overflow-wrap: anywhere; }
-.meter.governing .label { font-weight: 600; }
+.meter { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 1px 6px; align-items: baseline; margin: 3px 0; }
+.meter .label { min-width: 0; display: flex; align-items: baseline; gap: 6px; font-size: 11px; }
+/* The name yields before the reset does. The reset is a fixed short phrase and the name is the part that
+   varies, and it arrives already shortened from its middle, so an ellipsis here is the last guard rather
+   than the usual case. */
+.meter .what { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.meter .when { flex: none; opacity: 0.7; }
+.meter.governing .what { font-weight: 600; }
 .meter .bar { grid-column: 1 / -1; display: block; height: 4px; border-radius: 2px; background: var(--vscode-widget-border, rgba(128,128,128,0.35)); overflow: hidden; }
 .meter .value { display: block; height: 100%; border-radius: 2px; background: var(--vscode-progressBar-background); width: 0; }
 ${WIDTH_STYLE}
 .meter .percent { font-variant-numeric: tabular-nums; text-align: right; font-size: 11px; }
-.meter .detail { grid-column: 1 / -1; font-size: 11px; opacity: 0.75; }
 .panel .age { font-size: 11px; opacity: 0.7; }
 .action { margin: 2px 0 4px; padding: 2px 10px; border: 1px solid var(--vscode-button-border, transparent); border-radius: 2px; background: var(--vscode-button-background); color: var(--vscode-button-foreground); cursor: pointer; }
 .action:hover { background: var(--vscode-button-hoverBackground); }

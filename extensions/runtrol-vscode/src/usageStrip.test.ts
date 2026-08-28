@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import type { UsageRow } from "./usageDisplay";
-import { usageChips, usageStripHtml } from "./usageStrip";
+import type { UsageChip } from "./usageStrip";
+import { usageChips, usageChipsMarkup, usagePanelsMarkup } from "./usageStrip";
 
 function row(overrides: Partial<UsageRow>): UsageRow {
   return {
@@ -24,6 +25,15 @@ function row(overrides: Partial<UsageRow>): UsageRow {
   };
 }
 
+/// The strip exactly as the sidebar page embeds it, which is the only place it is ever drawn.
+///
+/// These tests used to render a standalone document that production had no route to. That document carried a
+/// `body` rule of its own, so a rule that was wrong on the real page was right in the tests' page and lived
+/// there for weeks (2026-08-28). A test that renders what nobody ships proves what nobody sees.
+function strip(chips: readonly UsageChip[]): string {
+  return `${usageChipsMarkup(chips, assets)}${chips.length === 0 ? "" : usagePanelsMarkup(chips)}`;
+}
+
 const assets = {
   cspSource: "vscode-resource:",
   nonce: "n0nce",
@@ -33,9 +43,9 @@ const assets = {
 test("a chip's ring is the whole-account week and its caption is that number", () => {
   const [chip] = usageChips([row({
     meters: [
-      { key: "5h", label: "5h", percent: 12, detail: "12% used, resets in 3h", governing: false },
-      { key: "7d", label: "7d", percent: 76, detail: "76% used, resets in 6d", governing: true },
-      { key: "7d:GPT", label: "7d GPT-5.3", percent: 0, detail: "0% used", governing: false },
+      { key: "5h", label: "5h", percent: 12, resets: "resets in 3h", governing: false },
+      { key: "7d", label: "7d", percent: 76, resets: "resets in 6d", governing: true },
+      { key: "7d:GPT", label: "7d GPT-5.3", percent: 0, resets: "", governing: false },
     ],
   })]);
   assert.equal(chip!.percent, 76);
@@ -50,12 +60,12 @@ test("a chip's ring is the whole-account week and its caption is that number", (
 });
 
 test("the chip draws one concentric ring per layer and no browser tooltip beside the panel", () => {
-  const html = usageStripHtml(usageChips([row({
+  const html = strip(usageChips([row({
     meters: [
-      { key: "5h", label: "5h", percent: 12, detail: "12% used", governing: false },
-      { key: "7d", label: "7d", percent: 76, detail: "76% used", governing: true },
+      { key: "5h", label: "5h", percent: 12, resets: "", governing: false },
+      { key: "7d", label: "7d", percent: 76, resets: "", governing: true },
     ],
-  })]), assets);
+  })]));
   assert.equal((html.match(/class="fill"/g) ?? []).length, 2);
   assert.ok(html.includes('r="11"'));
   assert.ok(html.includes('r="8"'));
@@ -88,15 +98,15 @@ test("a chip with nothing to show is a way into that account", () => {
 });
 
 test("the page draws one bar per reported window and escapes what the service said", () => {
-  const html = usageStripHtml(usageChips([row({
+  const html = strip(usageChips([row({
     name: "Codex <pro>",
     plan: "pro plan via chatgpt",
     meters: [
-      { key: "7d", label: "7d", percent: 76, detail: "76% used, resets in 6d", governing: true },
-      { key: "7d:GPT", label: "7d GPT-5.3", percent: 0, detail: "0% used", governing: false },
+      { key: "7d", label: "7d", percent: 76, resets: "resets in 6d", governing: true },
+      { key: "7d:GPT", label: "7d GPT-5.3", percent: 0, resets: "", governing: false },
     ],
     tooltip: "Codex <pro>: within limits\n7d: 76% used\n7d GPT-5.3: 0% used\nReported 2m ago",
-  })]), assets);
+  })]));
   assert.equal((html.match(/role="progressbar"/g) ?? []).length, 2);
   assert.ok(html.includes("Codex &lt;pro&gt;"));
   assert.ok(!html.includes("Codex <pro>"));
@@ -105,31 +115,29 @@ test("the page draws one bar per reported window and escapes what the service sa
   assert.ok(html.includes('<p class="position">Within limits</p>'));
   assert.ok(html.includes('<span class="plan">pro plan via chatgpt</span>'));
   assert.ok(!html.includes("Press Enter"));
-  assert.ok(html.includes(`nonce="${assets.nonce}"`));
-  assert.ok(html.includes("script-src 'nonce-n0nce'"));
 });
 
 test("a blocking limit colours the chip and the panel", () => {
-  const html = usageStripHtml(usageChips([row({
+  const html = strip(usageChips([row({
     reached: true,
     position: "A limit is blocking right now",
-    meters: [{ key: "5h", label: "5h", percent: 100, detail: "100% used, resets in 1h", governing: true }],
+    meters: [{ key: "5h", label: "5h", percent: 100, resets: "resets in 1h", governing: true }],
     tooltip: "Codex: a limit is blocking right now\n5h: 100% used, governing now\nReported just now",
-  })]), assets);
+  })]));
   assert.ok(html.includes('class="chip reached"'));
   assert.ok(html.includes(">100%<"));
   assert.ok(html.includes('class="position reached"'));
 });
 
 test("a signed-out chip answers a click with the sign-in action and says so to a screen reader", () => {
-  const html = usageStripHtml(usageChips([row({ state: "signedOut", position: "Not signed in", age: null })]), assets);
+  const html = strip(usageChips([row({ state: "signedOut", position: "Not signed in", age: null })]));
   assert.ok(html.includes('data-action="signIn" data-provider="codex"'));
   assert.ok(html.includes('aria-label="Codex: Sign in"'));
   assert.ok(!html.includes("Press Enter"));
 });
 
 test("no installed service says so instead of drawing nothing", () => {
-  assert.ok(usageStripHtml([], assets).includes("No coding service is installed yet."));
+  assert.ok(strip([]).includes("No coding service is installed yet."));
 });
 
 test("a service that answered with no number of its own is captioned in its own words", () => {
@@ -152,4 +160,24 @@ test("a service that answered with no number of its own is captioned in its own 
 test("a service nobody has heard from is still captioned as that", () => {
   const [chip] = usageChips([row({ meters: [], unmetered: null })]);
   assert.equal(chip?.caption, "No report");
+});
+
+test("the governing window says when it resets beside its name, not on a line of its own", () => {
+  const html = strip(usageChips([row({
+    meters: [
+      { key: "5h", label: "5h", percent: 12, resets: "resets in 3h", governing: false },
+      { key: "7d", label: "7d", percent: 76, resets: "resets in 6d", governing: true },
+    ],
+  })]));
+  // Inside the name's own cell, so the meter stays two rows tall and the bars of one service keep an even
+  // distance from each other (operator, 2026-08-28: close the gap between one service's bars).
+  assert.ok(
+    html.includes('<span class="label"><span class="what">7d</span><span class="when">resets in 6d</span></span>'),
+    html,
+  );
+  // The window that is not governing keeps its words to itself even when it knows its reset.
+  assert.ok(html.includes('<span class="label"><span class="what">5h</span></span>'), html);
+  // The number is the bar's to state. The sentence under the bar used to open by repeating it.
+  assert.ok(!html.includes("76% used"), html);
+  assert.ok(!html.includes('class="detail"'), "the third line is gone");
 });

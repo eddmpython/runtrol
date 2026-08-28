@@ -89,7 +89,9 @@ const THEME = `
    does to a row: the fade at the end of a long name and the percent beside a bar were both off the right
    edge, outside the picture. The width is the subject here, so the page holds it and the window merely has
    to be wider than it. */
-html, body { width: 320px; background: var(--vscode-sideBar-background); }
+/* Width only. The harness used to paint the background too, which is the page's own job, and painting it
+   here meant the harness could never show the page failing to paint it. That is exactly what happened. */
+html, body { width: 320px; }
 `;
 
 function conversation(over = {}) {

@@ -16,8 +16,12 @@ export type UsageMeter = {
   readonly label: string;
   /// A bounded value suitable for the HTML progressbar contract.
   readonly percent: number;
-  /// The complete spoken value, including the reset when one exists.
-  readonly detail: string;
+  /// When this window resets, in the service's own reckoning, or empty when it did not say.
+  ///
+  /// Only the reset. It used to carry "64% used, resets in 6d", whose first half is the number already drawn
+  /// beside the bar: the panel said one fact twice and paid a whole line for the repeat (operator's window,
+  /// 2026-08-28). The percent belongs to the bar and this belongs beside the name.
+  readonly resets: string;
   /// The service says this is the window governing right now, which is the one to read first.
   readonly governing: boolean;
 };
@@ -362,7 +366,7 @@ export function usageMeters(gauge: ProviderUsageGauge, nowMs: number): UsageMete
       key: window.id,
       label: meterLabel(window),
       percent,
-      detail: `${percent}% used${resets ? `, ${resets}` : ""}`,
+      resets: resets ?? "",
       governing: window.governing === true,
     }];
   });

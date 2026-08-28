@@ -291,7 +291,15 @@ const STYLE = `
 /* The panel's height, taken twice: the editor gives the frame its height and the document has to claim it, or
    the page is only as tall as its rows and the usage strip stops being the bottom of the sidebar. */
 html { height: 100%; }
-body { margin: 0; padding: 0; height: 100%; min-height: 100%; box-sizing: border-box; display: flex; flex-direction: column; overflow: hidden; color: var(--vscode-sideBar-foreground, var(--vscode-foreground)); background: transparent; font: var(--vscode-font-size) var(--vscode-font-family); user-select: none; }
+/* The panel paints the sidebar's own background, and it is the only thing that paints one.
+
+   Transparent is not the same as inheriting here. A view like this one is an iframe, and what shows through a
+   transparent body is the frame's own backdrop, which is neither the sidebar nor the editor: measured on the
+   operator's window, the editor drew #1E1E1E, the sidebar the editor itself paints drew #252526, and this
+   page drew #121212. So the list sat in a near black box inside a lighter sidebar and the usage strip, the
+   one element that did name a colour, stood out as a grey card glued to it (operator, 2026-08-28: why does
+   Agent Usage use a black background). One owner for one fact: the strip no longer names it. */
+body { margin: 0; padding: 6px 8px; height: 100%; min-height: 100%; box-sizing: border-box; display: flex; flex-direction: column; overflow: hidden; color: var(--vscode-sideBar-foreground, var(--vscode-foreground)); background: var(--vscode-sideBar-background); font: var(--vscode-font-size) var(--vscode-font-family); user-select: none; }
 button { font: inherit; color: inherit; }
 .notice { margin: 4px 4px 0; padding: 4px 6px; border-radius: 4px; font-size: 12px; background: var(--vscode-editorWidget-background); border-left: 3px solid var(--vscode-widget-border); }
 .notice.warn { border-left-color: var(--vscode-editorWarning-foreground); }
@@ -318,7 +326,7 @@ button { font: inherit; color: inherit; }
 .zone { padding: 4px 0 2px; }
 .zone + .zone { border-top: 1px solid var(--vscode-sideBarSectionHeader-border, var(--vscode-widget-border)); margin-top: 4px; }
 .zone-title { display: flex; align-items: center; gap: 4px; margin: 4px 4px 2px; font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; opacity: 0.55; }
-.usage-zone { flex: none; background: var(--vscode-sideBar-background); padding-bottom: 4px; border-top: 1px solid var(--vscode-sideBarSectionHeader-border, var(--vscode-widget-border)); }
+.usage-zone { flex: none; padding-bottom: 4px; border-top: 1px solid var(--vscode-sideBarSectionHeader-border, var(--vscode-widget-border)); }
 .row { position: relative; display: flex; align-items: center; gap: 6px; min-height: 24px; padding: 2px 4px 2px 0; border-radius: 4px; cursor: pointer; outline: none; }
 .row:hover { background: var(--vscode-list-hoverBackground); }
 .row:focus-visible { box-shadow: inset 0 0 0 1px var(--vscode-focusBorder); }

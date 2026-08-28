@@ -126,6 +126,17 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
         if token in haystack:
             found.append(f"{meaning} is reachable through `{token}`")
 
+    # One view, one document. A second file that builds a whole page brings a second `body` rule with it, and
+    # the last one concatenated wins. The usage strip had one from when it was its own webview; folding it into
+    # the single page left that rule in place, where it quietly took the page's padding, colour and background
+    # and handed the background back as `transparent`. So the panel sat on the browser's own dark canvas
+    # (#121212) inside a sidebar the editor painted #252526, which is the black background the operator asked
+    # about on 2026-08-28. It survived because the strip's unit tests rendered that second document, in which
+    # the rule was correct. Whoever adds the next page fragment must not also add a page.
+    documents = sorted(name for name, source in sources.items() if "<!DOCTYPE html>" in source)
+    if documents != ["sidebarPage.ts"]:
+        found.append(f"exactly one file may build the webview document, found {documents or ['none']}")
+
     writers = [relative for relative, source in sources.items() if "writeFile(" in source]
     # The selected-session scalar, and the Core installer's digest memory (file identity -> sha256, so an
     # activation does not hash the Core twice; measured 2026-08-25 at 60 ms per hash).
@@ -290,8 +301,6 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             "export function usageChips",
             "primarySevenDayMeter(row.meters)",
             'role="progressbar"',
-            "Content-Security-Policy",
-            "script-src 'nonce-",
             'aria-expanded="false"',
             "export function escapeHtml",
         ],
