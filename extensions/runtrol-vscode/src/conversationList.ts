@@ -107,6 +107,8 @@ export function conversations(
   pinnedKeys: ReadonlySet<string> = new Set(),
   renamedTitles: ReadonlyMap<string, string> = new Map(),
   started: readonly StartedConversation[] = [],
+  /// The conversations whose service is writing to its screen right now.
+  streaming: ReadonlySet<string> = new Set(),
 ): Conversation[] {
   const nativeByKey = new Map<string, NativeChatLine>();
   for (const chat of nativeChats) {
@@ -134,6 +136,7 @@ export function conversations(
       pinnedKeys.has(key) || (legacyKey !== null && pinnedKeys.has(legacyKey)),
       renamedTitles.get(key) ?? (legacyKey === null ? undefined : renamedTitles.get(legacyKey)),
       legacyKey,
+      streaming.has(key),
     ));
   }
   for (const [key, chat] of nativeByKey) {
@@ -427,6 +430,7 @@ function supervised(
   pinned: boolean,
   name: string | undefined,
   legacyKey: string | null,
+  streaming: boolean,
 ): Conversation {
   const homeWorkspace = isolatedWorkspaceHomes.get(workspaceIdentity(session.workspace)) ?? session.workspace;
   const projectless = isProjectless(homeWorkspace, projectlessRoot);
@@ -444,7 +448,7 @@ function supervised(
     folder: projectless ? "" : workspaceName(homeWorkspace),
     projectless,
     updatedAtMs: instant(native?.updatedAt),
-    activity: activityOf(session),
+    activity: streaming ? "working" : activityOf(session),
     tool: activity.tool,
     signInNeeded: activity.signInNeeded,
     live: session.hot,
@@ -493,6 +497,13 @@ function providerOwned(
   };
 }
 
+/// What a row says it is doing.
+///
+/// `Busy` is the Runtime's word for a turn Runtrol itself started, and Runtrol starts none: every conversation
+/// here is the service's own terminal interface with a person typing into it. So the lifecycle never said
+/// running and the row never turned (operator, 2026-08-28: the icon does not move while a session works).
+/// What we can see without reading a word of the conversation is that the service is writing to its screen
+/// right now, which is what a person means by "it is working"; `streaming` carries exactly that.
 function activityOf(session: SessionLine): ConversationActivity {
   if (session.lifecycle === "failed" || session.looksStuck) return "attention";
   // Waiting outranks running, because a turn that stopped for a person is the one fact worth interrupting them

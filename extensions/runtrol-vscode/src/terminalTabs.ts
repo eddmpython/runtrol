@@ -7,6 +7,7 @@ import {
 import * as vscode from "vscode";
 import type { Conversation, StartedConversation } from "./conversationList";
 import { tabColorId } from "./projectColor";
+import { tabName } from "./tabName";
 import { HIDE_CURSOR, MARK_FRAME_MS, paintMark, SHOW_CURSOR } from "./openingMark";
 import type { StudioRuntimeClient } from "./runtimeClient";
 
@@ -39,6 +40,9 @@ export class TerminalTabs implements vscode.Disposable {
     /// resume proof is signed by one Runtime generation; after an update the proof the row still holds is
     /// refused, and the honest answer is to look again rather than to tell the person to reload.
     private readonly refreshed: (conversationKey: string) => Promise<Conversation | null> = async () => null,
+    /// Told every time the service writes to a conversation's screen, which is how the sidebar knows the row
+    /// is working: the Runtime's lifecycle only reports turns Runtrol itself started, and it starts none.
+    private readonly serviceWrote: (conversationKey: string) => void = () => undefined,
   ) {
     this.closing = vscode.window.onDidCloseTerminal((terminal) => {
       for (const [key, open] of this.open) {
@@ -57,7 +61,8 @@ export class TerminalTabs implements vscode.Disposable {
       existing.show(preserveFocus);
       return existing;
     }
-    const pty = new RuntimeTerminal(this.runtime, targetOf(conversation), async () => {
+    const key = conversation.key;
+    const pty = new RuntimeTerminal(this.runtime, targetOf(conversation), () => this.serviceWrote(key), async () => {
       const again = await this.refreshed(conversation.key);
       return again ? targetOf(again) : null;
     });
@@ -65,7 +70,7 @@ export class TerminalTabs implements vscode.Disposable {
     // the colour answers "whose project", and the two together fit in the width a tab actually has.
     const colour = conversation.projectless ? null : tabColorId(conversation.workspace);
     const terminal = vscode.window.createTerminal({
-      name: conversation.title,
+      name: tabName(conversation.title),
       iconPath: tabIcon(colour, () => this.iconFor(conversation)),
       color: colour ? new vscode.ThemeColor(colour) : undefined,
       pty,
@@ -82,23 +87,27 @@ export class TerminalTabs implements vscode.Disposable {
   /// service's own listing gives the conversation a title (the sidebar shows it once the store does).
   showFresh(providerId: string, workspace: string, name: string, projectless = false): vscode.Terminal {
     // A fresh conversation carries no resume proof, so there is nothing to refresh if the open is refused.
+    // The same identity the row will carry, so the signal lands on the row a person is looking at.
+    const startedId = `${providerId}:${this.nextStarted + 1}`;
+    const startedKey = `started:${encodeURIComponent(startedId)}`;
     const pty = new RuntimeTerminal(this.runtime, {
       provider: providerId,
       native: null,
       workspace,
       blocked: null,
-    }, async () => null);
+    }, () => this.serviceWrote(startedKey), async () => null);
     const colour = projectless ? null : tabColorId(workspace);
     const terminal = vscode.window.createTerminal({
-      name,
+      name: tabName(name),
       iconPath: tabIcon(colour, () => this.iconForProvider(providerId)),
       color: colour ? new vscode.ThemeColor(colour) : undefined,
       pty,
       location: vscode.TerminalLocation.Editor,
       isTransient: true,
     });
+    this.nextStarted += 1;
     this.started.set(terminal, {
-      id: `${providerId}:${this.nextStarted += 1}`,
+      id: startedId,
       providerId,
       workspace,
       title: name,
@@ -204,6 +213,8 @@ class RuntimeTerminal implements vscode.Pseudoterminal {
   constructor(
     private readonly runtime: StudioRuntimeClient,
     private target: Target,
+    /// Told whenever the service writes, so the sidebar can turn this conversation's icon while it works.
+    private readonly wrote: () => void,
     private readonly refreshTarget: () => Promise<Target | null>,
   ) {}
 
@@ -279,7 +290,10 @@ class RuntimeTerminal implements vscode.Pseudoterminal {
   /// itself writes, and taking the mark down then left the same blank rectangle it exists to prevent
   /// (measured 2026-08-28, one click in a real window).
   private writeFromService(text: string): void {
-    if (text.length > 0) this.stopOpeningMark();
+    if (text.length > 0) {
+      this.stopOpeningMark();
+      this.wrote();
+    }
     this.writeEmitter.fire(text);
   }
 

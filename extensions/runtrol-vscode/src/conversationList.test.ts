@@ -80,6 +80,40 @@ function nativeChat(overrides: Partial<NativeChatLine> & Pick<NativeChatLine, "n
   } as NativeChatLine;
 }
 
+test("a conversation whose service is writing right now reads as working", () => {
+  // The Runtime's lifecycle only calls a session running when Runtrol started the turn, and Runtrol starts
+  // none: every conversation is the service's own terminal with a person typing into it. Bytes arriving is
+  // what tells the sidebar to turn the icon (operator, 2026-08-28).
+  const idle = conversations(
+    [session({ sessionId: "s1", hot: true, lifecycle: "hotIdle", nativeSessionId: "n1", providerId: "claude" })],
+    [],
+    [],
+    null,
+    null,
+    new Map(),
+    new Map(),
+    new Set(),
+    new Map(),
+    [],
+  );
+  assert.equal(idle[0]?.activity, "ready");
+  const key = idle[0]?.key ?? "";
+  const busy = conversations(
+    [session({ sessionId: "s1", hot: true, lifecycle: "hotIdle", nativeSessionId: "n1", providerId: "claude" })],
+    [],
+    [],
+    null,
+    null,
+    new Map(),
+    new Map(),
+    new Set(),
+    new Map(),
+    [],
+    new Set([key]),
+  );
+  assert.equal(busy[0]?.activity, "working");
+});
+
 test("one list holds supervised sessions and provider-owned chats alike", () => {
   const rows = conversations(
     [session({ sessionId: "s1", hot: true, lifecycle: "hotIdle" })],

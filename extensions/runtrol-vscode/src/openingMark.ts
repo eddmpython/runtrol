@@ -7,46 +7,34 @@
 /// An empty rectangle says the same thing as a broken one, so the person waits without knowing whether they
 /// are waiting (operator, 2026-08-28: show the symbol moving, like a spinner).
 ///
-/// # Why our own mark rather than a stock spinner
+/// # Why these characters
 ///
-/// The tab belongs to a conversation Runtrol opened, and the waiting is Runtrol's. A dot spinner is anyone's;
-/// the four-pointed mark with a dot going around it is the same shape as the ring the sidebar draws around a
-/// running conversation, so a person meets one idea twice rather than two ideas once.
+/// The mark is four curved arms with rotational symmetry (`resources/symbol.svg`). A terminal has no drawing
+/// surface, only characters, and the four rounded box elbows are those same four arms: turning the block a
+/// quarter turn moves each elbow to the next corner, which is what the mark does when it spins. A dot spinner
+/// would have been anyone's; this one is ours (operator, 2026-08-28: show our own symbol and make it move).
 
-/// The mark itself, centred, with one of the eight positions around it lit.
-const MARK = "✦";
-const DOT = "·";
-const LIT = "•";
-
-/// The eight places the travelling dot can be, clockwise from the top, as offsets in the 3x5 block below.
-const ORBIT: ReadonlyArray<readonly [number, number]> = [
-  [0, 2], [0, 4], [1, 4], [2, 4], [2, 2], [2, 0], [1, 0], [0, 0],
+/// The four corners, clockwise from the top left, in each of the four quarter turns.
+const TURNS: ReadonlyArray<readonly [string, string, string, string]> = [
+  ["╭", "╮", "╯", "╰"],
+  ["╰", "╭", "╮", "╯"],
+  ["╯", "╰", "╭", "╮"],
+  ["╮", "╯", "╰", "╭"],
 ];
 
 const BLOCK_ROWS = 3;
 const BLOCK_COLUMNS = 5;
 
-/// One frame of the animation as the lines it draws, top to bottom.
+/// One quarter turn of the mark as the lines it draws, top to bottom.
 export function markFrame(at: number): string[] {
-  const lit = ORBIT[at % ORBIT.length];
-  const rows: string[] = [];
-  for (let row = 0; row < BLOCK_ROWS; row += 1) {
-    let line = "";
-    for (let column = 0; column < BLOCK_COLUMNS; column += 1) {
-      if (row === 1 && column === 2) {
-        line += MARK;
-        continue;
-      }
-      const orbits = ORBIT.some(([r, c]) => r === row && c === column);
-      if (!orbits) {
-        line += " ";
-        continue;
-      }
-      line += lit !== undefined && lit[0] === row && lit[1] === column ? LIT : DOT;
-    }
-    rows.push(line);
-  }
-  return rows;
+  const corners = TURNS[at % TURNS.length];
+  if (!corners) return [];
+  const [topLeft, topRight, bottomRight, bottomLeft] = corners;
+  return [
+    `${topLeft}   ${topRight}`,
+    "     ",
+    `${bottomLeft}   ${bottomRight}`,
+  ];
 }
 
 /// The escape sequence that paints one frame centred in a terminal of this size.
@@ -64,9 +52,9 @@ export function paintMark(at: number, columns: number, rows: number): string {
   return `\x1b[2J${painted}`;
 }
 
-/// How often a frame is drawn. Eight positions at this interval is one turn a second, which reads as motion
-/// without asking the terminal to repaint faster than it can.
-export const MARK_FRAME_MS = 125;
+/// How often a frame is drawn. Four quarter turns at this interval is one turn every two thirds of a second,
+/// which reads as motion without asking the terminal to repaint faster than it can.
+export const MARK_FRAME_MS = 160;
 
 /// Hide the cursor while the mark turns; a block cursor parked at the top left is not part of the picture.
 export const HIDE_CURSOR = "\x1b[?25l";

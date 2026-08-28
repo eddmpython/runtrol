@@ -141,9 +141,9 @@ ${model.projects.map((project) => projectHtml(project, assets)).join("")}
   const usage = model.usage.length === 0
     ? ""
     : `<section class="zone usage-zone" aria-label="Usage">
-<h2 class="zone-title">Usage</h2>
-${usageChipsMarkup(model.usage, assets)}
+<h2 class="zone-title"><i class="ci ci-gauge" aria-hidden="true"></i>Usage</h2>
 ${usagePanelsMarkup(model.usage)}
+${usageChipsMarkup(model.usage, assets)}
 </section>`;
   return `<div class="scroll">${projects}${loose}</div>${usage}`;
 }
@@ -214,8 +214,10 @@ function conversationHtml(row: SidebarConversationRow, assets: SidebarAssets): s
 <span class="glyph-slot${row.activity === "working" ? " working" : ""}"><img class="glyph${row.activity === "working" ? " working" : ""}" src="${escapeHtml(iconUri)}" alt="${escapeHtml(row.serviceName)}" draggable="false"></span>
 <span class="title">${escapeHtml(row.title)}</span>
 ${dot}
-${row.memory ? `<span class="memory" title="Memory the provider process holds now">${escapeHtml(row.memory)}</span>` : ""}
+<span class="tail">
 <span class="actions">${actions}</span>
+${row.memory ? `<span class="memory" title="Memory the provider process holds now">${escapeHtml(row.memory)}</span>` : ""}
+</span>
 </div>`;
 }
 
@@ -291,7 +293,7 @@ button { font: inherit; color: inherit; }
 .scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; }
 .zone { padding: 4px 0 2px; }
 .zone + .zone { border-top: 1px solid var(--vscode-sideBarSectionHeader-border, var(--vscode-widget-border)); margin-top: 4px; }
-.zone-title { margin: 4px 4px 2px; font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; opacity: 0.55; }
+.zone-title { display: flex; align-items: center; gap: 4px; margin: 4px 4px 2px; font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; opacity: 0.55; }
 .usage-zone { flex: none; background: var(--vscode-sideBar-background); padding-bottom: 4px; border-top: 1px solid var(--vscode-sideBarSectionHeader-border, var(--vscode-widget-border)); }
 .row { position: relative; display: flex; align-items: center; gap: 6px; min-height: 24px; padding: 2px 4px 2px 0; border-radius: 4px; cursor: pointer; outline: none; }
 .row:hover { background: var(--vscode-list-hoverBackground); }
@@ -330,9 +332,15 @@ button { font: inherit; color: inherit; }
 .dot.ready { background: var(--vscode-testing-iconPassed, var(--vscode-charts-green)); opacity: 0.9; }
 .more .more-label { flex: 1 1 auto; font-size: 11px; opacity: 0.65; }
 .more:hover .more-label { opacity: 1; }
-.memory { flex: none; font-size: 10px; font-variant-numeric: tabular-nums; opacity: 0.6; }
-.actions { flex: none; display: none; gap: 1px; margin-left: 2px; }
-.row:hover .actions, .row:focus-within .actions { display: inline-flex; }
+/* One slot on the right, and nothing in the row moves when the cursor arrives. The actions hold their width
+   at rest and the memory figure sits on top of them; hovering swaps which one is painted, not the layout.
+   Appearing actions used to relayout the row and shift the name under the cursor (operator, 2026-08-28), and
+   on hover the actions are what the person came for. */
+.tail { flex: none; position: relative; display: inline-flex; align-items: center; justify-content: flex-end; margin-left: 2px; }
+.memory { position: absolute; right: 2px; font-size: 10px; font-variant-numeric: tabular-nums; opacity: 0.6; background: inherit; }
+.actions { display: inline-flex; gap: 1px; visibility: hidden; }
+.row:hover .actions, .row:focus-within .actions { visibility: visible; }
+.row:hover .memory, .row:focus-within .memory { visibility: hidden; }
 .act { border: 0; background: transparent; padding: 2px; border-radius: 3px; cursor: pointer; opacity: 0.75; line-height: 0; }
 .act:hover, .act:focus-visible { background: var(--vscode-toolbar-hoverBackground); opacity: 1; outline: none; }
 .project[draggable="true"] .project-row { cursor: grab; }
@@ -344,6 +352,8 @@ button { font: inherit; color: inherit; }
 .ci-close { --ci: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M3.3 2l4.7 4.7L12.7 2 14 3.3 9.3 8l4.7 4.7-1.3 1.3L8 9.3 3.3 14 2 12.7 6.7 8 2 3.3z'/></svg>"); }
 .ci-pin { --ci: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M10 1l5 5-3 1-2 2 1 4-3 1-2-4-4 4-1-1 4-4-4-2 1-3 4 1 2-2z' fill='none' stroke='currentColor' stroke-width='1.5'/></svg>"); }
 .ci-pinned { --ci: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M10 1l5 5-3 1-2 2 1 4-3 1-2-4-4 4-1-1 4-4-4-2 1-3 4 1 2-2z'/></svg>"); }
+.zone-title .ci { width: 11px; height: 11px; opacity: 0.8; }
+.ci-gauge { --ci: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M8 3a7 7 0 0 0-7 7v1h3v-1a4 4 0 1 1 8 0v1h3v-1a7 7 0 0 0-7-7z'/><path d='M8.9 10.6a1.3 1.3 0 1 1-1.8-1.8l4-2.6z'/></svg>"); }
 .ci-git-branch { --ci: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M11 2a2 2 0 0 0-1 3.7V7a2 2 0 0 1-2 2H6a3 3 0 0 0-1 .2V5.7a2 2 0 1 0-2 0v4.6a2 2 0 1 0 2 .1A2 2 0 0 1 6 10h2a4 4 0 0 0 4-4V5.7A2 2 0 0 0 11 2z'/></svg>"); }
 .ci-edit { --ci: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M12 1l3 3-8 8H4V9zM2 14h12v1H2z'/></svg>"); }
 .ci-trash { --ci: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M6 1h4l1 1h3v2H2V2h3zM3 5h10l-1 10H4z'/></svg>"); }

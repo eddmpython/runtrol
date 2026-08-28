@@ -15,6 +15,12 @@ import { discoveryNotice, incompleteDiscovery, providerRowsEqual, sessionRowsEqu
 import type { IsolatedWorkspaceLine } from "./protocol";
 import { workspaceIdentity } from "./workspaceCollision";
 
+/// How long after the last byte a conversation stops reading as working.
+///
+/// A model writing sends frames far closer together than this, so the row turns without flicker; a person
+/// reading an answer sees it stop about a second after the answer does.
+const STREAM_QUIET_MS = 1_200;
+
 export type RuntimeStateChange = "rows" | "selection" | "usage";
 
 /// Whether this window has heard from the Core yet.
@@ -63,6 +69,8 @@ export class RuntimeState implements vscode.Disposable {
   /// surface has none). Held here because every derived row reads it, and one place answering "is this
   /// conversation projectless" keeps the sidebar, the switcher and the tabs in agreement.
   private started: readonly StartedConversation[] = [];
+  /// The conversations whose service is writing to its screen right now, and the timer that forgets each one.
+  private readonly streaming = new Map<string, ReturnType<typeof setTimeout>>();
   private memoryBySession: ReadonlyMap<string, number> = new Map();
   private memoryByNative: ReadonlyMap<string, number> = new Map();
   private remember: ((catalogues: readonly NativeChatCatalogue[]) => void) | null = null;
@@ -148,6 +156,7 @@ export class RuntimeState implements vscode.Disposable {
       this.pinnedKeys,
       this.renamedTitles,
       this.started,
+      new Set(this.streaming.keys()),
     );
     return this.conversationRows;
   }
@@ -163,6 +172,26 @@ export class RuntimeState implements vscode.Disposable {
     const native = row.native?.nativeSessionId;
     if (!native) return null;
     return this.memoryByNative.get(`${row.providerId}:${native}`) ?? null;
+  }
+
+  /// This conversation's service just wrote to its screen, so it is working.
+  ///
+  /// The Runtime's own lifecycle cannot answer this: it says a turn is running only for turns Runtrol started,
+  /// and Runtrol starts none (every conversation is the service's terminal interface). Bytes arriving is the
+  /// signal that costs nothing and reads nothing: what is counted is that they came, never what they said.
+  /// The row stops turning after `STREAM_QUIET_MS` of silence, which is longer than the gap between frames of
+  /// a model writing and shorter than a person's next keystroke turning into an answer.
+  markStreaming(key: string): void {
+    const running = this.streaming.get(key);
+    if (running) clearTimeout(running);
+    this.streaming.set(key, setTimeout(() => {
+      this.streaming.delete(key);
+      this.conversationRows = null;
+      this.changedEmitter.fire("rows");
+    }, STREAM_QUIET_MS));
+    if (running) return;
+    this.conversationRows = null;
+    this.changedEmitter.fire("rows");
   }
 
   /// The memory poll's latest figures. Repaints only when a figure actually changed.
