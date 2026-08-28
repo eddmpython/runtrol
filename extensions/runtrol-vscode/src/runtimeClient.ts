@@ -235,14 +235,26 @@ export class StudioRuntimeClient implements vscode.Disposable {
       this.runtimeLocator(),
       this.requireOptions(),
     );
+    // The folder is compared as an identity, not as a string. The Runtime canonicalises the path it stores and
+    // Windows hands the same folder back with a different drive case, so the raw comparison found nothing and
+    // the person was shown the refusal instead of their own running conversation (2026-08-28).
+    const wanted = workspaceIdentity(workspace);
     const matches = fleet.flatMap((entry) => entry.outcome.kind === "listed"
       ? entry.outcome.snapshot.terminals.filter((terminal) => (
         terminal.providerId === providerId
         && terminal.nativeSessionId === nativeSessionId
-        && terminal.workspace === workspace
+        && workspaceIdentity(terminal.workspace) === wanted
       ))
       : []);
-    return matches.length === 1 ? matches[0]! : null;
+    // More than one generation can name the same conversation while a handover is in flight, which is exactly
+    // the moment this lookup exists for. Refusing then sent the person back to the error; take the one that is
+    // still running, and the newest of those.
+    const live = matches.filter((terminal) => terminal.processState === "running");
+    const candidates = live.length > 0 ? live : matches;
+    return candidates.reduce<TerminalDescriptor | null>(
+      (best, terminal) => (best === null || terminal.openedAtMs > best.openedAtMs ? terminal : best),
+      null,
+    );
   }
 
   private runtimeLocator(): RuntimeLocator {
@@ -285,6 +297,16 @@ export class StudioRuntimeClient implements vscode.Disposable {
   /// structural changes; a figure that moves without a structural change needs to be asked for.
   async listSessionsNow(): Promise<ManagedSessionList> {
     return this.read((runtime) => runtime.sessions().list());
+  }
+
+  /// The conversations of one service whose transcript was written in the last few seconds.
+  ///
+  /// The only way this panel can say a conversation is running when Runtrol did not start it, which is most of
+  /// them for a person who also uses their CLI in a terminal. Asked on the same slow poll as the memory
+  /// figures because it is the same kind of fact: it moves without anything structural changing.
+  async nativeActivity(providerId: string): Promise<readonly string[]> {
+    const answered = await this.read((runtime) => runtime.providers().nativeActivity(providerId));
+    return answered.active;
   }
 
   async models(providerId: string): Promise<RuntimeModelCatalog> {

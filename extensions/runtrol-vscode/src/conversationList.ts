@@ -109,6 +109,10 @@ export function conversations(
   started: readonly StartedConversation[] = [],
   /// The conversations whose service is writing to its screen right now.
   streaming: ReadonlySet<string> = new Set(),
+  /// Conversations the service wrote to a moment ago that Runtrol does not host. `streaming` cannot see these
+  /// because their bytes never pass through us; the Runtime names them by asking the service's own store what
+  /// it wrote lately.
+  activeNative: ReadonlySet<string> = new Set(),
 ): Conversation[] {
   const nativeByKey = new Map<string, NativeChatLine>();
   for (const chat of nativeChats) {
@@ -143,22 +147,22 @@ export function conversations(
     // A chat the daemon already supervises is the same conversation, not a second one. The service half only
     // contributes its title and timestamp, which the supervised row above has already taken.
     if (claimed.has(key) || chat.alreadyManagedAs) continue;
-    rows.push(providerOwned(chat, key, providers, projectlessRoot, pinnedKeys.has(key), renamedTitles.get(key)));
+    rows.push(providerOwned(
+      chat,
+      key,
+      providers,
+      projectlessRoot,
+      pinnedKeys.has(key),
+      renamedTitles.get(key),
+      activeNative.has(chat.nativeSessionId),
+    ));
   }
   // What runtrol started and the service has not named yet. A placeholder gives way to the row the service
   // finally wrote for it: same service, same folder, and touched at or after the moment the tab opened. Keeping
   // both would show one conversation twice, and dropping the placeholder any earlier would empty the list again.
-  const spokenFor = new Map<string, number>();
-  for (const row of rows) {
-    const slot = startedSlot(row.providerId, row.workspace);
-    spokenFor.set(slot, Math.max(spokenFor.get(slot) ?? 0, row.updatedAtMs ?? 0));
-  }
+  const named = namedPlaceholders(rows, started);
   for (const pending of started) {
-    const wrote = spokenFor.get(startedSlot(pending.providerId, pending.workspace));
-    // A minute of slack: the service stamps its own store from its own clock, and a row that is this
-    // conversation must not be missed over a second of drift. No row at all is not a match, however old the
-    // placeholder is: that is exactly the gap this stands in.
-    if (wrote !== undefined && wrote >= pending.startedAtMs - SERVICE_CLOCK_SLACK_MS) continue;
+    if (named.has(pending.id)) continue;
     rows.push(startedRow(pending, providers, projectlessRoot));
   }
   // Pinned rows first, each group then in its own recency order. Pinning is a placement choice, so it sorts
@@ -468,6 +472,7 @@ function providerOwned(
   projectlessRoot: string | null,
   pinned: boolean,
   name: string | undefined,
+  working: boolean,
 ): Conversation {
   const resumable = chat.resume === "available" && Boolean(chat.adoptionToken);
   const projectless = isProjectless(chat.cwd, projectlessRoot);
@@ -484,7 +489,7 @@ function providerOwned(
     folder: projectless ? "" : workspaceName(chat.cwd),
     projectless,
     updatedAtMs: instant(chat.updatedAt),
-    activity: "saved",
+    activity: working ? "working" : "saved",
     tool: null,
     signInNeeded: false,
     live: false,
@@ -638,6 +643,39 @@ function compare(left: string, right: string): number {
 /// How far a service's own clock may sit behind this one before a row stops being recognised as the
 /// conversation runtrol just started.
 const SERVICE_CLOCK_SLACK_MS = 60_000;
+
+/// Which placeholders the service has now named, and the conversation each one turned out to be.
+///
+/// A conversation started here has no name until its service writes one, so the list stands a placeholder in
+/// its place and the tab is filed under that placeholder. The moment the service writes the row, two things
+/// have to happen together: the list drops the placeholder, and the tab it belongs to moves onto the real
+/// conversation. They were two separate judgements, so the tab kept the folder name for the rest of its life
+/// even though the sidebar was already showing the real one (operator, 2026-08-28: the name the service gives
+/// has to reach the tab). One answer, read by both.
+///
+/// The match is the one a person would make: same service, same folder, and the service touched it at or after
+/// the moment the tab opened. A minute of slack, because the service stamps its store from its own clock and
+/// this conversation must not be missed over a second of drift.
+export function namedPlaceholders(
+  rows: readonly Conversation[],
+  started: readonly StartedConversation[],
+): ReadonlyMap<string, string> {
+  const spokenFor = new Map<string, Conversation>();
+  for (const row of rows) {
+    const slot = startedSlot(row.providerId, row.workspace);
+    const best = spokenFor.get(slot);
+    if (best === undefined || (row.updatedAtMs ?? 0) > (best.updatedAtMs ?? 0)) spokenFor.set(slot, row);
+  }
+  const named = new Map<string, string>();
+  for (const pending of started) {
+    const row = spokenFor.get(startedSlot(pending.providerId, pending.workspace));
+    // No row at all is not a match, however old the placeholder is: that is exactly the gap it stands in.
+    if (row === undefined) continue;
+    if ((row.updatedAtMs ?? 0) < pending.startedAtMs - SERVICE_CLOCK_SLACK_MS) continue;
+    named.set(pending.id, row.key);
+  }
+  return named;
+}
 
 /// The bucket a started conversation and a service-owned row share when they are the same conversation.
 function startedSlot(providerId: string, workspace: string): string {

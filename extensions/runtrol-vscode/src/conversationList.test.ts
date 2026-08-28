@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   attentionCount,
   conversationDetail,
+  namedPlaceholders,
   conversationStatus,
   conversations,
   elapsed,
@@ -112,6 +113,45 @@ test("a conversation whose service is writing right now reads as working", () =>
     new Set([key]),
   );
   assert.equal(busy[0]?.activity, "working");
+});
+
+test("a conversation Runtrol does not host reads as working while its service writes it", () => {
+  // The row above needs bytes to pass through Runtrol, which only happens for a conversation it hosts. A
+  // person who runs the CLI in their own terminal still expects the panel to show that conversation working,
+  // and on the operator's machine that is most of them (measured 2026-08-28: a live session read as idle).
+  const idle = conversations([], PROVIDERS, [nativeChat({ nativeSessionId: "n9" })], null);
+  assert.equal(idle[0]?.activity, "saved");
+  const busy = conversations(
+    [],
+    PROVIDERS,
+    [nativeChat({ nativeSessionId: "n9" })],
+    null,
+    null,
+    new Map(),
+    new Map(),
+    new Set(),
+    new Map(),
+    [],
+    new Set(),
+    new Set(["n9"]),
+  );
+  assert.equal(busy[0]?.activity, "working");
+  // Named by the service's own identity, not by the row key: the answer comes from the service's store.
+  const other = conversations(
+    [],
+    PROVIDERS,
+    [nativeChat({ nativeSessionId: "n9" })],
+    null,
+    null,
+    new Map(),
+    new Map(),
+    new Set(),
+    new Map(),
+    [],
+    new Set(),
+    new Set(["someone-else"]),
+  );
+  assert.equal(other[0]?.activity, "saved");
 });
 
 test("one list holds supervised sessions and provider-owned chats alike", () => {
@@ -1060,4 +1100,14 @@ test("a conversation runtrol just started stands in the list until its service n
     started,
   );
   assert.deepEqual(named.map((row) => row.title), ["Simple greeting request"]);
+
+  // The same judgement, told plainly: which placeholder became which conversation. The tab that was opened for
+  // the placeholder reads this to move onto the real conversation, so that the name the service gave reaches
+  // the tab and a second click does not open a second tab on it.
+  assert.deepEqual([...namedPlaceholders(named, started)], [["grok:1", named[0]!.key]]);
+  // Nothing to hand over while the service has written nothing: the placeholder stands.
+  assert.deepEqual([...namedPlaceholders(fresh.filter((row) => false), started)], []);
+  // Another folder's conversation is not this one, however recent it is.
+  const elsewhere = named.map((row) => ({ ...row, workspace: "C:/storage/other" }));
+  assert.deepEqual([...namedPlaceholders(elsewhere, started)], []);
 });

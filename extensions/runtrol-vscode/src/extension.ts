@@ -3,7 +3,7 @@ import path from "node:path";
 import * as vscode from "vscode";
 
 import { AgentToolsController, type AgentToolsAction } from "./agentTools";
-import { conversations as conversationRows } from "./conversationList";
+import { conversations as conversationRows, namedPlaceholders } from "./conversationList";
 import { ActivityWatcher } from "./activityWatch";
 import { WatchLifecycleGate } from "./watchLifecycleGate";
 import { DiffDocuments } from "./diffDocuments";
@@ -165,6 +165,12 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     (key) => state.conversations.find((row) => row.key === key)?.title ?? null,
   );
   context.subscriptions.push(terminals);
+  // A tab started from here is filed under a placeholder until its service writes the conversation. The list
+  // rebuild that drops the placeholder is the moment the tab can move onto the real one, and it is the same
+  // event that repaints the sidebar, so no row can be clicked before its tab has moved.
+  context.subscriptions.push(state.onDidChange((change) => {
+    if (change === "rows") terminals.retire(namedPlaceholders(state.conversations, terminals.startedConversations()));
+  }));
   controller = new Controller(context, client, runtime, state, selection, projectStore, terminals);
   const offerServices = (): readonly { providerId: string; displayName: string; icon: string }[] =>
     controller.startableServices().map((provider) => ({

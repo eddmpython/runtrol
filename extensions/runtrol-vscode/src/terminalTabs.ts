@@ -8,7 +8,7 @@ import * as vscode from "vscode";
 import type { Conversation, StartedConversation } from "./conversationList";
 import { tabColorId } from "./projectColor";
 import { tabName } from "./tabName";
-import { workspaceIdentity } from "./workspaceCollision";
+
 import { HIDE_CURSOR, hasVisibleText, MARK_FRAME_MS, paintMark, SHOW_CURSOR } from "./openingMark";
 import type { StudioRuntimeClient } from "./runtimeClient";
 
@@ -71,20 +71,28 @@ export class TerminalTabs implements vscode.Disposable {
 
   /// The tab this conversation is already running in, opened before the service named it.
   ///
-  /// A conversation started here has no identity until its service writes one, so its tab is filed under a
-  /// placeholder. When the name arrives the row changes key, and without this the row's next click opened a
-  /// second tab on a conversation that was already on screen. The match is the one the list itself uses: same
-  /// service, same folder.
-  private adoptStarted(conversation: Conversation): vscode.Terminal | null {
-    for (const [terminal, pending] of this.started) {
-      if (pending.providerId !== conversation.providerId) continue;
-      if (workspaceIdentity(pending.workspace) !== workspaceIdentity(conversation.workspace)) continue;
+  /// Move the tabs whose conversation the service has just named onto their real conversation.
+  ///
+  /// A tab opened from here is filed under a placeholder until then. Leaving it there costs two visible
+  /// things: the row's next click opens a second tab on a conversation already on screen, and the tab keeps
+  /// the folder name for the rest of its life because the placeholder it is filed under is no longer in the
+  /// list to have a name. Which placeholder became which conversation is `namedPlaceholders`, the same answer
+  /// the list uses to drop it.
+  retire(named: ReadonlyMap<string, string>): void {
+    const moved: vscode.Terminal[] = [];
+    for (const [terminal, pending] of [...this.started]) {
+      const key = named.get(pending.id);
+      if (key === undefined) continue;
       this.started.delete(terminal);
-      this.open.set(conversation.key, terminal);
-      this.startedChanged();
-      return terminal;
+      this.open.set(key, terminal);
+      moved.push(terminal);
     }
-    return null;
+    if (moved.length === 0) return;
+    this.startedChanged();
+    // The tab now has a name to wear. Only the active tab can be renamed, and it is the active one whenever
+    // the person is sitting in the conversation they just started, which is the whole of this moment.
+    const active = vscode.window.activeTerminal;
+    if (active && moved.includes(active)) void this.correctName(active);
   }
 
   /// Rename the active tab to the conversation's current name, once.
@@ -113,7 +121,7 @@ export class TerminalTabs implements vscode.Disposable {
 
   /// Show the conversation's terminal: the tab that already shows it, or a new one beside the active editor.
   show(conversation: Conversation, preserveFocus: boolean): vscode.Terminal {
-    const existing = this.open.get(conversation.key) ?? this.adoptStarted(conversation);
+    const existing = this.open.get(conversation.key);
     if (existing) {
       existing.show(preserveFocus);
       return existing;
@@ -257,7 +265,11 @@ function tabIcon(colour: string | null, service: () => vscode.ThemeIcon | vscode
 function leaseLost(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return message.includes("leaseExpired")
-    || message.includes("the terminal control lease expired or was released");
+    || message.includes("the terminal control lease expired or was released")
+    // Two windows of one profile share an integration, so they share the lease: whichever renews it last
+    // leaves the other holding a stale generation, and the Runtime names that `controlConflict`. Asking again
+    // is how this window takes control back, which is the same answer as an expiry.
+    || message.includes("controlConflict");
 }
 
 class RuntimeTerminal implements vscode.Pseudoterminal {
@@ -510,7 +522,11 @@ class RuntimeTerminal implements vscode.Pseudoterminal {
   private async ensureControl(view: TerminalView): Promise<TerminalControlLease> {
     const lease = this.lease;
     if (lease && lease.expiresAtMs > Date.now() + 5_000) return lease;
-    this.lease = lease
+    // A lease whose time is already up cannot be renewed: the Runtime retires it before answering, so asking
+    // to renew is a round trip that fails by construction. Past that moment the only move is to ask for
+    // control again, which is what a person typing after a quiet minute is entitled to.
+    const renewable = lease !== null && lease.expiresAtMs > Date.now();
+    this.lease = renewable && lease
       ? await view.renewControl({
           requestId: newMutationRequestId(),
           terminalId: view.opened.terminal.terminalId,
