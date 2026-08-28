@@ -262,6 +262,16 @@ class RuntimeTerminal implements vscode.Pseudoterminal {
     }, MARK_FRAME_MS);
   }
 
+  /// Pass on what the service drew, and take the mark down at the first sight of it.
+  ///
+  /// The Runtime answering is not the end of the wait: it hands back a screen that is empty until the CLI
+  /// itself writes, and taking the mark down then left the same blank rectangle it exists to prevent
+  /// (measured 2026-08-28, one click in a real window).
+  private writeFromService(text: string): void {
+    if (text.length > 0) this.stopOpeningMark();
+    this.writeEmitter.fire(text);
+  }
+
   /// Stop and leave the pane clear. The cursor comes back because the CLI about to draw here expects it.
   private stopOpeningMark(): void {
     if (!this.opening) return;
@@ -288,8 +298,7 @@ class RuntimeTerminal implements vscode.Pseudoterminal {
     }
     this.view = view;
     this.lease = view.opened.controlLease ?? null;
-    this.stopOpeningMark();
-    this.writeEmitter.fire(this.decoder.decode(view.initialScreen, { stream: true }));
+    this.writeFromService(this.decoder.decode(view.initialScreen, { stream: true }));
     if (
       this.dimensions.columns !== geometry.columns
       || this.dimensions.rows !== geometry.rows
@@ -334,7 +343,7 @@ class RuntimeTerminal implements vscode.Pseudoterminal {
         const notification = await view.next();
         switch (notification.kind) {
           case "output":
-            this.writeEmitter.fire(this.decoder.decode(notification.bytes, { stream: true }));
+            this.writeFromService(this.decoder.decode(notification.bytes, { stream: true }));
             break;
           case "lagged":
             // The Core re-sends the whole screen next; clear so the redraw lands on a clean page, and start
