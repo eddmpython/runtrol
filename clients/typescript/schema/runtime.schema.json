@@ -1146,7 +1146,7 @@
     },
     "NativeActivityParams": {
       "additionalProperties": false,
-      "description": "Ask which of one provider's conversations were written in the last few seconds.\n\nSeparate from the catalogue because it is asked often and the catalogue is not cheap: on the machine this\nwas measured, a catalogue reads every transcript's head and costs 121 ms, while naming what changed lately\ncosts 23 ms. A conversation being written is a conversation whose model is answering, which is how the\npanel knows a turn is running in a conversation Runtrol did not start.",
+      "description": "Ask which of one provider's conversations have a model answering right now.\n\nSeparate from the catalogue because it is asked often and the catalogue is not cheap: on the machine this\nwas measured, naming every stored conversation costs 121 ms. How a provider knows is its own business\n(Claude Code publishes a roster of its own running processes and what each one is doing); what the answer\nmeans is the same for every provider, and it is how the panel shows a turn running in a conversation\nRuntrol did not start.",
       "properties": {
         "providerId": {
           "$ref": "#/$defs/ProviderId",

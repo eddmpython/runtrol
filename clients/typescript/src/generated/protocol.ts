@@ -164,12 +164,13 @@ export type MutationRequestId = string;
 /** The conversations of one provider that were written inside the activity window. */
 export interface NativeActivity { readonly active: ReadonlyArray<string>; readonly providerId: ProviderId; }
 
-/** Ask which of one provider's conversations were written in the last few seconds.
+/** Ask which of one provider's conversations have a model answering right now.
 
 Separate from the catalogue because it is asked often and the catalogue is not cheap: on the machine this
-was measured, a catalogue reads every transcript's head and costs 121 ms, while naming what changed lately
-costs 23 ms. A conversation being written is a conversation whose model is answering, which is how the
-panel knows a turn is running in a conversation Runtrol did not start. */
+was measured, naming every stored conversation costs 121 ms. How a provider knows is its own business
+(Claude Code publishes a roster of its own running processes and what each one is doing); what the answer
+means is the same for every provider, and it is how the panel shows a turn running in a conversation
+Runtrol did not start. */
 export interface NativeActivityParams { readonly providerId: ProviderId; }
 
 /** Whether an officially listed session can be resumed through the same provider driver. */

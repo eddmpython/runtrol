@@ -33,13 +33,13 @@ pub struct ListNativeSessionsParams {
     pub cursor: Option<String>,
 }
 
-/// Ask which of one provider's conversations were written in the last few seconds.
+/// Ask which of one provider's conversations have a model answering right now.
 ///
 /// Separate from the catalogue because it is asked often and the catalogue is not cheap: on the machine this
-/// was measured, a catalogue reads every transcript's head and costs 121 ms. How a provider knows is its own
-/// business (Claude Code publishes a roster of its running processes and what each one is doing); what the
-/// answer means here is the same for every provider, and it is how the panel shows a turn running in a
-/// conversation Runtrol did not start.
+/// was measured, naming every stored conversation costs 121 ms. How a provider knows is its own business
+/// (Claude Code publishes a roster of its own running processes and what each one is doing); what the answer
+/// means is the same for every provider, and it is how the panel shows a turn running in a conversation
+/// Runtrol did not start.
 #[derive(Clone, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct NativeActivityParams {
