@@ -161,7 +161,7 @@ export interface ManagedSessionList { readonly sessions: ReadonlyArray<SessionDe
 /** A caller-minted UUIDv7 identifying one state-changing request. */
 export type MutationRequestId = string;
 
-/** The conversations of one provider that were written inside the activity window. */
+/** The conversations of one provider with a model answering in them right now. */
 export interface NativeActivity { readonly active: ReadonlyArray<string>; readonly providerId: ProviderId; }
 
 /** Ask which of one provider's conversations have a model answering right now.

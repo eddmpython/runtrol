@@ -2324,11 +2324,12 @@ fn refuse_supervised(
     }
 }
 
-/// Name the conversations of one provider that were written in the last few seconds.
+/// Name the conversations of one provider with a model answering in them right now.
 ///
-/// The panel asks this often, so it must stay the cheap question: the driver walks its own store for names and
-/// times and opens nothing. It is the only way Runtrol can say that a conversation it did not start is running,
-/// which is most of them for a person who also uses their CLI in a terminal (operator, 2026-08-28).
+/// The panel asks this often, so it must stay the cheap question: the driver answers from whatever its own
+/// service already publishes about its running processes, and opens no conversation. It is the only way
+/// Runtrol can say that a conversation it did not start is running, which is most of them for a person who
+/// also uses their CLI in a terminal (operator, 2026-08-28).
 ///
 /// No folder filter and no per-row authorisation: an identity the caller was already shown by the catalogue,
 /// answered on the owner-only local endpoint, adds nothing the caller does not have. The same argument the

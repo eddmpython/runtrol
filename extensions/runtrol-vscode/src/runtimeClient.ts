@@ -110,6 +110,7 @@ export class StudioRuntimeClient implements vscode.Disposable {
   private preferDigest: string | null = null;
   private providerWatch: symbol | null = null;
   private sessionWatch: symbol | null = null;
+  private terminalWatch: symbol | null = null;
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -299,7 +300,7 @@ export class StudioRuntimeClient implements vscode.Disposable {
     return this.read((runtime) => runtime.sessions().list());
   }
 
-  /// The conversations of one service whose transcript was written in the last few seconds.
+  /// The conversations of one service with a model answering in them right now.
   ///
   /// The only way this panel can say a conversation is running when Runtrol did not start it, which is most of
   /// them for a person who also uses their CLI in a terminal. Asked on the same slow poll as the memory
@@ -796,6 +797,44 @@ export class StudioRuntimeClient implements vscode.Disposable {
     }
   }
 
+  /// Follow the daemon's hosted-terminal registry as an event stream.
+  ///
+  /// This is the discovery hot path for provider processes launched through a transparent terminal bridge. It is
+  /// separate from the five-second memory sampling loop: process birth and exit are structural facts and reach the
+  /// sidebar without waiting for a clock.
+  async watchTerminals(
+    snapshot: (terminals: TerminalIndexSnapshot) => void,
+    signal: AbortSignal,
+  ): Promise<void> {
+    const watch = Symbol("terminal watch");
+    this.terminalWatch = watch;
+    await this.withRuntimeLocator(async (locator) => {
+      const runtime = await this.connector.connectWithRetry(locator, this.requireOptions(), { signal });
+      let subscription: Awaited<ReturnType<ReturnType<RuntimeClient["terminals"]>["watchIndex"]>> | null = null;
+      const close = (): void => subscription?.close();
+      signal.addEventListener("abort", close, { once: true });
+      try {
+        subscription = await runtime.terminals().watchIndex();
+        if (this.terminalWatch === watch) snapshot(subscription.started.snapshot);
+        while (!signal.aborted) {
+          const notification = await subscription.next();
+          if (notification.kind === "changed") {
+            if (this.terminalWatch === watch) snapshot(notification.changed.snapshot);
+          } else {
+            throw new Error(`the Runtime terminal stream ended: ${notification.ended.reason}`);
+          }
+        }
+      } catch (error) {
+        if (!signal.aborted) throw error;
+      } finally {
+        signal.removeEventListener("abort", close);
+        subscription?.close();
+        runtime.close();
+        if (this.terminalWatch === watch) this.terminalWatch = null;
+      }
+    });
+  }
+
   async watchEvents(
     sessionId: string,
     after: EventCursor | null,
@@ -1105,6 +1144,7 @@ export class StudioRuntimeClient implements vscode.Disposable {
   private invalidateInventory(): void {
     this.providerWatch = null;
     this.sessionWatch = null;
+    this.terminalWatch = null;
     this.providerSnapshot = null;
     this.sessionSnapshot = null;
   }

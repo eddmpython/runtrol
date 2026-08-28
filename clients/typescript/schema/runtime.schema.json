@@ -1124,10 +1124,10 @@
     },
     "NativeActivity": {
       "additionalProperties": false,
-      "description": "The conversations of one provider that were written inside the activity window.",
+      "description": "The conversations of one provider with a model answering in them right now.",
       "properties": {
         "active": {
-          "description": "Native identities written inside the window, in no particular order.",
+          "description": "Native identities answering now, in no particular order.",
           "items": {
             "type": "string"
           },

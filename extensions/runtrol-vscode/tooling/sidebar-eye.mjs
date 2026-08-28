@@ -43,7 +43,13 @@ await build({
 
 const { sidebarHtml } = await import(`file://${bundle.replaceAll("\\", "/")}`);
 
-/// The editor colours the page reads, at their Dark Modern values. Only what the page actually asks for.
+/// The editor colours the page reads. Only what the page actually asks for.
+///
+/// The values are the editor's own registry defaults for a dark theme, not one theme's palette. That is what a
+/// page actually gets: a theme names a few dozen colours and the editor fills in every other registered colour
+/// from the default for its kind. Measured 2026-08-28, the theme on the operator's machine (Visual Studio Dark)
+/// defines 37 colours and none of the ones this page reads for state, so all of them come from the registry.
+/// The harness was declaring one theme's palette instead and photographing colours nobody sees.
 const THEME = `
 :root {
   --vscode-font-family: "Segoe UI", system-ui, sans-serif;
@@ -58,11 +64,11 @@ const THEME = `
   --vscode-toolbar-hoverBackground: #383b3d;
   --vscode-focusBorder: #0078d4;
   --vscode-editorWidget-background: #202020;
-  --vscode-progressBar-background: #0078d4;
+  --vscode-progressBar-background: #0e70c0;
   --vscode-notificationsWarningIcon-foreground: #cca700;
   --vscode-errorForeground: #f85149;
-  --vscode-testing-iconPassed: #3fb950;
-  --vscode-charts-blue: #4e94ce;
+  --vscode-testing-iconPassed: #73c991;
+  --vscode-charts-blue: #59a4f9;
   --vscode-charts-green: #89d185;
   --vscode-charts-purple: #b180d7;
   --vscode-charts-yellow: #cca700;

@@ -282,10 +282,11 @@ const STYLE = `
 /* The one colour that says a conversation is running, named once so the mark around its icon and the state
    dot beside its name cannot drift apart.
 
-   Not the editor's progress colour, which is the obvious choice and was measured to be the wrong one: in the
-   default dark theme this build ships, progressBar.background is #878889, so a running row drew a grey ring
-   and a grey dot and looked exactly like an idle one (operator's window, 2026-08-28). The chart blue is
-   defined by every theme and is vivid in both light and dark, which is what a state colour has to be. */
+   Not the editor's progress colour, which is the obvious choice and is not a state colour. What it paints is
+   up to whichever theme is on: measured 2026-08-28, the dark theme this build of the editor falls back to
+   when nobody has chosen one paints progressBar.background #878889, and a running row drawn in it was grey,
+   which is what an idle row is. The chart colours are the ones meant to be told apart at a glance, and this
+   one is vivid in both light and dark. */
 :root { --runtrol-running: var(--vscode-charts-blue, #4e94ce); }
 /* The panel's height, taken twice: the editor gives the frame its height and the document has to claim it, or
    the page is only as tall as its rows and the usage strip stops being the bottom of the sidebar. */
@@ -362,10 +363,10 @@ button { font: inherit; color: inherit; }
 .conv .title { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; line-height: 1.4; -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 20px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 20px), transparent); }
 .conv.blocked .title { opacity: 0.5; }
 .conv.pinned .title::before { content: ""; display: inline-block; width: 9px; height: 9px; margin-right: 4px; background: currentColor; opacity: 0.55; -webkit-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M10 1l5 5-3 1-2 2 1 4-3 1-2-4-4 4-1-1 4-4-4-2 1-3 4 1 2-2z'/></svg>") center / contain no-repeat; mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M10 1l5 5-3 1-2 2 1 4-3 1-2-4-4 4-1-1 4-4-4-2 1-3 4 1 2-2z'/></svg>") center / contain no-repeat; }
-/* Every colour that says a state carries its own fallback: a var() naming a colour a theme leaves undefined
-   drops the whole declaration and leaves the rule above it, and a state that renders as no state is worse
-   than no dot at all. Measured 2026-08-28: the default dark theme this build ships defines no
-   testing.iconPassed. */
+/* Every colour that says a state carries its own fallback. The editor does define each of these, so the
+   fallback is not for the editor: it is for this page rendered anywhere else, which is how it is looked at
+   during development (the sidebar eye harness). A var() naming a colour nothing defines drops the whole
+   declaration and leaves the rule above it, and a state that renders as no state is worse than no dot. */
 .dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--vscode-descriptionForeground); opacity: 0.6; }
 .dot.working { background: var(--runtrol-running); opacity: 1; }
 .dot.needsYou { background: var(--vscode-notificationsWarningIcon-foreground, #cca700); opacity: 1; box-shadow: 0 0 0 2px color-mix(in srgb, var(--vscode-notificationsWarningIcon-foreground, #cca700) 30%, transparent); }

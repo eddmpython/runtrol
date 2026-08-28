@@ -1,6 +1,6 @@
 import { isProjectless } from "./projectlessWorkspace";
 import type { ProjectRecord } from "./projects";
-import type { NativeChatLine, ProviderLine, SessionLine } from "./runtimeTypes";
+import type { NativeChatLine, ProviderLine, SessionLine, TerminalDescriptor } from "./runtimeTypes";
 import { providerDisplayName, providerIcon, workspaceName } from "./sessionDisplay";
 import { workspaceCovers, workspaceIdentity } from "./workspaceCollision";
 
@@ -69,6 +69,10 @@ export type Conversation = {
   readonly pinned: boolean;
   readonly session: SessionLine | null;
   readonly native: NativeChatLine | null;
+  /// The exact daemon generation and terminal to attach when this conversation is already running.
+  readonly hostedTerminal: TerminalDescriptor | null;
+  /// The transient row key this hosted process had before the provider published its conversation identity.
+  readonly hostedKey: string | null;
   readonly canOpen: boolean;
   /// Why it cannot be opened, for the one row where that is true.
   readonly blocked: string | null;
@@ -109,24 +113,36 @@ export function conversations(
   started: readonly StartedConversation[] = [],
   /// The conversations whose service is writing to its screen right now.
   streaming: ReadonlySet<string> = new Set(),
-  /// Conversations the service wrote to a moment ago that Runtrol does not host. `streaming` cannot see these
-  /// because their bytes never pass through us; the Runtime names them by asking the service's own store what
-  /// it wrote lately.
+  /// Conversations with a model answering that Runtrol does not host. `streaming` cannot see these because
+  /// their bytes never pass through us; the Runtime names them by asking each service what its own running
+  /// processes are doing.
   activeNative: ReadonlySet<string> = new Set(),
+  /// Daemon-owned provider terminals, pushed at process birth and exit.
+  terminals: readonly TerminalDescriptor[] = [],
 ): Conversation[] {
   const nativeByKey = new Map<string, NativeChatLine>();
   for (const chat of nativeChats) {
     nativeByKey.set(conversationKey(chat.providerId, chat.nativeSessionId), chat);
   }
+  const terminalByConversation = new Map<string, TerminalDescriptor>();
+  for (const terminal of terminals) {
+    if (terminal.processState !== "running" || !terminal.nativeSessionId) continue;
+    const key = conversationKey(terminal.providerId, terminal.nativeSessionId);
+    const prior = terminalByConversation.get(key);
+    if (!prior || terminal.openedAtMs > prior.openedAtMs) terminalByConversation.set(key, terminal);
+  }
 
   const rows: Conversation[] = [];
   const claimed = new Set<string>();
+  const claimedTerminals = new Set<string>();
   for (const session of sessions) {
     const sessionKey = `session:${encodeURIComponent(session.sessionId)}`;
     const key = session.nativeSessionId
       ? conversationKey(session.providerId, session.nativeSessionId)
       : sessionKey;
     const legacyKey = key === sessionKey ? null : sessionKey;
+    const hosted = terminalByConversation.get(key) ?? null;
+    if (hosted) claimedTerminals.add(terminalKey(hosted));
     claimed.add(key);
     rows.push(supervised(
       session,
@@ -141,12 +157,15 @@ export function conversations(
       renamedTitles.get(key) ?? (legacyKey === null ? undefined : renamedTitles.get(legacyKey)),
       legacyKey,
       streaming.has(key),
+      hosted,
     ));
   }
   for (const [key, chat] of nativeByKey) {
     // A chat the daemon already supervises is the same conversation, not a second one. The service half only
     // contributes its title and timestamp, which the supervised row above has already taken.
     if (claimed.has(key) || chat.alreadyManagedAs) continue;
+    const hosted = terminalByConversation.get(key) ?? null;
+    if (hosted) claimedTerminals.add(terminalKey(hosted));
     rows.push(providerOwned(
       chat,
       key,
@@ -155,7 +174,19 @@ export function conversations(
       pinnedKeys.has(key),
       renamedTitles.get(key),
       activeNative.has(chat.nativeSessionId),
+      hosted,
     ));
+  }
+  // A provider process is visible immediately, even before its own store publishes a conversation identity and
+  // title. Once that row appears it claims this terminal and `hostedKey` lets an already open tab move in place.
+  for (const terminal of terminals) {
+    const key = terminalKey(terminal);
+    if (
+      terminal.processState !== "running"
+      || claimedTerminals.has(key)
+      || started.some((pending) => startedCoversTerminal(pending, terminal))
+    ) continue;
+    rows.push(hostedRow(terminal, providers, projectlessRoot));
   }
   // What runtrol started and the service has not named yet. A placeholder gives way to the row the service
   // finally wrote for it: same service, same folder, and touched at or after the moment the tab opened. Keeping
@@ -435,6 +466,7 @@ function supervised(
   name: string | undefined,
   legacyKey: string | null,
   streaming: boolean,
+  hosted: TerminalDescriptor | null,
 ): Conversation {
   const homeWorkspace = isolatedWorkspaceHomes.get(workspaceIdentity(session.workspace)) ?? session.workspace;
   const projectless = isProjectless(homeWorkspace, projectlessRoot);
@@ -455,11 +487,13 @@ function supervised(
     activity: streaming ? "working" : activityOf(session),
     tool: activity.tool,
     signInNeeded: activity.signInNeeded,
-    live: session.hot,
+    live: session.hot || hosted !== null,
     open: session.sessionId === selectedSessionId,
     pinned,
     session,
     native,
+    hostedTerminal: hosted,
+    hostedKey: hosted ? terminalKey(hosted) : null,
     canOpen: true,
     blocked: null,
   };
@@ -473,6 +507,7 @@ function providerOwned(
   pinned: boolean,
   name: string | undefined,
   working: boolean,
+  hosted: TerminalDescriptor | null,
 ): Conversation {
   const resumable = chat.resume === "available" && Boolean(chat.adoptionToken);
   const projectless = isProjectless(chat.cwd, projectlessRoot);
@@ -492,13 +527,15 @@ function providerOwned(
     activity: working ? "working" : "saved",
     tool: null,
     signInNeeded: false,
-    live: false,
+    live: hosted !== null,
     open: false,
     pinned,
     session: null,
     native: chat,
-    canOpen: resumable,
-    blocked: resumable ? null : "This coding service cannot reopen this conversation.",
+    hostedTerminal: hosted,
+    hostedKey: hosted ? terminalKey(hosted) : null,
+    canOpen: hosted !== null || resumable,
+    blocked: hosted !== null || resumable ? null : "This coding service cannot reopen this conversation.",
   };
 }
 
@@ -714,7 +751,54 @@ function startedRow(
     pinned: false,
     session: null,
     native: null,
+    hostedTerminal: null,
+    hostedKey: null,
     canOpen: true,
     blocked: null,
   };
+}
+
+/// A daemon-owned process whose provider conversation identity has not been published yet.
+function hostedRow(
+  terminal: TerminalDescriptor,
+  providers: readonly ProviderLine[],
+  projectlessRoot: string | null,
+): Conversation {
+  const key = terminalKey(terminal);
+  const projectless = isProjectless(terminal.workspace, projectlessRoot);
+  return {
+    key,
+    legacyKey: null,
+    providerId: terminal.providerId,
+    serviceName: providerDisplayName(terminal.providerId, providers),
+    serviceIcon: providerIcon(terminal.providerId, providers),
+    title: workspaceName(terminal.workspace) || "New conversation",
+    homeWorkspace: terminal.workspace,
+    workspace: terminal.workspace,
+    folder: projectless ? "" : workspaceName(terminal.workspace),
+    projectless,
+    updatedAtMs: terminal.openedAtMs,
+    activity: "ready",
+    tool: null,
+    signInNeeded: false,
+    live: true,
+    open: false,
+    pinned: false,
+    session: null,
+    native: null,
+    hostedTerminal: terminal,
+    hostedKey: key,
+    canOpen: true,
+    blocked: null,
+  };
+}
+
+function terminalKey(terminal: TerminalDescriptor): string {
+  return `terminal:${encodeURIComponent(terminal.runtimeGeneration)}:${encodeURIComponent(terminal.terminalId)}`;
+}
+
+function startedCoversTerminal(pending: StartedConversation, terminal: TerminalDescriptor): boolean {
+  return pending.providerId === terminal.providerId
+    && workspaceIdentity(pending.workspace) === workspaceIdentity(terminal.workspace)
+    && terminal.openedAtMs >= pending.startedAtMs - SERVICE_CLOCK_SLACK_MS;
 }
