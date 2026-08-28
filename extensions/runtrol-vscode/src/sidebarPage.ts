@@ -158,6 +158,7 @@ function projectHtml(project: SidebarProjectRow, assets: SidebarAssets): string 
   const actions = project.kind === "created"
     ? `<span class="actions">
 ${action("runtrol.newConversationInProject", "New conversation here", "add")}
+${action("runtrol.renameProject", "Rename", "edit")}
 ${action(project.agentTools ? "runtrol.disableAgentTools" : "runtrol.enableAgentTools", project.agentTools ? "Turn Agent Tools off for this project" : "Turn Agent Tools on for this project", project.agentTools ? "sparkle-filled" : "sparkle")}
 ${action(project.pinned ? "runtrol.unpinProject" : "runtrol.pinProject", project.pinned ? "Unpin" : "Pin to the top", project.pinned ? "pinned" : "pin")}
 ${action("runtrol.openProjectWorkspace", "Open this folder in a window", "link-external")}
