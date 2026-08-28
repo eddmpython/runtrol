@@ -160,7 +160,11 @@ async fn unwire_agent_tools(composed: &Composed) -> Result<(), String> {
         .await?
         {
             None => {}
-            Some(McpRegistrationState::ExactEnabled | McpRegistrationState::ExactDisabled) => {
+            Some(
+                McpRegistrationState::ExactEnabled
+                | McpRegistrationState::ExactDisabled
+                | McpRegistrationState::Superseded,
+            ) => {
                 owned.push(target);
             }
             Some(McpRegistrationState::Different) => {
@@ -212,6 +216,12 @@ async fn wire_agent_tools(composed: &Composed) -> Result<(), String> {
         {
             None => missing.push(target),
             Some(McpRegistrationState::ExactEnabled) => {}
+            Some(McpRegistrationState::Superseded) => {
+                // Ours, from the image this one replaced. Take it out and let the add below put this
+                // executable in its place, so the project stops opening every conversation with a failure.
+                remove_registration(composed, target, AGENT_TOOLS_NAME).await?;
+                missing.push(target);
+            }
             Some(McpRegistrationState::ExactDisabled) => {
                 return Err(format!(
                     "{} has this exact {AGENT_TOOLS_NAME} entry disabled. enable or remove it in that CLI before retrying",
@@ -440,6 +450,8 @@ async fn line_of(composed: &Composed, direction: &Direction<'_>) -> ConsultLine 
     .await
     {
         Ok(Some(McpRegistrationState::ExactEnabled)) => line(ConsultState::Wired, None),
+        // Ours, but naming the image this build replaced. Not wired, and wiring again is what repairs it.
+        Ok(Some(McpRegistrationState::Superseded)) => line(ConsultState::Unwired, None),
         Ok(None) => line(ConsultState::Unwired, None),
         Ok(Some(McpRegistrationState::ExactDisabled)) => line(
             ConsultState::Unsupported,
@@ -583,6 +595,9 @@ async fn change(composed: &Composed, from: &str, to: &str, how: Change) -> Respo
                 "{from} already has a different MCP entry named {name}; runtrol will not overwrite or remove it"
             ));
         }
+        // Ours from the image this build replaced. Treated as absent so the wiring below writes this
+        // executable in its place.
+        Some(McpRegistrationState::Superseded) => false,
     };
 
     let outcome = match how {

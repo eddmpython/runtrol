@@ -66,6 +66,15 @@ pub enum McpRegistrationState {
     ExactDisabled,
     /// A registration with this name exists, but it is not runtrol's exact entry.
     Different,
+    /// runtrol's own entry from an earlier build: the same name, arguments and shape, naming a runtrol
+    /// executable that stood beside this one and is gone.
+    ///
+    /// The extension installs the Core under a name taken from its contents and removes the image it
+    /// replaces, so every update leaves this entry naming a file that no longer exists. Every conversation in
+    /// that project then opens with "MCP client for runtrolTools failed to start: the system cannot find the
+    /// file specified" (operator, 2026-08-28, with a picture). It is ours to correct, and only ours: the
+    /// judgement is that the vanished command sat in the very directory this executable runs from.
+    Superseded,
 }
 
 impl McpRegistrar {
@@ -115,13 +124,33 @@ fn labeled_registration(
 
     if lines.iter().any(|line| *line == expected_heading)
         && kind == "stdio"
-        && read_command == command
         && read_args == expected_args
         && !has_environment
     {
-        Ok(McpRegistrationState::ExactEnabled)
-    } else {
-        Ok(McpRegistrationState::Different)
+        if read_command == command {
+            return Ok(McpRegistrationState::ExactEnabled);
+        }
+        if superseded_runtrol(read_command, command) {
+            return Ok(McpRegistrationState::Superseded);
+        }
+    }
+    Ok(McpRegistrationState::Different)
+}
+
+/// Whether a registered command is this runtrol's own earlier image rather than somebody else's program.
+///
+/// Two things have to hold together, and neither alone is enough. The file has to be gone, because a program
+/// that is still there is still somebody's. And it has to have stood in the directory this executable runs
+/// from, which is the folder the extension keeps its Core images in and nobody else writes to.
+fn superseded_runtrol(registered: &str, ours: &str) -> bool {
+    let registered = std::path::Path::new(registered);
+    let ours = std::path::Path::new(ours);
+    if registered.exists() {
+        return false;
+    }
+    match (registered.parent(), ours.parent()) {
+        (Some(theirs), Some(mine)) => !mine.as_os_str().is_empty() && theirs == mine,
+        _ => false,
     }
 }
 
