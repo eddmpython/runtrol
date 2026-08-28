@@ -130,9 +130,6 @@ export class ProjectStore {
     await this.replace(next);
   }
 
-  /// Remove the project on this folder. Its conversations lose their heading and nothing else: removal files
-  /// nothing, deletes nothing, and adding the project again is one click. The folder on disk is never
-  /// touched: removing a project is a list decision, deleting a folder is not one this surface makes.
   /// The projects in a new order, by record key. Keys that are not projects are ignored and projects the
   /// order omits keep their relative place at the end, so a stale drag never loses a project.
   async reorder(keys: readonly string[]): Promise<void> {
@@ -144,6 +141,9 @@ export class ProjectStore {
     await this.replace(next);
   }
 
+  /// Remove the project on this folder. Its conversations lose their heading and nothing else: removal files
+  /// nothing, deletes nothing, and adding the project again is one click. The folder on disk is never
+  /// touched: removing a project is a list decision, deleting a folder is not one this surface makes.
   async remove(workspace: string): Promise<void> {
     const key = workspaceIdentity(workspace);
     await this.replace(this.records.filter((record) => record.key !== key));

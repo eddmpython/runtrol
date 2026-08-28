@@ -70,6 +70,29 @@ test("rename keeps the folder and changes only what the person calls it", async 
   await assert.rejects(store.setName(ALPHA, "   "), /needs a name/);
 });
 
+test("a drag puts the projects in the order it names, and never loses one", async () => {
+  const shared = memento();
+  const store = new ProjectStore(shared);
+  await store.create(ALPHA);
+  await store.create(BETA);
+  const gamma = await store.create([ROOT, "gamma"].join(SEP));
+  assert.deepEqual(store.all().map((record) => record.name), ["alpha", "beta", "gamma"]);
+
+  await store.reorder([gamma.key, workspaceIdentity(ALPHA)]);
+  // What the drag named comes first, in its order. What it did not name keeps its place behind them, which is
+  // what a drag that started before another window added a project has to do: move what it meant, lose nothing.
+  assert.deepEqual(store.all().map((record) => record.name), ["gamma", "alpha", "beta"]);
+
+  // A key that is not a project is not an error and not a gap: it names nothing, so nothing moves for it.
+  await store.reorder(["nothing:at:all", workspaceIdentity(BETA)]);
+  assert.deepEqual(store.all().map((record) => record.name), ["beta", "gamma", "alpha"]);
+
+  // The order one window drags is the order the next window opens to. The panel is the machine's, not this
+  // window's, so an arrangement that lived only here would be a different list in every window.
+  const reopened = new ProjectStore(shared);
+  assert.deepEqual(reopened.all().map((record) => record.name), ["beta", "gamma", "alpha"]);
+});
+
 test("removal takes the heading away and nothing else", async () => {
   const store = new ProjectStore(memento());
   await store.create(ALPHA);
