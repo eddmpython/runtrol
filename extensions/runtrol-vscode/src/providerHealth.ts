@@ -25,3 +25,19 @@ export function isBroken(provider: ProviderLine): boolean {
 export function isUsable(provider: ProviderLine): boolean {
   return provider.installation.state === "usable";
 }
+
+/// The services to ask for their stored conversations now: the usable ones this window has not asked yet.
+///
+/// A service becomes usable at a moment nobody chose. Its CLI can be replacing itself while a window opens, and
+/// the Runtime's probe of it lands whenever it lands: measured on the operator machine 2026-08-28, five and a half
+/// minutes after activation. Every caller that asks for conversations runs before that, so without this the window
+/// asked while nothing was usable, never asked again, and showed every project with nothing under it for as long
+/// as it stayed open. `asked` is what keeps that from becoming a question on every listing the watch pushes.
+export function unaskedUsable(
+  providers: readonly ProviderLine[],
+  asked: ReadonlySet<string>,
+): string[] {
+  return providers
+    .filter((provider) => isUsable(provider) && !asked.has(provider.providerId))
+    .map((provider) => provider.providerId);
+}

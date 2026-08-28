@@ -27,7 +27,7 @@ import type { Conversation } from "./conversationList";
 import { attentionCount, nextNeedingYou, projects } from "./conversationList";
 import { conversationDeletion } from "./conversationDeletion";
 import { archivalQuestion, conversationArchival } from "./conversationArchival";
-import { awaitsVerification, isUsable } from "./providerHealth";
+import { awaitsVerification, isUsable, unaskedUsable } from "./providerHealth";
 import type { HelpOffer, ServiceTrouble } from "./serviceHelp";
 import {
   ServiceTroubleReported,
@@ -1352,14 +1352,12 @@ export class Controller implements vscode.Disposable {
     // finished five and a half minutes later. That window then listed every project with nothing under
     // it and no notice saying why, for an hour, until Refresh Conversations was run by hand. Asked once
     // per service per window: the reconnect paths that drop the catalogues clear this with them.
-    let waking = false;
-    for (const provider of this.state.providers) {
-      if (!isUsable(provider) || this.chatDiscoveryAsked.has(provider.providerId)) continue;
-      this.chatDiscoveryAsked.add(provider.providerId);
-      this.deferNativeDiscovery(provider.providerId, false);
-      waking = true;
+    const waking = unaskedUsable(this.state.providers, this.chatDiscoveryAsked);
+    for (const providerId of waking) {
+      this.chatDiscoveryAsked.add(providerId);
+      this.deferNativeDiscovery(providerId, false);
     }
-    if (waking) this.scheduleNativeDiscoveries();
+    if (waking.length > 0) this.scheduleNativeDiscoveries();
     for (const providerId of titleProviders) this.deferNativeDiscovery(providerId, true);
     if (titleProviders.length > 0) this.scheduleNativeDiscoveries();
     if (selected && !this.state.selected) {
