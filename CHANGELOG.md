@@ -10,6 +10,15 @@ and refactoring that no user can observe do not belong here.
 
 ## [Unreleased]
 
+## [0.1.32] - 2026-08-28
+
+### Fixed
+
+- A conversation's tab now carries its project's colour. The colour was being handed to the editor beside a
+  custom icon, which the editor draws as the image it is and tints not at all, so the tab kept the service's
+  brand colour while the sidebar row beside it carried the project's. A conversation that belongs to a project
+  trades the brand mark for the colour; one that belongs to no project keeps the mark, having no colour to show.
+
 ## [0.1.31] - 2026-08-28
 
 ### Fixed
