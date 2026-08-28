@@ -10,6 +10,18 @@ and refactoring that no user can observe do not belong here.
 
 ## [Unreleased]
 
+### Fixed
+
+- A conversation running in your own terminal now shows that it is running. The panel used to decide from the
+  conversation file's timestamp, and that file is written only when a message finishes: a turn that spent four
+  minutes inside one command read as idle, and a turn that had just ended kept reading as busy. It now asks the
+  service which of its own processes is answering, so the mark appears while the model works and goes when it
+  stops.
+- A running conversation is now unmistakable at a glance. An arc turns around its icon and the dot beside its
+  name is blue. Turning the service's own icon was not enough on its own: Claude Code's icon is symmetric, so
+  turning it looks exactly like standing still. The dot was painted with the editor's progress colour, which is
+  grey in the dark theme this build of VS Code ships, so a running row looked like every other row.
+
 ## [0.1.34] - 2026-08-28
 
 ### Fixed

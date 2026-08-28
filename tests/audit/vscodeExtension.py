@@ -254,8 +254,15 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             # (operator, 2026-08-28). Memory rides the row.
             "white-space: nowrap",
             "mask-image: linear-gradient(to right",
-            # A running turn is unmistakable: the icon turns and a ring turns around it.
-            ".conv .glyph.working { animation: spin",
+            # A running turn is unmistakable: the icon turns, and an arc turns around it so a still glance
+            # (and a photograph) can tell a running row from an idle one even when the service's own icon is
+            # symmetric enough that turning it changes nothing.
+            ".conv .glyph-slot.working .glyph { animation: spin",
+            ".conv .glyph-slot.working::after",
+            # The running colour is named once and is not the editor's progress colour: that one is grey in
+            # the default dark theme this build ships, which drew a running row as an idle one (measured on
+            # the operator's window 2026-08-28).
+            "--runtrol-running: var(--vscode-charts-blue",
             # A project shows five conversations and says how many more there are.
             'data-kind="more"',
             'class="memory"',
@@ -478,7 +485,8 @@ def selftest() -> int:
             'class="bar${project.hue class="bar${row.hue .row .bar.${hue.band} '
             '.row:hover .actions row.canDelete ? action("runtrol.deleteConversation" '
             "white-space: nowrap mask-image: linear-gradient(to right "
-            '.conv .glyph.working { animation: spin data-kind="more" '
+            '.conv .glyph-slot.working .glyph { animation: spin .conv .glyph-slot.working::after '
+            '--runtrol-running: var(--vscode-charts-blue data-kind="more" '
             'class="memory" Content-Security-Policy script-src \'nonce-'
         ),
         "sidebarView.ts": (

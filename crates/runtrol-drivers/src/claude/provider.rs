@@ -17,6 +17,7 @@ use runtrol_provider::{
 
 use crate::claude::agent::ClaudeAgent;
 use crate::claude::models::{ClaudeModels, discover_reasoning_efforts};
+use crate::claude::roster::ClaudeRoster;
 use crate::claude::store::ClaudeStore;
 
 /// The driver for the CLI that runs one process per session.
@@ -37,6 +38,9 @@ pub struct ClaudeProvider {
     models: ClaudeModels,
     /// The conversations this CLI has stored, named from its own store on each listing request.
     store: ClaudeStore,
+    /// The CLI's own record of its running processes, asked whenever the panel wants to know which
+    /// conversations have a model answering.
+    roster: ClaudeRoster,
     /// Bound flags confirmed by this installed CLI's own parser.
     available_flags: BTreeSet<Box<str>>,
     /// Optional bound flags not confirmed by the parser and what their absence means.
@@ -70,6 +74,7 @@ impl ClaudeProvider {
             contained_by,
             models: ClaudeModels::from_environment(models),
             store: ClaudeStore::from_environment(),
+            roster: ClaudeRoster::from_environment(),
             available_flags,
             unavailable_flags,
             account_usage: account
@@ -271,17 +276,16 @@ impl Provider for ClaudeProvider {
 
     async fn active_native_sessions(
         &self,
-        within: core::time::Duration,
     ) -> Result<Vec<runtrol_provider::NativeSessionId>, ProviderError> {
-        let store = self.store.clone();
+        let roster = self.roster.clone();
         let provider = self.id;
-        // Directory reads: blocking work, kept off the reactor so a slow disk cannot stall every other
-        // provider's answer. The walk asks for names and times and opens nothing.
-        tokio::task::spawn_blocking(move || store.active(provider, within))
+        // Small file reads and one existence check per record: blocking work, kept off the reactor so a slow
+        // disk cannot stall every other provider's answer.
+        tokio::task::spawn_blocking(move || roster.running(provider))
             .await
             .map_err(|join| ProviderError::Protocol {
                 provider,
-                doing: "reading which conversations this CLI wrote lately",
+                doing: "reading which of this CLI's conversations have a model answering",
                 detail: join.to_string(),
             })?
     }

@@ -2359,7 +2359,6 @@ async fn native_activity(
             "the selected provider identity is invalid",
         );
     };
-    let within = Duration::from_millis(runtrol_runtime_protocol::NATIVE_ACTIVITY_WINDOW_MS);
     let walked = tokio::time::timeout(
         Duration::from_millis(crate::serve::MODEL_PREPARATION_BUDGET_MS),
         async {
@@ -2370,7 +2369,7 @@ async fn native_activity(
             let prepared = prepared.map_err(|_| ())?;
             prepared
                 .driver
-                .active_native_sessions(within)
+                .active_native_sessions()
                 .await
                 .map_err(|_| ())
         },

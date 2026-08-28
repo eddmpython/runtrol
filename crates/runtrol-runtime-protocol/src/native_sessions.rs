@@ -36,9 +36,10 @@ pub struct ListNativeSessionsParams {
 /// Ask which of one provider's conversations were written in the last few seconds.
 ///
 /// Separate from the catalogue because it is asked often and the catalogue is not cheap: on the machine this
-/// was measured, a catalogue reads every transcript's head and costs 121 ms, while naming what changed lately
-/// costs 23 ms. A conversation being written is a conversation whose model is answering, which is how the
-/// panel knows a turn is running in a conversation Runtrol did not start.
+/// was measured, a catalogue reads every transcript's head and costs 121 ms. How a provider knows is its own
+/// business (Claude Code publishes a roster of its running processes and what each one is doing); what the
+/// answer means here is the same for every provider, and it is how the panel shows a turn running in a
+/// conversation Runtrol did not start.
 #[derive(Clone, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct NativeActivityParams {
@@ -55,12 +56,6 @@ pub struct NativeActivity {
     /// Native identities written inside the window, in no particular order.
     pub active: Vec<String>,
 }
-
-/// How recently a transcript must have been written for its conversation to count as running.
-///
-/// Long enough that the gap between two writes inside one turn never reads as a stop, short enough that a
-/// finished turn stops looking busy while the person is still looking at it.
-pub const NATIVE_ACTIVITY_WINDOW_MS: u64 = 12_000;
 
 /// The official provider surface used for discovery.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]

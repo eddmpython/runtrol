@@ -55,9 +55,8 @@ pub use models::{
 };
 pub use native_sessions::{
     CatalogueCoverage, CatalogueSource, ListNativeSessionsParams, MAX_NATIVE_ADOPTION_TOKEN_BYTES,
-    MAX_NATIVE_PUBLIC_CURSOR_BYTES, NATIVE_ACTIVITY_WINDOW_MS, NATIVE_CURSOR_LIFETIME_MS,
-    NativeActivity, NativeActivityParams, NativeResumeCapability, NativeSessionCatalogue,
-    NativeSessionDescriptor,
+    MAX_NATIVE_PUBLIC_CURSOR_BYTES, NATIVE_CURSOR_LIFETIME_MS, NativeActivity,
+    NativeActivityParams, NativeResumeCapability, NativeSessionCatalogue, NativeSessionDescriptor,
 };
 pub use revision::{
     FINALIZED_REVISIONS, ProtocolRevision, REVISION_2026_08_13, REVISION_2026_08_27, RevisionError,

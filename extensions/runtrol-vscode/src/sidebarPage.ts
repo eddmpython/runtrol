@@ -222,7 +222,7 @@ function conversationHtml(row: SidebarConversationRow, assets: SidebarAssets): s
   // tooltip floating beside the hover actions reads as clutter (operator, 2026-08-27).
   return `<div class="row conv${row.canOpen ? "" : " blocked"}${row.pinned ? " pinned" : ""}" role="button" tabindex="0" data-kind="conversation" data-key="${escapeHtml(row.key)}"${row.blocked ? ` title="${escapeHtml(row.blocked)}"` : ""}>
 <span class="bar${row.hue ? ` ${row.hue}` : ""}"></span>
-<img class="glyph${row.activity === "working" ? " working" : ""}" src="${escapeHtml(iconUri)}" alt="${escapeHtml(row.serviceName)}" draggable="false">
+<span class="glyph-slot${row.activity === "working" ? " working" : ""}"><img class="glyph" src="${escapeHtml(iconUri)}" alt="${escapeHtml(row.serviceName)}" draggable="false"></span>
 <span class="title">${escapeHtml(row.title)}</span>
 ${dot}
 <span class="tail">
@@ -279,6 +279,14 @@ function firstRunHtml(): string {
 // icon font, and an <img> would not follow the theme colour. Each is the codicon outline in a 16-unit box.
 const STYLE = `
 :root { color-scheme: light dark; }
+/* The one colour that says a conversation is running, named once so the mark around its icon and the state
+   dot beside its name cannot drift apart.
+
+   Not the editor's progress colour, which is the obvious choice and was measured to be the wrong one: in the
+   default dark theme this build ships, progressBar.background is #878889, so a running row drew a grey ring
+   and a grey dot and looked exactly like an idle one (operator's window, 2026-08-28). The chart blue is
+   defined by every theme and is vivid in both light and dark, which is what a state colour has to be. */
+:root { --runtrol-running: var(--vscode-charts-blue, #4e94ce); }
 /* The panel's height, taken twice: the editor gives the frame its height and the document has to claim it, or
    the page is only as tall as its rows and the usage strip stops being the bottom of the sidebar. */
 html { height: 100%; }
@@ -336,22 +344,34 @@ button { font: inherit; color: inherit; }
 .badge.branch .ci { flex: none; width: 11px; height: 11px; }
 .badge.branch .what { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .badge.tools { background: transparent; border: 1px solid var(--vscode-widget-border); font-weight: 400; opacity: 0.8; }
+.conv .glyph-slot { position: relative; flex: none; display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; }
 .conv .glyph { flex: none; width: 14px; height: 14px; }
-/* A turn is running, so the service's own icon turns. Slowly, and nothing else: a ring drawn around it was a
-   spinner borrowed from elsewhere, and what the operator asked for was this icon moving (2026-08-28). */
-.conv .glyph.working { animation: spin 2.4s linear infinite; }
+/* A turn is running, so the service's own icon turns. Slowly, because the row is a list entry and not a
+   progress bar (operator, 2026-08-28: the icon must move).
+
+   The arc around it is what makes that legible. Measured on the operator's window: this service's icon is a
+   star with rotational symmetry, so a photograph of it turning is identical to a photograph of it at rest,
+   and a person glancing at the list sees nothing. The arc is off-centre by construction, so it reads as
+   motion while it turns and as a coloured ring when it stands still. It is drawn outside the icon's box, so
+   a running row and an idle row put their names in the same place. */
+.conv .glyph-slot.working .glyph { animation: spin 2.4s linear infinite; }
+.conv .glyph-slot.working::after { content: ""; position: absolute; inset: -3px; border-radius: 50%; border: 1.5px solid color-mix(in srgb, var(--runtrol-running) 30%, transparent); border-top-color: var(--runtrol-running); animation: spin 900ms linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 /* One line, and the tail fades out rather than ending in dots: the reader sees there is more without a
    glyph spending width to say so, and two-line rows made the list hard to scan (operator, 2026-08-28). */
 .conv .title { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; line-height: 1.4; -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 20px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 20px), transparent); }
 .conv.blocked .title { opacity: 0.5; }
 .conv.pinned .title::before { content: ""; display: inline-block; width: 9px; height: 9px; margin-right: 4px; background: currentColor; opacity: 0.55; -webkit-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M10 1l5 5-3 1-2 2 1 4-3 1-2-4-4 4-1-1 4-4-4-2 1-3 4 1 2-2z'/></svg>") center / contain no-repeat; mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M10 1l5 5-3 1-2 2 1 4-3 1-2-4-4 4-1-1 4-4-4-2 1-3 4 1 2-2z'/></svg>") center / contain no-repeat; }
+/* Every colour that says a state carries its own fallback: a var() naming a colour a theme leaves undefined
+   drops the whole declaration and leaves the rule above it, and a state that renders as no state is worse
+   than no dot at all. Measured 2026-08-28: the default dark theme this build ships defines no
+   testing.iconPassed. */
 .dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--vscode-descriptionForeground); opacity: 0.6; }
-.dot.working { background: var(--vscode-progressBar-background); opacity: 1; }
-.dot.needsYou { background: var(--vscode-notificationsWarningIcon-foreground); opacity: 1; box-shadow: 0 0 0 2px color-mix(in srgb, var(--vscode-notificationsWarningIcon-foreground) 30%, transparent); }
-.dot.attention { background: var(--vscode-notificationsWarningIcon-foreground); opacity: 1; }
-.dot.waitingOnQuota { background: var(--vscode-errorForeground); opacity: 1; }
-.dot.ready { background: var(--vscode-testing-iconPassed, var(--vscode-charts-green)); opacity: 0.9; }
+.dot.working { background: var(--runtrol-running); opacity: 1; }
+.dot.needsYou { background: var(--vscode-notificationsWarningIcon-foreground, #cca700); opacity: 1; box-shadow: 0 0 0 2px color-mix(in srgb, var(--vscode-notificationsWarningIcon-foreground, #cca700) 30%, transparent); }
+.dot.attention { background: var(--vscode-notificationsWarningIcon-foreground, #cca700); opacity: 1; }
+.dot.waitingOnQuota { background: var(--vscode-errorForeground, #f85149); opacity: 1; }
+.dot.ready { background: var(--vscode-testing-iconPassed, var(--vscode-charts-green, #89d185)); opacity: 0.9; }
 .more .more-label { flex: 1 1 auto; font-size: 11px; opacity: 0.65; }
 .more:hover .more-label { opacity: 1; }
 /* One slot on the right, and nothing in the row moves when the cursor arrives. The actions hold their width

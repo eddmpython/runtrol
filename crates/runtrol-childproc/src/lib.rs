@@ -36,6 +36,7 @@
 //! - [`console_window`] prevents background children from creating their own Windows console. On other
 //!   platforms it is deliberately a no-op, so every spawn boundary can apply one policy.
 
+pub mod alive;
 pub mod argv;
 pub mod console_window;
 pub mod contain;
@@ -47,6 +48,7 @@ pub mod resolve;
 pub mod run;
 pub mod stall;
 
+pub use alive::alive;
 pub use argv::{MAX_ARGUMENT_LEN, check_all, check_one};
 pub use console_window::hide_console_window;
 #[cfg(unix)]

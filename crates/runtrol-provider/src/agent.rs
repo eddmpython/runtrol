@@ -116,28 +116,26 @@ pub trait Provider: Send + Sync + 'static {
         ))
     }
 
-    /// Which of this provider's stored conversations were written in the last `within`, newest first.
+    /// Which of this provider's conversations have a model answering in them right now.
     ///
-    /// The one question the sidebar asks often, so it has to be the cheap one. A conversation whose transcript
-    /// is being written is a conversation whose model is answering, and that is the only signal Runtrol has for
-    /// a conversation it did not start itself: a person who runs a CLI in their own terminal still expects the
-    /// panel to show it working (operator, 2026-08-28, measured against a live turn that showed as idle).
+    /// This is the only signal Runtrol has about a conversation it did not start itself: a person who runs a
+    /// CLI in their own terminal still expects the panel to show it working (operator, 2026-08-28, measured
+    /// against a live turn that every row showed as idle).
     ///
-    /// Answering must not read any conversation's content. On this machine a listing that reads each file's
-    /// head costs 121 ms and a walk that only asks the filesystem for names and times costs 23 ms, which is why
-    /// this is a separate question rather than a flag on the catalogue.
+    /// How a driver knows is its own business, and no threshold is imposed here. What is required is that the
+    /// answer be about a turn that is running now, not about a file that changed lately: the difference is a
+    /// conversation that stops turning the moment it stops working, rather than one that flickers through a
+    /// long tool call and keeps turning after the answer arrived. The sidebar asks this on a short clock, so
+    /// the answer must cost about what a process list costs and must read no conversation's content.
     ///
     /// # Errors
     ///
-    /// Any [`ProviderError`] produced while reading the provider's own store.
+    /// Any [`ProviderError`] produced while asking the provider's own surface.
     ///
     /// # Cancellation
     ///
-    /// Dropping this future must synchronously begin cleanup of anything the walk created.
-    async fn active_native_sessions(
-        &self,
-        _within: core::time::Duration,
-    ) -> Result<Vec<NativeSessionId>, ProviderError> {
+    /// Dropping this future must synchronously begin cleanup of anything the question created.
+    async fn active_native_sessions(&self) -> Result<Vec<NativeSessionId>, ProviderError> {
         Ok(Vec::new())
     }
 

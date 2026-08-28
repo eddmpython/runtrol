@@ -25,6 +25,7 @@ mod limits;
 pub mod map;
 mod models;
 pub mod provider;
+mod roster;
 mod store;
 mod trash;
 
