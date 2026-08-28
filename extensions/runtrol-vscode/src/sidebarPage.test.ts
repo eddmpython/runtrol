@@ -45,6 +45,7 @@ function project(overrides: Partial<SidebarProjectRow>): SidebarProjectRow {
     attention: 0,
     live: 0,
     hidden: 0,
+    branch: null,
     agentTools: false,
     rows: [conversation({})],
     ...overrides,

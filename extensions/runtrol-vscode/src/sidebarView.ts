@@ -18,6 +18,7 @@ import { canDelete } from "./conversationDeletion";
 import { loose, projects, type Conversation, type ProjectGroup } from "./conversationList";
 import type { ProjectRecord } from "./projects";
 import { rowHueClass } from "./projectColor";
+import { readGitBranch } from "./gitBranch";
 import { awaitsVerification, isUsable } from "./providerHealth";
 import type { ProviderCapabilities } from "./runtimeTypes";
 import { ConversationItem, ProjectItem, ServiceChoiceItem } from "./sidebarTargets";
@@ -46,6 +47,9 @@ const EXPANDED_KEY = "runtrol.sidebar.expandedProjects";
 /// conversations pushed every other project off the screen, and the panel is meant to show the machine
 /// (operator, 2026-08-28).
 const ROWS_PER_PROJECT = 5;
+
+/// How often a project's branch is read again.
+const BRANCH_READ_EVERY_MS = 5_000;
 
 export type ProjectsPort = {
   all(): readonly ProjectRecord[];
@@ -78,6 +82,12 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
   private staleWindow: string | null = null;
   private collapsed: Set<string>;
   private expanded: Set<string>;
+  /// The branch each project's folder is on, as last read. A render is synchronous and a repository read is
+  /// not, so the chip shows what the previous read found and the next read corrects it.
+  private branches = new Map<string, string | null>();
+  /// When the branches were last read. The panel redraws on every session update and a branch moves when a
+  /// person switches one, so the read is neither per redraw nor once: it is at most this often.
+  private branchesReadAt = 0;
   private usableProvider: boolean | null = null;
   private verifyingProvider: boolean | null = null;
   private reach: string | null = null;
@@ -278,6 +288,7 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
     const rows = this.state.conversations;
     const openWorkspaces = (vscode.workspace.workspaceFolders ?? []).map((folder) => folder.uri.fsPath);
     this.groups = projects(this.projectRecords.all(), rows, openWorkspaces);
+    void this.readBranches(this.groups);
     const projectRows: SidebarProjectRow[] = this.groups.map((group) => ({
       key: group.key,
       name: group.name,
@@ -290,6 +301,7 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
       attention: group.attention,
       live: group.live,
       agentTools: this.agentTools.enabled(group.workspace),
+      branch: this.branches.get(group.key) ?? null,
       ...this.rowsOf(group),
     }));
     const looseRows = pinnedFirst(loose(rows)).map((row) => this.conversationRow(row, null));
@@ -305,6 +317,28 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
       serviceChoice: this.serviceChoice(),
       firstRun,
     };
+  }
+
+  /// Read every project's branch once per listing, and redraw if any of them moved.
+  ///
+  /// Off the render path on purpose: the read is bounded file reads, not a subprocess, but it is still I/O and
+  /// the panel is redrawn on every session update. What the chip shows is the last answer.
+  private async readBranches(groups: readonly ProjectGroup[]): Promise<void> {
+    const now = Date.now();
+    const missing = groups.some((group) => !this.branches.has(group.key));
+    if (!missing && now - this.branchesReadAt < BRANCH_READ_EVERY_MS) return;
+    this.branchesReadAt = now;
+    let changed = false;
+    for (const group of groups) {
+      const branch = await readGitBranch(group.workspace).catch(() => null);
+      if (this.branches.get(group.key) === branch) continue;
+      this.branches.set(group.key, branch);
+      changed = true;
+    }
+    for (const key of [...this.branches.keys()]) {
+      if (!groups.some((group) => group.key === key)) this.branches.delete(key);
+    }
+    if (changed) this.render();
   }
 
   /// The rows this project shows now, and how many are waiting behind "Show all".

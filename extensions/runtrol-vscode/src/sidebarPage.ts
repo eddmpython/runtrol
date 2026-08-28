@@ -52,6 +52,8 @@ export type SidebarProjectRow = {
   readonly rows: readonly SidebarConversationRow[];
   /// How many of this project's conversations are waiting behind "Show all".
   readonly hidden: number;
+  /// The branch this folder's repository is on, or null when it is not in one.
+  readonly branch: string | null;
 };
 
 export type SidebarNotice = {
@@ -153,6 +155,7 @@ function projectHtml(project: SidebarProjectRow, assets: SidebarAssets): string 
   const badges = [
     project.attention > 0 ? `<span class="badge attention" title="${project.attention} waiting for you">${project.attention}</span>` : "",
     project.live > 0 ? `<span class="badge live" title="${project.live} running">${project.live}</span>` : "",
+    project.branch ? `<span class="badge branch" title="On branch ${escapeHtml(project.branch)}"><i class="ci ci-git-branch" aria-hidden="true"></i>${escapeHtml(project.branch)}</span>` : "",
     project.agentTools ? `<span class="badge tools" title="Agent Tools are on for this project">tools</span>` : "",
   ].join("");
   const actions = project.kind === "created"
@@ -304,6 +307,8 @@ button { font: inherit; color: inherit; }
 .badge { flex: none; font-size: 10px; line-height: 14px; padding: 0 5px; border-radius: 7px; font-weight: 600; }
 .badge.attention { background: var(--vscode-notificationsWarningIcon-foreground); color: var(--vscode-sideBar-background); }
 .badge.live { background: var(--vscode-progressBar-background); color: var(--vscode-sideBar-background); }
+.badge.branch { background: transparent; font-weight: 400; opacity: 0.7; display: inline-flex; align-items: center; gap: 3px; padding: 0 2px; max-width: 90px; overflow: hidden; white-space: nowrap; }
+.badge.branch .ci { width: 11px; height: 11px; }
 .badge.tools { background: transparent; border: 1px solid var(--vscode-widget-border); font-weight: 400; opacity: 0.8; }
 .conv .glyph-slot { flex: none; position: relative; display: inline-flex; width: 14px; height: 14px; }
 .conv .glyph { width: 14px; height: 14px; }
@@ -339,6 +344,7 @@ button { font: inherit; color: inherit; }
 .ci-close { --ci: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M3.3 2l4.7 4.7L12.7 2 14 3.3 9.3 8l4.7 4.7-1.3 1.3L8 9.3 3.3 14 2 12.7 6.7 8 2 3.3z'/></svg>"); }
 .ci-pin { --ci: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M10 1l5 5-3 1-2 2 1 4-3 1-2-4-4 4-1-1 4-4-4-2 1-3 4 1 2-2z' fill='none' stroke='currentColor' stroke-width='1.5'/></svg>"); }
 .ci-pinned { --ci: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M10 1l5 5-3 1-2 2 1 4-3 1-2-4-4 4-1-1 4-4-4-2 1-3 4 1 2-2z'/></svg>"); }
+.ci-git-branch { --ci: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M11 2a2 2 0 0 0-1 3.7V7a2 2 0 0 1-2 2H6a3 3 0 0 0-1 .2V5.7a2 2 0 1 0-2 0v4.6a2 2 0 1 0 2 .1A2 2 0 0 1 6 10h2a4 4 0 0 0 4-4V5.7A2 2 0 0 0 11 2z'/></svg>"); }
 .ci-edit { --ci: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M12 1l3 3-8 8H4V9zM2 14h12v1H2z'/></svg>"); }
 .ci-trash { --ci: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M6 1h4l1 1h3v2H2V2h3zM3 5h10l-1 10H4z'/></svg>"); }
 .ci-archive { --ci: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M1 2h14v4H1zM2 7h12v8H2zm4 2v1h4V9z'/></svg>"); }

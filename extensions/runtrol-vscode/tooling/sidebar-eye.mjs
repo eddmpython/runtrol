@@ -139,6 +139,7 @@ const model = {
       live: 1,
       agentTools: false,
       hidden: 3,
+      branch: "main",
       rows: [
         conversation({ title: "돈을 벌 수 있는 구조인지 지금 상태에서 판단해라", activity: "working", live: true, memory: "306 MB" }),
         conversation({ title: "현재 이 프로젝트 수준은?", memory: "278 MB" }),
@@ -160,6 +161,7 @@ const model = {
       live: 0,
       agentTools: true,
       hidden: 0,
+      branch: "feature/sidebar",
       rows: [
         conversation({ title: "Sidebar 대화삭제 및 기능 구현 미완료", hue: "huePurple", activity: "needsYou", workspace: "C:\\work\\runtrol" }),
         conversation({ title: "Runtroll 랜딩 사이트", hue: "huePurple", workspace: "C:\\work\\runtrol" }),
