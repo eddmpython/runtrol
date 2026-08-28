@@ -66,7 +66,7 @@ export class TerminalTabs implements vscode.Disposable {
     const colour = conversation.projectless ? null : tabColorId(conversation.workspace);
     const terminal = vscode.window.createTerminal({
       name: conversation.title,
-      iconPath: this.iconFor(conversation),
+      iconPath: tabIcon(colour, () => this.iconFor(conversation)),
       color: colour ? new vscode.ThemeColor(colour) : undefined,
       pty,
       location: vscode.TerminalLocation.Editor,
@@ -91,7 +91,7 @@ export class TerminalTabs implements vscode.Disposable {
     const colour = projectless ? null : tabColorId(workspace);
     const terminal = vscode.window.createTerminal({
       name,
-      iconPath: this.iconForProvider(providerId),
+      iconPath: tabIcon(colour, () => this.iconForProvider(providerId)),
       color: colour ? new vscode.ThemeColor(colour) : undefined,
       pty,
       location: vscode.TerminalLocation.Editor,
@@ -172,6 +172,17 @@ const STALE_PROOF = "native catalogue observation expired";
 /// Output is decoded as streaming UTF-8 (a multi-byte character may straddle two chunks). Input is sent as
 /// the UTF-8 bytes of what VS Code hands over, which for mouse reports and special keys is already the
 /// terminal's own escape vocabulary.
+/// The tab's glyph: the project's colour when it has one, the service's own mark when it does not.
+///
+/// VS Code tints a tab icon only when the icon is one of its own; a file handed to `iconPath` is drawn as the
+/// image it is and the `color` beside it does nothing (measured 2026-08-28: the tab kept the service's brand
+/// colour while the sidebar row beside it carried the project's). The operator asked twice for the project's
+/// colour to reach the tab, so a project's conversation trades the brand mark for the colour that says whose
+/// work the tab belongs to. A conversation with no project keeps the mark, having no colour to show instead.
+function tabIcon(colour: string | null, service: () => vscode.ThemeIcon | vscode.Uri): vscode.ThemeIcon | vscode.Uri {
+  return colour === null ? service() : new vscode.ThemeIcon("comment-discussion");
+}
+
 class RuntimeTerminal implements vscode.Pseudoterminal {
   private readonly writeEmitter = new vscode.EventEmitter<string>();
   private readonly closeEmitter = new vscode.EventEmitter<number | void>();
