@@ -6,7 +6,7 @@ from typing import ForwardRef, Literal, NotRequired, Required, TypeAlias, TypedD
 
 JsonValue: TypeAlias = None | bool | int | float | str | list["JsonValue"] | dict[str, "JsonValue"]
 JsonObject: TypeAlias = dict[str, JsonValue]
-SCHEMA_SHA256 = '1f368c487be7e151286405565a2637b88038364779b68e733e0317975261ff83'
+SCHEMA_SHA256 = '018f3607589869d90ce8654e9db2199c06284d678ff73ee4e271a3453daab5ac'
 
 AcquireControlParams = TypedDict('AcquireControlParams', {
     'expectedLifecycle': Required[ForwardRef('LifecycleState')],
@@ -173,6 +173,13 @@ ManagedSessionList = TypedDict('ManagedSessionList', {
     'warnings': Required[list[str]],
 })
 MutationRequestId: TypeAlias = str
+NativeActivity = TypedDict('NativeActivity', {
+    'active': Required[list[str]],
+    'providerId': Required[ForwardRef('ProviderId')],
+})
+NativeActivityParams = TypedDict('NativeActivityParams', {
+    'providerId': Required[ForwardRef('ProviderId')],
+})
 NativeResumeCapability: TypeAlias = Literal['available'] | Literal['unavailable'] | Literal['unknown']
 NativeSessionCatalogue = TypedDict('NativeSessionCatalogue', {
     'coverage': Required[ForwardRef('CatalogueCoverage')],
@@ -396,7 +403,7 @@ RuntimeLocatorRecord = TypedDict('RuntimeLocatorRecord', {
     'instanceId': Required[str],
     'schema': Required[int],
 })
-RuntimeMethod: TypeAlias = Literal['runtime/initialize'] | Literal['runtime/initialized'] | Literal['runtime/challenge'] | Literal['integrations/requestEnrollment'] | Literal['integrations/watchEnrollment'] | Literal['integrations/getGrant'] | Literal['integrations/rotateKey'] | Literal['providers/usage'] | Literal['providers/list'] | Literal['providers/watch'] | Literal['providers/getCapabilities'] | Literal['providers/listModels'] | Literal['providers/listNativeSessions'] | Literal['sessions/list'] | Literal['sessions/watchIndex'] | Literal['sessions/get'] | Literal['sessions/start'] | Literal['sessions/adoptNative'] | Literal['sessions/resume'] | Literal['sessions/acquireControl'] | Literal['sessions/renewControl'] | Literal['sessions/releaseControl'] | Literal['sessions/submitInput'] | Literal['sessions/submitBlocks'] | Literal['sessions/setModel'] | Literal['sessions/setMode'] | Literal['sessions/watchEvents'] | Literal['sessions/interrupt'] | Literal['sessions/cool'] | Literal['sessions/forget'] | Literal['sessions/deleteNative'] | Literal['sessions/archiveNative'] | Literal['terminals/list'] | Literal['terminals/watchIndex'] | Literal['terminals/open'] | Literal['terminals/attach'] | Literal['terminals/acquireControl'] | Literal['terminals/renewControl'] | Literal['terminals/releaseControl'] | Literal['terminals/write'] | Literal['terminals/resize'] | Literal['terminals/detach'] | Literal['terminals/stop'] | Literal['approvals/listPending'] | Literal['approvals/respond'] | Literal['sessions/indexChanged'] | Literal['sessions/indexEnded'] | Literal['providers/changed'] | Literal['providers/watchEnded'] | Literal['providers/usageChanged'] | Literal['sessions/event'] | Literal['sessions/lagged'] | Literal['terminals/indexChanged'] | Literal['terminals/indexEnded'] | Literal['terminals/output'] | Literal['terminals/lagged'] | Literal['terminals/exited'] | Literal['runtime/panicStop']
+RuntimeMethod: TypeAlias = Literal['runtime/initialize'] | Literal['runtime/initialized'] | Literal['runtime/challenge'] | Literal['integrations/requestEnrollment'] | Literal['integrations/watchEnrollment'] | Literal['integrations/getGrant'] | Literal['integrations/rotateKey'] | Literal['providers/usage'] | Literal['providers/list'] | Literal['providers/watch'] | Literal['providers/getCapabilities'] | Literal['providers/listModels'] | Literal['providers/listNativeSessions'] | Literal['providers/nativeActivity'] | Literal['sessions/list'] | Literal['sessions/watchIndex'] | Literal['sessions/get'] | Literal['sessions/start'] | Literal['sessions/adoptNative'] | Literal['sessions/resume'] | Literal['sessions/acquireControl'] | Literal['sessions/renewControl'] | Literal['sessions/releaseControl'] | Literal['sessions/submitInput'] | Literal['sessions/submitBlocks'] | Literal['sessions/setModel'] | Literal['sessions/setMode'] | Literal['sessions/watchEvents'] | Literal['sessions/interrupt'] | Literal['sessions/cool'] | Literal['sessions/forget'] | Literal['sessions/deleteNative'] | Literal['sessions/archiveNative'] | Literal['terminals/list'] | Literal['terminals/watchIndex'] | Literal['terminals/open'] | Literal['terminals/attach'] | Literal['terminals/acquireControl'] | Literal['terminals/renewControl'] | Literal['terminals/releaseControl'] | Literal['terminals/write'] | Literal['terminals/resize'] | Literal['terminals/detach'] | Literal['terminals/stop'] | Literal['approvals/listPending'] | Literal['approvals/respond'] | Literal['sessions/indexChanged'] | Literal['sessions/indexEnded'] | Literal['providers/changed'] | Literal['providers/watchEnded'] | Literal['providers/usageChanged'] | Literal['sessions/event'] | Literal['sessions/lagged'] | Literal['terminals/indexChanged'] | Literal['terminals/indexEnded'] | Literal['terminals/output'] | Literal['terminals/lagged'] | Literal['terminals/exited'] | Literal['runtime/panicStop']
 RuntimeModelCatalog: TypeAlias = JsonObject | JsonObject | JsonObject | JsonObject | JsonObject
 RuntimeModelChoice = TypedDict('RuntimeModelChoice', {
     'description': Required[str],
