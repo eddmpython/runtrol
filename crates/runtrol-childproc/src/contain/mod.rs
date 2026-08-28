@@ -55,7 +55,7 @@ use unix as platform;
 #[cfg(unix)]
 mod bootstrap;
 #[cfg(unix)]
-mod identity;
+pub(crate) mod identity;
 #[cfg(unix)]
 mod registry;
 mod tracked;
