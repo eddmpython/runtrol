@@ -2227,16 +2227,8 @@ async fn mutate_native_session(
         Ok(workspace) => workspace.path,
         Err(failure) => return inventory_failure(id, failure),
     };
-    match sessions.managed_as(&authority, provider, &native) {
-        Ok(None) => {}
-        Ok(Some(_)) => {
-            return Answer::plain(
-                id,
-                RuntimeErrorKind::SessionConflict,
-                "Runtime supervises this conversation; forget the supervised session first",
-            );
-        }
-        Err(failure) => return inventory_failure(id, failure),
+    if let Some(refusal) = refuse_supervised(id.clone(), sessions, &authority, provider, &native) {
+        return refusal;
     }
     let prepared = tokio::time::timeout(
         Duration::from_millis(crate::serve::MODEL_PREPARATION_BUDGET_MS),
@@ -2263,8 +2255,14 @@ async fn mutate_native_session(
             );
         }
     };
-    // The asked identity survives the provider's answer: a deletion then forgets Runtrol's pointers to it.
+    // The asked identity survives the provider's answer: a deletion then forgets Runtrol's pointers to it,
+    // and the folder is named in the record of what was removed.
     let asked = native.clone();
+    let removed_from = workspace.clone();
+    let origin = MutationOrigin {
+        integration: &authority,
+        workspace: &removed_from,
+    };
     let mutated = tokio::time::timeout(
         Duration::from_millis(crate::serve::MODEL_PREPARATION_BUDGET_MS),
         async {
@@ -2290,7 +2288,7 @@ async fn mutate_native_session(
     )
     .await;
     match mutated {
-        Ok(Ok(())) => mutated_answer(id, mutation, composed, provider, &native),
+        Ok(Ok(())) => mutated_answer(id, mutation, composed, provider, &native, &origin),
         // The provider's own answer, by kind: unsupported stays unsupported, a refusal stays a refusal.
         Ok(Err(error)) => control_failure(id, crate::runtime_control::provider_failure(&error)),
         Err(_) => Answer::plain(
@@ -2298,6 +2296,78 @@ async fn mutate_native_session(
             RuntimeErrorKind::RuntimeUnavailable,
             mutation.timeout_message(),
         ),
+    }
+}
+
+/// Refuse to change a conversation Runtime is supervising: the process would answer to a store that moved
+/// under it. Named so the mutation path reads as its three steps rather than carrying the guard inline.
+fn refuse_supervised(
+    id: JsonRpcId,
+    sessions: &RuntimeSessionCatalogue,
+    authority: &crate::runtime_auth::AuthorizedIntegration,
+    provider: runtrol_provider::ProviderId,
+    native: &runtrol_provider::NativeSessionId,
+) -> Option<Answer> {
+    match sessions.managed_as(authority, provider, native) {
+        Ok(None) => None,
+        Ok(Some(_)) => Some(Answer::plain(
+            id,
+            RuntimeErrorKind::SessionConflict,
+            "Runtime supervises this conversation; forget the supervised session first",
+        )),
+        Err(failure) => Some(inventory_failure(id, failure)),
+    }
+}
+
+/// Who asked for a native mutation and the folder they named, for the record a deletion leaves behind.
+struct MutationOrigin<'a> {
+    integration: &'a crate::runtime_auth::AuthorizedIntegration,
+    workspace: &'a runtrol_provider::AbsPath,
+}
+
+/// Name every conversation this Runtime removes from a coding service's store, and who asked for it.
+///
+/// The move into `runtrol-deleted` keeps the file and says nothing else: not when, not which integration, not
+/// which folder. On 2026-08-28 eight conversations were found there, and reconstructing the answer from file
+/// times and a stale catalogue took a session and still did not reach one. One line at the moment of the act
+/// is what makes the next one answerable.
+///
+/// A failed write is reported to the daemon's own error stream and no further. The conversation has already
+/// been moved by the provider, and turning a bookkeeping failure into a refusal would tell the person the
+/// opposite of what happened to their store.
+#[expect(
+    clippy::print_stderr,
+    reason = "the daemon's own error stream is where a failed record has to land: the conversation is already gone and there is no other surface left to say so"
+)]
+fn record_deletion(
+    composed: &Composed,
+    origin: &MutationOrigin<'_>,
+    provider: runtrol_provider::ProviderId,
+    native: &runtrol_provider::NativeSessionId,
+) {
+    let at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_millis());
+    let line = format!(
+        "{at} {integration} {provider} {native} {workspace}
+",
+        integration = origin.integration.grant.integration_id,
+        provider = provider.as_str(),
+        native = native.as_str(),
+        workspace = origin.workspace.as_str(),
+    );
+    let path = composed.home.paths().native_deletions();
+    let opened = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path.as_std_path());
+    match opened {
+        Ok(mut file) => {
+            if let Err(error) = std::io::Write::write_all(&mut file, line.as_bytes()) {
+                eprintln!("runtrol: could not record a conversation deletion: {error}");
+            }
+        }
+        Err(error) => eprintln!("runtrol: could not open the deletion record: {error}"),
     }
 }
 
@@ -2312,10 +2382,12 @@ fn mutated_answer(
     composed: &Composed,
     provider: runtrol_provider::ProviderId,
     native: &runtrol_provider::NativeSessionId,
+    origin: &MutationOrigin<'_>,
 ) -> Answer {
     if !matches!(mutation, NativeSessionMutation::Delete) {
         return Answer::success(id, &serde_json::json!({}));
     }
+    record_deletion(composed, origin, provider, native);
     if let Err(error) = forget_pointers_of(&composed.store, provider, native) {
         return Answer::plain(
             id,

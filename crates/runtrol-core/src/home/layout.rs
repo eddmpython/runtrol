@@ -71,6 +71,9 @@ const AGENT_TOOLS: &str = "agent-tools";
 /// Where the detached daemon's panic hook records why it died.
 const DAEMON_CRASH_LOG: &str = "daemon-crash.log";
 
+/// One line for every conversation this Runtime removed from a coding service's own store.
+const NATIVE_DELETIONS: &str = "native-deletions.log";
+
 /// Atomic bootstrap record for the separate public Runtime endpoint: every live daemon generation.
 const RUNTIME_LOCATOR: &str = "runtime.locator.json";
 
@@ -109,6 +112,8 @@ pub struct Layout {
     agent_tools: AbsPath,
     /// Where the detached daemon's panic hook records why it died.
     daemon_crash_log: AbsPath,
+    /// One line for every conversation this Runtime removed from a coding service's own store.
+    native_deletions: AbsPath,
     /// Where public SDK clients find the running Runtime generations.
     runtime_locator: AbsPath,
     /// The lock generations take around locator updates.
@@ -147,6 +152,7 @@ impl Layout {
             machine_identity: entry(MACHINE_IDENTITY)?,
             agent_tools: entry(AGENT_TOOLS)?,
             daemon_crash_log: entry(DAEMON_CRASH_LOG)?,
+            native_deletions: entry(NATIVE_DELETIONS)?,
             runtime_locator: entry(RUNTIME_LOCATOR)?,
             runtime_locator_lock: entry(RUNTIME_LOCATOR_LOCK)?,
             runtime_instance: entry(RUNTIME_INSTANCE)?,
@@ -231,6 +237,16 @@ impl Layout {
     #[must_use]
     pub const fn daemon_crash_log(&self) -> &AbsPath {
         &self.daemon_crash_log
+    }
+
+    /// Where every conversation removed from a coding service's own store is named, with who asked.
+    ///
+    /// A deletion is the one write this Runtime makes to a store it does not own, and `runtrol-deleted` keeps
+    /// the file but says nothing about who or when. Measured 2026-08-28: eight conversations were found there
+    /// and the answer had to be reconstructed from file times and a stale catalogue, and still was not reached.
+    #[must_use]
+    pub const fn native_deletions(&self) -> &AbsPath {
+        &self.native_deletions
     }
 
     /// Atomic public Runtime bootstrap record.
