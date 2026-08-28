@@ -507,7 +507,7 @@ function supervised(
     hostedKey: hosted ? terminalKey(hosted) : null,
     canOpen: !observedExternal || hosted !== null,
     blocked: observedExternal && hosted === null
-      ? "This provider process is running in another terminal and exposes no attach channel."
+      ? "This conversation is running in a terminal Runtrol did not start, so it cannot be opened here."
       : null,
   };
 }
@@ -552,7 +552,7 @@ function providerOwned(
     blocked: hosted !== null
       ? null
       : observedExternal
-        ? "This provider process is running in another terminal and exposes no attach channel."
+        ? "This conversation is running in a terminal Runtrol did not start, so it cannot be opened here."
         : resumable
           ? null
           : "This coding service cannot reopen this conversation.",
@@ -575,6 +575,17 @@ function activityOf(session: SessionLine): ConversationActivity {
   if (session.lifecycle === "hotRunning") return "working";
   if (session.lifecycle === "hotIdle") return "ready";
   return "saved";
+}
+
+/// Whether this conversation is being answered in a terminal Runtrol did not start.
+///
+/// The panel can see the service's own running processes, and a terminal it did not create has no attach
+/// channel a public operating system call can take over. So the row says the conversation is alive and refuses
+/// to open it, which is the truth rather than a tab that would fight the terminal already driving it.
+///
+/// This is exactly `live` without `canOpen`: every other reason a row cannot open leaves it not live.
+export function runningElsewhere(row: Conversation): boolean {
+  return row.live && !row.canOpen;
 }
 
 /// Whether this conversation has stopped and cannot continue until the reader does something.

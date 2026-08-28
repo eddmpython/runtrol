@@ -5,6 +5,7 @@ import test from "node:test";
 import {
   attentionCount,
   conversationDetail,
+  runningElsewhere,
   namedPlaceholders,
   conversationStatus,
   conversations,
@@ -176,7 +177,25 @@ test("an externally running provider conversation is live but never auto-resumed
 
   assert.equal(row?.live, true);
   assert.equal(row?.canOpen, false, "clicking must not create a duplicate resume process");
-  assert.match(row?.blocked ?? "", /running in another terminal/u);
+  // The sentence is what the row's tooltip says and what the click repeats, so it is written for a person:
+  // where the conversation is, and why this panel will not open it.
+  assert.match(row?.blocked ?? "", /running in a terminal Runtrol did not start/u);
+  // The click path asks this rather than reading the sentence, so the words and the behaviour cannot drift.
+  assert.equal(row ? runningElsewhere(row) : false, true);
+});
+
+test("only a conversation running outside Runtrol answers to running elsewhere", () => {
+  // Every other reason a row cannot open leaves it not live, which is what makes the one predicate exact.
+  const [saved] = conversations(
+    [],
+    PROVIDERS,
+    [nativeChat({ nativeSessionId: "n1", adoptionToken: null })],
+    null,
+    null,
+  );
+  assert.equal(saved?.live, false);
+  assert.equal(saved?.canOpen, false, "a service that cannot resume still shows the conversation");
+  assert.equal(saved ? runningElsewhere(saved) : true, false);
 });
 
 test("a daemon-owned terminal is the exact attach target and keeps the provider title", () => {

@@ -25,7 +25,7 @@ import type {
   WorkspaceAccess,
 } from "./runtimeTypes";
 import type { Conversation } from "./conversationList";
-import { attentionCount, nativeProcessKey, nextNeedingYou, projects } from "./conversationList";
+import { attentionCount, nativeProcessKey, nextNeedingYou, projects, runningElsewhere } from "./conversationList";
 import { conversationDeletion, deletionQuestion } from "./conversationDeletion";
 import { archivalQuestion, conversationArchival } from "./conversationArchival";
 import { awaitsVerification, isUsable, unaskedUsable } from "./providerHealth";
@@ -499,6 +499,21 @@ export class Controller implements vscode.Disposable {
     return session;
   }
 
+  /// Say why a running conversation will not open here, and offer the folder's next conversation.
+  ///
+  /// One button and no modal: the person clicked a row, so the answer belongs where they are looking, and the
+  /// only thing Runtrol can actually do for them is start another conversation in the same folder.
+  private async offerAnotherHere(row: Conversation): Promise<void> {
+    const start = "Start a conversation here";
+    // The row already carries the sentence, so the message says what the tooltip says and cannot drift from it.
+    const why = row.blocked ?? `${row.title} cannot be opened here.`;
+    // The button is offered only where it leads somewhere: a conversation with no folder has nowhere to start.
+    const offered = row.workspace ? [start] : [];
+    const said = await vscode.window.showInformationMessage(why, ...offered);
+    if (said !== start || !row.workspace) return;
+    await this.startSessionInWorkspace(row.workspace);
+  }
+
   private async applySelection(
     value: SelectionTarget,
     reveal: boolean,
@@ -508,7 +523,18 @@ export class Controller implements vscode.Disposable {
     // A conversation row opens the service's own terminal interface in an editor tab. That is the whole
     // surface (`docs/terminalSurface.md`): no adoption, no structured session, no page of ours.
     if ("key" in target) {
-      if (!target.canOpen) throw new Error(target.blocked ?? "that conversation cannot be opened");
+      if (!target.canOpen) {
+        // A conversation answered in a terminal Runtrol did not start is the one refusal a person meets every
+        // day on a machine that runs its CLIs directly: measured 2026-08-28, eleven of this operator's coding
+        // processes had been alive since morning, which put half of two projects' conversations behind it. An
+        // error toast in protocol words leaves them nowhere, so the click offers the thing that does work.
+        if (runningElsewhere(target)) {
+          await this.offerAnotherHere(target);
+          afterApplied();
+          return;
+        }
+        throw new Error(target.blocked ?? "that conversation cannot be opened");
+      }
       this.terminals.show(target, !reveal);
       if (target.session) this.state.select(target.session.sessionId);
       afterApplied();

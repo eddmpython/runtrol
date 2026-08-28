@@ -12,6 +12,12 @@ and refactoring that no user can observe do not belong here.
 
 ### Fixed
 
+- Pressing a conversation that is running in your own terminal now offers something to do. The panel can see
+  those conversations, and it cannot open one: a terminal it did not start has no channel to take over. It used
+  to answer with an error in protocol words and nothing else, which on a machine that keeps its CLIs open all
+  day is most of the conversations in a folder. It now says where the conversation is, in a sentence written
+  for a person, and offers to start another conversation in the same folder.
+
 - A conversation running in your own terminal now shows that it is running. The panel used to decide from the
   conversation file's timestamp, and that file is written only when a message finishes: a turn that spent four
   minutes inside one command read as idle, and a turn that had just ended kept reading as busy. It now asks the
