@@ -10,14 +10,6 @@ and refactoring that no user can observe do not belong here.
 
 ## [Unreleased]
 
-## [0.1.32] - 2026-08-28
-
-### Added
-
-- A project row says which branch its folder is on, read straight from the repository rather than by running
-  git, and says nothing when the folder is not in one.
-- A project can be renamed from its own row, beside the actions that were already there.
-
 ## [0.1.31] - 2026-08-28
 
 ### Fixed
@@ -25,6 +17,12 @@ and refactoring that no user can observe do not belong here.
 - The mark that turns while a conversation opens now stays until the service itself draws. It was taken down
   when the Runtime answered, which is earlier: the answer carries an empty screen, so the tab went back to
   being the blank rectangle the mark exists to prevent.
+
+### Added
+
+- A project row says which branch its folder is on, read straight from the repository rather than by running
+  git, and says nothing when the folder is not in one.
+- A project can be renamed from its own row, beside the actions that were already there.
 
 ## [0.1.30] - 2026-08-28
 
