@@ -381,24 +381,21 @@ function projectOf(records: readonly ProjectRecord[], row: Conversation): Projec
   return home;
 }
 
-/// The conversations that belong to no project, in the order the rows already have.
-///
-/// These include chats started without a project, chats whose service reported no folder, and chats in a folder
-/// nobody added as a project. They sit at the top level beneath the project headings, not inside one. An earlier
-/// version filed them under a heading called "No project", which turns an absence into a category and reads as
-/// a folder the person forgot about. The chat apps people already use do not do that: a project is a place you
-/// can put a conversation, and a conversation you did not put anywhere is simply a conversation.
-///
-/// Below the headings rather than above them, because a project is a place somebody chose and a loose
-/// conversation is one they did not. Together `projects` and this function split the list with nothing falling
-/// through and nothing drawn twice.
-/// The conversations that belong to no project: they run in the extension's scratch folder, or name no
-/// folder at all. Their own section, beneath Projects (`docs/vscodeSurface.md`).
+/// The conversations that belong to no project: they run in the extension's scratch folder, or name no folder
+/// at all. Their own section, beneath Projects (`docs/vscodeSurface.md`), in the order the rows already have.
 ///
 /// A conversation discovered in a folder nobody added is NOT one of these. It has a project, that project is
 /// simply not on this person's list, and showing it anyway is what made the sidebar a wall of other people's
 /// work (operator, 2026-08-26: the standard is Paseo, the Claude app and the Codex app, where a folder you
-/// never added is not on screen). Adding the folder is what brings its conversations in, all at once.
+/// never added is not on screen). Adding the folder is what brings its conversations in, all at once. The
+/// consequence is worth stating plainly, because it is large: measured on this machine 2026-08-28, one service
+/// alone held 176 conversations across 95 folders while two folders were on the list, so most of what exists is
+/// deliberately not on screen until a folder is added.
+///
+/// Below the headings rather than above them, because a project is a place somebody chose and a loose
+/// conversation is one they did not. No heading of their own: an earlier version filed them under "No project",
+/// which turns an absence into a category and reads as a folder the person forgot about. Together `projects`
+/// and this function split the list with nothing falling through and nothing drawn twice.
 export function loose(rows: readonly Conversation[]): Conversation[] {
   return rows.filter(intrinsicallyLoose);
 }
