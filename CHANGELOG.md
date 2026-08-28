@@ -10,6 +10,8 @@ and refactoring that no user can observe do not belong here.
 
 ## [Unreleased]
 
+## [0.1.34] - 2026-08-28
+
 ### Fixed
 
 - A conversation already running in another window now opens as itself. Pressing it in a second window used to
@@ -31,6 +33,11 @@ and refactoring that no user can observe do not belong here.
 - A project's name no longer disappears at a real panel width. The name could shrink to nothing while the
   chips beside it refused to shrink at all, and the hover buttons held a third of the row even while hidden.
 - A service's own word for its account no longer runs into its neighbour's number.
+- Conversations stop opening with a failure after an update. The panel installs the Core under a name made from
+  its contents, so every update moves this program and takes the old copy away, leaving the tool entry a person
+  switched on naming a program that is gone. Nothing was going to fix that on its own, because wiring happens
+  when somebody presses the toggle and they already pressed it. The Core now re-points its own entry the moment
+  it starts serving. It repairs and never creates: a project with no entry keeps none.
 
 ### Changed
 
