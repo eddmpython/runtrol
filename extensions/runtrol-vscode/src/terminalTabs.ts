@@ -231,6 +231,16 @@ function tabIcon(colour: string | null, service: () => vscode.ThemeIcon | vscode
   return colour === null ? service() : new vscode.ThemeIcon("comment-discussion");
 }
 
+/// Whether a refusal is the control lease being gone rather than the action being wrong.
+///
+/// Named by the Runtime, so the word is matched rather than guessed at. A lease can end by expiring or by
+/// another window taking control, and both are answered the same way: ask for control again.
+function leaseLost(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes("leaseExpired")
+    || message.includes("the terminal control lease expired or was released");
+}
+
 class RuntimeTerminal implements vscode.Pseudoterminal {
   private readonly writeEmitter = new vscode.EventEmitter<string>();
   private readonly closeEmitter = new vscode.EventEmitter<number | void>();
@@ -459,7 +469,17 @@ class RuntimeTerminal implements vscode.Pseudoterminal {
       if (this.closed) return;
       const view = this.view;
       if (!view) throw new Error("The public Runtime terminal is not connected.");
-      await action(view, await this.ensureControl(view));
+      try {
+        await action(view, await this.ensureControl(view));
+      } catch (error: unknown) {
+        // The lease lives thirty seconds and is renewed when something is sent, so a conversation nobody typed
+        // into for longer answers the next keystroke with `leaseExpired`. That is recoverable and used to reach
+        // the person as a red line in their conversation instead (operator, 2026-08-28, with a picture). Another
+        // window may also have taken control, and asking again is how this window takes it back.
+        if (!leaseLost(error)) throw error;
+        this.lease = null;
+        await action(view, await this.ensureControl(view));
+      }
     });
     this.commandTail = command.then(
       () => undefined,

@@ -71,9 +71,24 @@ export function usageChips(rows: readonly UsageRow[]): UsageChip[] {
       plan: row.plan,
       age: row.age,
       meters: row.meters,
-      action: row.state === "signedOut" ? "signIn" : row.state === "unavailable" ? "fix" : null,
+      action: chipAction(row, shown !== undefined && shown !== null),
     };
   });
+}
+
+/// What pressing this chip does.
+///
+/// A chip is a button, so pressing it goes straight into the one thing worth doing for that account rather
+/// than opening something to read (the operator's rule, and 2026-08-28: pressing a chip should reach that
+/// provider's sign-in). A service with a figure to show has its hover panel, which is the reading surface; a
+/// service that shows nothing has nothing to read, and signing in is the only lever this surface holds.
+function chipAction(row: UsageRow, hasFigure: boolean): "signIn" | "fix" | null {
+  if (row.state === "unavailable") return "fix";
+  if (row.state === "signedOut" || row.state === "disconnected") return "signIn";
+  // Still asking. Offering to sign in to an account nobody has finished checking would answer a question that
+  // has not been asked yet.
+  if (row.state === "checking") return null;
+  return hasFigure ? null : "signIn";
 }
 
 /// The word under an empty ring. Short because the chip is narrow; the panel says the whole sentence.

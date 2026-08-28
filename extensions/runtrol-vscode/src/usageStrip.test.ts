@@ -77,6 +77,16 @@ test("a row without a number keeps an empty ring and names its cause under it", 
   ]);
 });
 
+test("a chip with nothing to show is a way into that account", () => {
+  // A chip is a button: pressing it goes into the one thing worth doing for that account. A service that
+  // answered with no figure has nothing to read, so the lever is its sign-in (operator, 2026-08-28).
+  const chips = usageChips([
+    row({ state: "available", meters: [], position: "No report" }),
+    row({ state: "disconnected", meters: [], position: "Offline" }),
+  ]);
+  assert.deepEqual(chips.map((chip) => chip.action), ["signIn", "signIn"]);
+});
+
 test("the page draws one bar per reported window and escapes what the service said", () => {
   const html = usageStripHtml(usageChips([row({
     name: "Codex <pro>",
