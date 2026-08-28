@@ -225,7 +225,9 @@ html = html.replace('id="panel-0" hidden', 'id="panel-0"');
 const page = path.join(temporary, "sidebar.html");
 await writeFile(page, html, "utf8");
 
-const chrome = "C:\Program Files\Google\Chrome\Application\chrome.exe";
+// A Windows path in a JavaScript string: each separator is two characters or the escape eats it and the
+// name becomes `C:Program Files...`, which no shell can find.
+const chrome = "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
 const profile = path.join(temporary, "chrome");
 
 // Photographed by the browser itself rather than by capturing its window.
