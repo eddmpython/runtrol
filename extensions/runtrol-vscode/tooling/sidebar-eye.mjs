@@ -235,7 +235,17 @@ html = html.replace("</head>", `<script nonce="${assets.nonce}">
   };
 </script></head>`);
 // One panel open, because a hover panel that nothing hovers is a state this harness could never show.
-html = html.replace('id="panel-0" hidden', 'id="panel-0"');
+//
+// Opened the way a person opens it. Stripping the `hidden` attribute used to be enough, but the page now
+// restores the panel a person had open after every repaint, and that restore closed the one this harness had
+// forced open before the picture was taken (2026-08-28). Pressing the chip goes through the same path the
+// person's press does, which is also the only way the harness can be sure that path still works.
+html = html.replace("</body>", `<script nonce="${assets.nonce}">
+  window.addEventListener("load", function () {
+    var chip = document.querySelectorAll(".chip")[0];
+    if (chip) chip.click();
+  });
+</script></body>`);
 const page = path.join(temporary, "sidebar.html");
 await writeFile(page, html, "utf8");
 
