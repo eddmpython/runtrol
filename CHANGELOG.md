@@ -10,6 +10,14 @@ and refactoring that no user can observe do not belong here.
 
 ## [Unreleased]
 
+## [0.1.32] - 2026-08-28
+
+### Added
+
+- A project row says which branch its folder is on, read straight from the repository rather than by running
+  git, and says nothing when the folder is not in one.
+- A project can be renamed from its own row, beside the actions that were already there.
+
 ## [0.1.31] - 2026-08-28
 
 ### Fixed
