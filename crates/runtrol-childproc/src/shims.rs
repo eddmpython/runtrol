@@ -171,12 +171,18 @@ fn command_files(names: &[Box<str>]) -> Vec<String> {
     names
         .iter()
         .filter_map(|name| Path::new(name.as_ref()).file_name()?.to_str())
+        // A name carrying one of Windows' launcher extensions is not a command file on this platform, and the
+        // comparison is on the extension itself so that a name whose own text merely ends in those letters is
+        // left alone.
         .filter(|name| {
-            let lower = name.to_ascii_lowercase();
-            !lower.ends_with(".cmd")
-                && !lower.ends_with(".exe")
-                && !lower.ends_with(".bat")
-                && !lower.ends_with(".com")
+            !Path::new(name)
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| {
+                    ["cmd", "exe", "bat", "com"]
+                        .iter()
+                        .any(|launcher| extension.eq_ignore_ascii_case(launcher))
+                })
         })
         .filter(|name| !name.is_empty() && *name != "." && *name != "..")
         .map(ToOwned::to_owned)

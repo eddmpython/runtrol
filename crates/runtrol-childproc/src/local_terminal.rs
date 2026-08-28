@@ -189,6 +189,10 @@ mod platform {
             unsafe_code,
             reason = "the terminal window-size ioctl has no safe standard-library interface"
         )]
+        #[expect(
+            clippy::unused_self,
+            reason = "the receiver is the proof that this process holds the terminal; the geometry it then asks for is the process's own, which is why the call takes no identifier"
+        )]
         pub(super) fn size(&self) -> io::Result<LocalTerminalSize> {
             // SAFETY: the ioctl writes one winsize value for the current process's standard output terminal.
             unsafe {
