@@ -147,7 +147,9 @@ ${usagePanelsMarkup(model.usage)}
 }
 
 function projectHtml(project: SidebarProjectRow, assets: SidebarAssets): string {
-  const count = project.rows.length;
+  // What the project holds, not what fits: the rows are capped at five and the count is the reason a person
+  // knows there is more before they reach the row that says so.
+  const count = project.rows.length + project.hidden;
   const badges = [
     project.attention > 0 ? `<span class="badge attention" title="${project.attention} waiting for you">${project.attention}</span>` : "",
     project.live > 0 ? `<span class="badge live" title="${project.live} running">${project.live}</span>` : "",
@@ -260,7 +262,10 @@ function firstRunHtml(): string {
 // icon font, and an <img> would not follow the theme colour. Each is the codicon outline in a 16-unit box.
 const STYLE = `
 :root { color-scheme: light dark; }
-body { margin: 0; padding: 0; height: 100vh; box-sizing: border-box; display: flex; flex-direction: column; overflow: hidden; color: var(--vscode-sideBar-foreground, var(--vscode-foreground)); background: transparent; font: var(--vscode-font-size) var(--vscode-font-family); user-select: none; }
+/* The panel's height, taken twice: the editor gives the frame its height and the document has to claim it, or
+   the page is only as tall as its rows and the usage strip stops being the bottom of the sidebar. */
+html { height: 100%; }
+body { margin: 0; padding: 0; height: 100%; min-height: 100%; box-sizing: border-box; display: flex; flex-direction: column; overflow: hidden; color: var(--vscode-sideBar-foreground, var(--vscode-foreground)); background: transparent; font: var(--vscode-font-size) var(--vscode-font-family); user-select: none; }
 button { font: inherit; color: inherit; }
 .notice { margin: 4px 4px 0; padding: 4px 6px; border-radius: 4px; font-size: 12px; background: var(--vscode-editorWidget-background); border-left: 3px solid var(--vscode-widget-border); }
 .notice.warn { border-left-color: var(--vscode-editorWarning-foreground); }

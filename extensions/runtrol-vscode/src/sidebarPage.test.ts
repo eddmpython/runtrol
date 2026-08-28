@@ -121,6 +121,18 @@ test("row keys are unique and in page order, which is what the eye test reads", 
   assert.deepEqual(keys, ["project:app", "claude:one", "codex:loose"]);
 });
 
+test("a project counts what it holds, and says how many wait behind the row that shows them", () => {
+  const html = sidebarHtml(model({
+    projects: [project({ rows: [conversation({ key: "a" })], hidden: 7 })],
+  }), assets);
+  // Eight conversations, one drawn: the heading counts all of them, because the count is what tells a reader
+  // the list is capped before they read the row that offers the rest.
+  assert.ok(html.includes('<span class="count">8</span>'), html.slice(html.indexOf("count")));
+  assert.ok(html.includes("Show all (7 more conversations)"));
+  const one = sidebarHtml(model({ projects: [project({ rows: [conversation({ key: "a" })], hidden: 1 })] }), assets);
+  assert.ok(one.includes("Show all (1 more conversation)"), "one is not one conversations");
+});
+
 test("the page spends no row on a menu, and escapes what services said", () => {
   const html = sidebarHtml(model({
     loose: [conversation({ key: "x", title: "<script>alert(1)</script>", hue: null })],
