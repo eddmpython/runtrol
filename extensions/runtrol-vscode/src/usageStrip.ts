@@ -230,7 +230,7 @@ export const USAGE_STYLE = `
 body { margin: 0; padding: 6px 8px; color: var(--vscode-foreground); font: var(--vscode-font-size) var(--vscode-font-family); background: transparent; }
 .empty { margin: 0; opacity: 0.8; }
 .chips { display: flex; flex-wrap: wrap; gap: 2px 6px; }
-.chip { display: flex; flex-direction: column; align-items: center; gap: 0; width: 38px; padding: 2px 0 1px; border: 1px solid transparent; border-radius: 5px; background: transparent; color: inherit; cursor: pointer; }
+.chip { display: flex; flex-direction: column; align-items: center; gap: 0; min-width: 38px; max-width: 86px; padding: 2px 3px 1px; border: 1px solid transparent; border-radius: 5px; background: transparent; color: inherit; cursor: pointer; }
 .chip:hover, .chip[aria-expanded="true"] { background: var(--vscode-list-hoverBackground); }
 .chip:focus-visible { outline: none; border-color: var(--vscode-focusBorder); }
 .ring { position: relative; width: 26px; height: 26px; }
@@ -240,7 +240,11 @@ body { margin: 0; padding: 6px 8px; color: var(--vscode-foreground); font: var(-
 .chip.reached .fill { stroke: var(--vscode-errorForeground); }
 .chip.bare .fill { display: none; }
 .ring .icon { position: absolute; left: 8.5px; top: 8.5px; width: 9px; height: 9px; }
-.caption { font-size: 10px; line-height: 12px; opacity: 0.9; white-space: nowrap; }
+/* The caption belongs to its own chip. It was a fixed 38px box with no overflow rule, so a service's own
+   word for its account ("team-managed") spilled across its neighbours and read as one run-on word,
+   "20%team-managed" (operator's window, 2026-08-28). The chip grows for a longer word up to a cap, and past
+   that the word is cut with an ellipsis: the hover panel says the whole sentence. */
+.caption { max-width: 100%; overflow: hidden; text-overflow: ellipsis; font-size: 10px; line-height: 12px; opacity: 0.9; white-space: nowrap; }
 .chip.reached .caption { color: var(--vscode-errorForeground); }
 .panels { margin-top: 4px; }
 .panel { padding: 6px 4px 2px; border-top: 1px solid var(--vscode-widget-border, rgba(128,128,128,0.35)); }

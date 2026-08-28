@@ -116,7 +116,9 @@ function chip(providerId, name, percent, rings) {
     icon: providerId,
     percent,
     rings,
-    caption: "",
+    // What the host puts under a ring that has a number. Left empty, the harness drew captionless chips and
+    // hid the very collision the operator found in their own window (2026-08-28).
+    caption: percent === null ? "" : `${percent}%`,
     reached: false,
     state: "within",
     position: "Within limits",
