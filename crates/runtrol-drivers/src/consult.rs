@@ -265,6 +265,42 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_registration_is_ours_again_only_when_its_image_is_gone_from_our_own_folder() {
+        let folder = std::env::temp_dir().join("runtrolSupersededTest");
+        std::fs::create_dir_all(&folder).expect("the test folder");
+        let ours = folder.join("runtrol-abc123.exe");
+        let older = folder.join("runtrol-def456.exe");
+        let stranger = folder.join("someoneElse.exe");
+        std::fs::write(&ours, b"x").expect("our image");
+        std::fs::write(&stranger, b"x").expect("their image");
+        if older.exists() {
+            std::fs::remove_file(&older).expect("clear the replaced image");
+        }
+
+        // The image the extension replaced: gone, and it stood where we stand.
+        assert!(superseded_runtrol(
+            older.to_str().expect("path"),
+            ours.to_str().expect("path")
+        ));
+        // A program that is still there is still somebody's, even in our folder.
+        assert!(!superseded_runtrol(
+            stranger.to_str().expect("path"),
+            ours.to_str().expect("path")
+        ));
+        // Gone, but from a folder we never write to: not ours to take over.
+        let elsewhere = std::env::temp_dir()
+            .join("someOtherPlace")
+            .join("runtrol.exe");
+        assert!(!superseded_runtrol(
+            elsewhere.to_str().expect("path"),
+            ours.to_str().expect("path")
+        ));
+
+        std::fs::remove_file(&ours).expect("clean up our image");
+        std::fs::remove_file(&stranger).expect("clean up their image");
+    }
+
+    #[test]
     fn every_declared_surface_is_official_commands_and_never_a_config_file() {
         // The thin boundary: registration happens through the CLI's own command surface. An argv that names a
         // configuration file would be runtrol editing another program's config, which `configReadOnly` exists
