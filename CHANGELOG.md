@@ -10,6 +10,35 @@ and refactoring that no user can observe do not belong here.
 
 ## [Unreleased]
 
+### Fixed
+
+- A conversation already running in another window now opens as itself. Pressing it in a second window used to
+  offer to resume it again, because the lookup that finds the live terminal compared folders as raw strings
+  and the Runtime stores a path the window spells with a different drive case. It compares them as one folder
+  now, and when a handover has left two generations naming it, takes the one still running.
+- The name a service gives a conversation reaches its tab. A conversation started here is filed under a
+  placeholder until its service writes it down, and only the list knew when that had happened, so the tab kept
+  the folder's name for the rest of its life while the sidebar beside it showed the real one.
+- Typing no longer stops mid-conversation. Two windows of one profile share the control of a terminal, so the
+  one that renewed last leaves the other holding a retired generation, which the Runtime calls a control
+  conflict. That was not counted as losing control, so the keystroke was dropped instead of asking again. An
+  expired lease is also renewed no more: past its moment the only move is to take control again.
+- Every usage bar was empty. Their widths were set on the element, and this page's own policy drops a style
+  attribute without a word, so each bar drew at nothing. The same mistake had already cost the project colour
+  band its colour; widths are stylesheet rules now, and a machine check refuses the attribute outright.
+- The account panel offers its service's sign-in whatever the account looks like. A healthy account had no way
+  to reach it at all, which is the one thing this surface is for when somebody is switching accounts.
+- A project's name no longer disappears at a real panel width. The name could shrink to nothing while the
+  chips beside it refused to shrink at all, and the hover buttons held a third of the row even while hidden.
+- A service's own word for its account no longer runs into its neighbour's number.
+
+### Changed
+
+- The panel stops rebuilding itself when a figure ticks. It used to rewrite its whole document every few
+  seconds as memory readings changed, taking with it the detail panel a person had opened, the row they had
+  focused and the place they had scrolled to. Only the content changes now.
+
+
 ## [0.1.33] - 2026-08-28
 
 ### Added
