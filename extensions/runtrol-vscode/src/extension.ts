@@ -162,6 +162,7 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
       return state.conversations.find((candidate) => candidate.key === key) ?? null;
     },
     (key) => state.markStreaming(key),
+    (key) => state.conversations.find((row) => row.key === key)?.title ?? null,
   );
   context.subscriptions.push(terminals);
   controller = new Controller(context, client, runtime, state, selection, projectStore, terminals);

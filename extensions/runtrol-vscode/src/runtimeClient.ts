@@ -39,6 +39,7 @@ import {
   type StoredControlState,
 } from "./runtimeControl";
 import { collectNativeChats } from "./nativeChatCatalogue";
+import { workspaceIdentity } from "./workspaceCollision";
 import type { NativeChatCatalogue, NativeChatLine } from "./runtimeTypes";
 
 const SECRET_KEY = "runtrol.runtime.integration.v1";

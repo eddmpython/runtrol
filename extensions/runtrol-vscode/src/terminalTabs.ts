@@ -27,6 +27,9 @@ export class TerminalTabs implements vscode.Disposable {
   private readonly started = new Map<vscode.Terminal, StartedConversation>();
   private nextStarted = 0;
   private readonly closing: vscode.Disposable;
+  private readonly focusing: vscode.Disposable;
+  /// The name this tab is currently showing, so a rename runs once rather than on every focus.
+  private readonly named = new Map<vscode.Terminal, string>();
 
   constructor(
     private readonly runtime: StudioRuntimeClient,
@@ -43,6 +46,9 @@ export class TerminalTabs implements vscode.Disposable {
     /// Told every time the service writes to a conversation's screen, which is how the sidebar knows the row
     /// is working: the Runtime's lifecycle only reports turns Runtrol itself started, and it starts none.
     private readonly serviceWrote: (conversationKey: string) => void = () => undefined,
+    /// The name this conversation carries now, or null when nothing in the list matches this tab. A tab opened
+    /// before the service named the conversation is called after its folder, and the name arrives later.
+    private readonly nameOf: (conversationKey: string) => string | null = () => null,
   ) {
     this.closing = vscode.window.onDidCloseTerminal((terminal) => {
       for (const [key, open] of this.open) {
@@ -51,7 +57,39 @@ export class TerminalTabs implements vscode.Disposable {
       // A tab closed before its service named the conversation takes its placeholder row with it. Leaving the row
       // would leave a conversation on screen that nothing on this machine can open.
       if (this.started.delete(terminal)) this.startedChanged();
+      this.named.delete(terminal);
     });
+    // A tab cannot be renamed through the API, and the editor's own rename command acts on the active terminal.
+    // So the name is corrected the moment a person looks at the tab, which is the only moment it matters and the
+    // only one that steals no focus. A conversation opened before its service named it is called after its
+    // folder until then (operator, 2026-08-28: the service gave it a name and the tab kept the old one).
+    this.focusing = vscode.window.onDidChangeActiveTerminal((terminal) => {
+      if (terminal) void this.correctName(terminal);
+    });
+  }
+
+  /// Rename the active tab to the conversation's current name, once.
+  private async correctName(terminal: vscode.Terminal): Promise<void> {
+    const key = this.keyOf(terminal);
+    if (key === null) return;
+    const current = this.nameOf(key);
+    if (!current) return;
+    const wanted = tabName(current);
+    if (this.named.get(terminal) === wanted || terminal.name === wanted) {
+      this.named.set(terminal, wanted);
+      return;
+    }
+    this.named.set(terminal, wanted);
+    await vscode.commands.executeCommand("workbench.action.terminal.renameWithArg", { name: wanted });
+  }
+
+  /// Which conversation a tab is showing, by the key the sidebar uses for it.
+  private keyOf(terminal: vscode.Terminal): string | null {
+    for (const [key, open] of this.open) {
+      if (open === terminal) return key;
+    }
+    const pending = this.started.get(terminal);
+    return pending ? `started:${encodeURIComponent(pending.id)}` : null;
   }
 
   /// Show the conversation's terminal: the tab that already shows it, or a new one beside the active editor.
@@ -144,6 +182,7 @@ export class TerminalTabs implements vscode.Disposable {
 
   dispose(): void {
     this.closing.dispose();
+    this.focusing.dispose();
     for (const terminal of this.open.values()) terminal.dispose();
     this.open.clear();
   }
