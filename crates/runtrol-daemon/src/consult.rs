@@ -190,6 +190,69 @@ async fn unwire_agent_tools(composed: &Composed) -> Result<(), String> {
 }
 
 /// Register this exact executable's bounded Agent Tools server in every usable CLI registrar.
+/// Point a registration that is ours, and stale, back at the image now running.
+///
+/// # Why this runs on its own
+///
+/// The extension installs the Core under a name made from its digest, so every update puts this program at a
+/// new path and deletes the one it replaced. The registration written at wiring time still names the old path,
+/// and from then on every conversation in that project opens with `MCP client for runtrolTools failed to
+/// start` and the file-not-found the operating system gives for a program that is gone (operator's window,
+/// 2026-08-28: measured, the registered image was absent from the folder the current one runs from). Nothing
+/// asked for that, and nothing was going to fix it: wiring only happens when a person presses the toggle, and
+/// they already pressed it.
+///
+/// # What it will not do
+///
+/// It repairs and never creates. A provider with no entry keeps none, because an entry is a person's decision.
+/// Anything but [`McpRegistrationState::Superseded`] is left exactly as it stands, which is the same ownership
+/// rule the toggle holds: the file has to be gone, and it has to have stood where this executable stands.
+pub(crate) async fn repair_agent_tools(composed: &Composed) -> Vec<String> {
+    let server_program = match this_executable() {
+        Ok(program) => program,
+        Err(why) => return vec![format!("the running Core could not name itself: {why}")],
+    };
+    let expected_args = ["mcp"];
+    let mut trouble = Vec::new();
+    for target in agent_registrars(composed) {
+        let state = exact_registration(
+            composed,
+            &target.program,
+            &target.registrar,
+            AGENT_TOOLS_NAME,
+            server_program.path().as_str(),
+            &expected_args,
+        )
+        .await;
+        match state {
+            Ok(Some(McpRegistrationState::Superseded)) => {}
+            Ok(_) => continue,
+            Err(why) => {
+                trouble.push(format!("{}: {why}", target.provider));
+                continue;
+            }
+        }
+        if let Err(why) = remove_registration(composed, &target, AGENT_TOOLS_NAME).await {
+            trouble.push(format!("{}: {why}", target.provider));
+            continue;
+        }
+        let mut add: Vec<&str> = target.registrar.add.to_vec();
+        add.extend([
+            AGENT_TOOLS_NAME,
+            "--",
+            server_program.path().as_str(),
+            "mcp",
+        ]);
+        if let Err(why) = ask(composed, &target.program, &add, &[]).await {
+            trouble.push(format!(
+                "{}: the stale entry was removed and the new one could not be added: {why}",
+                target.provider
+            ));
+        }
+    }
+    trouble
+}
+
 async fn wire_agent_tools(composed: &Composed) -> Result<(), String> {
     let server_program = this_executable()?;
     verify_agent_tools(composed, &server_program).await?;
@@ -787,6 +850,36 @@ fn said(output: &Output) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_repair_only_ever_touches_a_registration_that_is_ours_and_gone() {
+        // Read as source, because what has to hold here is which states act and which are left alone: a
+        // repair that created an entry would be runtrol deciding something a person decides, and a repair
+        // that took over a `Different` entry would be runtrol overwriting somebody else's.
+        let source = include_str!("consult.rs");
+        let body = source
+            .split("pub(crate) async fn repair_agent_tools")
+            .nth(1)
+            .expect("the repair exists")
+            .split(
+                "
+async fn wire_agent_tools",
+            )
+            .next()
+            .expect("the repair ends before the toggle");
+        assert!(
+            body.contains("Ok(Some(McpRegistrationState::Superseded)) => {}"),
+            "only a superseded entry is repaired"
+        );
+        assert!(
+            body.contains("Ok(_) => continue,"),
+            "every other state is left exactly as it stands"
+        );
+        assert!(
+            !body.contains("None =>"),
+            "an absent entry stays absent: an entry is a person's decision"
+        );
+    }
 
     #[test]
     fn the_registration_name_says_what_it_gives_the_agent_that_reads_it() {
