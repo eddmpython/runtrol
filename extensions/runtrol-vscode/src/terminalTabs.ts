@@ -8,6 +8,7 @@ import * as vscode from "vscode";
 import type { Conversation, StartedConversation } from "./conversationList";
 import { tabColorId } from "./projectColor";
 import { tabName } from "./tabName";
+import { workspaceIdentity } from "./workspaceCollision";
 import { HIDE_CURSOR, hasVisibleText, MARK_FRAME_MS, paintMark, SHOW_CURSOR } from "./openingMark";
 import type { StudioRuntimeClient } from "./runtimeClient";
 
@@ -68,6 +69,24 @@ export class TerminalTabs implements vscode.Disposable {
     });
   }
 
+  /// The tab this conversation is already running in, opened before the service named it.
+  ///
+  /// A conversation started here has no identity until its service writes one, so its tab is filed under a
+  /// placeholder. When the name arrives the row changes key, and without this the row's next click opened a
+  /// second tab on a conversation that was already on screen. The match is the one the list itself uses: same
+  /// service, same folder.
+  private adoptStarted(conversation: Conversation): vscode.Terminal | null {
+    for (const [terminal, pending] of this.started) {
+      if (pending.providerId !== conversation.providerId) continue;
+      if (workspaceIdentity(pending.workspace) !== workspaceIdentity(conversation.workspace)) continue;
+      this.started.delete(terminal);
+      this.open.set(conversation.key, terminal);
+      this.startedChanged();
+      return terminal;
+    }
+    return null;
+  }
+
   /// Rename the active tab to the conversation's current name, once.
   private async correctName(terminal: vscode.Terminal): Promise<void> {
     const key = this.keyOf(terminal);
@@ -94,7 +113,7 @@ export class TerminalTabs implements vscode.Disposable {
 
   /// Show the conversation's terminal: the tab that already shows it, or a new one beside the active editor.
   show(conversation: Conversation, preserveFocus: boolean): vscode.Terminal {
-    const existing = this.open.get(conversation.key);
+    const existing = this.open.get(conversation.key) ?? this.adoptStarted(conversation);
     if (existing) {
       existing.show(preserveFocus);
       return existing;
