@@ -107,6 +107,11 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
         "see the (i)": "sidebar coverage hidden behind an information action",
         "Untitled ·": "repeated non-name conversation fallback",
         "Resume anyway": "internal writer-collision copy on conversation switching",
+        # The pages declare `style-src 'nonce-...'`, which covers their own style block and nothing else. A
+        # style attribute carries no nonce, so the browser drops it without a word and the element renders
+        # unstyled. It cost the project colour band days of invisibility and every usage bar its fill
+        # (2026-08-28). Widths and colours belong to a class in the nonced stylesheet.
+        'style="': "an inline style attribute the page's own policy silently drops",
     }
     # One timer is not a poll: it draws the Runtrol mark in a conversation tab while the tab opens and stops on
     # the first byte the service writes (`openingMark.ts`, added 2026-08-28). It is named here by its exact call

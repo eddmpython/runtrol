@@ -41,10 +41,16 @@ export type UsageChip = {
   readonly meters: readonly UsageMeter[];
   /// The one action the panel offers, or null when the row is only information.
   readonly action: "signIn" | "fix" | null;
+  /// The service publishes a sign-in line, so the panel can offer to sign in whatever the account's state is.
+  readonly canSignIn: boolean;
 };
 
 /// Rows to chips. The order is the rows' order, which is the services' order.
-export function usageChips(rows: readonly UsageRow[]): UsageChip[] {
+export function usageChips(
+  rows: readonly UsageRow[],
+  /// The services that publish a sign-in line of their own.
+  signInAble: ReadonlySet<string> = new Set(),
+): UsageChip[] {
   return rows.map((row) => {
     // The ring is the week when the service published one; otherwise the window it says governs, so a
     // five-hour limit that is blocking right now is never hidden behind "No report".
@@ -72,6 +78,7 @@ export function usageChips(rows: readonly UsageRow[]): UsageChip[] {
       age: row.age,
       meters: row.meters,
       action: chipAction(row, shown !== undefined && shown !== null),
+      canSignIn: signInAble.has(row.providerId),
     };
   });
 }
@@ -152,6 +159,20 @@ ${chips.length === 0 ? "" : usagePanelsMarkup(chips)}
 </html>`;
 }
 
+/// A bar's fill, as a class rather than as a `style` attribute.
+///
+/// The page's policy allows styles from its own nonced block and from nowhere else, and a `style` attribute
+/// carries no nonce, so every fill this drew was dropped without a word and each window's bar read as empty.
+/// The identical mistake had already cost the project colour band days of being invisible (2026-08-28), which
+/// is why the fill is a class and the rules for every whole percent are in the stylesheet.
+function widthClass(percent: number): string {
+  return `w${Math.max(0, Math.min(100, Math.round(percent)))}`;
+}
+
+/// One rule per whole percent, generated once. A hundred and one short rules is smaller than the code any
+/// scheme for emitting only the percents in use would need, and it cannot go stale.
+const WIDTH_STYLE = Array.from({ length: 101 }, (_unused, at) => `.meter .value.w${at} { width: ${at}%; }`).join(" ");
+
 function chipHtml(chip: UsageChip, index: number, assets: UsageStripAssets): string {
   const iconUri = assets.iconUris.get(chip.icon) ?? "";
   const spoken = chip.percent === null
@@ -184,7 +205,7 @@ function panelHtml(chip: UsageChip, index: number): string {
   const bars = chip.meters.map((meter) => `<div class="meter${meter.governing ? " governing" : ""}">
 <span class="label">${escapeHtml(meter.label)}</span>
 <span class="percent">${meter.percent}%</span>
-<span class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${meter.percent}" aria-label="${escapeHtml(`${meter.label} ${meter.percent} percent`)}"><span class="value" style="width:${meter.percent}%"></span></span>
+<span class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${meter.percent}" aria-label="${escapeHtml(`${meter.label} ${meter.percent} percent`)}"><span class="value ${widthClass(meter.percent)}"></span></span>
 ${meter.governing ? `<span class="detail">${escapeHtml(meter.detail)}</span>` : ""}
 </div>`).join("");
   return `<section class="panel" id="panel-${index}" hidden>
@@ -192,6 +213,7 @@ ${meter.governing ? `<span class="detail">${escapeHtml(meter.detail)}</span>` : 
 <p class="position${chip.reached ? " reached" : ""}">${escapeHtml(chip.position)}</p>
 ${bars}
 ${chip.age ? `<p class="age">${escapeHtml(chip.age)}</p>` : ""}
+${chip.canSignIn && chip.action !== "signIn" ? `<button class="action" type="button" data-action="signIn" data-provider="${escapeHtml(chip.providerId)}">Sign in to ${escapeHtml(chip.name)}</button>` : ""}
 </section>`;
 }
 
@@ -233,7 +255,8 @@ body { margin: 0; padding: 6px 8px; color: var(--vscode-foreground); font: var(-
 .meter .label { min-width: 0; font-size: 11px; overflow-wrap: anywhere; }
 .meter.governing .label { font-weight: 600; }
 .meter .bar { grid-column: 1 / -1; display: block; height: 4px; border-radius: 2px; background: var(--vscode-widget-border, rgba(128,128,128,0.35)); overflow: hidden; }
-.meter .value { display: block; height: 100%; border-radius: 2px; background: var(--vscode-progressBar-background); }
+.meter .value { display: block; height: 100%; border-radius: 2px; background: var(--vscode-progressBar-background); width: 0; }
+${WIDTH_STYLE}
 .meter .percent { font-variant-numeric: tabular-nums; text-align: right; font-size: 11px; }
 .meter .detail { grid-column: 1 / -1; font-size: 11px; opacity: 0.75; }
 .panel .age { font-size: 11px; opacity: 0.7; }

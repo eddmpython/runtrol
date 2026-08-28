@@ -67,12 +67,23 @@ const THEME = `
   --vscode-charts-purple: #b180d7;
   --vscode-charts-yellow: #cca700;
   --vscode-charts-red: #f14c4c;
+  --vscode-button-background: #0078d4;
+  --vscode-button-foreground: #ffffff;
+  --vscode-button-hoverBackground: #026ec1;
+  --vscode-button-border: transparent;
   --vscode-button-secondaryBackground: #313131;
   --vscode-button-secondaryForeground: #cccccc;
   --vscode-menu-background: #1f1f1f;
   --vscode-menu-foreground: #cccccc;
 }
-html, body { background: var(--vscode-sideBar-background); }
+/* The panel's width, declared rather than asked for.
+   Measured 2026-08-28: this browser will not open a window narrower than about 500 CSS px, so a
+   window size of 320 laid the page out at 500 and photographed the leftmost 320 of it. Every picture the
+   harness had taken was a crop of a page that was never that narrow, which hid exactly what a narrow panel
+   does to a row: the fade at the end of a long name and the percent beside a bar were both off the right
+   edge, outside the picture. The width is the subject here, so the page holds it and the window merely has
+   to be wider than it. */
+html, body { width: 320px; background: var(--vscode-sideBar-background); }
 `;
 
 function conversation(over = {}) {
@@ -118,6 +129,7 @@ function chip(providerId, name, percent, rings) {
       governing: at === 0,
     })),
     action: null,
+    canSignIn: true,
   };
 }
 
@@ -245,7 +257,9 @@ const shot = spawn(chrome, [
   "--headless=new",
   "--disable-gpu",
   `--screenshot=${out}`,
-  "--window-size=320,900",
+  "--window-size=560,900",
+  // Two device pixels per CSS pixel, so 11px text in the picture is legible enough to judge.
+  "--force-device-scale-factor=2",
   `file:///${page.replaceAll("\\", "/")}`,
 ], { stdio: "ignore" });
 const captured = await new Promise((resolve) => shot.on("close", resolve));

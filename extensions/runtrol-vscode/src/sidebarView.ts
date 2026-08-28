@@ -305,7 +305,15 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
       ...this.rowsOf(group),
     }));
     const looseRows = pinnedFirst(loose(rows)).map((row) => this.conversationRow(row, null));
-    const usage: UsageChip[] = usageChips(usageRows(this.state.usage, this.state.providers, Date.now()));
+    // Which services publish a sign-in line, so the account panel can offer it whatever the account's state
+    // is. A person switching accounts, or checking one that looks healthy, had no way there at all.
+    const signInAble = new Set(this.state.providers
+      .filter((provider) => provider.help?.signIn)
+      .map((provider) => provider.providerId));
+    const usage: UsageChip[] = usageChips(
+      usageRows(this.state.usage, this.state.providers, Date.now()),
+      signInAble,
+    );
     const usable = this.state.providers.some(isUsable);
     const firstRun = projectRows.length === 0 && looseRows.length === 0
       && this.state.coreReach === "reached" && usable;

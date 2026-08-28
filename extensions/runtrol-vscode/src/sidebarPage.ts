@@ -155,7 +155,7 @@ function projectHtml(project: SidebarProjectRow, assets: SidebarAssets): string 
   const badges = [
     project.attention > 0 ? `<span class="badge attention" title="${project.attention} waiting for you">${project.attention}</span>` : "",
     project.live > 0 ? `<span class="badge live" title="${project.live} running">${project.live}</span>` : "",
-    project.branch ? `<span class="badge branch" title="On branch ${escapeHtml(project.branch)}"><i class="ci ci-git-branch" aria-hidden="true"></i>${escapeHtml(project.branch)}</span>` : "",
+    project.branch ? `<span class="badge branch" title="On branch ${escapeHtml(project.branch)}"><i class="ci ci-git-branch" aria-hidden="true"></i><span class="what">${escapeHtml(project.branch)}</span></span>` : "",
     project.agentTools ? `<span class="badge tools" title="Agent Tools are on for this project">tools</span>` : "",
   ].join("");
   const actions = project.kind === "created"
@@ -303,14 +303,23 @@ button { font: inherit; color: inherit; }
 .project-row .chevron { flex: none; width: 10px; height: 10px; margin-right: -2px; background: currentColor; opacity: 0.6; -webkit-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M5 3l6 5-6 5z'/></svg>") center / contain no-repeat; mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M5 3l6 5-6 5z'/></svg>") center / contain no-repeat; transform: rotate(90deg); transition: transform 80ms; }
 .project.collapsed .project-row .chevron { transform: rotate(0deg); }
 .project.collapsed .rows { display: none; }
-.project-row .name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* The project's name is what the row is. An item with hidden overflow may shrink to nothing, and with the
+   chips beside it refusing to shrink at all, that is what it did: at a real panel width the second project
+   showed its branch, its count and its chips with no name at all (measured 2026-08-28). It keeps a floor and
+   takes the free space; the chips beside it give theirs up first. */
+.project-row .name { flex: 0 1 auto; min-width: 3.5em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.project-row .count { flex: none; }
 .project-row .count { font-weight: 400; opacity: 0.55; font-size: 11px; }
 .project-row.current .name::after { content: " · here"; font-weight: 400; opacity: 0.6; font-size: 11px; }
 .badge { flex: none; font-size: 10px; line-height: 14px; padding: 0 5px; border-radius: 7px; font-weight: 600; }
 .badge.attention { background: var(--vscode-notificationsWarningIcon-foreground); color: var(--vscode-sideBar-background); }
 .badge.live { background: var(--vscode-progressBar-background); color: var(--vscode-sideBar-background); }
-.badge.branch { background: transparent; font-weight: 400; opacity: 0.7; display: inline-flex; align-items: center; gap: 3px; padding: 0 2px; max-width: 90px; overflow: hidden; white-space: nowrap; }
-.badge.branch .ci { width: 11px; height: 11px; }
+.badge.branch { flex: 0 2 auto; min-width: 2.5em; background: transparent; font-weight: 400; opacity: 0.7; display: inline-flex; align-items: center; gap: 3px; padding: 0 2px; max-width: 90px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+/* The icon holds its size and the name gives way with an ellipsis. Shrinking the whole chip evenly ate the
+   icon first and left a bare "featu", which names nothing; a branch mark with a shortened name still says
+   what it is (measured 2026-08-28). */
+.badge.branch .ci { flex: none; width: 11px; height: 11px; }
+.badge.branch .what { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .badge.tools { background: transparent; border: 1px solid var(--vscode-widget-border); font-weight: 400; opacity: 0.8; }
 .conv .glyph { flex: none; width: 14px; height: 14px; }
 /* A turn is running, so the service's own icon turns. Slowly, and nothing else: a ring drawn around it was a
@@ -334,12 +343,20 @@ button { font: inherit; color: inherit; }
    at rest and the memory figure sits on top of them; hovering swaps which one is painted, not the layout.
    Appearing actions used to relayout the row and shift the name under the cursor (operator, 2026-08-28), and
    on hover the actions are what the person came for. */
-.tail { flex: none; position: relative; display: inline-flex; align-items: center; justify-content: flex-end; margin-left: 2px; }
-.memory { position: absolute; right: 2px; font-size: 10px; font-variant-numeric: tabular-nums; opacity: 0.6; background: inherit; }
+.tail { flex: none; display: inline-flex; align-items: center; gap: 4px; justify-content: flex-end; margin-left: 2px; }
+/* The figure stays in the flow. It was taken out of it so the hover buttons could sit on top of it, and in a
+   box that had shrunk to nothing it broke "306 MB" across two lines and printed the running dot through it
+   (measured 2026-08-28). The buttons now overlay the whole row instead, so nothing has to hide here. */
+.memory { flex: none; white-space: nowrap; font-size: 10px; font-variant-numeric: tabular-nums; opacity: 0.6; }
 /* Always at the right edge of the row, never packed against the name: a person reaching for delete should
    find it in the same place on every row (operator, 2026-08-28). */
-.actions { display: inline-flex; gap: 1px; margin-left: auto; visibility: hidden; }
-.conv .actions { margin-left: 0; }
+/* The hover actions sit over the right end of the row rather than beside it.
+   Measured 2026-08-28 at a real panel width: hidden, they still held 113px of a 304px project row, which is
+   where the branch name went. Reserving the space was meant to stop the row reflowing when they appear, and
+   taking them out of the flow stops it just as completely: the row's own content never moves, and what the
+   buttons cover is the faded tail a name was already losing. They carry the hover colour so nothing shows
+   through them. */
+.actions { position: absolute; right: 3px; top: 1px; bottom: 1px; display: inline-flex; align-items: center; gap: 1px; padding-left: 8px; visibility: hidden; background: var(--vscode-list-hoverBackground); }
 .row:hover .actions, .row:focus-within .actions { visibility: visible; }
 .row:hover .memory, .row:focus-within .memory { visibility: hidden; }
 .act { border: 0; background: transparent; padding: 2px; border-radius: 3px; cursor: pointer; opacity: 0.75; line-height: 0; }

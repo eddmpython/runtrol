@@ -1,3 +1,5 @@
+import { randomBytes } from "node:crypto";
+
 import * as vscode from "vscode";
 
 import { CoreClient } from "./core/client";
@@ -293,16 +295,28 @@ function expect(
   return "with" in response ? response.with : undefined;
 }
 
+/// The page that shows a one-use pairing code.
+///
+/// Its styles are in a nonced block rather than on the elements. `'unsafe-inline'` would have allowed them
+/// where they were, but this page draws a pairing secret and the whole product's policy is default-deny, so
+/// the page that matters most is not the one to hold the loosest policy.
 function pairingHtml(cspSource: string, qr: string, fingerprint: string, expiresAtMs: number): string {
   const seconds = Math.max(0, Math.ceil((expiresAtMs - Date.now()) / 1000));
+  const nonce = randomBytes(16).toString("base64url");
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data: ${cspSource}; style-src ${cspSource} 'unsafe-inline'">
-<title>Pair a phone</title></head>
-<body style="margin:0;padding:32px;display:grid;place-items:center;background:var(--vscode-editor-background);color:var(--vscode-editor-foreground);font-family:var(--vscode-font-family)">
-<main style="width:min(440px,100%);text-align:center"><h1 style="font-size:24px">Pair a phone</h1>
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data: ${cspSource}; style-src 'nonce-${nonce}'">
+<title>Pair a phone</title>
+<style nonce="${nonce}">
+body { margin: 0; padding: 32px; display: grid; place-items: center; background: var(--vscode-editor-background); color: var(--vscode-editor-foreground); font-family: var(--vscode-font-family); }
+main { width: min(440px, 100%); text-align: center; }
+h1 { font-size: 24px; }
+.code { max-width: 100%; height: auto; background: #fff; border-radius: 16px; }
+</style></head>
+<body>
+<main><h1>Pair a phone</h1>
 <p>Open the Runtrol phone app and scan this one-use code.</p>
-<img src="${qr}" width="320" height="320" alt="One-use Runtrol phone pairing QR" style="max-width:100%;height:auto;background:#fff;border-radius:16px">
+<img class="code" src="${qr}" width="320" height="320" alt="One-use Runtrol phone pairing QR">
 <p><strong>PC key</strong><br><code>${escapeHtml(fingerprint)}</code></p>
 <p>This code expires in about ${seconds} seconds. The phone still needs a separate approval in VS Code.</p></main></body></html>`;
 }
