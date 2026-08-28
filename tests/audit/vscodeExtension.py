@@ -108,8 +108,17 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
         "Untitled ·": "repeated non-name conversation fallback",
         "Resume anyway": "internal writer-collision copy on conversation switching",
     }
+    # One timer is not a poll: it draws the Runtrol mark in a conversation tab while the tab opens and stops on
+    # the first byte the service writes (`openingMark.ts`, added 2026-08-28). It is named here by its exact call
+    # so that any other timer of this shape, which is what the ban is for, still trips.
+    opening_mark = "this.opening = setInterval(() => {"
+    if opening_mark not in sources.get("terminalTabs.ts", ""):
+        found.append("the opening mark's frame timer is missing from the conversation terminal")
+    if "clearInterval" not in sources.get("terminalTabs.ts", ""):
+        found.append("the opening mark's frame timer is never stopped")
     for token, meaning in forbidden.items():
-        if token in all_source:
+        haystack = all_source.replace(opening_mark, "") if token == "setInterval(" else all_source
+        if token in haystack:
             found.append(f"{meaning} is reachable through `{token}`")
 
     writers = [relative for relative, source in sources.items() if "writeFile(" in source]
