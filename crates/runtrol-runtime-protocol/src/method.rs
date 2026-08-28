@@ -50,6 +50,7 @@ pub enum RuntimeMethod {
     ProvidersListNativeSessions,
     /// Name the conversations of one provider written in the last few seconds, which is how a caller knows a
     /// turn is running in a conversation this Runtime did not start.
+    #[serde(rename = "providers/nativeActivity")]
     ProvidersNativeActivity,
     /// Read the Runtime-managed session catalogue.
     #[serde(rename = "sessions/list")]

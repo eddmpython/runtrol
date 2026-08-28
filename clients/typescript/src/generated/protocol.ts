@@ -161,6 +161,17 @@ export interface ManagedSessionList { readonly sessions: ReadonlyArray<SessionDe
 /** A caller-minted UUIDv7 identifying one state-changing request. */
 export type MutationRequestId = string;
 
+/** The conversations of one provider that were written inside the activity window. */
+export interface NativeActivity { readonly active: ReadonlyArray<string>; readonly providerId: ProviderId; }
+
+/** Ask which of one provider's conversations were written in the last few seconds.
+
+Separate from the catalogue because it is asked often and the catalogue is not cheap: on the machine this
+was measured, a catalogue reads every transcript's head and costs 121 ms, while naming what changed lately
+costs 23 ms. A conversation being written is a conversation whose model is answering, which is how the
+panel knows a turn is running in a conversation Runtrol did not start. */
+export interface NativeActivityParams { readonly providerId: ProviderId; }
+
 /** Whether an officially listed session can be resumed through the same provider driver. */
 export type NativeResumeCapability = "available" | "unavailable" | "unknown";
 
@@ -325,7 +336,7 @@ export interface RuntimeLimits { readonly challengeLifetimeMs: number; readonly 
 export interface RuntimeLocatorRecord { readonly generations: ReadonlyArray<RuntimeGeneration>; readonly instanceId: string; readonly schema: number; }
 
 /** A public Runtime method implemented by the initial read-only boundary. */
-export type RuntimeMethod = "runtime/initialize" | "runtime/initialized" | "runtime/challenge" | "integrations/requestEnrollment" | "integrations/watchEnrollment" | "integrations/getGrant" | "integrations/rotateKey" | "providers/usage" | "providers/list" | "providers/watch" | "providers/getCapabilities" | "providers/listModels" | "providers/listNativeSessions" | "sessions/list" | "sessions/watchIndex" | "sessions/get" | "sessions/start" | "sessions/adoptNative" | "sessions/resume" | "sessions/acquireControl" | "sessions/renewControl" | "sessions/releaseControl" | "sessions/submitInput" | "sessions/submitBlocks" | "sessions/setModel" | "sessions/setMode" | "sessions/watchEvents" | "sessions/interrupt" | "sessions/cool" | "sessions/forget" | "sessions/deleteNative" | "sessions/archiveNative" | "terminals/list" | "terminals/watchIndex" | "terminals/open" | "terminals/attach" | "terminals/acquireControl" | "terminals/renewControl" | "terminals/releaseControl" | "terminals/write" | "terminals/resize" | "terminals/detach" | "terminals/stop" | "approvals/listPending" | "approvals/respond" | "sessions/indexChanged" | "sessions/indexEnded" | "providers/changed" | "providers/watchEnded" | "providers/usageChanged" | "sessions/event" | "sessions/lagged" | "terminals/indexChanged" | "terminals/indexEnded" | "terminals/output" | "terminals/lagged" | "terminals/exited" | "runtime/panicStop";
+export type RuntimeMethod = "runtime/initialize" | "runtime/initialized" | "runtime/challenge" | "integrations/requestEnrollment" | "integrations/watchEnrollment" | "integrations/getGrant" | "integrations/rotateKey" | "providers/usage" | "providers/list" | "providers/watch" | "providers/getCapabilities" | "providers/listModels" | "providers/listNativeSessions" | "providers/nativeActivity" | "sessions/list" | "sessions/watchIndex" | "sessions/get" | "sessions/start" | "sessions/adoptNative" | "sessions/resume" | "sessions/acquireControl" | "sessions/renewControl" | "sessions/releaseControl" | "sessions/submitInput" | "sessions/submitBlocks" | "sessions/setModel" | "sessions/setMode" | "sessions/watchEvents" | "sessions/interrupt" | "sessions/cool" | "sessions/forget" | "sessions/deleteNative" | "sessions/archiveNative" | "terminals/list" | "terminals/watchIndex" | "terminals/open" | "terminals/attach" | "terminals/acquireControl" | "terminals/renewControl" | "terminals/releaseControl" | "terminals/write" | "terminals/resize" | "terminals/detach" | "terminals/stop" | "approvals/listPending" | "approvals/respond" | "sessions/indexChanged" | "sessions/indexEnded" | "providers/changed" | "providers/watchEnded" | "providers/usageChanged" | "sessions/event" | "sessions/lagged" | "terminals/indexChanged" | "terminals/indexEnded" | "terminals/output" | "terminals/lagged" | "terminals/exited" | "runtime/panicStop";
 
 /** The current model information Runtime can truthfully expose. */
 export type RuntimeModelCatalog = { readonly coverage: "known"; readonly models: ReadonlyArray<RuntimeModelChoice>; } | { readonly aliases: ReadonlyArray<string>; readonly coverage: "aliases"; readonly reasoningEfforts: ReadonlyArray<RuntimeReasoningChoice>; readonly why: string; } | { readonly aliases: ReadonlyArray<string>; readonly coverage: "partial"; readonly models: ReadonlyArray<RuntimeModelChoice>; readonly reasoningEfforts: ReadonlyArray<RuntimeReasoningChoice>; readonly why: string; } | { readonly coverage: "unknown"; readonly why: string; } | { readonly coverage: "unsupported"; readonly why: string; };

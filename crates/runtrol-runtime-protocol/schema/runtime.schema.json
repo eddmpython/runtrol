@@ -1122,6 +1122,42 @@
       "description": "A caller-minted UUIDv7 identifying one state-changing request.",
       "type": "string"
     },
+    "NativeActivity": {
+      "additionalProperties": false,
+      "description": "The conversations of one provider that were written inside the activity window.",
+      "properties": {
+        "active": {
+          "description": "Native identities written inside the window, in no particular order.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "providerId": {
+          "$ref": "#/$defs/ProviderId",
+          "description": "The provider asked about."
+        }
+      },
+      "required": [
+        "providerId",
+        "active"
+      ],
+      "type": "object"
+    },
+    "NativeActivityParams": {
+      "additionalProperties": false,
+      "description": "Ask which of one provider's conversations were written in the last few seconds.\n\nSeparate from the catalogue because it is asked often and the catalogue is not cheap: on the machine this\nwas measured, a catalogue reads every transcript's head and costs 121 ms, while naming what changed lately\ncosts 23 ms. A conversation being written is a conversation whose model is answering, which is how the\npanel knows a turn is running in a conversation Runtrol did not start.",
+      "properties": {
+        "providerId": {
+          "$ref": "#/$defs/ProviderId",
+          "description": "Opaque provider identity returned by `providers/list`."
+        }
+      },
+      "required": [
+        "providerId"
+      ],
+      "type": "object"
+    },
     "NativeResumeCapability": {
       "description": "Whether an officially listed session can be resumed through the same provider driver.",
       "oneOf": [
@@ -2864,6 +2900,11 @@
         {
           "const": "providers/listNativeSessions",
           "description": "Discover one root-scoped official provider-native session page.",
+          "type": "string"
+        },
+        {
+          "const": "providers/nativeActivity",
+          "description": "Name the conversations of one provider written in the last few seconds, which is how a caller knows a\nturn is running in a conversation this Runtime did not start.",
           "type": "string"
         },
         {
@@ -4695,6 +4736,12 @@
     "model_catalogue": {
       "$ref": "#/$defs/RuntimeModelCatalog"
     },
+    "native_activity": {
+      "$ref": "#/$defs/NativeActivity"
+    },
+    "native_activity_params": {
+      "$ref": "#/$defs/NativeActivityParams"
+    },
     "native_session_catalogue": {
       "$ref": "#/$defs/NativeSessionCatalogue"
     },
@@ -4881,6 +4928,8 @@
     "model_catalogue",
     "list_native_sessions",
     "native_session_catalogue",
+    "native_activity_params",
+    "native_activity",
     "managed_session_list",
     "get_session",
     "session_descriptor",

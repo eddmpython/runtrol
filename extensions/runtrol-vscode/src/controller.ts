@@ -1247,6 +1247,7 @@ export class Controller implements vscode.Disposable {
           }
         }
         this.state.setMemory(bySession, byNative);
+        await this.pollNativeActivity(signal);
       } catch (error) {
         // Reported nowhere on purpose: the index watch owns the reachability verdict and says so in its own
         // words; a missed memory round changes no row and the next round asks again.
@@ -1404,6 +1405,33 @@ export class Controller implements vscode.Disposable {
       });
       this.verificationTail = verified;
     }
+  }
+
+  /// Ask each usable service which of its conversations it wrote to a moment ago.
+  ///
+  /// The panel can see a turn running in a conversation it hosts, because those bytes pass through it. It
+  /// cannot see one in a conversation started in the person's own terminal, and on a real machine that is most
+  /// of them (measured on the operator's window 2026-08-28: a session was answering and every row read as
+  /// idle). The Runtime answers this by asking the service's own store what it wrote lately, which costs a
+  /// directory walk and opens nothing, so it rides the same slow poll as the memory figures.
+  private async pollNativeActivity(signal: AbortSignal): Promise<void> {
+    const providers = this.state.providers.filter(isUsable);
+    if (providers.length === 0) {
+      this.state.setNativeActivity(new Set());
+      return;
+    }
+    const answers = await Promise.all(providers.map(async (provider) => {
+      // One service that cannot answer must not blank the others: an empty answer is what "nothing running"
+      // looks like, and that is the honest reading of a question this service could not take.
+      try {
+        return await this.runtime.nativeActivity(provider.providerId);
+      } catch (error) {
+        if (signal.aborted) throw error;
+        return [];
+      }
+    }));
+    if (signal.aborted || this.disposed) return;
+    this.state.setNativeActivity(new Set(answers.flat()));
   }
 
   private loadNativeChats(providerId: string, force: boolean): Promise<void> {

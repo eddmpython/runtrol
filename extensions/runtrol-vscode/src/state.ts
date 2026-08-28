@@ -73,6 +73,8 @@ export class RuntimeState implements vscode.Disposable {
   private readonly streaming = new Map<string, ReturnType<typeof setTimeout>>();
   private memoryBySession: ReadonlyMap<string, number> = new Map();
   private memoryByNative: ReadonlyMap<string, number> = new Map();
+  /// Conversations the service is writing to right now that Runtrol does not host, by native identity.
+  private activeNative: ReadonlySet<string> = new Set();
   private remember: ((catalogues: readonly NativeChatCatalogue[]) => void) | null = null;
   private rememberUsage: ((usage: readonly ProviderUsageGauge[]) => void) | null = null;
 
@@ -157,6 +159,7 @@ export class RuntimeState implements vscode.Disposable {
       this.renamedTitles,
       this.started,
       new Set(this.streaming.keys()),
+      this.activeNative,
     );
     return this.conversationRows;
   }
@@ -199,6 +202,18 @@ export class RuntimeState implements vscode.Disposable {
     if (sameEntries(bySession, this.memoryBySession) && sameEntries(byNative, this.memoryByNative)) return;
     this.memoryBySession = bySession;
     this.memoryByNative = byNative;
+    this.changedEmitter.fire("rows");
+  }
+
+  /// The activity poll's latest answer: which conversations the services wrote to a moment ago.
+  ///
+  /// `streaming` above covers the conversations whose terminal Runtrol hosts, because their bytes pass
+  /// through it. This covers the rest, which on a real machine is most of them: a person who runs the CLI in
+  /// their own terminal still expects the panel to show that conversation working.
+  setNativeActivity(active: ReadonlySet<string>): void {
+    if (sameMembers(active, this.activeNative)) return;
+    this.activeNative = active;
+    this.conversationRows = null;
     this.changedEmitter.fire("rows");
   }
 
@@ -382,6 +397,15 @@ export class RuntimeState implements vscode.Disposable {
     this.capabilityRows.clear();
     this.changedEmitter.dispose();
   }
+}
+
+/// Whether two sets hold the same names, so a poll that answered the same thing repaints nothing.
+function sameMembers(left: ReadonlySet<string>, right: ReadonlySet<string>): boolean {
+  if (left.size !== right.size) return false;
+  for (const name of left) {
+    if (!right.has(name)) return false;
+  }
+  return true;
 }
 
 function sameEntries(left: ReadonlyMap<string, number>, right: ReadonlyMap<string, number>): boolean {

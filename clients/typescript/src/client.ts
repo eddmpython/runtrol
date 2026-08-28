@@ -30,6 +30,8 @@ import type {
   ListPendingApprovalsParams,
   ManagedSessionList,
   MutationRequestId,
+  NativeActivity,
+  NativeActivityParams,
   NativeSessionCatalogue,
   PendingEnrollmentId,
   PendingApprovalList,
@@ -439,6 +441,17 @@ export class ProviderClient {
       params,
       "NativeSessionCatalogue",
     );
+  }
+
+  /// Which of this provider's conversations were written in the last few seconds.
+  ///
+  /// The cheap question, meant to be asked often: the Runtime walks the provider's own store for names and
+  /// times and opens nothing, where a catalogue reads every transcript's head. A conversation being written is
+  /// one whose model is answering, which is how a caller can show a turn running in a conversation the Runtime
+  /// did not start.
+  public nativeActivity(providerId: ProviderId): Promise<NativeActivity> {
+    const params: NativeActivityParams = { providerId };
+    return callRuntime(this.runtime, "providers/nativeActivity", params, "NativeActivity");
   }
 }
 
