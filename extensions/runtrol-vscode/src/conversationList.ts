@@ -4,13 +4,21 @@ import type { NativeChatLine, ProviderLine, SessionLine, TerminalDescriptor } fr
 import { providerDisplayName, providerIcon, workspaceName } from "./sessionDisplay";
 import { workspaceCovers, workspaceIdentity } from "./workspaceCollision";
 
+import { NO_ACTIVITY, type SessionActivity } from "./sessionActivity";
+
+/// Why a row refuses to open while its service is answering somewhere else.
+///
+/// Named once because two row shapes reach the same refusal, and because the row's tooltip and the notification
+/// its click raises are both this sentence. Written twice it drifts, and then the panel says one thing where
+/// the reader hovers and another where they click.
+const RUNNING_ELSEWHERE =
+  "This conversation is running in a terminal Runtrol did not start, so it cannot be opened here.";
+
 /// What a conversation is doing, said the way a person would say it.
 ///
 /// Ordered by how much it wants from the reader. `needsYou` is the only one that is actually urgent, and keeping
 /// it a separate value from `attention` is deliberate: something that broke and something that is politely
 /// waiting are different errands, and a surface that merged them would send the reader to the wrong one.
-import { NO_ACTIVITY, type SessionActivity } from "./sessionActivity";
-
 export type ConversationActivity =
   | "needsYou"
   | "attention"
@@ -506,9 +514,7 @@ function supervised(
     hostedTerminal: hosted,
     hostedKey: hosted ? terminalKey(hosted) : null,
     canOpen: !observedExternal || hosted !== null,
-    blocked: observedExternal && hosted === null
-      ? "This conversation is running in a terminal Runtrol did not start, so it cannot be opened here."
-      : null,
+    blocked: observedExternal && hosted === null ? RUNNING_ELSEWHERE : null,
   };
 }
 
@@ -552,7 +558,7 @@ function providerOwned(
     blocked: hosted !== null
       ? null
       : observedExternal
-        ? "This conversation is running in a terminal Runtrol did not start, so it cannot be opened here."
+        ? RUNNING_ELSEWHERE
         : resumable
           ? null
           : "This coding service cannot reopen this conversation.",
