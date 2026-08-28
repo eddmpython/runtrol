@@ -250,7 +250,7 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             "white-space: nowrap",
             "mask-image: linear-gradient(to right",
             # A running turn is unmistakable: the icon turns and a ring turns around it.
-            ".conv .glyph-slot.working::after",
+            ".conv .glyph.working { animation: spin",
             # A project shows five conversations and says how many more there are.
             'data-kind="more"',
             'class="memory"',
@@ -473,7 +473,7 @@ def selftest() -> int:
             'class="bar${project.hue class="bar${row.hue .row .bar.${hue.band} '
             '.row:hover .actions row.canDelete ? action("runtrol.deleteConversation" '
             "white-space: nowrap mask-image: linear-gradient(to right "
-            '.conv .glyph-slot.working::after data-kind="more" '
+            '.conv .glyph.working { animation: spin data-kind="more" '
             'class="memory" Content-Security-Policy script-src \'nonce-'
         ),
         "sidebarView.ts": (

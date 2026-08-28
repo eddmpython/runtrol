@@ -211,7 +211,7 @@ function conversationHtml(row: SidebarConversationRow, assets: SidebarAssets): s
   // tooltip floating beside the hover actions reads as clutter (operator, 2026-08-27).
   return `<div class="row conv${row.canOpen ? "" : " blocked"}${row.pinned ? " pinned" : ""}" role="button" tabindex="0" data-kind="conversation" data-key="${escapeHtml(row.key)}"${row.blocked ? ` title="${escapeHtml(row.blocked)}"` : ""}>
 <span class="bar${row.hue ? ` ${row.hue}` : ""}"></span>
-<span class="glyph-slot${row.activity === "working" ? " working" : ""}"><img class="glyph${row.activity === "working" ? " working" : ""}" src="${escapeHtml(iconUri)}" alt="${escapeHtml(row.serviceName)}" draggable="false"></span>
+<img class="glyph${row.activity === "working" ? " working" : ""}" src="${escapeHtml(iconUri)}" alt="${escapeHtml(row.serviceName)}" draggable="false">
 <span class="title">${escapeHtml(row.title)}</span>
 ${dot}
 <span class="tail">
@@ -312,12 +312,10 @@ button { font: inherit; color: inherit; }
 .badge.branch { background: transparent; font-weight: 400; opacity: 0.7; display: inline-flex; align-items: center; gap: 3px; padding: 0 2px; max-width: 90px; overflow: hidden; white-space: nowrap; }
 .badge.branch .ci { width: 11px; height: 11px; }
 .badge.tools { background: transparent; border: 1px solid var(--vscode-widget-border); font-weight: 400; opacity: 0.8; }
-.conv .glyph-slot { flex: none; position: relative; display: inline-flex; width: 14px; height: 14px; }
-.conv .glyph { width: 14px; height: 14px; }
-/* A turn is running. The icon turns, and a ring turns around it: the icon alone is 14px of slow rotation that
-   a reader scanning the list does not catch (operator, 2026-08-28: make it unmistakable). */
-.conv .glyph.working { animation: spin 1.1s linear infinite; }
-.conv .glyph-slot.working::after { content: ""; position: absolute; inset: -3px; border-radius: 50%; border: 1.5px solid transparent; border-top-color: var(--vscode-progressBar-background); border-right-color: var(--vscode-progressBar-background); animation: spin 0.9s linear infinite; }
+.conv .glyph { flex: none; width: 14px; height: 14px; }
+/* A turn is running, so the service's own icon turns. Slowly, and nothing else: a ring drawn around it was a
+   spinner borrowed from elsewhere, and what the operator asked for was this icon moving (2026-08-28). */
+.conv .glyph.working { animation: spin 2.4s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 /* One line, and the tail fades out rather than ending in dots: the reader sees there is more without a
    glyph spending width to say so, and two-line rows made the list hard to scan (operator, 2026-08-28). */
