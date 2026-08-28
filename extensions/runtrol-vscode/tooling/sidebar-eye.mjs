@@ -158,7 +158,7 @@ const model = {
         conversation({ title: "돈을 벌 수 있는 구조인지 지금 상태에서 판단해라", activity: "working", live: true, memory: "306 MB" }),
         conversation({ title: "현재 이 프로젝트 수준은?", memory: "278 MB" }),
         conversation({ title: "/model" }),
-        conversation({ title: "Runtrol mainPlan/localAgentRuntime 구현과 그 뒤 정리", pinned: true }),
+        conversation({ title: "터미널 탭이 열릴 때 서비스가 처음 그릴 때까지 마크가 도는지", pinned: true }),
         conversation({ title: "/logout", canOpen: false, blocked: "This coding service cannot reopen this conversation." }),
       ],
     },

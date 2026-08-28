@@ -77,6 +77,7 @@ optional GUI. A public connection cannot approve itself.
 | `providers/list`, `providers/watch`, `providers/getCapabilities`, `providers/usage` | `provider.read` |
 | `providers/listModels` | `model.read` |
 | `providers/listNativeSessions` | `session.native.discover`, plus an approved root when one is named |
+| `providers/nativeActivity` | `session.native.discover` |
 | `sessions/list`, `sessions/watchIndex`, `sessions/get` | `session.list` |
 | `sessions/start` | `session.start` plus an approved root |
 | `sessions/adoptNative`, `sessions/resume` | `session.resume` plus an approved root |
@@ -107,6 +108,14 @@ the folder must be in the caller's grant, and rows outside it are dropped. Omitt
 provider for every conversation it will name, which four of the five measured CLIs answer directly
 because their own listing treats the working directory as a filter rather than a required argument.
 Each returned row carries its own folder, so grouping stays a fact the provider reported.
+
+`providers/nativeActivity` names which of one provider's conversations have a model answering right
+now, and nothing else: one provider identity in, a list of that provider's own conversation identities
+out. It is separate from the catalogue because a panel asks it on a short clock and a catalogue is not
+cheap (a listing reads every stored conversation's head; naming what is running does not open one).
+How a provider knows is its own business. The measured driver reads the CLI's own record of its running
+processes and asks the operating system whether each is still there, so the answer is about a turn that
+is running rather than about a file that changed lately.
 
 A folderless request is answered on the owner-only local endpoint, where a caller already holds
 machine-wide authority through the private administration wire, and where the managed session index
