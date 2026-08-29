@@ -84,6 +84,8 @@ pub(crate) struct HostedTerminal {
     pub(crate) opened_at_ms: u64,
     pub(crate) generation: u64,
     pub(crate) stopping: bool,
+    /// Joined a process the Runtime did not start (see [`Terminals::insert_mirror`]).
+    pub(crate) mirror: bool,
 }
 
 impl HostedTerminal {
@@ -97,6 +99,7 @@ impl HostedTerminal {
             opened_at_ms: open.opened_at_ms,
             generation: open.generation,
             stopping: open.stopping,
+            mirror: open.mirror,
         }
     }
 }
@@ -309,29 +312,63 @@ const DRAINING_IDLE_GRACE_MS: u64 = 15_000;
 /// generation. This is why old generations used to linger for hours holding idle sessions (operator,
 /// 2026-08-29). Only a terminal with no viewer and no output for the grace is closed; one a person is watching,
 /// or one a turn is still writing to, is left alone.
+///
+/// A mirror is let go, never killed. Its process belongs to whoever started it (the operator's Claude Code
+/// window, another tool), and killing it ended the operator's own sessions with `0xC0000001` at every Runtime
+/// update, minutes after each new generation started (five times on 2026-08-29, two sessions at once each
+/// time). Dropping the mirror closes the helper's stdin, the helper exits, and the current generation observes
+/// the still-running process again and mirrors it afresh.
 pub(crate) async fn close_idle_while_draining(composed: &Arc<Composed>) {
     let now = WallMs::now().as_millis();
-    let stale: Vec<TerminalId> = {
+    let stale: Vec<(TerminalId, DrainAction)> = {
         let terminals = composed.terminals.lock().await;
         terminals
             .hosted_all()
             .into_iter()
-            .filter(|hosted| hosted.terminal.viewer_count() == 0)
-            .filter(|hosted| {
+            .filter_map(|hosted| {
                 let quiet_since = hosted
                     .terminal
                     .wrote_at()
                     .map_or(hosted.opened_at_ms, WallMs::as_millis);
-                now.saturating_sub(quiet_since) >= DRAINING_IDLE_GRACE_MS
+                let action = drain_action(
+                    hosted.mirror,
+                    hosted.terminal.viewer_count(),
+                    now.saturating_sub(quiet_since),
+                );
+                (action != DrainAction::Keep).then_some((hosted.id, action))
             })
-            .map(|hosted| hosted.id)
             .collect()
     };
-    for id in stale {
-        if let Some(hosted) = composed.terminals.lock().await.hosted(id) {
-            drop(hosted.terminal.kill());
+    for (id, action) in stale {
+        if action == DrainAction::Kill {
+            let hosted = composed.terminals.lock().await.hosted(id);
+            if let Some(hosted) = hosted {
+                drop(hosted.terminal.kill());
+            }
         }
         forget(composed, id).await;
+    }
+}
+
+/// What a draining generation does with one of its terminals.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DrainAction {
+    /// Watched, or still writing: it is live work and the generation waits for it.
+    Keep,
+    /// A mirror nobody watches: forget it; the process it joined is not the Runtime's to end.
+    Release,
+    /// A process this Runtime started that nobody watches and that is quiet: end it so the generation can exit.
+    Kill,
+}
+
+fn drain_action(mirror: bool, viewers: usize, quiet_for_ms: u64) -> DrainAction {
+    if viewers > 0 || quiet_for_ms < DRAINING_IDLE_GRACE_MS {
+        return DrainAction::Keep;
+    }
+    if mirror {
+        DrainAction::Release
+    } else {
+        DrainAction::Kill
     }
 }
 
@@ -722,5 +759,18 @@ mod tests {
                 "the complete central terminal set exceeds its 24 MiB state budget"
             );
         }
+    }
+
+    #[test]
+    fn a_draining_generation_ends_only_the_quiet_unwatched_processes_it_started() {
+        use super::{DRAINING_IDLE_GRACE_MS, DrainAction, drain_action};
+        let grace = DRAINING_IDLE_GRACE_MS;
+        assert_eq!(drain_action(false, 0, grace), DrainAction::Kill);
+        assert_eq!(drain_action(false, 1, grace), DrainAction::Keep);
+        assert_eq!(drain_action(false, 0, grace - 1), DrainAction::Keep);
+        // The operator's own Claude Code process, joined by a mirror: let go, never killed.
+        assert_eq!(drain_action(true, 0, grace), DrainAction::Release);
+        assert_eq!(drain_action(true, 0, grace * 100), DrainAction::Release);
+        assert_eq!(drain_action(true, 1, grace), DrainAction::Keep);
     }
 }

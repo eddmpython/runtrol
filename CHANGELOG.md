@@ -12,6 +12,12 @@ and refactoring that no user can observe do not belong here.
 
 ### Fixed
 
+- A Runtime update no longer ends the Claude Code sessions running in your own editor. When a new Runtime took
+  over, the old one closed the conversations nobody was watching so it could exit, and that sweep also ended the
+  processes it had only joined as mirrors: every update killed the editor's own Claude Code sessions with
+  `exited with code 3221225473`, two at a time, minutes after the update. The old Runtime now lets a mirror go
+  and ends only processes it started itself.
+
 - The Runtime no longer rebuilds its provider inventory every second while a window is open. The sidebar's
   activity observation (four times a second per service) counted as a request that must recheck the executable
   search path, so the Runtime walked PATH for every service once a second for as long as a window lived; on
