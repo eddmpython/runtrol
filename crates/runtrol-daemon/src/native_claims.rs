@@ -268,9 +268,12 @@ impl NativeLiveClaimRegistry {
         if existing.native_session_id.as_deref() == Some(native_session_id) {
             return Ok(false);
         }
-        if existing.native_session_id.is_some() {
-            return Err(TerminalClaimError::State);
-        }
+        // A terminal already bound to one conversation may move to another: the CLI's own `/resume` and
+        // `/clear` change the conversation a running process is in, and its roster then names the new one
+        // for the same pid. Refusing that (measured 2026-08-29 on the operator's machine) left the claim on
+        // the old conversation, so the row for the new one had no terminal to join and a click opened a
+        // second process on the same conversation; every roster round after that answered with an error.
+        // The new identity is checked against every other claim exactly as a first binding is.
         for claim in state
             .structured
             .values()
@@ -527,6 +530,49 @@ mod tests {
                 .and_then(|claim| claim.native_session_id.as_deref()),
             Some("native")
         );
+    }
+
+    #[test]
+    fn a_process_that_moved_to_another_conversation_rebinds_its_terminal() {
+        let registry = NativeLiveClaimRegistry::default();
+        let terminal_id = TerminalId::now();
+        let TerminalClaimAdmission::Reserved(terminal) = registry
+            .reserve_terminal(terminal_id, "example", None, "/work")
+            .expect("fresh terminal claim")
+        else {
+            panic!("fresh terminal unexpectedly joined");
+        };
+        terminal.commit().expect("committed terminal claim");
+        assert!(
+            registry
+                .bind_terminal_native(terminal_id, "example", "first", "/work")
+                .expect("the first identity binds")
+        );
+        // The CLI resumed another conversation inside the same process.
+        assert!(
+            registry
+                .bind_terminal_native(terminal_id, "example", "second", "/work")
+                .expect("the moved identity rebinds")
+        );
+        // A resume of the new conversation joins this terminal instead of opening a second process, and the
+        // old identity no longer joins anything.
+        assert!(matches!(
+            registry.reserve_terminal(TerminalId::now(), "example", Some("second"), "/work"),
+            Ok(TerminalClaimAdmission::Join(id)) if id == terminal_id
+        ));
+        assert!(matches!(
+            registry.reserve_terminal(TerminalId::now(), "example", Some("first"), "/work"),
+            Ok(TerminalClaimAdmission::Reserved(_))
+        ));
+        // Another live claim on the target still refuses, exactly as a first binding would.
+        registry
+            .reserve_structured(SessionId::now(), "example", Some("third"), "/work")
+            .expect("structured claim")
+            .commit();
+        assert!(matches!(
+            registry.bind_terminal_native(terminal_id, "example", "third", "/work"),
+            Err(TerminalClaimError::StructuredBusy)
+        ));
     }
 
     #[test]

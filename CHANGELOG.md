@@ -36,6 +36,11 @@ and refactoring that no user can observe do not belong here.
   did, twice in one afternoon, and every window then reported "the daemon connection closed" and "Runtime
   reconnect deadline expired" at once. The screen emulator (vt100) is updated to the release that fixed it,
   and a test pins the sequence.
+- One conversation, one process. When a coding CLI moved to another conversation inside its own terminal
+  (`/resume`, `/clear`), the Runtime kept the terminal filed under the old conversation, refused the new
+  identity on every roster round (each answered with an error), and a click on the new conversation's row
+  opened a second process on it. The terminal now follows the conversation its process is in, so the row
+  joins the terminal that already shows it.
 
 ## [0.1.36] - 2026-08-29
 

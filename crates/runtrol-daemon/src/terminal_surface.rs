@@ -144,17 +144,21 @@ impl Terminals {
         if open.native.as_deref() == Some(native) {
             return Ok(false);
         }
-        if open.native.is_some() {
-            return Err(TerminalClaimError::State);
-        }
         claims.bind_terminal_native(
             *terminal_id,
             provider.as_str(),
             native,
             open.workspace.as_str(),
         )?;
-        open.native = Some(native.into());
         let terminal_id = *terminal_id;
+        // The process moved to another conversation (`/resume`, `/clear` in its own interface): the old
+        // conversation no longer has a terminal here, and the new one is this terminal from now on.
+        if let Some(previous) = open.native.replace(native.into()) {
+            let key = (provider, previous);
+            if self.by_conversation.get(&key) == Some(&terminal_id) {
+                self.by_conversation.remove(&key);
+            }
+        }
         self.by_conversation
             .insert((provider, native.into()), terminal_id);
         self.publish_change();
