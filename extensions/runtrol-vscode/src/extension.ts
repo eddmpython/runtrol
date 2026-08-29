@@ -590,14 +590,10 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
   // The public locator's native verification starts now; the private locator reads the control endpoint off
   // its answer instead of spawning `endpoint`, and `initialize` finds it settled. See `warmLocator`.
   void runtime.warmLocator();
-  const runtimeInitialization = superviseCoreCurrency(client, locator, (updating) => {
-    // Under the usage strip, where it stays. The count is what this window can see running: those are the
-    // conversations the older generation is still holding, and when the last one ends the installed build takes
-    // over. Saying it without a number would leave the reader with no idea whether this is seconds or an hour.
-    sidebar.setUpdateNotice(updating
-      ? updateNotice(state.sessions.length)
-      : null);
-  }).then(() => runtime.initialize());
+  // The generation supervision (re-check and reconnect to the installed build) runs, but says nothing on the
+  // sidebar: the "update applies when the running conversations end" line read as out of nowhere on a machine
+  // with several generations alive, especially when this window sees none of them running (operator, 2026-08-29).
+  const runtimeInitialization = superviseCoreCurrency(client, locator).then(() => runtime.initialize());
   const controllerInitialization = runtimeInitialization.then(async () => {
     initializationStage = "controller";
     await controller.initialize();
@@ -803,13 +799,6 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
       )
       : undefined,
   };
-}
-
-/// What the sidebar says while an older Core generation is still serving this window.
-function updateNotice(running: number): string {
-  if (running === 1) return "Update applies when this conversation ends.";
-  if (running > 1) return `Update applies when these ${running} conversations end.`;
-  return "Update applies as soon as the running conversations end.";
 }
 
 /// Why a cold row that was selected is not the hot session it should now be, or null when it is.

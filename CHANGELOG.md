@@ -22,6 +22,10 @@ and refactoring that no user can observe do not belong here.
 
 ### Fixed
 
+- The sidebar no longer prints "Update applies when the running conversations end" under its header. On a
+  machine with several Runtime generations alive, and especially when this window sees none of them running, it
+  read as coming from nowhere. The generation supervision still runs; it just no longer narrates itself here.
+
 - Signing in to a coding service now completes. Pressing sign in used to type the service's login command
   into a terminal and stop there, so no login ever opened. It now runs the command, and the CLI opens its own
   browser flow for you to finish. Runtrol still holds no credential: the CLI authenticates itself, which is
@@ -78,6 +82,10 @@ and refactoring that no user can observe do not belong here.
 
 ### Fixed
 
+- The sidebar no longer prints "Update applies when the running conversations end" under its header. On a
+  machine with several Runtime generations alive, and especially when this window sees none of them running, it
+  read as coming from nowhere. The generation supervision still runs; it just no longer narrates itself here.
+
 - A conversation already running in another window now opens as itself. Pressing it in a second window used to
   offer to resume it again, because the lookup that finds the live terminal compared folders as raw strings
   and the Runtime stores a path the window spells with a different drive case. It compares them as one folder
@@ -123,6 +131,10 @@ and refactoring that no user can observe do not belong here.
 
 ### Fixed
 
+- The sidebar no longer prints "Update applies when the running conversations end" under its header. On a
+  machine with several Runtime generations alive, and especially when this window sees none of them running, it
+  read as coming from nowhere. The generation supervision still runs; it just no longer narrates itself here.
+
 - A conversation's tab now carries its project's colour. The colour was being handed to the editor beside a
   custom icon, which the editor draws as the image it is and tints not at all, so the tab kept the service's
   brand colour while the sidebar row beside it carried the project's. A conversation that belongs to a project
@@ -131,6 +143,10 @@ and refactoring that no user can observe do not belong here.
 ## [0.1.31] - 2026-08-28
 
 ### Fixed
+
+- The sidebar no longer prints "Update applies when the running conversations end" under its header. On a
+  machine with several Runtime generations alive, and especially when this window sees none of them running, it
+  read as coming from nowhere. The generation supervision still runs; it just no longer narrates itself here.
 
 - The mark that turns while a conversation opens now stays until the service itself draws. It was taken down
   when the Runtime answered, which is earlier: the answer carries an empty screen, so the tab went back to
@@ -174,6 +190,10 @@ and refactoring that no user can observe do not belong here.
 
 ### Fixed
 
+- The sidebar no longer prints "Update applies when the running conversations end" under its header. On a
+  machine with several Runtime generations alive, and especially when this window sees none of them running, it
+  read as coming from nowhere. The generation supervision still runs; it just no longer narrates itself here.
+
 - Each project's colour band is visible again beside its heading and its conversations. The colour was written
   onto the element, which the sidebar page's security policy drops, so the band was laid out at full width and
   painted nothing. The page's own stylesheet paints it now.
@@ -181,6 +201,10 @@ and refactoring that no user can observe do not belong here.
 ## [0.1.27] - 2026-08-28
 
 ### Fixed
+
+- The sidebar no longer prints "Update applies when the running conversations end" under its header. On a
+  machine with several Runtime generations alive, and especially when this window sees none of them running, it
+  read as coming from nowhere. The generation supervision still runs; it just no longer narrates itself here.
 
 - The sidebar lists a project's conversations on its own again. A coding service that became usable after the
   window had already asked (its CLI updating in the background, or the Runtime still starting) was never asked
@@ -191,11 +215,19 @@ and refactoring that no user can observe do not belong here.
 
 ### Fixed
 
+- The sidebar no longer prints "Update applies when the running conversations end" under its header. On a
+  machine with several Runtime generations alive, and especially when this window sees none of them running, it
+  read as coming from nowhere. The generation supervision still runs; it just no longer narrates itself here.
+
 - The sidebar no longer shows "Runtrol Runtime is not installed" when a healthy Runtime from an earlier build
   is still running. A window that installed a new build but whose own build has not taken over yet now uses the
   Runtime that is actually serving, instead of waiting for its exact build and then declaring nothing installed.
 
 ### Fixed
+
+- The sidebar no longer prints "Update applies when the running conversations end" under its header. On a
+  machine with several Runtime generations alive, and especially when this window sees none of them running, it
+  read as coming from nowhere. The generation supervision still runs; it just no longer narrates itself here.
 
 - The Runtime no longer goes quiet under load: starting or closing a conversation used to wait behind another
   session's process spawn or a durable session write on the Runtime's single control thread, which on slow disks
@@ -209,6 +241,10 @@ and refactoring that no user can observe do not belong here.
 ## [0.1.25] - 2026-08-27
 
 ### Fixed
+
+- The sidebar no longer prints "Update applies when the running conversations end" under its header. On a
+  machine with several Runtime generations alive, and especially when this window sees none of them running, it
+  read as coming from nowhere. The generation supervision still runs; it just no longer narrates itself here.
 
 - While several Runtime generations coexist right after an update, the locator file is rewritten often, and a
   security check that landed mid-rewrite made Studio pop "Runtrol Runtime is not installed" although the daemon
@@ -240,6 +276,10 @@ and refactoring that no user can observe do not belong here.
   descriptors, measured from the operating system and never estimated.
 
 ### Fixed
+
+- The sidebar no longer prints "Update applies when the running conversations end" under its header. On a
+  machine with several Runtime generations alive, and especially when this window sees none of them running, it
+  read as coming from nowhere. The generation supervision still runs; it just no longer narrates itself here.
 
 - Opening a conversation right after a Runtime update no longer fails with "the native catalogue observation
   expired": Studio reads the provider's catalogue again and opens with the proof it hands back now.
@@ -344,6 +384,10 @@ and refactoring that no user can observe do not belong here.
 
 ### Fixed
 
+- The sidebar no longer prints "Update applies when the running conversations end" under its header. On a
+  machine with several Runtime generations alive, and especially when this window sees none of them running, it
+  read as coming from nowhere. The generation supervision still runs; it just no longer narrates itself here.
+
 - Deleting a conversation now removes the row the moment it is clicked; the service's own deletion and its
   answer follow behind, and a refusal puts the row back with the reason. Before, every deletion re-read the
   service's whole store before the row left.
@@ -425,6 +469,10 @@ and refactoring that no user can observe do not belong here.
   markers.
 
 ### Fixed
+
+- The sidebar no longer prints "Update applies when the running conversations end" under its header. On a
+  machine with several Runtime generations alive, and especially when this window sees none of them running, it
+  read as coming from nowhere. The generation supervision still runs; it just no longer narrates itself here.
 
 - When Agent Usage cannot refresh, it now says why instead of only that it failed.
 - Deleting a conversation from its row now says what was deleted and whose list it left, instead of the row
@@ -524,6 +572,10 @@ and refactoring that no user can observe do not belong here.
 
 ### Fixed
 
+- The sidebar no longer prints "Update applies when the running conversations end" under its header. On a
+  machine with several Runtime generations alive, and especially when this window sees none of them running, it
+  read as coming from nowhere. The generation supervision still runs; it just no longer narrates itself here.
+
 - Startup preparation now meets only coding services whose executable is installed. Missing entries from the service
   catalogue remain discoverable in the sidebar without creating background probe tasks or extending idle memory use.
 - Clicking another saved chat in the same project now cools an idle provider process and switches immediately while
@@ -544,6 +596,10 @@ and refactoring that no user can observe do not belong here.
 
 ### Fixed
 
+- The sidebar no longer prints "Update applies when the running conversations end" under its header. On a
+  machine with several Runtime generations alive, and especially when this window sees none of them running, it
+  read as coming from nowhere. The generation supervision still runs; it just no longer narrates itself here.
+
 - The fixed sidebar area now shows every installed coding-agent CLI's operational state and usage together. A service
   being checked remains visible, an unavailable service exposes its own fix action there, a failed refresh admits that
   the retained report is old, and the Conversations tree contains only projects and actual conversations.
@@ -553,6 +609,10 @@ and refactoring that no user can observe do not belong here.
 ## [0.1.14] - 2026-08-23
 
 ### Fixed
+
+- The sidebar no longer prints "Update applies when the running conversations end" under its header. On a
+  machine with several Runtime generations alive, and especially when this window sees none of them running, it
+  read as coming from nowhere. The generation supervision still runs; it just no longer narrates itself here.
 
 - The machine-wide Conversations view no longer carries the current folder as a title qualifier. Every project remains
   a top-level sibling, and incomplete provider history is identified by service directly above the list instead of
@@ -567,6 +627,10 @@ and refactoring that no user can observe do not belong here.
 ## [0.1.13] - 2026-08-23
 
 ### Fixed
+
+- The sidebar no longer prints "Update applies when the running conversations end" under its header. On a
+  machine with several Runtime generations alive, and especially when this window sees none of them running, it
+  read as coming from nowhere. The generation supervision still runs; it just no longer narrates itself here.
 
 - The Conversations sidebar now keeps every conversation-bearing folder as a top-level project sibling and omits
   an empty open folder, so another repository can no longer appear nested beneath the current workspace.
@@ -590,6 +654,10 @@ and refactoring that no user can observe do not belong here.
 ## [0.1.11] - 2026-08-23
 
 ### Fixed
+
+- The sidebar no longer prints "Update applies when the running conversations end" under its header. On a
+  machine with several Runtime generations alive, and especially when this window sees none of them running, it
+  read as coming from nowhere. The generation supervision still runs; it just no longer narrates itself here.
 
 - Conversation rows and open tabs now adopt each coding service's own title when a native identity appears or a
   turn finishes. Provider catalogue refreshes are coalesced per service, operator names remain primary, and runtrol
@@ -802,6 +870,10 @@ and refactoring that no user can observe do not belong here.
 
 ### Fixed
 
+- The sidebar no longer prints "Update applies when the running conversations end" under its header. On a
+  machine with several Runtime generations alive, and especially when this window sees none of them running, it
+  read as coming from nowhere. The generation supervision still runs; it just no longer narrates itself here.
+
 - An ordinary chat sent to several services no longer chooses linked worktrees automatically. Before any provider
   starts, the operator explicitly chooses separate Core-owned worktrees or a shared current checkout, with the
   collision consequence stated in the same local confirmation. Runtrol performs only that choice.
@@ -839,6 +911,10 @@ and refactoring that no user can observe do not belong here.
 ## [0.1.9] - 2026-08-20
 
 ### Fixed
+
+- The sidebar no longer prints "Update applies when the running conversations end" under its header. On a
+  machine with several Runtime generations alive, and especially when this window sees none of them running, it
+  read as coming from nowhere. The generation supervision still runs; it just no longer narrates itself here.
 
 - Updating the extension no longer breaks against the still-running older Core. 0.1.8 failed its
   first hello on every machine with a running daemon ("InitializeResult violates the selected
@@ -959,6 +1035,10 @@ and refactoring that no user can observe do not belong here.
 
 ### Fixed
 
+- The sidebar no longer prints "Update applies when the running conversations end" under its header. On a
+  machine with several Runtime generations alive, and especially when this window sees none of them running, it
+  read as coming from nowhere. The generation supervision still runs; it just no longer narrates itself here.
+
 - Returning to a conversation no longer shows an empty page. Leaving the tab (or switching sessions) used to
   resume the event stream after everything already delivered, so the fresh page had nothing to paint until
   the agent spoke again. A reopened conversation now replays the daemon's bounded recent window into the new
@@ -971,6 +1051,10 @@ and refactoring that no user can observe do not belong here.
 ## [0.1.6] - 2026-08-20
 
 ### Fixed
+
+- The sidebar no longer prints "Update applies when the running conversations end" under its header. On a
+  machine with several Runtime generations alive, and especially when this window sees none of them running, it
+  read as coming from nowhere. The generation supervision still runs; it just no longer narrates itself here.
 
 - The folders your window has open are conversation headings again. The 0.1.5 correction that stopped every
   folder from becoming a heading over-shot and flattened even the window's own project into a repeating list
@@ -1047,6 +1131,10 @@ and refactoring that no user can observe do not belong here.
   from 1,244 ms to 992 ms and the ratchet's activation budget went from red to green.
 
 ### Fixed
+
+- The sidebar no longer prints "Update applies when the running conversations end" under its header. On a
+  machine with several Runtime generations alive, and especially when this window sees none of them running, it
+  read as coming from nowhere. The generation supervision still runs; it just no longer narrates itself here.
 
 - A cold start no longer probes your installed services single file. The first time Runtrol meets each CLI it
   asks the binary who it is (hundreds of milliseconds each), and one global lock made five such introductions
@@ -1148,6 +1236,10 @@ and refactoring that no user can observe do not belong here.
 
 ### Fixed
 
+- The sidebar no longer prints "Update applies when the running conversations end" under its header. On a
+  machine with several Runtime generations alive, and especially when this window sees none of them running, it
+  read as coming from nowhere. The generation supervision still runs; it just no longer narrates itself here.
+
 - A conversation that would not start now says why. Every failure coming from the coding service itself, including a
   CLI that was simply not signed in, used to report "the session or native pointer changed after the caller observed
   it" and offer nothing. Not signed in, not installed, out of quota and capability absent are now four distinct
@@ -1197,6 +1289,10 @@ and refactoring that no user can observe do not belong here.
 
 ### Fixed
 
+- The sidebar no longer prints "Update applies when the running conversations end" under its header. On a
+  machine with several Runtime generations alive, and especially when this window sees none of them running, it
+  read as coming from nowhere. The generation supervision still runs; it just no longer narrates itself here.
+
 - Studio populates navigation from one exact Runtime inventory before background change streams connect, keeping cold
   activation within its startup budget on every supported operating system. Session navigation initializes as soon
   as Runtime is ready while the independent Mission list continues loading.
@@ -1232,6 +1328,10 @@ and refactoring that no user can observe do not belong here.
 ## [0.1.1] - 2026-08-12
 
 ### Fixed
+
+- The sidebar no longer prints "Update applies when the running conversations end" under its header. On a
+  machine with several Runtime generations alive, and especially when this window sees none of them running, it
+  read as coming from nowhere. The generation supervision still runs; it just no longer narrates itself here.
 
 - Installed CLI discovery no longer repeats one expensive help process for every candidate flag. The measured cold
   Core startup on Windows fell from about 30 seconds to about 4.3 seconds.
@@ -1333,6 +1433,10 @@ First public Runtrol Studio release for six native Windows, macOS, and Linux tar
   raw Noise private key never rests on disk and other machine accounts cannot read it.
 
 ### Fixed
+
+- The sidebar no longer prints "Update applies when the running conversations end" under its header. On a
+  machine with several Runtime generations alive, and especially when this window sees none of them running, it
+  read as coming from nowhere. The generation supervision still runs; it just no longer narrates itself here.
 
 - Typing and scrolling no longer rerender the full multi-session rail during sustained output. Frame parsing stays
   bounded, and disabled production tracing no longer schedules hidden DOM checkpoint work.

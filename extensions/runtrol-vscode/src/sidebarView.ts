@@ -83,7 +83,6 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
   private groups: readonly ProjectGroup[] = [];
   private choosingFor: string | null = null;
   private services: ServiceOffer | null = null;
-  private updateNotice: string | null = null;
   private staleWindow: string | null = null;
   private collapsed: Set<string>;
   private expanded: Set<string>;
@@ -147,12 +146,6 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
   /// The services' own reasons the list is not everything, for the menu's explanation.
   listingReasons(): string | null {
     return this.state.incompleteDiscovery;
-  }
-
-  setUpdateNotice(notice: string | null): void {
-    if (this.updateNotice === notice) return;
-    this.updateNotice = notice;
-    this.render();
   }
 
   setStaleWindow(notice: string | null): void {
@@ -431,9 +424,6 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
         command: "runtrol.setUpServices",
         label: "Set up",
       });
-    }
-    if (this.updateNotice) {
-      notices.push({ tone: "info", text: this.updateNotice, command: null, label: null });
     }
     // The services' own "history is partial" sentence is not pushed here. It sat above every list taking a
     // line to say something no one acts on, and the same answer is one click away in the title bar's menu
