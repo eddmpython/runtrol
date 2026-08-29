@@ -12,6 +12,8 @@ import { CoreClient } from "./core/client";
 import { CoreLocator } from "./core/locator";
 import { superviseCoreCurrency } from "./coreCurrencySurface";
 import { readGitBranch } from "./gitBranch";
+import { GitChangesWatch } from "./gitChanges";
+import { followGitExtension } from "./gitExtensionFollow";
 import {
   confirmRuntimeForget,
   confirmRuntimeSharedOpen,
@@ -161,6 +163,10 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
   context.subscriptions.push(
     vscode.workspace.registerTextDocumentContentProvider(DiffDocuments.scheme, diffDocuments),
   );
+  // What each project holds uncommitted and unpushed. Measured when an agent in it writes (it may have edited
+  // files) and when the editor's git extension sees a change in a folder this window has open; never polled.
+  const changes = new GitChangesWatch();
+  context.subscriptions.push(changes, followGitExtension((root) => changes.touchUnder(root)));
   // The conversation surface: the service's own terminal interface in an editor tab, hosted by the Core.
   const terminals = new TerminalTabs(
     runtime,
@@ -171,7 +177,11 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
       await controller.refreshChats();
       return state.conversations.find((candidate) => candidate.key === key) ?? null;
     },
-    (key) => state.markStreaming(key),
+    (key) => {
+      state.markStreaming(key);
+      const home = state.conversations.find((row) => row.key === key)?.homeWorkspace;
+      if (home) changes.touch(home);
+    },
     (key) => state.conversations.find((row) => row.key === key)?.title ?? null,
   );
   context.subscriptions.push(terminals);
@@ -212,7 +222,7 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     if (!provider) throw new Error(`${providerId} is not an installed service`);
     return provider;
   };
-  const sidebar = new SidebarView(context, state, projectStore, agentTools, {
+  const sidebar = new SidebarView(context, state, projectStore, agentTools, changes, {
     signIn: (providerId) => afterReady(async () => {
       await controller.signInProvider(providerNamed(providerId));
     }),

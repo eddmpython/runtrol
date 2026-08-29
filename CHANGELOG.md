@@ -10,6 +10,14 @@ and refactoring that no user can observe do not belong here.
 
 ## [Unreleased]
 
+### Added
+
+- A project row now shows what its repository holds that is not committed or not pushed: lines added and
+  removed, files git has not seen, and commits ahead of upstream, as `+120 -35 ?2 ↑3`. Committing takes the
+  first three to zero and pushing takes the last to zero, and a clean, pushed project shows nothing. It is
+  measured when an agent in that project writes and when the editor's git extension sees a change, never on a
+  timer.
+
 ## [0.1.36] - 2026-08-29
 
 ### Fixed

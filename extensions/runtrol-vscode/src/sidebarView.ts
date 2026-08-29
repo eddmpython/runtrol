@@ -19,6 +19,7 @@ import { loose, projects, type Conversation, type ProjectGroup } from "./convers
 import type { ProjectRecord } from "./projects";
 import { rowHueClass } from "./projectColor";
 import { readGitBranch } from "./gitBranch";
+import type { GitChanges } from "./gitChanges";
 import { awaitsVerification, isUsable } from "./providerHealth";
 import type { ProviderCapabilities } from "./runtimeTypes";
 import { ConversationItem, ProjectItem, ServiceChoiceItem } from "./sidebarTargets";
@@ -63,6 +64,14 @@ export type AgentToolsPort = {
   onDidChange(listener: () => void): { dispose(): void };
 };
 
+/// The uncommitted and unpushed work per project folder, measured by `GitChangesWatch` on its own triggers.
+export type GitChangesPort = {
+  get(workspace: string): GitChanges | null | undefined;
+  ensure(workspace: string): void;
+  keep(workspaces: readonly string[]): void;
+  onDidChange(listener: () => void): { dispose(): void };
+};
+
 export type UsageActions = {
   signIn(providerId: string): Promise<void>;
   fix(providerId: string): Promise<void>;
@@ -102,6 +111,7 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
     private readonly state: RuntimeState,
     private readonly projectRecords: ProjectsPort,
     private readonly agentTools: AgentToolsPort,
+    private readonly changes: GitChangesPort,
     private readonly usageActions: UsageActions,
     private readonly report: (error: unknown) => void,
   ) {
@@ -114,6 +124,7 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
       }),
       projectRecords.onDidChange(() => this.render()),
       agentTools.onDidChange(() => this.render()),
+      changes.onDidChange(() => this.render()),
       vscode.workspace.onDidChangeWorkspaceFolders(() => this.render()),
     );
   }
@@ -301,6 +312,8 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
     const openWorkspaces = (vscode.workspace.workspaceFolders ?? []).map((folder) => folder.uri.fsPath);
     this.groups = projects(this.projectRecords.all(), rows, openWorkspaces);
     void this.readBranches(this.groups);
+    this.changes.keep(this.groups.map((group) => group.workspace));
+    for (const group of this.groups) this.changes.ensure(group.workspace);
     const projectRows: SidebarProjectRow[] = this.groups.map((group) => ({
       key: group.key,
       name: group.name,
@@ -314,6 +327,7 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
       live: group.live,
       agentTools: this.agentTools.enabled(group.workspace),
       branch: this.branches.get(group.key) ?? null,
+      changes: this.changes.get(group.workspace) ?? null,
       ...this.rowsOf(group),
     }));
     const looseRows = pinnedFirst(loose(rows)).map((row) => this.conversationRow(row, null));

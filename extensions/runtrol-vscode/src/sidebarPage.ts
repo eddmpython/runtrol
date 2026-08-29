@@ -11,6 +11,7 @@
 /// and nothing else; it never asks a provider anything and never sees a conversation.
 
 import type { ConversationActivity } from "./conversationList";
+import { hasChanges, type GitChanges } from "./gitChanges";
 import { HUES } from "./projectColor";
 import { escapeHtml, usageChipsMarkup, usagePanelsMarkup, USAGE_SCRIPT, USAGE_STYLE, type UsageChip, type UsageStripAssets } from "./usageStrip";
 
@@ -57,6 +58,8 @@ export type SidebarProjectRow = {
   readonly hidden: number;
   /// The branch this folder's repository is on, or null when it is not in one.
   readonly branch: string | null;
+  /// What the repository holds uncommitted or unpushed, or null when nothing is known.
+  readonly changes: GitChanges | null;
 };
 
 export type SidebarNotice = {
@@ -172,6 +175,28 @@ ${usageChipsMarkup(model.usage, assets)}
   return `<div class="scroll">${projects}${loose}</div>${usage}`;
 }
 
+/// The uncommitted and unpushed work of a project, as `+120 -35 ?2 ↑3`, each part only while it is not zero.
+///
+/// Lines rather than files, because "three files changed" says nothing about whether it was a typo or an
+/// afternoon. The chip vanishes at zero: a clean, pushed project has nothing to say and says nothing.
+function changesMarkup(changes: GitChanges | null): string {
+  if (!hasChanges(changes)) return "";
+  const parts = [
+    changes.added > 0 ? `<span class="add">+${changes.added}</span>` : "",
+    changes.removed > 0 ? `<span class="del">-${changes.removed}</span>` : "",
+    changes.untracked > 0 ? `<span class="new">?${changes.untracked}</span>` : "",
+    changes.ahead > 0 ? `<span class="ahead">↑${changes.ahead}</span>` : "",
+  ].join("");
+  const said = [
+    changes.added > 0 || changes.removed > 0
+      ? `${changes.added} lines added, ${changes.removed} removed, not committed`
+      : "",
+    changes.untracked > 0 ? `${changes.untracked} new ${changes.untracked === 1 ? "file" : "files"} not in git` : "",
+    changes.ahead > 0 ? `${changes.ahead} ${changes.ahead === 1 ? "commit" : "commits"} not pushed` : "",
+  ].filter((line) => line !== "").join("; ");
+  return `<span class="badge changes" title="${escapeHtml(said)}">${parts}</span>`;
+}
+
 function projectHtml(project: SidebarProjectRow, assets: SidebarAssets): string {
   // What the project holds, not what fits: the rows are capped at five and the count is the reason a person
   // knows there is more before they reach the row that says so.
@@ -180,6 +205,7 @@ function projectHtml(project: SidebarProjectRow, assets: SidebarAssets): string 
     project.attention > 0 ? `<span class="badge attention" title="${project.attention} waiting for you">${project.attention}</span>` : "",
     project.live > 0 ? `<span class="badge live" title="${project.live} running">${project.live}</span>` : "",
     project.branch ? `<span class="badge branch" title="On branch ${escapeHtml(project.branch)}"><i class="ci ci-git-branch" aria-hidden="true"></i><span class="what">${escapeHtml(project.branch)}</span></span>` : "",
+    changesMarkup(project.changes),
     project.agentTools ? `<span class="badge tools" title="Agent Tools are on for this project">tools</span>` : "",
   ].join("");
   const actions = project.kind === "created"
@@ -364,6 +390,12 @@ button { font: inherit; color: inherit; }
    what it is (measured 2026-08-28). */
 .badge.branch .ci { flex: none; width: 11px; height: 11px; }
 .badge.branch .what { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The editor's own git colours, so the numbers read the same as the explorer's file decorations beside them. */
+.badge.changes { flex: none; background: transparent; font-weight: 500; display: inline-flex; align-items: center; gap: 4px; padding: 0 2px; font-variant-numeric: tabular-nums; }
+.badge.changes .add { color: var(--vscode-gitDecoration-addedResourceForeground); }
+.badge.changes .del { color: var(--vscode-gitDecoration-deletedResourceForeground); }
+.badge.changes .new { color: var(--vscode-gitDecoration-untrackedResourceForeground); }
+.badge.changes .ahead { opacity: 0.7; font-weight: 400; }
 .badge.tools { background: transparent; border: 1px solid var(--vscode-widget-border); font-weight: 400; opacity: 0.8; }
 .conv .glyph-slot { position: relative; flex: none; display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; }
 .conv .glyph { flex: none; width: 14px; height: 14px; }

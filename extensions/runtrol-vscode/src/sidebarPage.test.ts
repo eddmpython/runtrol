@@ -48,6 +48,7 @@ function project(overrides: Partial<SidebarProjectRow>): SidebarProjectRow {
     live: 0,
     hidden: 0,
     branch: null,
+    changes: null,
     agentTools: false,
     rows: [conversation({})],
     ...overrides,
@@ -236,4 +237,20 @@ test("first run offers the two starting actions and a chosen service offers its 
   assert.ok(html.includes('data-command="runtrol.createProject"'));
   assert.ok(html.includes('data-command="runtrol.startSession"'));
   assert.ok(html.includes('data-command="runtrol.startSessionWith" data-kind="service" data-key="claude"'));
+});
+
+test("a project shows its uncommitted lines, new files and unpushed commits, and nothing when it is clean", () => {
+  const dirty = sidebarHtml(model({ projects: [project({ changes: { added: 120, removed: 35, untracked: 2, ahead: 3 } })] }), assets);
+  assert.ok(dirty.includes('<span class="add">+120</span>'));
+  assert.ok(dirty.includes('<span class="del">-35</span>'));
+  assert.ok(dirty.includes('<span class="new">?2</span>'));
+  assert.ok(dirty.includes('<span class="ahead">↑3</span>'));
+  assert.ok(dirty.includes("120 lines added, 35 removed, not committed; 2 new files not in git; 3 commits not pushed"));
+  const partial = sidebarHtml(model({ projects: [project({ changes: { added: 0, removed: 0, untracked: 0, ahead: 1 } })] }), assets);
+  assert.ok(partial.includes('<span class="ahead">↑1</span>'));
+  assert.ok(!partial.includes('class="add"'), "a zero is not drawn");
+  const clean = sidebarHtml(model({ projects: [project({ changes: { added: 0, removed: 0, untracked: 0, ahead: 0 } })] }), assets);
+  assert.ok(!clean.includes('class="badge changes"'), "a clean, pushed project has no chip");
+  const unknown = sidebarHtml(model({ projects: [project({ changes: null })] }), assets);
+  assert.ok(!unknown.includes('class="badge changes"'));
 });

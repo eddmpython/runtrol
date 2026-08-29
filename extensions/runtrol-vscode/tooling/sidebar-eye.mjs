@@ -68,6 +68,9 @@ const THEME = `
   --vscode-notificationsWarningIcon-foreground: #cca700;
   --vscode-errorForeground: #f85149;
   --vscode-testing-iconPassed: #73c991;
+  --vscode-gitDecoration-addedResourceForeground: #81b88b;
+  --vscode-gitDecoration-deletedResourceForeground: #c74e39;
+  --vscode-gitDecoration-untrackedResourceForeground: #73c991;
   --vscode-charts-blue: #59a4f9;
   --vscode-charts-green: #89d185;
   --vscode-charts-purple: #b180d7;
@@ -162,6 +165,7 @@ const model = {
       agentTools: false,
       hidden: 3,
       branch: "main",
+      changes: { added: 119, removed: 4, untracked: 2, ahead: 0 },
       rows: [
         conversation({ title: "돈을 벌 수 있는 구조인지 지금 상태에서 판단해라", activity: "working", live: true, memory: "306 MB" }),
         conversation({ title: "현재 이 프로젝트 수준은?", memory: "278 MB" }),
@@ -184,6 +188,7 @@ const model = {
       agentTools: true,
       hidden: 0,
       branch: "feature/sidebar",
+      changes: { added: 0, removed: 0, untracked: 0, ahead: 3 },
       rows: [
         conversation({ title: "Sidebar 대화삭제 및 기능 구현 미완료", hue: "huePurple", activity: "needsYou", workspace: "C:\\work\\runtrol" }),
         conversation({ title: "Runtroll 랜딩 사이트", hue: "huePurple", workspace: "C:\\work\\runtrol" }),
