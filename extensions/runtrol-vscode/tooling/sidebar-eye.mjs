@@ -210,7 +210,7 @@ const model = {
     // and it is only reachable in a picture from here.
     {
       ...chip("grok", "Grok", null, []),
-      caption: "team-managed",
+      caption: "",
       position: "team-managed",
       plan: "SuperGrok",
       meters: [],

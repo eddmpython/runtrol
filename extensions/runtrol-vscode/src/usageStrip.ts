@@ -129,7 +129,9 @@ function shortCaption(row: UsageRow): string {
     case "disconnected":
       return "Offline";
     case "available":
-      return row.unmetered ?? "No report";
+      // A service whose meter belongs to a team has no number and nothing to act on, so the chip stays bare;
+      // the panel says why (operator, 2026-08-29: "team-managed" under the ring read as a broken state).
+      return row.unmetered ? "" : "No report";
   }
 }
 

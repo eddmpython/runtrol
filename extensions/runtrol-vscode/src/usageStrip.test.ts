@@ -259,7 +259,7 @@ test("a service that answered with no number of its own is captioned in its own 
     unmetered: "team-managed",
     position: "team-managed",
   })]);
-  assert.equal(chip?.caption, "team-managed");
+  assert.equal(chip?.caption, "", "a team-metered account shows nothing under the ring; the panel explains");
   assert.deepEqual(chip?.rings, []);
   assert.equal(chip?.percent, null);
 });
