@@ -136,6 +136,28 @@ test("a signed-out chip answers a click with the sign-in action and says so to a
   assert.ok(!html.includes("Press Enter"));
 });
 
+test("a signed-in account reporting its usage is not told to sign in, even where it could", () => {
+  // The account is signed in (available) and showing real figures. Its provider publishes a sign-in command,
+  // but offering "Sign in to Codex" under its live percentages reads as a bug (operator, 2026-08-29).
+  const html = strip(usageChips(
+    [row({
+      state: "available",
+      meters: [{ key: "7d", label: "7d", percent: 70, resets: "resets in 5d", governing: true }],
+    })],
+    new Set(["codex"]),
+  ));
+  assert.ok(html.includes(">70%<"), "the account's usage is shown");
+  assert.ok(!html.includes("Sign in to Codex"), "and it is not told to sign in");
+});
+
+test("a signed-out account that can sign in is still offered the way in", () => {
+  const html = strip(usageChips(
+    [row({ state: "signedOut", position: "Not signed in", age: null })],
+    new Set(["codex"]),
+  ));
+  assert.ok(html.includes('data-action="signIn" data-provider="codex"'), "sign-in is reachable when signed out");
+});
+
 test("no installed service says so instead of drawing nothing", () => {
   assert.ok(strip([]).includes("No coding service is installed yet."));
 });

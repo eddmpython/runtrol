@@ -198,8 +198,22 @@ function panelHtml(chip: UsageChip, index: number): string {
 <p class="position${chip.reached ? " reached" : ""}">${escapeHtml(chip.position)}</p>
 ${bars}
 ${chip.age ? `<p class="age">${escapeHtml(chip.age)}</p>` : ""}
-${chip.canSignIn && chip.action !== "signIn" ? `<button class="action" type="button" data-action="signIn" data-provider="${escapeHtml(chip.providerId)}">Sign in to ${escapeHtml(chip.name)}</button>` : ""}
+${signInButton(chip)}
 </section>`;
+}
+
+/// The detail panel's sign-in button, shown only when signing in is the true next step.
+///
+/// A signed-in account that is reporting its usage is not a sign-in situation, and offering "Sign in to
+/// Claude Code" under its live figures read as a bug (operator, 2026-08-29: it was signed in and the button
+/// was still there). It shows only when the account is not signed in or has dropped its connection, and only
+/// when that is not already the chip's own single action (which opens sign-in on its own press).
+function signInButton(chip: UsageChip): string {
+  const needsSignIn = chip.state === "signedOut" || chip.state === "disconnected";
+  if (!chip.canSignIn || !needsSignIn || chip.action === "signIn") {
+    return "";
+  }
+  return `<button class="action" type="button" data-action="signIn" data-provider="${escapeHtml(chip.providerId)}">Sign in to ${escapeHtml(chip.name)}</button>`;
 }
 
 export function escapeHtml(text: string): string {

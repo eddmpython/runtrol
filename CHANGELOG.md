@@ -22,6 +22,12 @@ and refactoring that no user can observe do not belong here.
 
 ### Fixed
 
+- Signing in to a coding service now completes. Pressing sign in used to type the service's login command
+  into a terminal and stop there, so no login ever opened. It now runs the command, and the CLI opens its own
+  browser flow for you to finish. Runtrol still holds no credential: the CLI authenticates itself, which is
+  the boundary this product keeps.
+- A coding service you are already signed in to no longer shows a "Sign in" button under its live usage. The
+  button now appears only when the account is actually signed out or disconnected.
 - The service choice that opens from the panel's new-conversation button withdraws when you click anywhere
   else, press Escape, or leave the panel. It used to stay open until answered.
 - A conversation tab in VS Code behaves like the terminal it is. Clicking inside it no longer brings back an

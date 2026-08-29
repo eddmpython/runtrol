@@ -802,19 +802,23 @@ export class Controller implements vscode.Disposable {
     this.offerInTerminal(picked.offer);
   }
 
-  /// Type a coding service's own command into the operator's terminal and stop there.
+  /// Put a coding service's own command in the operator's terminal, running it or leaving it for them.
   ///
-  /// `false` is the whole point of this method: the line is placed, not run. Runtrol fetching and executing
-  /// on somebody's behalf is the one capability this product refused from the start, and an install button
-  /// that installs is exactly that capability with a friendly label. So the person reads the command,
-  /// standing in their own shell, and decides.
-  private offerInTerminal(offer: HelpOffer): void {
+  /// `run` is the line between two different things a person means by pressing a button here. An install
+  /// command (`npm i -g …`) is Runtrol fetching and executing on somebody's behalf, the one capability this
+  /// product refused from the start, so it is placed and left for the person to read and run. A sign-in is
+  /// the opposite: the provider CLI authenticates itself through its own browser flow, holding its own
+  /// credential, which is exactly the thin boundary this product keeps. Leaving `claude auth login` typed but
+  /// unrun did not honour that boundary, it just made sign-in not work (operator, 2026-08-29: pressing sign
+  /// in only wrote to the terminal and no login opened). So a sign-in runs to the end, and the person
+  /// completes it in the browser the CLI opens.
+  private offerInTerminal(offer: HelpOffer, run = false): void {
     if (this.helpTerminal?.exitStatus !== undefined) {
       this.helpTerminal = null;
     }
     this.helpTerminal ??= vscode.window.createTerminal({ name: "Runtrol: coding service" });
     this.helpTerminal.show(true);
-    this.helpTerminal.sendText(offer.command, false);
+    this.helpTerminal.sendText(offer.command, run);
   }
 
   async interrupt(from?: SessionLine): Promise<void> {
@@ -966,7 +970,8 @@ export class Controller implements vscode.Disposable {
       this.say(`${provider.displayName} declares no sign-in command; sign in at its own surface.`, "info");
       return;
     }
-    this.offerInTerminal(signIn);
+    // Run it: the CLI opens its own browser flow and the person finishes there. Runtrol holds nothing.
+    this.offerInTerminal(signIn, true);
   }
 
   /// Answer the question a conversation is waiting on from its row, with the service's own options, without
