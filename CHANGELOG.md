@@ -10,6 +10,22 @@ and refactoring that no user can observe do not belong here.
 
 ## [Unreleased]
 
+## [0.1.36] - 2026-08-29
+
+### Fixed
+
+- Old Runtime generations no longer linger after an update. A generation that has handed over now closes the
+  conversations nobody is watching once they have been idle a short while, so it can finish and leave instead
+  of holding them for hours. The current generation still keeps a viewerless session so a window or phone can
+  reattach; only a generation that has been replaced lets an idle one go, and the coding service keeps the
+  conversation either way.
+- A session opened elsewhere is recognised as the one conversation it is, not drawn a second time. A session
+  another generation already holds is no longer mirrored as if it were new, and the sidebar draws one row per
+  conversation however many generations hold a terminal for it.
+- A terminal stream ending because the grant generation moved (a deploy, a re-enrollment) no longer surfaces
+  an error or marks the Core unreachable. The window re-reads the locator and reconnects; only a revoked
+  integration is treated as a real stop.
+
 ## [0.1.35] - 2026-08-29
 
 ### Changed
