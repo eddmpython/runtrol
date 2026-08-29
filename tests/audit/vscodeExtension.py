@@ -265,11 +265,9 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             # (operator, 2026-08-28). Memory rides the row.
             "white-space: nowrap",
             "mask-image: linear-gradient(to right",
-            # A running turn is unmistakable: the icon turns, and an arc turns around it so a still glance
-            # (and a photograph) can tell a running row from an idle one even when the service's own icon is
-            # symmetric enough that turning it changes nothing.
+            # A running turn is unmistakable: the icon itself turns, fast enough to read as motion. The arc
+            # that used to turn around it is gone by the operator's order (2026-08-29: no ring, just the icon).
             ".conv .glyph-slot.working .glyph { animation: spin",
-            ".conv .glyph-slot.working::after",
             # The running colour is named once and is not the editor's progress colour: that one is grey in
             # the default dark theme this build ships, which drew a running row as an idle one (measured on
             # the operator's window 2026-08-28).
@@ -498,11 +496,12 @@ def selftest() -> int:
             'names(unavailable, "unavailable for")'
         ),
         "sidebarPage.ts": (
+            "<!DOCTYPE html> "
             'aria-label="Projects" aria-label="Conversations" aria-label="Usage" '
             'class="bar${project.hue class="bar${row.hue .row .bar.${hue.band} '
             '.row:hover .actions row.canDelete ? action("runtrol.deleteConversation" '
             "white-space: nowrap mask-image: linear-gradient(to right "
-            '.conv .glyph-slot.working .glyph { animation: spin .conv .glyph-slot.working::after '
+            '.conv .glyph-slot.working .glyph { animation: spin '
             '--runtrol-running: var(--vscode-charts-blue data-kind="more" '
             'class="memory" Content-Security-Policy script-src \'nonce-'
         ),
@@ -618,11 +617,11 @@ def selftest() -> int:
         (package, {**sources, "conversationIcon.ts": sources["conversationIcon.ts"].replace("provider-icons", "brand")}),
         (package, {**sources, "conversationList.ts": sources["conversationList.ts"] + " `Chat ${identity}`"}),
         (package, {**sources, "usageStrip.ts": sources["usageStrip.ts"].replace('role="progressbar"', "")}),
-        (package, {**sources, "usageStrip.ts": sources["usageStrip.ts"].replace("Content-Security-Policy", "")}),
+        (package, {**sources, "sidebarPage.ts": sources["sidebarPage.ts"].replace("Content-Security-Policy", "")}),
         (package, {**sources, "sidebarView.ts": sources["sidebarView.ts"].replace("usageRows(this.state.usage", "")}),
         (package, {**sources, "sidebarView.ts": sources["sidebarView.ts"].replace("Cannot reach the Runtrol Core.", "")}),
         (package, {**sources, "sidebarPage.ts": sources["sidebarPage.ts"].replace('row.canDelete ? action("runtrol.deleteConversation"', "")}),
-        (package, {**sources, "sidebarPage.ts": sources["sidebarPage.ts"].replace(".conv .glyph-slot.working::after", "")}),
+        (package, {**sources, "sidebarPage.ts": sources["sidebarPage.ts"].replace(".conv .glyph-slot.working .glyph { animation: spin", "")}),
         (package, {**sources, "sidebarPage.ts": sources["sidebarPage.ts"].replace("--runtrol-running: var(--vscode-charts-blue", "")}),
         (package, {**sources, "extension.ts": sources["extension.ts"].replace('executeCommand("runtrol.sidebar.focus")', "")}),
         (package, {**sources, "stateRows.ts": sources["stateRows.ts"].replace("discoveryNotice", "")}),

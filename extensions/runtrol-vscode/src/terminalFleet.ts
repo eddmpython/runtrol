@@ -3,7 +3,7 @@ import type { TerminalDescriptor, TerminalIndexSnapshot } from "./runtimeTypes";
 /// The hosted terminals of every Runtime generation, read as one list.
 ///
 /// A conversation's terminal lives in the exact generation that opened it, and an update leaves that generation
-/// draining beside the new one for as long as its conversations run (`docs/daemonLifecycle.md`). Each generation
+/// draining beside the new one for as long as its conversations run. Each generation
 /// publishes only its own terminals. A window that followed one generation therefore saw none of the others,
 /// and the provider's own process roster still showed those conversations alive, so the sidebar took them for
 /// terminals somebody else owned and refused to open them (measured 2026-08-29: five draining generations held

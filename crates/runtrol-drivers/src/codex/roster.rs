@@ -21,7 +21,7 @@
 //! the one that was answering had `task_complete` at 07:20:36.672Z followed by `task_started` at
 //! 07:20:36.804Z, and everything written since. This is a state, not a heartbeat, so it stays true through a
 //! long tool call that writes nothing for minutes. That is what a timestamp cannot do, and why the timestamp
-//! is not the signal (`memory/sidebarContract.md` records the same mistake made for the other CLI).
+//! is not the signal. The other CLI was first read through timestamps and it failed both ways there too.
 //!
 //! Nothing here reads a message. The lock is a file name, and the log is read for the names of its event
 //! types and the byte offset reached.
