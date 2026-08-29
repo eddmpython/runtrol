@@ -26,6 +26,7 @@ and refactoring that no user can observe do not belong here.
   into a terminal and stop there, so no login ever opened. It now runs the command, and the CLI opens its own
   browser flow for you to finish. Runtrol still holds no credential: the CLI authenticates itself, which is
   the boundary this product keeps.
+- The usage detail panel is now reachable. Hovering a chip opened it, but moving the pointer down to the panel to press a button left the chip strip and closed it first. The chip and its panel are now one hover region, so you can travel into the panel and click.
 - A coding service you are already signed in to no longer shows a "Sign in" button under its live usage. The
   button now appears only when the account is actually signed out or disconnected.
 - The service choice that opens from the panel's new-conversation button withdraws when you click anywhere

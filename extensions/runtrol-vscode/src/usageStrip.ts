@@ -298,12 +298,20 @@ export const USAGE_SCRIPT = `
     if (open) open.scrollIntoView({ block: "nearest" });
   }
   function settle() { show(pinned, true); }
+  // The preview must be reachable. The panel sits below the chips, so moving the pointer from a chip down to
+  // its panel to press a button leaves the chip strip, and closing on that leave hid the panel before the
+  // button could be clicked (operator, 2026-08-29: hovering a usage button, the panel vanished on the way to
+  // it). Closing is deferred a beat and cancelled the moment the pointer is over the panel, so the chip and
+  // its panel act as one hover region. A pinned panel (a click) is unaffected: settle keeps it open.
+  var hideTimer = null;
+  function keepOpen() { if (hideTimer !== null) { clearTimeout(hideTimer); hideTimer = null; } }
+  function scheduleSettle() { keepOpen(); hideTimer = setTimeout(function () { hideTimer = null; settle(); }, 150); }
   function bind() {
   chips = Array.prototype.slice.call(document.querySelectorAll(".chip"));
   panels = Array.prototype.slice.call(document.querySelectorAll(".panel"));
   if (pinned !== null && pinned >= chips.length) pinned = null;
   chips.forEach(function (chip, index) {
-    chip.addEventListener("mouseenter", function () { if (pinned === null) show(index, false); });
+    chip.addEventListener("mouseenter", function () { keepOpen(); if (pinned === null) show(index, false); });
     chip.addEventListener("focus", function () { if (pinned === null) show(index, true); });
     chip.addEventListener("click", function () {
       var direct = chip.dataset.action;
@@ -316,7 +324,13 @@ export const USAGE_SCRIPT = `
     });
   });
   var strip = document.querySelector(".chips");
-  if (strip) strip.addEventListener("mouseleave", settle);
+  if (strip) strip.addEventListener("mouseleave", scheduleSettle);
+  // The panel is part of the same hover region: entering it cancels the pending close, leaving it schedules
+  // one, so a person can travel from a chip to its panel and press the button there.
+  panels.forEach(function (panel) {
+    panel.addEventListener("mouseenter", keepOpen);
+    panel.addEventListener("mouseleave", scheduleSettle);
+  });
   Array.prototype.slice.call(document.querySelectorAll(".action")).forEach(function (button) {
     button.addEventListener("click", function () {
       vscode.postMessage({ type: "action", action: button.dataset.action, providerId: button.dataset.provider });

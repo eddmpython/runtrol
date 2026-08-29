@@ -3,7 +3,73 @@ import { test } from "node:test";
 
 import type { UsageRow } from "./usageDisplay";
 import type { UsageChip } from "./usageStrip";
-import { usageChips, usageChipsMarkup, usagePanelsMarkup } from "./usageStrip";
+import { usageChips, usageChipsMarkup, usagePanelsMarkup, USAGE_SCRIPT } from "./usageStrip";
+
+/// A DOM small enough to run the strip's own script against, so the hover behaviour is tested, not the text.
+///
+/// Only what the script touches: elements with listeners, a class query, `hidden`, `setAttribute`, `dataset`,
+/// and timers a test drives by hand. Enough to prove that leaving the chips and entering a panel keeps the
+/// panel open, which is the exact travel a person makes to press a button in it.
+function fakeDom(chipCount: number) {
+  type Handler = () => void;
+  const timers: Handler[] = [];
+  class Element {
+    className: string;
+    hidden = true;
+    dataset: Record<string, string> = {};
+    private readonly handlers = new Map<string, Handler[]>();
+    constructor(className: string) {
+      this.className = className;
+    }
+    addEventListener(kind: string, handler: Handler): void {
+      const list = this.handlers.get(kind) ?? [];
+      list.push(handler);
+      this.handlers.set(kind, list);
+    }
+    setAttribute(): void {}
+    scrollIntoView(): void {}
+    fire(kind: string): void {
+      for (const handler of this.handlers.get(kind) ?? []) handler();
+    }
+  }
+  const chips = Array.from({ length: chipCount }, () => new Element("chip"));
+  const panels = Array.from({ length: chipCount }, () => new Element("panel"));
+  const strip = new Element("chips");
+  const document = {
+    querySelectorAll(selector: string): Element[] {
+      if (selector === ".chip") return chips;
+      if (selector === ".panel") return panels;
+      if (selector === ".action") return [];
+      return [];
+    },
+    querySelector(selector: string): Element | null {
+      return selector === ".chips" ? strip : null;
+    },
+    addEventListener(): void {},
+    body: { contains: () => true },
+  };
+  const globals = {
+    window: { __runtrolVsCodeApi: { postMessage() {} }, scrollTo() {} },
+    document,
+    acquireVsCodeApi: () => ({ postMessage() {} }),
+    setTimeout: (handler: Handler): number => timers.push(handler),
+    clearTimeout: (id: number): void => {
+      if (id > 0 && id <= timers.length) timers[id - 1] = () => {};
+    },
+  };
+  const runTimers = (): void => {
+    const pending = timers.splice(0);
+    for (const handler of pending) handler();
+  };
+  return { chips, panels, strip, globals, runTimers };
+}
+
+function runUsageScript(dom: ReturnType<typeof fakeDom>): void {
+  const names = Object.keys(dom.globals);
+  const values = Object.values(dom.globals);
+  // eslint-disable-next-line no-new-func
+  new Function(...names, USAGE_SCRIPT)(...values);
+}
 
 function row(overrides: Partial<UsageRow>): UsageRow {
   return {
@@ -156,6 +222,25 @@ test("a signed-out account that can sign in is still offered the way in", () => 
     new Set(["codex"]),
   ));
   assert.ok(html.includes('data-action="signIn" data-provider="codex"'), "sign-in is reachable when signed out");
+});
+
+test("a hovered panel stays open while the pointer travels from the chip into it", () => {
+  const dom = fakeDom(2);
+  runUsageScript(dom);
+  // Hover the first chip: its panel previews.
+  dom.chips[0]!.fire("mouseenter");
+  assert.equal(dom.panels[0]!.hidden, false, "the panel previews on chip hover");
+  // Leave the chip strip toward the panel: closing is only scheduled, not immediate.
+  dom.strip!.fire("mouseleave");
+  assert.equal(dom.panels[0]!.hidden, false, "the panel is not hidden the instant the chips are left");
+  // Enter the panel before the timer fires: the pending close is cancelled.
+  dom.panels[0]!.fire("mouseenter");
+  dom.runTimers();
+  assert.equal(dom.panels[0]!.hidden, false, "and it stays open so its button can be pressed");
+  // Leaving the panel to nowhere finally settles it closed.
+  dom.panels[0]!.fire("mouseleave");
+  dom.runTimers();
+  assert.equal(dom.panels[0]!.hidden, true, "leaving the panel closes it");
 });
 
 test("no installed service says so instead of drawing nothing", () => {
