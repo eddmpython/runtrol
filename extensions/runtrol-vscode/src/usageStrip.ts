@@ -183,8 +183,8 @@ function chipHtml(chip: UsageChip, index: number, assets: UsageStripAssets): str
     : `${chip.name}: seven day usage ${chip.percent} percent${chip.reached ? ", a limit is blocking" : ""}`;
   // No native tooltip: the hover panel is the one detail surface, and a browser tooltip floating over it was
   // read as two competing popups (operator, 2026-08-27). Screen readers keep the spoken summary.
-  const direct = chip.action ? ` data-action="${chip.action}" data-provider="${escapeHtml(chip.providerId)}"` : "";
-  return `<button class="chip${chip.reached ? " reached" : ""}${chip.percent === null ? " bare" : ""}" type="button" role="listitem" data-index="${index}"${direct} aria-label="${escapeHtml(spoken)}" aria-expanded="false" aria-controls="panel-${index}">
+  const direct = chip.action ? ` data-action="${chip.action}"` : "";
+  return `<button class="chip${chip.reached ? " reached" : ""}${chip.percent === null ? " bare" : ""}" type="button" role="listitem" data-index="${index}" data-provider="${escapeHtml(chip.providerId)}"${direct} aria-label="${escapeHtml(spoken)}" aria-expanded="false" aria-controls="panel-${escapeHtml(chip.providerId)}">
 <span class="ring">
 <svg viewBox="0 0 26 26" aria-hidden="true">
 ${chip.rings.slice(0, RING_RADII.length).map((ring, at) => {
@@ -214,7 +214,7 @@ function panelHtml(chip: UsageChip, index: number): string {
 <span class="percent">${meter.percent}%</span>
 <span class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${meter.percent}" aria-label="${escapeHtml(`${meter.label} ${meter.percent} percent`)}"><span class="value ${widthClass(meter.percent)}"></span></span>
 </div>`).join("");
-  return `<section class="panel" id="panel-${index}" hidden>
+  return `<section class="panel" id="panel-${escapeHtml(chip.providerId)}" data-provider="${escapeHtml(chip.providerId)}" hidden>
 <h2><span class="who">${escapeHtml(chip.name)}${chip.plan ? ` <span class="plan">${escapeHtml(chip.plan)}</span>` : ""}${chip.version ? ` <span class="version" title="${escapeHtml(`${chip.name} ${chip.version} is installed`)}">${escapeHtml(chip.version)}</span>` : ""}</span>${updateButton(chip)}</h2>
 ${chip.position ? `<p class="position${chip.reached ? " reached" : ""}">${escapeHtml(chip.position)}</p>` : ""}
 ${bars}
@@ -329,18 +329,25 @@ export const USAGE_SCRIPT = `
   var vscode = window.__runtrolVsCodeApi || (window.__runtrolVsCodeApi = acquireVsCodeApi());
   var chips = [];
   var panels = [];
-  // Which panel the person opened. It lives outside the binding so that a repaint, which is a figure ticking
-  // and nothing they did, leaves their open panel open (2026-08-28).
+  // Which panel the person opened, by the service it belongs to rather than by its place in the strip: a
+  // service arriving or leaving must not hand the pin to its neighbour. It lives outside the binding so that
+  // a repaint, which is a figure ticking and nothing they did, leaves their open panel open (2026-08-28).
   var pinned = null;
+  // Which panel is showing right now: the pinned one, or the one under the pointer. A repaint writes every
+  // panel back closed, and this is what reopens the one the person was reading (measured 2026-08-29: a
+  // hover preview closed under the pointer on every memory tick).
+  var shown = null;
+  function serviceOf(node) { return node.dataset.provider || null; }
   // A hover preview must not move anything: scrolling the panel into view moved the chip out from under the
   // pointer, which closed the panel, which scrolled back and reopened it, and the strip flickered (2026-08-27).
   // Only a pinned panel (a click, or keyboard focus) is brought into the short view.
-  function show(index, settle) {
-    chips.forEach(function (chip, at) { chip.setAttribute("aria-expanded", at === index ? "true" : "false"); });
-    panels.forEach(function (panel, at) { panel.hidden = at !== index; });
+  function show(service, settle) {
+    shown = service;
+    chips.forEach(function (chip) { chip.setAttribute("aria-expanded", serviceOf(chip) === service ? "true" : "false"); });
+    panels.forEach(function (panel) { panel.hidden = serviceOf(panel) !== service; });
     if (!settle) return;
-    if (index === null) { window.scrollTo(0, 0); return; }
-    var open = panels[index];
+    if (service === null) { window.scrollTo(0, 0); return; }
+    var open = panels.filter(function (panel) { return serviceOf(panel) === service; })[0];
     if (open) open.scrollIntoView({ block: "nearest" });
   }
   function settle() { show(pinned, true); }
@@ -359,15 +366,17 @@ export const USAGE_SCRIPT = `
   function bind() {
   chips = Array.prototype.slice.call(document.querySelectorAll(".chip"));
   panels = Array.prototype.slice.call(document.querySelectorAll(".panel"));
-  if (pinned !== null && pinned >= chips.length) pinned = null;
-  chips.forEach(function (chip, index) {
+  var present = chips.map(serviceOf);
+  if (pinned !== null && present.indexOf(pinned) === -1) pinned = null;
+  if (shown !== null && present.indexOf(shown) === -1) shown = pinned;
+  chips.forEach(function (chip) {
     if (!once(chip)) return;
-    chip.addEventListener("mouseenter", function () { keepOpen(); if (pinned === null) show(index, false); });
-    chip.addEventListener("focus", function () { if (pinned === null) show(index, true); });
+    chip.addEventListener("mouseenter", function () { keepOpen(); if (pinned === null) show(serviceOf(chip), false); });
+    chip.addEventListener("focus", function () { if (pinned === null) show(serviceOf(chip), true); });
     chip.addEventListener("click", function () {
       var direct = chip.dataset.action;
       if (direct) { vscode.postMessage({ type: "action", action: direct, providerId: chip.dataset.provider }); return; }
-      pinned = pinned === index ? null : index;
+      pinned = pinned === serviceOf(chip) ? null : serviceOf(chip);
       show(pinned, true);
     });
     chip.addEventListener("keydown", function (event) {
@@ -389,7 +398,7 @@ export const USAGE_SCRIPT = `
       vscode.postMessage({ type: "action", action: button.dataset.action, providerId: button.dataset.provider });
     });
   });
-  show(pinned, false);
+  show(pinned !== null ? pinned : shown, false);
   }
   window.__runtrolBindUsage = bind;
   bind();

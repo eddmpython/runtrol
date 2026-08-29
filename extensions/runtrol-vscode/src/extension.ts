@@ -14,6 +14,7 @@ import { superviseCoreCurrency } from "./coreCurrencySurface";
 import { readGitBranch } from "./gitBranch";
 import { GitChangesWatch } from "./gitChanges";
 import { ProviderUpdateWatch } from "./providerUpdateWatch";
+import { ProviderHelpCache } from "./providerHelpCache";
 import { followGitExtension } from "./gitExtensionFollow";
 import {
   confirmRuntimeForget,
@@ -26,7 +27,7 @@ import {
 import { journeyApi, type JourneyApi } from "./journeyApi";
 import { projectlessRoot } from "./projectlessWorkspace";
 import { ProjectStore } from "./projects";
-import { isBroken } from "./providerHealth";
+import { isBroken, isUsable } from "./providerHealth";
 import { materializeProviderShims } from "./providerShims";
 import { managePhones, pairPhone, reviewPhonePairings } from "./pairingAdministration";
 import type { RemoteConnection } from "./protocol";
@@ -82,6 +83,9 @@ const SESSION_SWITCH_ROUNDS = 5;
 
 /// Whether the performance-only measurement surface is on, asked once. One name for one flag.
 const MEASURED_HOST = process.env.RUNTROL_VSCODE_PERFORMANCE === "1";
+
+/// How long after reaching a Core the release inspection waits, so discovery goes first.
+const RELEASE_CHECK_AFTER_REACH_MS = 15_000;
 
 export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi {
   // Declared below; the private locator only asks it after activation has built it.
@@ -181,7 +185,9 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     (key) => {
       state.markStreaming(key);
       const home = state.conversations.find((row) => row.key === key)?.homeWorkspace;
-      if (home) changes.touch(home);
+      // The project the conversation is filed under, not the folder it runs in: a conversation in a
+      // subfolder is a row of the project above it, and that is the chip to move.
+      if (home) changes.touchContaining(home);
     },
     (key) => state.conversations.find((row) => row.key === key)?.title ?? null,
   );
@@ -228,13 +234,18 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
   // version beside the service and an Update button when the Core confirmed a rollback-safe release.
   let releasesAsked = false;
   const releases = new ProviderUpdateWatch(() => controller.inspectProviderUpdates());
-  context.subscriptions.push(releases);
-  const sidebar = new SidebarView(context, state, projectStore, agentTools, changes, releases, {
+  // Each service's private help line (its sign-out command), asked once per set of usable services.
+  const help = new ProviderHelpCache((providerId) => controller.providerHelpLine(providerId));
+  // An install takes minutes and a command connection is serial: the Update button runs on a connection of
+  // its own so nothing else this window asks the Core waits behind it.
+  const updateChannel = new CoreClient(locator);
+  context.subscriptions.push(releases, help, updateChannel);
+  const sidebar = new SidebarView(context, state, projectStore, agentTools, changes, releases, help, {
     signIn: (providerId) => afterReady(async () => {
       await controller.signInProvider(providerNamed(providerId));
     }),
     signOut: (providerId) => afterReady(async () => {
-      controller.signOutProvider(providerNamed(providerId));
+      await controller.signOutProvider(providerNamed(providerId));
     }),
     fix: (providerId) => afterReady(async () => {
       await controller.fixService(providerNamed(providerId));
@@ -242,21 +253,24 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     update: (providerId) => afterReady(async () => {
       const line = releases.get(providerId);
       if (!line) throw new Error(`${providerId} has no update inspection to act on`);
-      await controller.updateProvider(line, providerNamed(providerId).displayName);
-      await releases.check();
+      await controller.updateProvider(line, providerNamed(providerId).displayName, updateChannel);
+      await releases.check(true);
     }),
   }, (error) => void vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error)));
   context.subscriptions.push(state.onDidChange((change) => {
     if (change !== "rows") return;
-    // Each time the Core is reached anew (activation, or a reconnect after an update), ask about releases
-    // once. Between reaches nothing polls; the manual check command and a finished update ask on their own.
-    if (state.coreReach === "reached") {
-      if (!releasesAsked) {
-        releasesAsked = true;
-        void releases.check();
-      }
-    } else {
+    if (state.coreReach !== "reached") {
       releasesAsked = false;
+      return;
+    }
+    void help.refresh(state.providers.filter(isUsable).map((provider) => provider.providerId));
+    // Each time the Core is reached anew (activation, or a reconnect after an update), ask about releases
+    // once, a moment later: the inspection holds each service's discovery lane while it asks the package
+    // registry, and the conversation listing that reach starts must not queue behind a network call.
+    // Between reaches nothing polls; the manual check command and a finished update ask on their own.
+    if (!releasesAsked) {
+      releasesAsked = true;
+      setTimeout(() => void releases.check(), RELEASE_CHECK_AFTER_REACH_MS);
     }
   }));
 

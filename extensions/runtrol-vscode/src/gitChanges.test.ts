@@ -127,6 +127,20 @@ test("an unchanged answer does not redraw, a changed one does", async () => {
   watch.dispose();
 });
 
+test("a write inside a subfolder touches the project above it and measures nothing else", async () => {
+  const git = counting();
+  const watch = new GitChangesWatch(git.read, 1, 10);
+  const inside = `${WORKSPACE}${process.platform === "win32" ? "\\packages\\core" : "/packages/core"}`;
+  watch.ensure(WORKSPACE);
+  await tick();
+  assert.equal(git.reads.length, 1);
+  watch.touchContaining(inside);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.deepEqual(git.reads, [WORKSPACE, WORKSPACE], "the project was measured again, the subfolder never");
+  assert.equal(watch.get(inside), undefined);
+  watch.dispose();
+});
+
 test("a change under a repository root touches the projects inside it, spelled either way", async () => {
   const git = counting();
   const watch = new GitChangesWatch(git.read, 1, 10);

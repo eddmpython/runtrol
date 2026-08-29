@@ -27,6 +27,10 @@ import type {
   WorkspaceAccess,
 } from "./runtimeTypes";
 import { abortableDelay } from "./abortableDelay";
+
+/// How long a stopped conversation is given to leave this window's live rows before it is kept rather than
+/// deleted. The Core sees an exit within a few hundred milliseconds; ten seconds covers a slow machine.
+const STOP_SETTLE_MS = 10_000;
 import type { Conversation } from "./conversationList";
 import { attentionCount, nativeProcessKey, nextNeedingYou, projects, runningElsewhere } from "./conversationList";
 import { conversationDeletion, deletionQuestion } from "./conversationDeletion";
@@ -389,11 +393,18 @@ export class Controller implements vscode.Disposable {
   ///
   /// No question here: the Update button already names the release it goes to, and the Core's transaction
   /// verifies the new release and rolls back to the exact earlier one on failure.
-  async updateProvider(line: ProviderUpdateLine, label: string): Promise<void> {
+  async updateProvider(
+    line: ProviderUpdateLine,
+    label: string,
+    /// The connection to run it on. An install takes minutes and a command connection is serial, so the
+    /// sidebar hands a connection of its own here; on the shared one every other ask of this window would
+    /// wait behind the install (closing a conversation, answering from a row, deleting).
+    channel: CoreClient = this.client,
+  ): Promise<void> {
     const result = await vscode.window.withProgress(
       { location: vscode.ProgressLocation.Notification, title: `Updating ${label} to ${line.target ?? "the latest release"}` },
       async () => {
-        const updated = await this.client.once({
+        const updated = await channel.once({
           ask: "providerUpdate",
           with: { provider: line.provider },
         });
@@ -996,10 +1007,20 @@ export class Controller implements vscode.Disposable {
     this.offerInTerminal(signIn, true);
   }
 
+  /// What the Core's private help line says about one service: the sign-out command, when it declares one.
+  ///
+  /// The private admin answer rather than the public inventory, because the public inventory is validated
+  /// against a closed schema by every shipped window and a new field there breaks them (2026-08-29).
+  async providerHelpLine(providerId: string): Promise<{ signOut: string | null } | null> {
+    const { response } = await this.client.once({ ask: "providerHelp", with: { provider_id: providerId } });
+    if (response.say !== "providerHelp") return null;
+    return { signOut: response.with.sign_out ?? null };
+  }
+
   /// The service's own sign-out command, run in a terminal the same way sign-in is: the CLI clears what it
   /// stored, and Runtrol holds nothing to clear. Reachable from the usage panel of a signed-in account.
-  signOutProvider(provider: ProviderLine): void {
-    const command = provider.help?.signOut;
+  async signOutProvider(provider: ProviderLine): Promise<void> {
+    const command = (await this.providerHelpLine(provider.providerId))?.signOut ?? null;
     if (!command) {
       this.say(`${provider.displayName} declares no sign-out command; sign out at its own surface.`, "info");
       return;
@@ -1139,7 +1160,8 @@ export class Controller implements vscode.Disposable {
       );
       return;
     }
-    const buttons = [question.stopAndDelete, question.deleteIdle]
+    // The idle-only button first: the first button is what Enter presses, and Enter must not stop agents.
+    const buttons = [question.deleteIdle, question.stopAndDelete]
       .filter((label): label is string => label !== null);
     const choice = await vscode.window.showWarningMessage(
       question.message,
@@ -1148,28 +1170,38 @@ export class Controller implements vscode.Disposable {
     );
     if (!choice) return;
     const stopping = choice === question.stopAndDelete ? plan.stoppable : [];
-    const doomed = [...plan.deletable, ...stopping];
+    const intended = plan.deletable.length + stopping.length;
     let deleted = 0;
     const refused: string[] = [];
     await vscode.window.withProgress(
       {
         location: vscode.ProgressLocation.Notification,
-        title: `Deleting ${doomed.length} conversations from ${item.group.name}`,
+        title: `Deleting ${intended} conversations from ${item.group.name}`,
       },
       async (progress) => {
+        // A stop answers before the process has ended, and the Core keeps the conversation's live claim
+        // until it has seen the exit (a settle of a few hundred milliseconds). Deleting inside that window
+        // is refused as "stop its original session first", which is nonsense to a person who just pressed
+        // Stop. So each stopped row is deleted only once this window's own row for it has gone idle, which
+        // is the Core saying the claim is gone; one that does not go idle in time is kept and said.
+        const stopped: Conversation[] = [];
         for (const row of stopping) {
           progress.report({ message: `stopping ${row.title}` });
           try {
             if (row.presence.kind === "hosted") {
               await this.runtime.stopTerminal(row.presence.terminal);
-            } else if (row.session) {
-              await this.runtime.close(runtimeAction(row.session), true);
+              if (!(await this.awaitIdle(row.key, STOP_SETTLE_MS))) {
+                refused.push(`${row.title}: still running after Stop, so it was kept`);
+                continue;
+              }
             }
+            // A supervised session is closed by the deletion itself, which knows how (deleteNativeWithoutAsking).
+            stopped.push(row);
           } catch (error) {
             refused.push(`${row.title}: ${error instanceof Error ? error.message : String(error)}`);
           }
         }
-        for (const row of doomed) {
+        for (const row of [...plan.deletable, ...stopped]) {
           progress.report({ message: row.title });
           try {
             await this.deleteNativeWithoutAsking({ ...row, live: false });
@@ -1187,9 +1219,30 @@ export class Controller implements vscode.Disposable {
       kept.length > 0 ? `Kept: ${kept.join(", ")}.` : "",
       refused.length > 0 ? `Refused: ${refused.join("; ")}` : "",
     ].filter((line) => line !== "").join(" ");
-    const summary = `Deleted ${deleted} of ${doomed.length} from ${item.group.name}.${tail ? ` ${tail}` : ""}`;
+    const summary = `Deleted ${deleted} of ${intended} from ${item.group.name}.${tail ? ` ${tail}` : ""}`;
     if (refused.length > 0) void vscode.window.showWarningMessage(summary);
     else void vscode.window.showInformationMessage(summary);
+  }
+
+  /// Whether this window's row for a conversation stops being live within the deadline: the Core's own word,
+  /// through the terminal index it pushes, that the process ended and the conversation's claim went with it.
+  private awaitIdle(key: string, deadlineMs: number): Promise<boolean> {
+    const idle = (): boolean => {
+      const row = this.state.conversations.find((candidate) => candidate.key === key);
+      return !row || !row.live;
+    };
+    if (idle()) return Promise.resolve(true);
+    return new Promise((resolve) => {
+      const settle = (answer: boolean): void => {
+        clearTimeout(timer);
+        watching.dispose();
+        resolve(answer);
+      };
+      const timer = setTimeout(() => settle(idle()), deadlineMs);
+      const watching = this.state.onDidChange(() => {
+        if (idle()) settle(true);
+      });
+    });
   }
 
   /// The deletion itself, after the question (or, for the headless journey, instead of it).

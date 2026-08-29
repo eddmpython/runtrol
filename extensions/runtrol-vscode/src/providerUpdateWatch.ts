@@ -10,9 +10,17 @@ import type { ProviderUpdateLine } from "./protocol";
 /// No clock of its own. The inspection asks the package registry over the network, and this repository bans
 /// polling loops outright, so it is asked exactly when something happened: the window reaches a Core (fresh
 /// activation or a reconnect after an update), an update just ran, or the person invokes the check command.
+/// The least time between two inspections that nobody asked for by name.
+///
+/// A Core that answers a listing and then drops the stream is reached again on every reconnect, and each
+/// reach would otherwise be a fresh network inspection. The manual command and a finished update pass
+/// `force` and are never held back.
+const MIN_GAP_MS = 10 * 60 * 1000;
+
 export class ProviderUpdateWatch {
   private lines = new Map<string, ProviderUpdateLine>();
   private inFlight: Promise<void> | null = null;
+  private askedAt = 0;
   private readonly listeners = new Set<() => void>();
   private disposed = false;
 
@@ -35,8 +43,11 @@ export class ProviderUpdateWatch {
   }
 
   /// One inspection. A failure keeps the previous answer: a registry that did not answer is not a release.
-  check(): Promise<void> {
+  check(force = false): Promise<void> {
+    if (this.disposed) return Promise.resolve();
     if (this.inFlight) return this.inFlight;
+    if (!force && Date.now() - this.askedAt < MIN_GAP_MS) return Promise.resolve();
+    this.askedAt = Date.now();
     this.inFlight = this.inspect()
       .then((lines) => {
         if (this.disposed) return;

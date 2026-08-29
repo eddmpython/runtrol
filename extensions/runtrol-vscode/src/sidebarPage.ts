@@ -146,9 +146,13 @@ export function sidebarHtml(model: SidebarModel, assets: SidebarAssets): string 
 /// itself while the hand was still moving towards it, which is the mouse losing its way (operator, 2026-08-28)
 /// and is also the plainest kind of stutter this panel can have.
 export function sidebarBody(model: SidebarModel, assets: SidebarAssets): string {
-  return `${model.notices.map(noticeHtml).join("")}
-${model.serviceChoice ? serviceChoiceHtml(model.serviceChoice, assets) : ""}
-${model.firstRun ? firstRunHtml() : ""}
+  // Every top-level part has a fixed id, present even when empty. The repaint matches elements by key, and
+  // an unkeyed part that comes and goes (a notice, the service choice) shifted every part after it onto the
+  // wrong element: the list was rebuilt from scratch and jumped to the top whenever a notice appeared
+  // (measured 2026-08-29).
+  return `<div id="notices">${model.notices.map(noticeHtml).join("")}</div>
+<div id="choice">${model.serviceChoice ? serviceChoiceHtml(model.serviceChoice, assets) : ""}</div>
+<div id="first-run">${model.firstRun ? firstRunHtml() : ""}</div>
 ${zonesHtml(model, assets)}`;
 }
 
@@ -167,12 +171,12 @@ ${model.projects.map((project) => projectHtml(project, assets)).join("")}
 </section>`;
   const usage = model.usage.length === 0
     ? ""
-    : `<section class="zone usage-zone" aria-label="Usage">
+    : `<section class="zone usage-zone" id="usage" aria-label="Usage">
 <h2 class="zone-title"><i class="ci ci-gauge" aria-hidden="true"></i>Usage</h2>
 ${usagePanelsMarkup(model.usage)}
 ${usageChipsMarkup(model.usage, assets)}
 </section>`;
-  return `<div class="scroll">${projects}${loose}</div>${usage}`;
+  return `<div class="scroll" id="scroll">${projects}${loose}</div>${usage}`;
 }
 
 /// The uncommitted and unpushed work of a project, as `+120 -35 ?2 ↑3`, each part only while it is not zero.
@@ -597,26 +601,40 @@ const SCRIPT = `
     var have = Array.prototype.slice.call(from.childNodes);
     var byKey = {};
     have.forEach(function (node) { var key = keyOf(node); if (key !== null && !byKey[key]) byKey[key] = node; });
-    var used = [];
+    var matched = new Array(wanted.length);
+    var used = new WeakSet();
+    // Keyed parts keep their element wherever they moved to.
     wanted.forEach(function (next, index) {
       var key = keyOf(next);
-      var match = key !== null ? byKey[key] : null;
-      if (match && match.tagName !== next.tagName) match = null;
-      if (!match && key === null) {
-        var candidate = have[index];
-        if (candidate && used.indexOf(candidate) === -1 && keyOf(candidate) === null
-          && candidate.nodeType === next.nodeType && candidate.tagName === next.tagName) match = candidate;
+      if (key === null) return;
+      var match = byKey[key];
+      if (match && match.tagName === next.tagName && !used.has(match)) { matched[index] = match; used.add(match); }
+    });
+    // Unkeyed parts pair up in order with the free unkeyed old nodes of the same kind, so one that appeared
+    // or vanished shifts nothing onto the wrong element.
+    var cursor = 0;
+    wanted.forEach(function (next, index) {
+      if (matched[index] || keyOf(next) !== null) return;
+      while (cursor < have.length) {
+        var candidate = have[cursor++];
+        if (used.has(candidate) || keyOf(candidate) !== null) continue;
+        if (candidate.nodeType === next.nodeType && candidate.tagName === next.tagName) { matched[index] = candidate; used.add(candidate); break; }
       }
+    });
+    // What nothing wanted leaves first, so what stays is not moved past it: moving an element is a removal
+    // and a reinsertion, which restarts its animation and drops its focus (measured 2026-08-29: closing the
+    // row above a working one restarted that one's icon and lost the keyboard).
+    have.forEach(function (node) { if (!used.has(node)) from.removeChild(node); });
+    wanted.forEach(function (next, index) {
       var current = from.childNodes[index];
+      var match = matched[index];
       if (match) {
-        used.push(match);
         if (match !== current) from.insertBefore(match, current || null);
         morphNode(match, next);
       } else {
         from.insertBefore(next.cloneNode(true), current || null);
       }
     });
-    while (from.childNodes.length > wanted.length) from.removeChild(from.lastChild);
   }
   function morphNode(node, next) {
     if (node.nodeType === 3) { if (node.nodeValue !== next.nodeValue) node.nodeValue = next.nodeValue; return; }

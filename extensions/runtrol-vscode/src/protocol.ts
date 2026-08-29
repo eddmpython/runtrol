@@ -421,6 +421,8 @@ export type Response =
         version: string | null;
         why: string | null;
         sign_in: string | null;
+        /// Additive (2026-08-29): absent from an older Core, which an older reader never asked for.
+        sign_out?: string | null;
         diagnose: string | null;
         install: string | null;
       };

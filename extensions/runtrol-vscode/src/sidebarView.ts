@@ -80,6 +80,12 @@ export type UsageActions = {
   update(providerId: string): Promise<void>;
 };
 
+/// What the Core's private help line says per service (`ProviderHelpCache`).
+export type ProviderHelpPort = {
+  signOutFor(providerId: string): string | null;
+  onDidChange(listener: () => void): { dispose(): void };
+};
+
 /// What the Core last said about each service's release (`ProviderUpdateWatch`).
 export type ProviderReleasePort = {
   installedFor(providerId: string): string | null;
@@ -123,6 +129,7 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
     private readonly agentTools: AgentToolsPort,
     private readonly changes: GitChangesPort,
     private readonly releases: ProviderReleasePort,
+    private readonly help: ProviderHelpPort,
     private readonly usageActions: UsageActions,
     private readonly report: (error: unknown) => void,
   ) {
@@ -137,6 +144,7 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
       agentTools.onDidChange(() => this.render()),
       changes.onDidChange(() => this.render()),
       releases.onDidChange(() => this.render()),
+      help.onDidChange(() => this.render()),
       vscode.workspace.onDidChangeWorkspaceFolders(() => this.render()),
     );
   }
@@ -355,7 +363,7 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
       .filter((provider) => provider.help?.signIn)
       .map((provider) => provider.providerId));
     const signOutAble = new Set(this.state.providers
-      .filter((provider) => provider.help?.signOut)
+      .filter((provider) => this.help.signOutFor(provider.providerId) !== null)
       .map((provider) => provider.providerId));
     // The CLI release beside each service's name: Runtime's probe of the binary, or the Core's inspection when
     // the probe said nothing. And the release the Update button goes to, when the Core confirmed one.

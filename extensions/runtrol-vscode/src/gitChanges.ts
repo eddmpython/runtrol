@@ -158,6 +158,16 @@ export class GitChangesWatch {
     this.pending.set(key, { timer, since });
   }
 
+  /// Something wrote inside this folder: touch every followed folder that contains it, which is the project
+  /// the conversation is filed under. A conversation running in a subfolder of a project is that project's
+  /// row, so the project's chip is what moves; the subfolder itself is never measured on its own.
+  touchContaining(folder: string): void {
+    const key = keyOf(folder);
+    for (const [known, spelled] of this.folders) {
+      if (key === known || key.startsWith(`${known}${path.sep}`)) this.touch(spelled);
+    }
+  }
+
   /// Something changed somewhere under this root: touch every folder measured under it.
   touchUnder(root: string): void {
     const prefix = keyOf(root);

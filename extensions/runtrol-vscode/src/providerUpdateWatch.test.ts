@@ -29,14 +29,16 @@ test("an update is offered only when the Core confirms a newer release and an ex
 
   answer = [line({ state: "available", target: "2.1.252", rollback: null })];
   await watch.check();
+  assert.equal(watch.updateTargetFor("claude"), null, "inside the gap an unforced check asks nothing");
+  await watch.check(true);
   assert.equal(watch.updateTargetFor("claude"), null, "no rollback, no button: the Core would refuse the update");
 
   answer = [line({ state: "available", target: "2.1.252", rollback: "2.1.251" })];
-  await watch.check();
+  await watch.check(true);
   assert.equal(watch.updateTargetFor("claude"), "2.1.252");
   assert.equal(changed, 3);
 
-  await watch.check();
+  await watch.check(true);
   assert.equal(changed, 3, "the same answer again is not a change");
   watch.dispose();
 });
@@ -50,7 +52,7 @@ test("a registry that does not answer keeps the previous answer", async () => {
   await watch.check();
   assert.equal(watch.updateTargetFor("claude"), "2.1.252");
   fail = true;
-  await watch.check();
+  await watch.check(true);
   assert.equal(watch.updateTargetFor("claude"), "2.1.252");
   watch.dispose();
 });

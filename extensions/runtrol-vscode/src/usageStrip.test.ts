@@ -32,8 +32,17 @@ function fakeDom(chipCount: number) {
       for (const handler of this.handlers.get(kind) ?? []) handler();
     }
   }
-  const chips = Array.from({ length: chipCount }, () => new Element("chip"));
-  const panels = Array.from({ length: chipCount }, () => new Element("panel"));
+  // Chips and panels are paired by the service they belong to, the way the page marks them.
+  const chips = Array.from({ length: chipCount }, (_, at) => {
+    const chip = new Element("chip");
+    chip.dataset.provider = `service-${at}`;
+    return chip;
+  });
+  const panels = Array.from({ length: chipCount }, (_, at) => {
+    const panel = new Element("panel");
+    panel.dataset.provider = `service-${at}`;
+    return panel;
+  });
   const strip = new Element("chips");
   const document = {
     querySelectorAll(selector: string): Element[] {
@@ -197,7 +206,7 @@ test("a blocking limit colours the chip and the panel", () => {
 
 test("a signed-out chip answers a click with the sign-in action and says so to a screen reader", () => {
   const html = strip(usageChips([row({ state: "signedOut", position: "Not signed in", age: null })]));
-  assert.ok(html.includes('data-action="signIn" data-provider="codex"'));
+  assert.ok(html.includes('data-provider="codex" data-action="signIn"'));
   assert.ok(html.includes('aria-label="Codex: Sign in"'));
   assert.ok(!html.includes("Press Enter"));
 });
@@ -221,7 +230,7 @@ test("a signed-out account that can sign in is still offered the way in", () => 
     [row({ state: "signedOut", position: "Not signed in", age: null })],
     new Set(["codex"]),
   ));
-  assert.ok(html.includes('data-action="signIn" data-provider="codex"'), "sign-in is reachable when signed out");
+  assert.ok(html.includes('data-provider="codex" data-action="signIn"'), "sign-in is reachable when signed out");
 });
 
 test("a hovered panel stays open while the pointer travels from the chip into it", () => {

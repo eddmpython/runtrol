@@ -25,20 +25,29 @@ type GitExtensionExports = {
 /// measured when an agent in them writes. A window whose git extension is off simply gets no events from it.
 export function followGitExtension(changed: (root: string) => void): vscode.Disposable {
   const subscriptions: vscode.Disposable[] = [];
+  const perRepository = new Map<string, vscode.Disposable>();
   let disposed = false;
   const follow = (repository: GitRepository): void => {
-    const listener = repository.state.onDidChange(() => changed(repository.rootUri.fsPath));
-    subscriptions.push(listener);
+    const root = repository.rootUri.fsPath;
+    perRepository.get(root)?.dispose();
+    perRepository.set(root, repository.state.onDidChange(() => changed(root)));
+  };
+  const unfollow = (repository: GitRepository): void => {
+    const root = repository.rootUri.fsPath;
+    perRepository.get(root)?.dispose();
+    perRepository.delete(root);
   };
   void activateGit().then((api) => {
     if (disposed || !api) return;
     for (const repository of api.repositories) follow(repository);
-    subscriptions.push(api.onDidOpenRepository(follow));
+    subscriptions.push(api.onDidOpenRepository(follow), api.onDidCloseRepository(unfollow));
   });
   return {
     dispose: () => {
       disposed = true;
       for (const subscription of subscriptions) subscription.dispose();
+      for (const listener of perRepository.values()) listener.dispose();
+      perRepository.clear();
     },
   };
 }
