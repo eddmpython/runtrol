@@ -10,6 +10,13 @@ and refactoring that no user can observe do not belong here.
 
 ## [Unreleased]
 
+### Changed
+
+- The symbol that shows while a conversation opens is now the Runtrol mark held still, with a coral light
+  sweeping across it from left to right and repeating, instead of the mark spinning. It draws on a cleared
+  pane, so there is no tile behind it.
+- The sidebar shows the build version in small type at the top, under the "Runtrol" header.
+
 ### Added
 
 - A conversation you started outside Runtrol on Windows can now be opened and driven inside it. When a coding
@@ -120,6 +127,13 @@ and refactoring that no user can observe do not belong here.
 
 ## [0.1.33] - 2026-08-28
 
+### Changed
+
+- The symbol that shows while a conversation opens is now the Runtrol mark held still, with a coral light
+  sweeping across it from left to right and repeating, instead of the mark spinning. It draws on a cleared
+  pane, so there is no tile behind it.
+- The sidebar shows the build version in small type at the top, under the "Runtrol" header.
+
 ### Added
 
 - A conversation the panel did not start now turns its icon while its service is answering. Runtime gained a
@@ -152,6 +166,13 @@ and refactoring that no user can observe do not belong here.
   when the Runtime answered, which is earlier: the answer carries an empty screen, so the tab went back to
   being the blank rectangle the mark exists to prevent.
 
+### Changed
+
+- The symbol that shows while a conversation opens is now the Runtrol mark held still, with a coral light
+  sweeping across it from left to right and repeating, instead of the mark spinning. It draws on a cleared
+  pane, so there is no tile behind it.
+- The sidebar shows the build version in small type at the top, under the "Runtrol" header.
+
 ### Added
 
 - A project row says which branch its folder is on, read straight from the repository rather than by running
@@ -171,6 +192,13 @@ and refactoring that no user can observe do not belong here.
 - Usage stays at the bottom of the panel, and its detail gives each window's name a line of its own with the
   progress underneath, so a model's name is never the part that gets cut.
 
+### Changed
+
+- The symbol that shows while a conversation opens is now the Runtrol mark held still, with a coral light
+  sweeping across it from left to right and repeating, instead of the mark spinning. It draws on a cleared
+  pane, so there is no tile behind it.
+- The sidebar shows the build version in small type at the top, under the "Runtrol" header.
+
 ### Added
 
 - A conversation whose turn is running is marked by its icon turning, with a ring turning around it.
@@ -179,6 +207,13 @@ and refactoring that no user can observe do not belong here.
 - A project added, renamed or removed in one window shows up in the others when they are next looked at.
 
 ## [0.1.29] - 2026-08-28
+
+### Changed
+
+- The symbol that shows while a conversation opens is now the Runtrol mark held still, with a coral light
+  sweeping across it from left to right and repeating, instead of the mark spinning. It draws on a cleared
+  pane, so there is no tile behind it.
+- The sidebar shows the build version in small type at the top, under the "Runtrol" header.
 
 ### Added
 
@@ -269,6 +304,13 @@ and refactoring that no user can observe do not belong here.
   gone), a conversation row keeps a tooltip only for the reason an open would be refused, and inside the panel
   only the window that is actually limiting you keeps its sentence; the others are a bar and a number.
 
+### Changed
+
+- The symbol that shows while a conversation opens is now the Runtrol mark held still, with a coral light
+  sweeping across it from left to right and repeating, instead of the mark spinning. It draws on a cleared
+  pane, so there is no tile behind it.
+- The sidebar shows the build version in small type at the top, under the "Runtrol" header.
+
 ### Added
 
 - Every conversation row shows what its provider process holds in memory right now (`412 MB`), read from the
@@ -296,6 +338,13 @@ and refactoring that no user can observe do not belong here.
   full cross-generation double-open protection.
 
 ## [0.1.23] - 2026-08-27
+
+### Changed
+
+- The symbol that shows while a conversation opens is now the Runtrol mark held still, with a coral light
+  sweeping across it from left to right and repeating, instead of the mark spinning. It draws on a cleared
+  pane, so there is no tile behind it.
+- The sidebar shows the build version in small type at the top, under the "Runtrol" header.
 
 ### Added
 
@@ -447,6 +496,13 @@ and refactoring that no user can observe do not belong here.
 
 ## [0.1.22] - 2026-08-25
 
+### Changed
+
+- The symbol that shows while a conversation opens is now the Runtrol mark held still, with a coral light
+  sweeping across it from left to right and repeating, instead of the mark spinning. It draws on a cleared
+  pane, so there is no tile behind it.
+- The sidebar shows the build version in small type at the top, under the "Runtrol" header.
+
 ### Added
 
 - Conversations can now be pinned with an inline pin, and unpinned the same way. A pinned conversation leads the
@@ -509,6 +565,13 @@ and refactoring that no user can observe do not belong here.
 
 ## [0.1.20] - 2026-08-24
 
+### Changed
+
+- The symbol that shows while a conversation opens is now the Runtrol mark held still, with a coral light
+  sweeping across it from left to right and repeating, instead of the mark spinning. It draws on a cleared
+  pane, so there is no tile behind it.
+- The sidebar shows the build version in small type at the top, under the "Runtrol" header.
+
 ### Added
 
 - Conversation rows now expose provider-native archive beside delete when the installed CLI reports that capability.
@@ -558,6 +621,13 @@ and refactoring that no user can observe do not belong here.
   reducing fixed memory without weakening service serialization, line acceptance, or replay bounds.
 
 ## [0.1.17] - 2026-08-24
+
+### Changed
+
+- The symbol that shows while a conversation opens is now the Runtrol mark held still, with a coral light
+  sweeping across it from left to right and repeating, instead of the mark spinning. It draws on a cleared
+  pane, so there is no tile behind it.
+- The sidebar shows the build version in small type at the top, under the "Runtrol" header.
 
 ### Added
 
@@ -664,6 +734,13 @@ and refactoring that no user can observe do not belong here.
   still never reads conversation content to invent a title.
 
 ## [0.1.10] - 2026-08-22
+
+### Changed
+
+- The symbol that shows while a conversation opens is now the Runtrol mark held still, with a coral light
+  sweeping across it from left to right and repeating, instead of the mark spinning. It draws on a cleared
+  pane, so there is no tile behind it.
+- The sidebar shows the build version in small type at the top, under the "Runtrol" header.
 
 ### Added
 
@@ -925,6 +1002,13 @@ and refactoring that no user can observe do not belong here.
   last three published packages, runs each as a real daemon, and requires this build's client to
   complete a real handshake against it, so the same break cannot reach anyone again.
 
+### Changed
+
+- The symbol that shows while a conversation opens is now the Runtrol mark held still, with a coral light
+  sweeping across it from left to right and repeating, instead of the mark spinning. It draws on a cleared
+  pane, so there is no tile behind it.
+- The sidebar shows the build version in small type at the top, under the "Runtrol" header.
+
 ### Added
 
 - The Core now rolls itself forward. The daemon announces its own executable digest in the
@@ -936,6 +1020,13 @@ and refactoring that no user can observe do not belong here.
 
 ## [0.1.8] - 2026-08-20
 
+### Changed
+
+- The symbol that shows while a conversation opens is now the Runtrol mark held still, with a coral light
+  sweeping across it from left to right and repeating, instead of the mark spinning. It draws on a cleared
+  pane, so there is no tile behind it.
+- The sidebar shows the build version in small type at the top, under the "Runtrol" header.
+
 ### Added
 
 - Conversations now open like files: each one gets its own editor tab, so several conversations can be
@@ -944,6 +1035,13 @@ and refactoring that no user can observe do not belong here.
   window reload restores every conversation tab to its own session instead of collapsing them into one.
 
 ## [0.1.7] - 2026-08-20
+
+### Changed
+
+- The symbol that shows while a conversation opens is now the Runtrol mark held still, with a coral light
+  sweeping across it from left to right and repeating, instead of the mark spinning. It draws on a cleared
+  pane, so there is no tile behind it.
+- The sidebar shows the build version in small type at the top, under the "Runtrol" header.
 
 ### Added
 
@@ -1077,6 +1175,13 @@ and refactoring that no user can observe do not belong here.
 
 ## [0.1.5] - 2026-08-20
 
+### Changed
+
+- The symbol that shows while a conversation opens is now the Runtrol mark held still, with a coral light
+  sweeping across it from left to right and repeating, instead of the mark spinning. It draws on a cleared
+  pane, so there is no tile behind it.
+- The sidebar shows the build version in small type at the top, under the "Runtrol" header.
+
 ### Added
 
 - The model can now be switched in the middle of a conversation, from the conversation's own header. Click the
@@ -1173,6 +1278,13 @@ and refactoring that no user can observe do not belong here.
 
 ## [0.1.4] - 2026-08-17
 
+### Changed
+
+- The symbol that shows while a conversation opens is now the Runtrol mark held still, with a coral light
+  sweeping across it from left to right and repeating, instead of the mark spinning. It draws on a cleared
+  pane, so there is no tile behind it.
+- The sidebar shows the build version in small type at the top, under the "Runtrol" header.
+
 ### Added
 
 - Conversations now say when they are waiting for you. A coding agent that stops mid-turn for an approval or a
@@ -1248,6 +1360,13 @@ and refactoring that no user can observe do not belong here.
 
 ## [0.1.3] - 2026-08-16
 
+### Changed
+
+- The symbol that shows while a conversation opens is now the Runtrol mark held still, with a coral light
+  sweeping across it from left to right and repeating, instead of the mark spinning. It draws on a cleared
+  pane, so there is no tile behind it.
+- The sidebar shows the build version in small type at the top, under the "Runtrol" header.
+
 ### Added
 
 - The Marketplace page now gives an exact extension-ID search fallback, automatic-update recovery for earlier manual
@@ -1264,6 +1383,13 @@ and refactoring that no user can observe do not belong here.
   Core. Untrusted and virtual workspaces are rejected with a direct explanation instead of failing after activation.
 
 ## [0.1.2] - 2026-08-16
+
+### Changed
+
+- The symbol that shows while a conversation opens is now the Runtrol mark held still, with a coral light
+  sweeping across it from left to right and repeating, instead of the mark spinning. It draws on a cleared
+  pane, so there is no tile behind it.
+- The sidebar shows the build version in small type at the top, under the "Runtrol" header.
 
 ### Added
 
@@ -1343,6 +1469,13 @@ and refactoring that no user can observe do not belong here.
 ## [0.1.0] - 2026-08-12
 
 First public Runtrol Studio release for six native Windows, macOS, and Linux targets.
+
+### Changed
+
+- The symbol that shows while a conversation opens is now the Runtrol mark held still, with a coral light
+  sweeping across it from left to right and repeating, instead of the mark spinning. It draws on a cleared
+  pane, so there is no tile behind it.
+- The sidebar shows the build version in small type at the top, under the "Runtrol" header.
 
 ### Added
 

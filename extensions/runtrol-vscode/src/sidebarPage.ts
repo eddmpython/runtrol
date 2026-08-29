@@ -79,6 +79,8 @@ export type SidebarModel = {
   readonly serviceChoice: SidebarServiceChoice | null;
   /// Nothing to list and a service to start with: the page offers the two first actions as rows.
   readonly firstRun: boolean;
+  /// This build's version, shown small under the header so a person can name what they are running.
+  readonly version: string;
 };
 
 export type SidebarAssets = UsageStripAssets;
@@ -133,10 +135,18 @@ export function sidebarHtml(model: SidebarModel, assets: SidebarAssets): string 
 /// itself while the hand was still moving towards it, which is the mouse losing its way (operator, 2026-08-28)
 /// and is also the plainest kind of stutter this panel can have.
 export function sidebarBody(model: SidebarModel, assets: SidebarAssets): string {
-  return `${model.notices.map(noticeHtml).join("")}
+  return `${versionHtml(model.version)}
+${model.notices.map(noticeHtml).join("")}
 ${model.serviceChoice ? serviceChoiceHtml(model.serviceChoice, assets) : ""}
 ${model.firstRun ? firstRunHtml() : ""}
 ${zonesHtml(model, assets)}`;
+}
+
+/// The build's version, small and muted at the top of the body, right under the title bar's "Runtrol". The
+/// title bar is the editor's, not the page's, so the version cannot live in it; this is the nearest place the
+/// page owns (operator, 2026-08-29: show the version in the header).
+function versionHtml(version: string): string {
+  return version ? `<div class="version">v${escapeHtml(version)}</div>` : "";
 }
 
 function zonesHtml(model: SidebarModel, assets: SidebarAssets): string {
@@ -302,6 +312,7 @@ html { height: 100%; }
    Agent Usage use a black background). One owner for one fact: the strip no longer names it. */
 body { margin: 0; padding: 6px 8px; height: 100%; min-height: 100%; box-sizing: border-box; display: flex; flex-direction: column; overflow: hidden; color: var(--vscode-sideBar-foreground, var(--vscode-foreground)); background: var(--vscode-sideBar-background); font: var(--vscode-font-size) var(--vscode-font-family); user-select: none; }
 button { font: inherit; color: inherit; }
+.version { margin: 2px 6px 0; font-size: 10px; line-height: 12px; opacity: 0.55; letter-spacing: 0.02em; }
 .notice { margin: 4px 4px 0; padding: 4px 6px; border-radius: 4px; font-size: 12px; background: var(--vscode-editorWidget-background); border-left: 3px solid var(--vscode-widget-border); }
 .notice.warn { border-left-color: var(--vscode-editorWarning-foreground); }
 .notice.error { border-left-color: var(--vscode-errorForeground); }

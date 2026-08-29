@@ -15,46 +15,69 @@
 /// would have been anyone's; this one is ours (operator, 2026-08-28: show our own symbol and make it move).
 
 /// The four corners, clockwise from the top left, in each of the four quarter turns.
-const TURNS: ReadonlyArray<readonly [string, string, string, string]> = [
-  ["╭", "╮", "╯", "╰"],
-  ["╰", "╭", "╮", "╯"],
-  ["╯", "╰", "╭", "╮"],
-  ["╮", "╯", "╰", "╭"],
+/// The mark itself, standing still: the four arms in their corners, top to bottom. It does not spin
+/// (operator, 2026-08-29: use our symbol as it is and put the effect on it, not a rotation). The light is
+/// what moves; the symbol is the thing the light moves across.
+const SYMBOL: readonly string[] = [
+  "╭   ╮",
+  "     ",
+  "╰   ╯",
 ];
 
-const BLOCK_ROWS = 3;
-const BLOCK_COLUMNS = 5;
+const BLOCK_ROWS = SYMBOL.length;
+const BLOCK_COLUMNS = SYMBOL[0]?.length ?? 0;
 
-/// One quarter turn of the mark as the lines it draws, top to bottom.
-export function markFrame(at: number): string[] {
-  const corners = TURNS[at % TURNS.length];
-  if (!corners) return [];
-  const [topLeft, topRight, bottomRight, bottomLeft] = corners;
-  return [
-    `${topLeft}   ${topRight}`,
-    "     ",
-    `${bottomLeft}   ${bottomRight}`,
-  ];
+/// The mark as its plain lines, the same every frame. Kept exported so a test can read the shape without the
+/// escape sequences the light adds.
+export function markFrame(): readonly string[] {
+  return SYMBOL;
+}
+
+/// The Runtrol coral, as a truecolor foreground. The light that sweeps the symbol is brand-coloured, so the
+/// motion reads as our light rather than as the terminal blinking.
+const LIT = "\x1b[1;38;2;245;101;101m";
+const NEAR = "\x1b[0m";
+const DIM = "\x1b[2m";
+
+/// The sweep runs one column past the symbol on each side, so the light fully enters and fully leaves before
+/// it comes round again. That gap is what makes the motion read as a repeating left-to-right pass rather than
+/// a column that just jumps back.
+const SWEEP_MARGIN = 2;
+const SWEEP_PERIOD = BLOCK_COLUMNS + SWEEP_MARGIN * 2;
+
+/// The escape for one cell at column `x`, given where the light is (`lit`): brightest under the light, normal
+/// one column to either side, dim elsewhere. This is the whole effect, per character.
+function cellStyle(x: number, lit: number): string {
+  const distance = Math.abs(x - lit);
+  if (distance === 0) return LIT;
+  if (distance === 1) return NEAR;
+  return DIM;
 }
 
 /// The escape sequence that paints one frame centred in a terminal of this size.
 ///
-/// The whole screen is cleared each frame rather than only the block: the terminal this draws into is about to
-/// be handed to a CLI that will clear it anyway, and a partial repaint of a pane that may have been resized
-/// leaves the old block behind.
+/// The symbol stands still and a coral light sweeps across it left to right, over and over. The whole screen
+/// is cleared each frame rather than only the block: the terminal this draws into is about to be handed to a
+/// CLI that will clear it anyway, and a partial repaint of a pane that may have been resized leaves the old
+/// block behind.
 export function paintMark(at: number, columns: number, rows: number): string {
-  const lines = markFrame(at);
   const top = Math.max(1, Math.floor((rows - BLOCK_ROWS) / 2));
   const left = Math.max(1, Math.floor((columns - BLOCK_COLUMNS) / 2));
-  const painted = lines
-    .map((line, index) => `\x1b[${top + index};${left}H\x1b[2m${line}\x1b[0m`)
+  const lit = (at % SWEEP_PERIOD) - SWEEP_MARGIN;
+  const painted = SYMBOL
+    .map((line, row) => {
+      const cells = [...line]
+        .map((character, x) => `${cellStyle(x, lit)}${character}`)
+        .join("");
+      return `\x1b[${top + row};${left}H${cells}\x1b[0m`;
+    })
     .join("");
   return `\x1b[2J${painted}`;
 }
 
-/// How often a frame is drawn. Four quarter turns at this interval is one turn every two thirds of a second,
-/// which reads as motion without asking the terminal to repaint faster than it can.
-export const MARK_FRAME_MS = 160;
+/// How often a frame is drawn. The light moves one column per frame, and at this interval its pass across the
+/// symbol reads as motion without asking the terminal to repaint faster than it can.
+export const MARK_FRAME_MS = 110;
 
 /// Hide the cursor while the mark turns; a block cursor parked at the top left is not part of the picture.
 export const HIDE_CURSOR = "\x1b[?25l";

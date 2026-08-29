@@ -62,6 +62,7 @@ function model(overrides: Partial<SidebarModel>): SidebarModel {
     usage: [],
     serviceChoice: null,
     firstRun: false,
+    version: "0.1.34",
     ...overrides,
   };
 }
@@ -111,6 +112,11 @@ test("a project's colour reaches its heading bar and every conversation under it
   );
   assert.ok(!html.includes('style="background'), "no colour is written onto an element for the CSP to drop");
   assert.ok(html.includes('class="bar"></span>'), "a loose conversation has no project colour");
+});
+
+test("the build's version shows small at the top, and a placeholder build shows none", () => {
+  assert.ok(sidebarHtml(model({ version: "0.1.35" }), assets).includes('class="version">v0.1.35<'), "the version rides the header");
+  assert.ok(!sidebarHtml(model({ version: "" }), assets).includes('class="version"'), "an unpackaged build shows no version");
 });
 
 test("row actions are buttons that name their command, and only the actions a row can perform", () => {
@@ -224,6 +230,7 @@ test("first run offers the two starting actions and a chosen service offers its 
     projects: [],
     loose: [],
     firstRun: true,
+    version: "0.1.34",
     serviceChoice: { workspace: "C:\\work\\app", services: [{ providerId: "claude", displayName: "Claude Code", icon: "claude" }] },
   }), assets);
   assert.ok(html.includes('data-command="runtrol.createProject"'));

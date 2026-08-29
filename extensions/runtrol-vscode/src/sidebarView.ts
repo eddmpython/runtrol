@@ -336,7 +336,15 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
       usage,
       serviceChoice: this.serviceChoice(),
       firstRun,
+      version: this.version(),
     };
+  }
+
+  /// This build's version, from the installed extension's manifest. The checked-in manifest carries the
+  /// derived-version placeholder, so an unpackaged dev build has no number to show and the line stays away.
+  private version(): string {
+    const declared = this.context.extension.packageJSON as { version?: unknown };
+    return typeof declared.version === "string" && declared.version !== "0.0.0" ? declared.version : "";
   }
 
   /// Read every project's branch once per listing, and redraw if any of them moved.
