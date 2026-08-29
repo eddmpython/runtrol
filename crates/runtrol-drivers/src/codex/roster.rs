@@ -38,6 +38,7 @@ use std::fs;
 use std::io::{Read as _, Seek as _, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use tokio::sync::Mutex;
 
@@ -90,6 +91,14 @@ const TURN_OPENED: &[u8] = b"\"type\":\"task_started\"";
 /// The event that closes one.
 const TURN_CLOSED: &[u8] = b"\"type\":\"task_complete\"";
 
+/// How long one answer about which conversations are held is reused.
+///
+/// Asking is an exclusive open, and an exclusive open is the one thing here that another process can notice:
+/// for the moment it is held, the CLI opening that same lock would be refused. The observation clock runs
+/// four times a second, so the question is asked far less often than it is answered, and a conversation that
+/// opened or closed inside the last second is reported a moment late rather than probed at that rate.
+const OWNERSHIP_FOR: Duration = Duration::from_secs(1);
+
 /// What one conversation's log looked like at the last observation.
 #[derive(Clone, Debug)]
 struct Followed {
@@ -101,10 +110,22 @@ struct Followed {
     answering: bool,
 }
 
+/// Which conversations were held, and when that was asked.
+#[derive(Clone, Debug)]
+struct Ownership {
+    threads: Vec<NativeSessionId>,
+    asked_at: Instant,
+}
+
 /// The CLI's own record of which conversations are open and which are answering.
 #[derive(Clone, Debug)]
 pub(super) struct CodexRoster {
     home: Result<PathBuf, HomeProblem>,
+    /// The last answer about which conversations a live process holds, reused for [`Self::owned_for`].
+    owned: Arc<Mutex<Option<Ownership>>>,
+    /// How long that answer is reused. [`OWNERSHIP_FOR`] in the product; nothing in tests, which assert on
+    /// what one call sees rather than on a clock.
+    owned_for: Duration,
     /// Where each conversation's log is and how far it has been read, so a later look reads only what was
     /// appended. Shared because the driver hands clones to the blocking pool.
     followed: Arc<Mutex<HashMap<Box<str>, Followed>>>,
@@ -122,15 +143,21 @@ impl CodexRoster {
     }
 
     fn at(home: Result<PathBuf, HomeProblem>) -> Self {
+        Self::holding(home, OWNERSHIP_FOR)
+    }
+
+    fn holding(home: Result<PathBuf, HomeProblem>, owned_for: Duration) -> Self {
         Self {
             home,
+            owned: Arc::new(Mutex::new(None)),
+            owned_for,
             followed: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
     #[cfg(test)]
     fn rooted(home: PathBuf) -> Self {
-        Self::at(Ok(home))
+        Self::holding(Ok(home), Duration::ZERO)
     }
 
     /// The conversations this CLI has open, and the subset with a model answering.
@@ -147,7 +174,22 @@ impl CodexRoster {
         let Ok(home) = &self.home else {
             return Ok(NativeProcessActivity::default());
         };
-        let owned = owned_threads(provider, &home.join(LOCKS_DIRECTORY))?;
+        let owned = {
+            // Taken with the blocking form on purpose: every caller reaches this from the blocking pool, and
+            // the async form cannot be awaited from outside a runtime task.
+            let mut cached = self.owned.blocking_lock();
+            match cached.as_ref() {
+                Some(known) if known.asked_at.elapsed() < self.owned_for => known.threads.clone(),
+                _ => {
+                    let threads = owned_threads(provider, &home.join(LOCKS_DIRECTORY))?;
+                    *cached = Some(Ownership {
+                        threads: threads.clone(),
+                        asked_at: Instant::now(),
+                    });
+                    threads
+                }
+            }
+        };
         let mut live = Vec::with_capacity(owned.len());
         let mut active = Vec::new();
         // Conversations nobody owns any more stop being followed, so a machine that has run for a week is
