@@ -208,9 +208,8 @@ fn json_registration(
 ) -> Result<McpRegistrationState, String> {
     let read: JsonRegistration = serde_json::from_slice(stdout)
         .map_err(|error| format!("the MCP registration JSON could not be read: {error}"))?;
-    let exact = read.name == name
+    let owned_shape = read.name == name
         && read.transport.kind == "stdio"
-        && read.transport.command == command
         && read
             .transport
             .args
@@ -220,13 +219,17 @@ fn json_registration(
         && read.transport.env.is_null()
         && read.transport.env_vars.is_empty()
         && read.transport.cwd.is_null();
-    if !exact {
+    if !owned_shape {
         return Ok(McpRegistrationState::Different);
     }
-    if read.enabled {
+    if read.transport.command == command && read.enabled {
         Ok(McpRegistrationState::ExactEnabled)
-    } else {
+    } else if read.transport.command == command {
         Ok(McpRegistrationState::ExactDisabled)
+    } else if read.enabled && superseded_runtrol(&read.transport.command, command) {
+        Ok(McpRegistrationState::Superseded)
+    } else {
+        Ok(McpRegistrationState::Different)
     }
 }
 
@@ -505,5 +508,73 @@ mod tests {
                 .expect("declared shape"),
             McpRegistrationState::Different
         );
+    }
+
+    #[test]
+    fn json_readback_recognizes_only_a_vanished_managed_image_as_superseded() {
+        let registrar = McpRegistrar {
+            add: &[],
+            remove: &[],
+            get: &[],
+            get_suffix: &["--json"],
+            readback: McpReadback::Json,
+        };
+        let readback = |enabled: bool, command: &str| {
+            serde_json::to_vec(&serde_json::json!({
+                "name": "runtrolTools",
+                "enabled": enabled,
+                "transport": {
+                    "type": "stdio",
+                    "command": command,
+                    "args": ["mcp"],
+                    "env": null,
+                    "env_vars": [],
+                    "cwd": null
+                }
+            }))
+            .expect("JSON")
+        };
+        let folder =
+            std::env::temp_dir().join(format!("runtrolJsonSupersededTest{}", std::process::id()));
+        std::fs::create_dir_all(&folder).expect("the test folder");
+        let current = folder.join("runtrol-abc123.exe");
+        let replaced = folder.join("runtrol-def456.exe");
+        std::fs::write(&current, b"current").expect("the current managed image");
+        if replaced.exists() {
+            std::fs::remove_file(&replaced).expect("clear the replaced image");
+        }
+        let current = current.to_str().expect("the current path");
+        let replaced = replaced.to_str().expect("the replaced path");
+        assert_eq!(
+            registrar
+                .registration_state(&readback(true, replaced), "runtrolTools", current, &["mcp"],)
+                .expect("declared shape"),
+            McpRegistrationState::Superseded,
+            "Codex JSON readback must recognize the vanished Core image an update replaced"
+        );
+        assert_eq!(
+            registrar
+                .registration_state(
+                    &readback(false, replaced),
+                    "runtrolTools",
+                    current,
+                    &["mcp"],
+                )
+                .expect("declared shape"),
+            McpRegistrationState::Different,
+            "a disabled entry remains the provider's explicit choice"
+        );
+
+        std::fs::write(replaced, b"still live").expect("the previous image is still live");
+        assert_eq!(
+            registrar
+                .registration_state(&readback(true, replaced), "runtrolTools", current, &["mcp"],)
+                .expect("declared shape"),
+            McpRegistrationState::Different,
+            "a live sibling image is not ours to replace"
+        );
+        std::fs::remove_file(current).expect("clean up the current image");
+        std::fs::remove_file(replaced).expect("clean up the previous image");
+        std::fs::remove_dir(folder).expect("clean up the test folder");
     }
 }

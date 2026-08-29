@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use runtrol_provider::{AccountReport, AccountStatus, ProviderId, WallMs};
-use tokio::sync::watch;
+use tokio::sync::{Notify, watch};
 
 use crate::Composed;
 
@@ -40,14 +40,20 @@ const ROUND_INTERVAL: Duration = Duration::from_mins(10);
 /// is a CLI that writes continuously while it works and then stops, so quiet is the boundary. Long enough
 /// that a pause between two frames is not read as an ending, short enough that the strip moves while the
 /// person is still looking at it.
-const TURN_QUIET: Duration = Duration::from_secs(3);
+const TURN_QUIET: Duration = Duration::from_secs(1);
 /// The least time between two questions to one service.
 ///
 /// A question is not free: measured 2026-08-27, asking one of these three costs a child process that peaks
 /// near 470 MiB for eight seconds, because answering means that CLI opening its own channel to its vendor.
 /// Short turns in a row would otherwise pay that every few seconds. Per service rather than overall, so a
 /// slow answer from one never delays another.
-const SERVICE_FLOOR: Duration = Duration::from_secs(30);
+const PROCESS_SERVICE_FLOOR: Duration = Duration::from_secs(30);
+/// The least time between two questions over a declared structured account protocol.
+///
+/// These drivers reuse or briefly open their machine channel and measured in well under the process-backed
+/// account reader. The distinction comes from the provider manifest, never a provider name, so a new driver
+/// gets the right lane by declaring the surface it actually owns.
+const PROTOCOL_SERVICE_FLOOR: Duration = Duration::from_secs(5);
 /// How soon a question that did not come back is asked again.
 ///
 /// A read that failed is the one absence that is runtrol's own, so it is not left to the slow sweep: the
@@ -59,9 +65,73 @@ const RETRY_AFTER: Duration = Duration::from_mins(1);
 /// Cheap on purpose: it reads one atomic per open terminal and starts nothing unless one of them has just
 /// gone quiet. When nothing is open it does not run at all, so an idle daemon keeps the footprint its
 /// budget contract fixes.
-const WATCH_TICK: Duration = Duration::from_secs(2);
+const WATCH_TICK: Duration = Duration::from_millis(500);
 /// How long a wake waits before its round, so a burst of session events becomes one round.
-const WAKE_SETTLE: Duration = Duration::from_secs(2);
+const WAKE_SETTLE: Duration = Duration::from_millis(250);
+
+/// A bounded, coalescing request for fresh account state.
+///
+/// A notification alone loses which provider moved and turns one finished conversation into a probe of every
+/// installed service. This retains at most one bit per provider plus one all-services bit, so a burst from any
+/// number of windows has memory bounded by the provider registry rather than the event rate.
+#[derive(Debug, Default)]
+pub(crate) struct AccountProbeWake {
+    pending: tokio::sync::Mutex<ProbeRequest>,
+    notify: Notify,
+}
+
+#[derive(Debug, Default)]
+struct ProbeRequest {
+    all: bool,
+    providers: BTreeSet<ProviderId>,
+}
+
+impl ProbeRequest {
+    fn all() -> Self {
+        Self {
+            all: true,
+            providers: BTreeSet::new(),
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        !self.all && self.providers.is_empty()
+    }
+
+    fn merge(&mut self, mut other: Self) {
+        self.all |= other.all;
+        self.providers.append(&mut other.providers);
+    }
+}
+
+impl AccountProbeWake {
+    /// Ask for every usable provider. Used when a usage surface first becomes visible.
+    pub(crate) async fn all(&self) {
+        self.pending.lock().await.all = true;
+        self.notify.notify_one();
+    }
+
+    /// Ask only the provider whose activity changed.
+    pub(crate) async fn provider(&self, provider: ProviderId) {
+        // ok: duplicate activity signals deliberately collapse into one provider identity.
+        self.pending.lock().await.providers.insert(provider);
+        self.notify.notify_one();
+    }
+
+    async fn wait(&self) -> ProbeRequest {
+        loop {
+            self.notify.notified().await;
+            let pending = self.take().await;
+            if !pending.is_empty() {
+                return pending;
+            }
+        }
+    }
+
+    async fn take(&self) -> ProbeRequest {
+        std::mem::take(&mut *self.pending.lock().await)
+    }
+}
 
 /// One service's latest report and when it arrived.
 #[derive(Clone, Debug, PartialEq)]
@@ -175,31 +245,65 @@ pub(crate) async fn supervise(
     providers: watch::Sender<Arc<runtrol_runtime_protocol::ProviderList>>,
     usage: watch::Sender<Arc<runtrol_runtime_protocol::ProviderUsageList>>,
 ) {
-    tokio::time::sleep(FIRST_ROUND_DELAY).await;
-    round(&composed, &providers, &usage).await;
-    let mut swept_at = WallMs::now();
     let mut asked: BTreeMap<ProviderId, WallMs> = BTreeMap::new();
     let mut unread: BTreeSet<ProviderId> = BTreeSet::new();
+    let mut pending: BTreeSet<ProviderId> = BTreeSet::new();
+    let started_at = WallMs::now();
+    let first = tokio::select! {
+        () = tokio::time::sleep(FIRST_ROUND_DELAY) => ProbeRequest::all(),
+        request = composed.account_probe_wake.wait() => request,
+    };
+    let mut first = settled_request(&composed.account_probe_wake, first).await;
+    // A request which raced the first-round clock belongs to the same round.
+    first.merge(composed.account_probe_wake.take().await);
+    let now = WallMs::now();
+    pending.extend(requested(&composed, &first));
+    let first_ids = take_requested_due(&composed, &mut pending, &asked, now);
+    for id in &first_ids {
+        // ok: this is the first instant for this service.
+        asked.insert(*id, now);
+    }
+    let first_unread = ask_all(&composed, &providers, &usage, first_ids.clone()).await;
+    update_unread(&mut unread, &first_ids, &first_unread);
+    let mut swept_at = if first_ids.len() == usable(&composed).len() {
+        now
+    } else {
+        started_at
+    };
+
     loop {
+        let wait = next_check(
+            &composed,
+            &asked,
+            &unread,
+            &pending,
+            swept_at,
+            WallMs::now(),
+        );
         tokio::select! {
-            () = tokio::time::sleep(WATCH_TICK) => {}
-            () = composed.account_probe_wake.notified() => {
-                // Coalesce the burst a conversation opening or closing makes, then ask about everything:
-                // which service changed is not knowable from that signal, and it is rare.
-                tokio::time::sleep(WAKE_SETTLE).await;
+            () = tokio::time::sleep(wait) => {}
+            request = composed.account_probe_wake.wait() => {
+                let request = settled_request(&composed.account_probe_wake, request).await;
                 let now = WallMs::now();
-                let ids = usable(&composed);
+                pending.extend(requested(&composed, &request));
+                let ids = take_requested_due(&composed, &mut pending, &asked, now);
                 for id in &ids {
                     // ok: the previous instant for this service is exactly what is being replaced.
                     asked.insert(*id, now);
                 }
-                unread = ask_all(&composed, &providers, &usage, ids).await;
-                swept_at = now;
+                let answer = ask_all(&composed, &providers, &usage, ids.clone()).await;
+                update_unread(&mut unread, &ids, &answer);
+                if ids.len() == usable(&composed).len() {
+                    swept_at = now;
+                }
                 continue;
             }
         }
         let now = WallMs::now();
         let mut due = due_now(&composed, &asked, swept_at, now).await;
+        due.extend(take_requested_due(&composed, &mut pending, &asked, now));
+        due.sort_unstable();
+        due.dedup();
         // A question that did not come back is the one absence that is runtrol's own, so it is not left to
         // the slow sweep. Which services those are is what the last round answered, kept here rather than
         // read back out of the report table: this runs every couple of seconds, and the projection that
@@ -225,13 +329,27 @@ pub(crate) async fn supervise(
             asked.insert(*id, now);
         }
         let answered = ask_all(&composed, &providers, &usage, due.clone()).await;
-        for id in &due {
+        update_unread(&mut unread, &due, &answered);
+    }
+}
+
+async fn settled_request(wake: &AccountProbeWake, mut request: ProbeRequest) -> ProbeRequest {
+    tokio::time::sleep(WAKE_SETTLE).await;
+    request.merge(wake.take().await);
+    request
+}
+
+fn update_unread(
+    unread: &mut BTreeSet<ProviderId>,
+    asked: &[ProviderId],
+    answered_unread: &BTreeSet<ProviderId>,
+) {
+    for id in asked {
+        if answered_unread.contains(id) {
             // ok: the set is the answer, and whether this id was already in it says nothing.
-            if answered.contains(id) {
-                unread.insert(*id);
-            } else {
-                unread.remove(id);
-            }
+            unread.insert(*id);
+        } else {
+            unread.remove(id);
         }
     }
 }
@@ -246,6 +364,111 @@ fn usable(composed: &Composed) -> Vec<ProviderId> {
         .collect()
 }
 
+/// Usable providers named by one coalesced wake.
+fn requested(composed: &Composed, request: &ProbeRequest) -> Vec<ProviderId> {
+    let requested = if request.all {
+        usable(composed)
+    } else {
+        request.providers.iter().copied().collect()
+    };
+    requested
+        .into_iter()
+        .filter(|id| {
+            composed
+                .registry
+                .get(*id)
+                .is_some_and(runtrol_core::registry::Provider::is_usable)
+        })
+        .collect()
+}
+
+/// Remove and return pending providers whose measured cost floor has passed.
+///
+/// A request inside its floor remains in the bounded set. Dropping it made a second external turn disappear
+/// until the ten-minute sweep because no hosted terminal clock existed to rediscover that quiet edge.
+fn take_requested_due(
+    composed: &Composed,
+    pending: &mut BTreeSet<ProviderId>,
+    asked: &BTreeMap<ProviderId, WallMs>,
+    now: WallMs,
+) -> Vec<ProviderId> {
+    take_due(pending, asked, now, |provider| {
+        service_floor(composed, provider)
+    })
+}
+
+fn take_due(
+    pending: &mut BTreeSet<ProviderId>,
+    asked: &BTreeMap<ProviderId, WallMs>,
+    now: WallMs,
+    floor: impl Fn(ProviderId) -> Duration,
+) -> Vec<ProviderId> {
+    let due: Vec<ProviderId> = pending
+        .iter()
+        .copied()
+        .filter(|id| {
+            asked
+                .get(id)
+                .is_none_or(|at| at.millis_until(now).unwrap_or(0) >= millis(floor(*id)))
+        })
+        .collect();
+    for id in &due {
+        pending.remove(id);
+    }
+    due
+}
+
+/// The cost floor declared by the account transport rather than the provider's identity.
+fn service_floor(composed: &Composed, provider: ProviderId) -> Duration {
+    let protocol = composed
+        .registry
+        .get(provider)
+        .and_then(|provider| provider.manifest.account.as_ref())
+        .and_then(|account| account.protocol.as_ref());
+    if protocol.is_some() {
+        PROTOCOL_SERVICE_FLOOR
+    } else {
+        PROCESS_SERVICE_FLOOR
+    }
+}
+
+/// Sleep only until a fact could next be due.
+///
+/// An open terminal gets the cheap half-second clock that notices quiet. With no terminal and no unread
+/// answer, the task sleeps straight to the ten-minute sweep; an idle daemon does not wake twice a second just
+/// to discover that it is still idle.
+fn next_check(
+    composed: &Composed,
+    asked: &BTreeMap<ProviderId, WallMs>,
+    unread: &BTreeSet<ProviderId>,
+    pending: &BTreeSet<ProviderId>,
+    swept_at: WallMs,
+    now: WallMs,
+) -> Duration {
+    let remaining = |since: WallMs, interval: Duration| {
+        interval.saturating_sub(Duration::from_millis(since.millis_until(now).unwrap_or(0)))
+    };
+    let mut next = remaining(swept_at, ROUND_INTERVAL);
+    if composed
+        .open_terminals
+        .load(std::sync::atomic::Ordering::Acquire)
+        > 0
+    {
+        next = next.min(WATCH_TICK);
+    }
+    for provider in unread {
+        if let Some(at) = asked.get(provider) {
+            next = next.min(remaining(*at, RETRY_AFTER));
+        }
+    }
+    for provider in pending {
+        next = next.min(asked.get(provider).map_or(Duration::ZERO, |at| {
+            remaining(*at, service_floor(composed, *provider))
+        }));
+    }
+    next
+}
+
 /// One duration as whole milliseconds a wall-clock difference can be compared against.
 ///
 /// These are constants of a few seconds, so the conversion cannot lose anything; it is written as a
@@ -258,7 +481,7 @@ fn millis(span: Duration) -> u64 {
 /// Whether one service is worth asking again, from when its CLI last wrote and when it was last asked.
 ///
 /// The whole decision, kept apart from the table it is made over so it can be stated as cases.
-fn is_due(wrote: Option<WallMs>, asked: Option<WallMs>, now: WallMs) -> bool {
+fn is_due(wrote: Option<WallMs>, asked: Option<WallMs>, now: WallMs, floor: Duration) -> bool {
     // Wrote something, then stopped: that is this surface's turn boundary. A terminal that has never
     // written has nothing to have finished.
     let Some(wrote) = wrote else { return false };
@@ -268,7 +491,7 @@ fn is_due(wrote: Option<WallMs>, asked: Option<WallMs>, now: WallMs) -> bool {
     match asked {
         // Nothing written since the last answer, so the last answer is still the answer.
         Some(asked) if asked >= wrote => false,
-        Some(asked) => asked.millis_until(now).unwrap_or(0) >= millis(SERVICE_FLOOR),
+        Some(asked) => asked.millis_until(now).unwrap_or(0) >= millis(floor),
         None => true,
     }
 }
@@ -311,25 +534,16 @@ async fn due_now(
     wrote
         .into_iter()
         .filter(|(provider, _)| usable.contains(provider))
-        .filter(|(provider, wrote)| is_due(*wrote, asked.get(provider).copied(), now))
+        .filter(|(provider, wrote)| {
+            is_due(
+                *wrote,
+                asked.get(provider).copied(),
+                now,
+                service_floor(composed, *provider),
+            )
+        })
         .map(|(provider, _)| provider)
         .collect()
-}
-
-/// One round over every usable service. A service that does not answer gets an unpublished report
-/// naming that, never a stale green light and never a silent blank.
-pub(crate) async fn round(
-    composed: &Arc<Composed>,
-    providers: &watch::Sender<Arc<runtrol_runtime_protocol::ProviderList>>,
-    usage: &watch::Sender<Arc<runtrol_runtime_protocol::ProviderUsageList>>,
-) {
-    let ids: Vec<ProviderId> = composed
-        .registry
-        .all()
-        .filter(|provider| provider.is_usable())
-        .map(runtrol_core::registry::Provider::id)
-        .collect();
-    ask_all(composed, providers, usage, ids).await;
 }
 
 /// Ask exactly these services and republish what changed.
@@ -430,7 +644,7 @@ mod tests {
     fn a_terminal_that_wrote_and_went_quiet_is_asked_about() {
         // The moment the number moved. Before this the strip waited out a clock instead.
         let now = WallMs::from_millis(1_000_000_000);
-        assert!(is_due(Some(ago(now, 5)), None, now));
+        assert!(is_due(Some(ago(now, 5)), None, now, PROCESS_SERVICE_FLOOR));
     }
 
     #[test]
@@ -438,13 +652,18 @@ mod tests {
         // Mid-turn the CLI writes continuously. Asking then would spend a question on a number about to
         // change again, and would do it for every frame it drew.
         let now = WallMs::from_millis(1_000_000_000);
-        assert!(!is_due(Some(ago(now, 1)), None, now));
+        assert!(!is_due(
+            Some(WallMs::from_millis(now.as_millis() - 500)),
+            None,
+            now,
+            PROCESS_SERVICE_FLOOR
+        ));
     }
 
     #[test]
     fn a_terminal_that_has_written_nothing_has_finished_nothing() {
         let now = WallMs::from_millis(1_000_000_000);
-        assert!(!is_due(None, None, now));
+        assert!(!is_due(None, None, now, PROCESS_SERVICE_FLOOR));
     }
 
     #[test]
@@ -452,7 +671,12 @@ mod tests {
         // The quiet is the same quiet that was already asked about. Without this the loop would ask every
         // tick for as long as a finished conversation stayed open.
         let now = WallMs::from_millis(1_000_000_000);
-        assert!(!is_due(Some(ago(now, 60)), Some(ago(now, 30)), now));
+        assert!(!is_due(
+            Some(ago(now, 60)),
+            Some(ago(now, 30)),
+            now,
+            PROCESS_SERVICE_FLOOR
+        ));
     }
 
     #[test]
@@ -460,8 +684,80 @@ mod tests {
         // Measured: one question costs a child process peaking near 470 MiB for eight seconds. A person
         // taking twenty-second turns would otherwise pay that on each one.
         let now = WallMs::from_millis(1_000_000_000);
-        assert!(!is_due(Some(ago(now, 4)), Some(ago(now, 10)), now));
+        assert!(!is_due(
+            Some(ago(now, 4)),
+            Some(ago(now, 10)),
+            now,
+            PROCESS_SERVICE_FLOOR
+        ));
         // And once the floor has passed, the newer turn is asked about.
-        assert!(is_due(Some(ago(now, 4)), Some(ago(now, 40)), now));
+        assert!(is_due(
+            Some(ago(now, 4)),
+            Some(ago(now, 40)),
+            now,
+            PROCESS_SERVICE_FLOOR
+        ));
+    }
+
+    #[test]
+    fn a_structured_account_surface_can_refresh_again_after_five_seconds() {
+        let now = WallMs::from_millis(1_000_000_000);
+        assert!(is_due(
+            Some(ago(now, 2)),
+            Some(ago(now, 6)),
+            now,
+            PROTOCOL_SERVICE_FLOOR
+        ));
+        assert!(!is_due(
+            Some(ago(now, 2)),
+            Some(ago(now, 6)),
+            now,
+            PROCESS_SERVICE_FLOOR
+        ));
+    }
+
+    #[tokio::test]
+    async fn wake_bursts_keep_only_provider_identities() {
+        let wake = AccountProbeWake::default();
+        let first = ProviderId::parse("first").expect("provider id");
+        let second = ProviderId::parse("second").expect("provider id");
+        wake.provider(first).await;
+        wake.provider(first).await;
+        wake.provider(second).await;
+        let request = wake.wait().await;
+        assert_eq!(request.providers, BTreeSet::from([first, second]));
+        assert!(!request.all);
+
+        wake.provider(first).await;
+        wake.all().await;
+        let request = wake.wait().await;
+        assert!(request.all);
+        assert_eq!(request.providers, BTreeSet::from([first]));
+    }
+
+    #[test]
+    fn a_throttled_external_turn_stays_pending_until_its_floor() {
+        let provider = ProviderId::parse("outside").expect("provider id");
+        let asked_at = WallMs::from_millis(1_000_000_000);
+        let mut pending = BTreeSet::from([provider]);
+        let asked = BTreeMap::from([(provider, asked_at)]);
+
+        let early = take_due(
+            &mut pending,
+            &asked,
+            WallMs::from_millis(asked_at.as_millis() + 10_000),
+            |_| PROCESS_SERVICE_FLOOR,
+        );
+        assert!(early.is_empty());
+        assert_eq!(pending, BTreeSet::from([provider]));
+
+        let ready = take_due(
+            &mut pending,
+            &asked,
+            WallMs::from_millis(asked_at.as_millis() + 30_000),
+            |_| PROCESS_SERVICE_FLOOR,
+        );
+        assert_eq!(ready, vec![provider]);
+        assert!(pending.is_empty());
     }
 }

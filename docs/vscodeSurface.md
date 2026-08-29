@@ -53,11 +53,13 @@ The page has three zones with visible edges, in this order:
 - **Conversations**: the conversations that belong to no project, as plain rows.
 - **Usage**: one chip per installed service, its icon inside a ring gauge with the seven-day percentage; see below.
 
-A conversation row is the service glyph, the title (wrapped to two lines when a service names a conversation by
-its first prompt, never cut short), a state dot, and the memory the provider process holds right now (`412 MB`,
-from the Runtime's `memoryBytes`, asked for every five seconds). On hover the row shows its actions: pin, rename,
-stop when running, archive and delete when the service reports those surfaces, allow and decline when a turn
-waits for the person. Rows are reached with Tab and the arrow keys; Enter opens the conversation's terminal tab.
+A conversation row is the service glyph, a normal-contrast one-line title with a fading tail, an optional worded
+action state, and the memory the provider process holds right now (`412 MB`, from the Runtime's `memoryBytes`, asked
+for every five seconds). A running row needs no dot because the moving ring around the provider glyph already says
+it. Only a state that changes what the operator can do spends width: `Needs you`, `Sign in`, `Limit`, `Error`,
+`Elsewhere`, or `Unavailable`. On hover the row shows its actions: pin, rename, stop when running, archive and delete
+when the service reports those surfaces, allow and decline when a turn waits for the person. Rows are reached with
+Tab and the arrow keys; Enter opens the conversation's terminal tab.
 
 Everything rare lives behind the vertical dots at the top of the page: switching, refreshing, service set-up and
 updates, phone pairing, Runtime integrations and requests, restarting the Extension Host. The empty list says
@@ -77,6 +79,16 @@ provider's panel under the chips; Enter pins the panel and Escape closes it. The
 named, one thin bar per reported window with its own name (`5h`, `7d`, `7d GPT-5.3-Codex`) and reset, and the
 report age. A chip whose state has one action (`Sign in`, `Fix`) performs it on click. Studio never converts a
 missing percentage into zero or derives account capacity from terminal text.
+
+The Runtime subscription is the refresh clock. Structured provider account events publish immediately to the shared
+`providers/usageChanged` watch. Hosted terminal writes are checked by a cheap clock only while at least one terminal
+is open; one second of quiet requests that provider alone. The provider-owned process roster supplies the same
+busy-to-quiet edge for a conversation started outside Studio. Requests from multiple windows coalesce by provider.
+A manifest-declared protocol account surface has a five-second repeat floor; a process-backed account reader has a
+thirty-second floor because a measured read can briefly use hundreds of MiB. With no open terminal and no unread
+report, the supervisor sleeps until an activity wake or its ten-minute backstop instead of polling while idle. An
+activity edge inside a repeat floor stays in the same bounded provider set and runs when that floor expires; it is
+never dropped into the slow backstop.
 
 ## Terminal tabs
 

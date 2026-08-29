@@ -47,6 +47,13 @@ the keyboard-accessible vertical-menu action disclose every provider-reported wi
 limit condition. No percentage is inferred. Provider additions appear through Runtime inventory without a Studio or
 Core edit.
 
+Usage is push-first and activity-driven. A structured provider account event reaches every subscribed window without
+a Studio polling round. For a provider that exposes only an explicit account read, Runtime asks that provider after
+its hosted terminal or provider-owned external process changes from active to quiet. Provider identities are
+coalesced in one bounded set, so ten windows and one window cause the same read. A slow sweep remains only as a
+backstop for account changes made elsewhere. Runtime never parses a terminal warning or a `/status` screen to infer
+usage.
+
 A conversation opens as the provider CLI's own terminal interface in an editor tab. Studio uses the public Runtime
 terminal API and pins every reconnect to the generation that owns the terminal. The phone uses a paired,
 device-scoped transport adapter into the same Core terminal host. That private device adapter is not an application
@@ -59,6 +66,8 @@ integration API.
 - Exactly one selected session owns the foreground subscription and full renderer.
 - Search and ordering use operational metadata, never conversation content.
 - A working conversation changes its declared provider icon to a spinning state without adding repeated labels.
+- A conversation title keeps normal contrast. Only actionable or unavailable states spend row width, and they use
+  words rather than unexplained state dots.
 - A provider capability controls whether resume, archive, native delete, models, usage, and remedies exist.
 - Cold resume uses the provider-native identity and the exact bound workspace.
 - Closing a viewer does not end a provider process.

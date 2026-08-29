@@ -526,9 +526,11 @@ async fn dispatch_public(
                 rotate_integration_key(state, composed, id, params).await
             }
             RuntimeMethod::ProvidersList => providers_list(state, composed, providers, id, params),
-            RuntimeMethod::ProvidersUsage => providers_usage(state, composed, usage, id, params),
+            RuntimeMethod::ProvidersUsage => {
+                providers_usage(state, composed, usage, id, params).await
+            }
             RuntimeMethod::ProvidersWatch => {
-                providers_watch(state, composed, provider_updates, usage_updates, id, params)
+                providers_watch(state, composed, provider_updates, usage_updates, id, params).await
             }
             RuntimeMethod::ProvidersGetCapabilities => {
                 get_provider_capabilities(state, composed, discovering, id, params).await
@@ -1331,7 +1333,7 @@ fn providers_list(
 /// Answered from a snapshot the serve task publishes when a report passes, so this read costs no lock on the
 /// session owner and no provider process. An empty list means nothing has reported since the Runtime started,
 /// which a surface says as "no report yet" rather than as a green light.
-fn providers_usage(
+async fn providers_usage(
     state: &mut PublicState,
     composed: &Composed,
     usage: &ProviderUsageList,
@@ -1346,12 +1348,15 @@ fn providers_usage(
         );
     }
     match authorized(state, composed, Some(AppScope::ProviderRead)) {
-        Ok(_) => Answer::success(id, usage),
+        Ok(_) => {
+            composed.account_probe_wake.all().await;
+            Answer::success(id, usage)
+        }
         Err(failure) => Answer::failure(id, failure),
     }
 }
 
-fn providers_watch(
+async fn providers_watch(
     state: &mut PublicState,
     composed: &Composed,
     updates: &watch::Sender<Arc<ProviderList>>,
@@ -1370,6 +1375,7 @@ fn providers_watch(
         Ok(authority) => authority.clone(),
         Err(failure) => return Answer::failure(id, failure),
     };
+    composed.account_probe_wake.all().await;
     let subscription_id = match random_subscription_id() {
         Ok(subscription_id) if !subscription_id.is_empty() => subscription_id,
         Ok(_) | Err(_) => {
@@ -2404,9 +2410,12 @@ async fn native_activity(
                 .native_process_activity()
                 .await
                 .map_err(|_| ())?;
-            discovering
+            let turn_ended = discovering
                 .remember_native_activity(provider, activity.clone())
                 .await;
+            if turn_ended {
+                composed.account_probe_wake.provider(provider).await;
+            }
             Ok(activity)
         },
     )

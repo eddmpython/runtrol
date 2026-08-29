@@ -207,7 +207,7 @@ function moreHtml(project: SidebarProjectRow): string {
 
 function conversationHtml(row: SidebarConversationRow, assets: SidebarAssets): string {
   const iconUri = assets.iconUris.get(row.icon) ?? "";
-  const dot = row.activity === "saved" && !row.live ? "" : `<span class="dot ${row.activity}" title="${escapeHtml(spokenActivity(row))}"></span>`;
+  const state = conversationStateHtml(row);
   const actions = [
     row.activity === "needsYou" ? action("runtrol.allowFromRow", "Allow", "check") + action("runtrol.declineFromRow", "Decline", "circle-slash") : "",
     row.signIn ? action("runtrol.signInFromRow", "Sign in", "key") : "",
@@ -224,7 +224,7 @@ function conversationHtml(row: SidebarConversationRow, assets: SidebarAssets): s
 <span class="bar${row.hue ? ` ${row.hue}` : ""}"></span>
 <span class="glyph-slot${row.activity === "working" ? " working" : ""}"><img class="glyph" src="${escapeHtml(iconUri)}" alt="${escapeHtml(row.serviceName)}" draggable="false"></span>
 <span class="title">${escapeHtml(row.title)}</span>
-${dot}
+${state}
 <span class="tail">
 <span class="actions">${actions}</span>
 ${row.memory ? `<span class="memory" title="Memory the provider process holds now">${escapeHtml(row.memory)}</span>` : ""}
@@ -236,22 +236,21 @@ function action(command: string, label: string, codicon: string): string {
   return `<button class="act" type="button" data-command="${command}" title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}"><i class="ci ci-${codicon}" aria-hidden="true"></i></button>`;
 }
 
-function spokenActivity(row: SidebarConversationRow): string {
-  if (!row.canOpen) return "cannot be reopened";
-  switch (row.activity) {
-    case "needsYou":
-      return "needs you";
-    case "attention":
-      return "needs attention";
-    case "working":
-      return "working";
-    case "waitingOnQuota":
-      return "waiting on a limit";
-    case "ready":
-      return "ready";
-    case "saved":
-      return "saved";
-  }
+function conversationStateHtml(row: SidebarConversationRow): string {
+  const state = row.signIn
+    ? { label: "Sign in", tone: "attention" }
+    : row.activity === "needsYou"
+      ? { label: "Needs you", tone: "attention" }
+      : row.activity === "waitingOnQuota"
+        ? { label: "Limit", tone: "error" }
+        : row.activity === "attention"
+          ? { label: "Error", tone: "error" }
+          : !row.canOpen
+            ? { label: row.live ? "Elsewhere" : "Unavailable", tone: "muted" }
+            : null;
+  return state
+    ? `<span class="conv-state ${state.tone}" title="${escapeHtml(row.blocked ?? state.label)}">${state.label}</span>`
+    : "";
 }
 
 function noticeHtml(notice: SidebarNotice): string {
@@ -279,8 +278,7 @@ function firstRunHtml(): string {
 // icon font, and an <img> would not follow the theme colour. Each is the codicon outline in a 16-unit box.
 const STYLE = `
 :root { color-scheme: light dark; }
-/* The one colour that says a conversation is running, named once so the mark around its icon and the state
-   dot beside its name cannot drift apart.
+/* The one colour that says a conversation is running, named once for the mark around its icon.
 
    Not the editor's progress colour, which is the obvious choice and is not a state colour. What it paints is
    up to whichever theme is on: measured 2026-08-28, the dark theme this build of the editor falls back to
@@ -369,18 +367,13 @@ button { font: inherit; color: inherit; }
 /* One line, and the tail fades out rather than ending in dots: the reader sees there is more without a
    glyph spending width to say so, and two-line rows made the list hard to scan (operator, 2026-08-28). */
 .conv .title { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; line-height: 1.4; -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 20px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 20px), transparent); }
-.conv.blocked .title { opacity: 0.5; }
 .conv.pinned .title::before { content: ""; display: inline-block; width: 9px; height: 9px; margin-right: 4px; background: currentColor; opacity: 0.55; -webkit-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M10 1l5 5-3 1-2 2 1 4-3 1-2-4-4 4-1-1 4-4-4-2 1-3 4 1 2-2z'/></svg>") center / contain no-repeat; mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M10 1l5 5-3 1-2 2 1 4-3 1-2-4-4 4-1-1 4-4-4-2 1-3 4 1 2-2z'/></svg>") center / contain no-repeat; }
-/* Every colour that says a state carries its own fallback. The editor does define each of these, so the
-   fallback is not for the editor: it is for this page rendered anywhere else, which is how it is looked at
-   during development (the sidebar eye harness). A var() naming a colour nothing defines drops the whole
-   declaration and leaves the rule above it, and a state that renders as no state is worse than no dot. */
-.dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--vscode-descriptionForeground); opacity: 0.6; }
-.dot.working { background: var(--runtrol-running); opacity: 1; }
-.dot.needsYou { background: var(--vscode-notificationsWarningIcon-foreground, #cca700); opacity: 1; box-shadow: 0 0 0 2px color-mix(in srgb, var(--vscode-notificationsWarningIcon-foreground, #cca700) 30%, transparent); }
-.dot.attention { background: var(--vscode-notificationsWarningIcon-foreground, #cca700); opacity: 1; }
-.dot.waitingOnQuota { background: var(--vscode-errorForeground, #f85149); opacity: 1; }
-.dot.ready { background: var(--vscode-testing-iconPassed, var(--vscode-charts-green, #89d185)); opacity: 0.9; }
+/* Running needs no second mark: the moving ring already says it. Only states that change what the person can
+   do spend width, and they say their meaning instead of asking the person to memorize coloured dots. */
+.conv-state { flex: none; max-width: 72px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; line-height: 15px; padding: 0 5px; border-radius: 8px; }
+.conv-state.attention { color: var(--vscode-notificationsWarningIcon-foreground, #cca700); background: color-mix(in srgb, currentColor 14%, transparent); }
+.conv-state.error { color: var(--vscode-errorForeground, #f85149); background: color-mix(in srgb, currentColor 14%, transparent); }
+.conv-state.muted { color: var(--vscode-descriptionForeground); background: var(--vscode-badge-background); }
 .more .more-label { flex: 1 1 auto; font-size: 11px; opacity: 0.65; }
 .more:hover .more-label { opacity: 1; }
 /* One slot on the right, and nothing in the row moves when the cursor arrives. The actions hold their width

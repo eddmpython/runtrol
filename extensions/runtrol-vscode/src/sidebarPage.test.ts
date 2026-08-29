@@ -134,10 +134,15 @@ test("memory reads as a short figure and rides the row", () => {
   assert.ok(html.includes('<span class="memory" title="Memory the provider process holds now">412 MB</span>'));
 });
 
-test("a running conversation is marked at its icon and at its dot, and an idle one at neither", () => {
+test("a running conversation is marked once at its icon, and action states use words instead of dots", () => {
   const html = sidebarHtml(model({
     projects: [project({
-      rows: [conversation({ key: "claude:one", activity: "working" }), conversation({ key: "claude:two" })],
+      rows: [
+        conversation({ key: "claude:one", activity: "working" }),
+        conversation({ key: "claude:two" }),
+        conversation({ key: "claude:three", activity: "needsYou" }),
+        conversation({ key: "claude:four", live: true, canOpen: false, blocked: "running outside runtrol" }),
+      ],
     })],
     loose: [],
   }), assets);
@@ -145,11 +150,12 @@ test("a running conversation is marked at its icon and at its dot, and an idle o
   // arc is what a person sees when the service's own icon is symmetric enough that turning it shows nothing.
   assert.equal(html.match(/class="glyph-slot working"/gu)?.length, 1);
   assert.ok(html.includes('<span class="glyph-slot"><img class="glyph"'), "an idle row carries no mark");
-  assert.equal(html.match(/class="dot working"/gu)?.length, 1);
-  // Both marks take the one colour the page names for running, so they can never drift apart.
+  assert.ok(!html.includes('class="dot'), "no unexplained status dot is drawn");
+  assert.ok(html.includes('class="conv-state attention" title="Needs you">Needs you</span>'));
+  assert.ok(html.includes('class="conv-state muted" title="running outside runtrol">Elsewhere</span>'));
   assert.ok(html.includes("--runtrol-running: var(--vscode-charts-blue"));
   assert.ok(html.includes("border-top-color: var(--runtrol-running)"));
-  assert.ok(html.includes(".dot.working { background: var(--runtrol-running)"));
+  assert.ok(!html.includes(".conv.blocked .title"), "an externally running conversation stays readable");
 });
 
 test("row keys are unique and in page order, which is what the eye test reads", () => {

@@ -173,11 +173,13 @@ impl DiscoveryGates {
         &self,
         provider: ProviderId,
         activity: runtrol_provider::NativeProcessActivity,
-    ) {
-        self.native_activity
-            .lock()
-            .await
-            .insert(provider, (std::time::Instant::now(), activity));
+    ) -> bool {
+        let mut cache = self.native_activity.lock().await;
+        let turn_ended = cache
+            .get(&provider)
+            .is_some_and(|(_, previous)| !previous.active.is_empty() && activity.active.is_empty());
+        cache.insert(provider, (std::time::Instant::now(), activity));
+        turn_ended
     }
 }
 
@@ -1285,6 +1287,15 @@ async fn serve_surfaces(
                         | Request::IntegrationRevoke { .. }
                         | Request::IntegrationGrantChange { .. }
                 );
+                let account_provider = match &request {
+                    Request::Start { provider, .. } | Request::Resume { provider, .. } => {
+                        ProviderId::parse(provider).map(Some)
+                    }
+                    Request::Close { session, .. } => Ok(sessions
+                        .live_session(*session)
+                        .map(|live| live.provider)),
+                    _ => Ok(None),
+                };
                 let reservation = reservation.and_then(ReservationGuard::take);
                 let reply = answer_prepared(
                     &mut conversation,
@@ -1317,8 +1328,10 @@ async fn serve_surfaces(
                         &provider_update_notices,
                     );
                     generation.update(live_work_of(&sessions, &composed), draining);
-                    // A conversation opened or closed: the account probe asks the services again soon.
-                    composed.account_probe_wake.notify_one();
+                    if let Ok(Some(provider)) = account_provider {
+                        // A conversation opened or closed: ask only the service whose account could have moved.
+                        composed.account_probe_wake.provider(provider).await;
+                    }
                 }
                 if draining && live_work_of(&sessions, &composed) == 0 {
                     break Ok(());
@@ -1662,7 +1675,11 @@ async fn serve_surfaces(
                 if index_changed {
                     // A turn ended or a conversation changed state: the account probe asks the services
                     // again soon, so the limit the turn moved reaches the sidebar without waiting for a clock.
-                    composed.account_probe_wake.notify_one();
+                    if let Some(live) = sessions.live_session(session) {
+                        composed.account_probe_wake.provider(live.provider).await;
+                    } else {
+                        composed.account_probe_wake.all().await;
+                    }
                 }
                 if gauges_changed {
                     account_gauges.send_replace(Arc::new(
@@ -3175,6 +3192,48 @@ mod tests {
         );
         drop(held_unknown);
 
+        drop(composed);
+        std::fs::remove_dir_all(&scratch).expect("remove the scratch home");
+    }
+
+    #[tokio::test]
+    async fn an_external_turn_ending_is_reported_once() {
+        let scratch =
+            std::env::temp_dir().join(format!("runtrol-native-activity-{}", std::process::id()));
+        if scratch.exists() {
+            std::fs::remove_dir_all(&scratch).expect("clear the previous run");
+        }
+        std::fs::create_dir(&scratch).expect("create the scratch home");
+        let home = scratch.to_str().expect("UTF-8 scratch path");
+        let composed = crate::Composed::for_tests(home, runtrol_drivers::builtin())
+            .expect("a fresh home composes");
+        let gates = DiscoveryGates::new(&composed.registry);
+        let provider = runtrol_provider::ProviderId::parse("claude").expect("a builtin provider");
+        let native = runtrol_provider::NativeSessionId::new("native-one").expect("native id");
+        let active = runtrol_provider::NativeProcessActivity {
+            live: vec![native.clone()],
+            active: vec![native.clone()],
+            processes: Vec::new(),
+        };
+        let quiet = runtrol_provider::NativeProcessActivity {
+            live: vec![native],
+            active: Vec::new(),
+            processes: Vec::new(),
+        };
+
+        assert!(!gates.remember_native_activity(provider, active).await);
+        assert!(
+            gates
+                .remember_native_activity(provider, quiet.clone())
+                .await,
+            "the busy-to-quiet edge is the provider-neutral external turn boundary"
+        );
+        assert!(
+            !gates.remember_native_activity(provider, quiet).await,
+            "re-reading the same quiet roster must not start another usage probe"
+        );
+
+        drop(gates);
         drop(composed);
         std::fs::remove_dir_all(&scratch).expect("remove the scratch home");
     }

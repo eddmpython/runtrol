@@ -339,7 +339,7 @@ pub struct Composed {
     pub(crate) account_reports: tokio::sync::Mutex<crate::account_probe::AccountReports>,
     /// Rung by the session owner when a conversation attaches or a turn ends, so the account probe asks
     /// the services again within seconds instead of on its ten-minute backstop.
-    pub(crate) account_probe_wake: tokio::sync::Notify,
+    pub(crate) account_probe_wake: crate::account_probe::AccountProbeWake,
     /// Every hosted terminal (a provider's own terminal interface on a daemon-owned pseudo terminal), by
     /// id and by the conversation it shows, so a second viewer joins the one that is open.
     pub(crate) terminals: tokio::sync::Mutex<crate::terminal_surface::Terminals>,
@@ -447,7 +447,7 @@ impl Composed {
             account_reports: tokio::sync::Mutex::new(
                 crate::account_probe::AccountReports::default(),
             ),
-            account_probe_wake: tokio::sync::Notify::new(),
+            account_probe_wake: crate::account_probe::AccountProbeWake::default(),
             terminals: tokio::sync::Mutex::new(crate::terminal_surface::Terminals::default()),
             runtime_terminals: crate::runtime_terminal::TerminalRuntimeAdapter::default(),
             open_terminals: std::sync::atomic::AtomicUsize::new(0),
@@ -507,7 +507,7 @@ impl Composed {
             account_reports: tokio::sync::Mutex::new(
                 crate::account_probe::AccountReports::default(),
             ),
-            account_probe_wake: tokio::sync::Notify::new(),
+            account_probe_wake: crate::account_probe::AccountProbeWake::default(),
             terminals: tokio::sync::Mutex::new(crate::terminal_surface::Terminals::default()),
             runtime_terminals: crate::runtime_terminal::TerminalRuntimeAdapter::default(),
             open_terminals: std::sync::atomic::AtomicUsize::new(0),

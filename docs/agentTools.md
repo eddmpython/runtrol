@@ -73,6 +73,13 @@ environment, no working directory, and an enabled entry. A pre-existing entry th
 and left untouched. Removal performs the same ownership preflight across every provider before deleting anything,
 so an entry replaced outside Runtrol is never removed as collateral.
 
+One narrow upgrade case is also provably Runtrol-owned. If the entry has that exact authority-free shape, points to a
+missing `runtrol-<digest>` image beside the current managed `runtrol-<digest>` image, and remains enabled, daemon
+startup removes and recreates it through the provider CLI's official commands. A disabled entry, a live sibling
+image, another directory, another executable name, extra arguments, an environment, or a working directory is never
+taken over. This keeps content-named Core replacement from leaving every later provider session with a missing MCP
+executable while preserving the default-deny ownership rule.
+
 ## Protocol contract
 
 The same `runtrol mcp` process supports the finalized stateless MCP discovery flow and the legacy initialization
