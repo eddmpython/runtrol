@@ -62,6 +62,20 @@ pub enum Unreachable {
         seconds: u64,
     },
 
+    /// A daemon was started and ended before it answered.
+    ///
+    /// Told apart from a daemon that is merely slow, because the two send a person to different places: a
+    /// slow one wants a longer wait or a lighter machine, an ended one wants its crash log in the runtrol
+    /// home (measured 2026-08-29 on a hosted macOS runner, where only "did not begin answering" was said
+    /// and nothing distinguished a crash from a stall).
+    #[error(
+        "a daemon was started and ended before answering ({status}); the daemon crash log in the runtrol home says why"
+    )]
+    DaemonExited {
+        /// How it ended, as the operating system reports it.
+        status: String,
+    },
+
     /// The endpoint is there and something went wrong reaching it.
     #[error(transparent)]
     Transport(#[from] TransportError),
@@ -87,9 +101,9 @@ pub async fn reach(address: &str, runtrol: &Path) -> Result<Connection, Unreacha
         Err(error) => return Err(Unreachable::Transport(error)),
     }
 
-    start(runtrol)?;
+    let mut daemon = start(runtrol)?;
     trace("cli: daemon spawned; waiting for it to answer");
-    wait_for_it(address).await
+    wait_for_it(address, &mut daemon).await
 }
 
 /// One step of reaching the daemon, on stderr, only when `RUNTROL_CLOSE_TRACE=1` asks for it.
@@ -126,7 +140,7 @@ pub(crate) fn trace(step: &str) {
 ///
 /// It also must not be stopped by a keystroke aimed at the command. An operator pressing the interrupt key at a
 /// prompt is stopping what they can see; a daemon that went away with it would take every running agent with it.
-fn start(runtrol: &Path) -> Result<(), Unreachable> {
+fn start(runtrol: &Path) -> Result<std::process::Child, Unreachable> {
     let mut command = std::process::Command::new(runtrol);
     command
         .arg(DAEMON_ARGUMENT)
@@ -135,11 +149,12 @@ fn start(runtrol: &Path) -> Result<(), Unreachable> {
         .stderr(std::process::Stdio::null());
     detach(&mut command);
 
+    // The handle is kept only for as long as this command waits, to notice a daemon that ended before it
+    // answered. Dropping it afterwards leaves the daemon running: the child is detached and never waited on.
     command.spawn().map_err(|error| Unreachable::CannotStart {
         program: runtrol.display().to_string(),
         detail: error.to_string(),
-    })?;
-    Ok(())
+    })
 }
 
 /// Let go of the terminal that started this command.
@@ -164,8 +179,11 @@ fn detach(command: &mut std::process::Command) {
     command.process_group(0);
 }
 
-/// Keep asking until the daemon that was just started answers.
-async fn wait_for_it(address: &str) -> Result<Connection, Unreachable> {
+/// Keep asking until the daemon that was just started answers, or is seen to have ended.
+async fn wait_for_it(
+    address: &str,
+    daemon: &mut std::process::Child,
+) -> Result<Connection, Unreachable> {
     let give_up_at = tokio::time::Instant::now() + WHILE_STARTING;
     loop {
         match runtrol_ipc::transport::connect(address).await {
@@ -173,6 +191,14 @@ async fn wait_for_it(address: &str) -> Result<Connection, Unreachable> {
 
             // Not up yet. The ordinary answer for most of this loop.
             Err(error) if error.means_no_daemon() => {
+                // A daemon that ended is not one that will answer later: say so now, with how it ended.
+                // A wait handle that errors is treated as "still running", because the only thing lost
+                // then is this distinction, and the deadline below still speaks.
+                if let Ok(Some(status)) = daemon.try_wait() {
+                    return Err(Unreachable::DaemonExited {
+                        status: status.to_string(),
+                    });
+                }
                 if tokio::time::Instant::now() >= give_up_at {
                     return Err(Unreachable::NeverAnswered {
                         seconds: WHILE_STARTING.as_secs(),
