@@ -318,14 +318,19 @@ async function backProof(environment) {
     press(hereTitle, "{ESC}", userData);
     await delay(1_000);
     // Add the second folder as a project the way a person does: a project is a decision, never a discovery, so
-    // the picker offers nothing this profile has not been told about. "New Project Folder" takes a typed path
-    // and registers an existing folder as it is, which is the one keyboard-only way in.
+    // the picker offers nothing this profile has not been told about. "Add Project" opens the system folder
+    // dialog (the typed-path command it replaced is gone since 4d616af, and this step kept pressing it,
+    // measured 2026-08-29: the keys landed in the explorer's new-folder box instead). The dialog is its own
+    // top-level window, found by the title the extension gives it; a full path in its folder box and Enter
+    // goes there, and Enter again on the empty box takes the folder it is standing in.
     press(hereTitle, "^+p", userData);
     await delay(1_500);
-    press(hereTitle, "Runtrol: New Project Folder{ENTER}", userData);
+    press(hereTitle, "Runtrol: Add Project{ENTER}", userData);
+    await delay(3_000);
+    const dialogTitle = "Choose the folder each new project stands on";
+    press(dialogTitle, `${other}{ENTER}`);
     await delay(1_500);
-    // The box pre-fills the open folder's parent; a full path goes over it, the way a person pastes one.
-    press(hereTitle, `^a${other}{ENTER}`, userData);
+    press(dialogTitle, "{ENTER}");
     await delay(2_500);
     capture(hereTitle, path.join(outDir, "projectAdded.png"), userData);
     // The switch goes through the command palette, which opens whatever has focus (a fresh window focuses its
