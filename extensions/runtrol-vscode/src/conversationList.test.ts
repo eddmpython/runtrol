@@ -590,7 +590,7 @@ test("opening a saved chat keeps the same row identity", () => {
   assert.equal(after[0]?.open, true);
 });
 
-test("turn state never reorders the list", () => {
+test("a conversation that starts working rises to the top of its list", () => {
   const idle = conversations(
     [
       session({ sessionId: "s1", hot: true, lifecycle: "hotIdle", workspace: ALPHA }),
@@ -610,8 +610,38 @@ test("turn state never reorders the list", () => {
     null,
   );
 
-  assert.deepEqual(idle.map((row) => row.key), working.map((row) => row.key));
-  assert.equal(working[1]?.activity, "working");
+  // Idle: the two sit in their fixed identity order (ALPHA before BETA).
+  assert.deepEqual(idle.map((row) => row.key), working.map((row) => row.key).slice().reverse());
+  // s2 answering moves it to the very top: the running conversation leads its project.
+  assert.equal(working[0]?.activity, "working");
+  assert.equal(working[0]?.workspace, BETA);
+});
+
+test("several running conversations keep a fixed order however the bytes arrive", () => {
+  // Two conversations answering at once. Recency would reshuffle them on every streamed byte; the list holds a
+  // fixed identity order instead so the rows do not thrash under the person (operator, 2026-08-30).
+  const oneOrder = conversations(
+    [
+      session({ sessionId: "s1", hot: true, lifecycle: "hotRunning", workspace: ALPHA }),
+      session({ sessionId: "s2", hot: true, lifecycle: "hotRunning", workspace: BETA }),
+    ],
+    PROVIDERS,
+    [],
+    null,
+  );
+  const otherOrder = conversations(
+    [
+      session({ sessionId: "s2", hot: true, lifecycle: "hotRunning", workspace: BETA }),
+      session({ sessionId: "s1", hot: true, lifecycle: "hotRunning", workspace: ALPHA }),
+    ],
+    PROVIDERS,
+    [],
+    null,
+  );
+
+  // The order the Runtime happened to list them in does not change where they land.
+  assert.deepEqual(oneOrder.map((row) => row.key), otherOrder.map((row) => row.key));
+  assert.equal(oneOrder[0]?.workspace, ALPHA);
 });
 
 test("a chat the service cannot reopen says so instead of failing on click", () => {

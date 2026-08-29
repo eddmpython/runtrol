@@ -281,9 +281,42 @@ export function conversations(
     if (named.has(pending.id)) continue;
     rows.push(startedRow(pending, providers, projectlessRoot));
   }
-  // Pinned rows first, each group then in its own recency order. Pinning is a placement choice, so it sorts
-  // ahead of recency rather than pretending the conversation was just touched.
-  return rows.sort((left, right) => Number(right.pinned) - Number(left.pinned) || byMostRecentlyActive(left, right));
+  // Pinned rows first, then running conversations above idle ones, and inside each of those bands a fixed
+  // order. Pinning is a placement choice, so it sorts ahead of everything else.
+  return rows.sort((left, right) =>
+    Number(right.pinned) - Number(left.pinned) || byRunningThenStable(left, right));
+}
+
+/// How near the top a conversation sits by what its process is doing, higher first.
+///
+/// A conversation a turn stopped for is the one worth a person's eye, then one a model is answering in, then one
+/// merely alive, then one only stored. This is the "running conversations on top" the sidebar promises.
+function activityRank(activity: ConversationActivity): number {
+  switch (activity) {
+    case "needsYou": return 5;
+    case "attention": return 4;
+    case "working": return 3;
+    case "waitingOnQuota": return 2;
+    case "ready": return 1;
+    case "saved": return 0;
+  }
+}
+
+/// Running conversations rank above idle ones, and within a running band the order never moves.
+///
+/// A running conversation's `updatedAtMs` bumps on every byte it streams, so ordering the live band by recency
+/// made the rows reshuffle under the person while several sessions ran (operator, 2026-08-30). A live band is
+/// held in a fixed identity order instead, so a conversation stays where the eye left it for as long as it runs.
+/// Stored conversations do not stream, so recency there is both stable and the useful order.
+function byRunningThenStable(left: Conversation, right: Conversation): number {
+  const rank = activityRank(right.activity) - activityRank(left.activity);
+  if (rank !== 0) return rank;
+  if (activityRank(left.activity) > 0) {
+    return compare(left.folder, right.folder)
+      || compare(left.title, right.title)
+      || compare(left.key, right.key);
+  }
+  return byMostRecentlyActive(left, right);
 }
 
 /// Every conversation that belongs to one created project, under one heading.

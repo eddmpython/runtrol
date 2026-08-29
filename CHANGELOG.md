@@ -12,6 +12,16 @@ and refactoring that no user can observe do not belong here.
 
 ### Fixed
 
+- The conversation your editor's Claude panel is running no longer flickers in and out of the sidebar. A panel
+  session has no terminal of its own (the Claude extension drives it over a private pipe), but it announced
+  itself the same way a real terminal session does, so the Runtime kept trying to mirror a console that was not
+  there; each attempt appeared as a row and vanished a moment later. The Runtime now mirrors only sessions that
+  own a real terminal, and shows a panel session as running in its own window instead.
+- Running conversations now sit at the top of their project and stay put. The list ranked rows by how recently
+  each was touched, and a conversation that is answering is touched on every streamed byte, so several running
+  at once reshuffled the list continuously. Rows are now ordered by what their session is doing, and conversations
+  in the same state hold a fixed order that streaming output cannot disturb.
+
 - A Runtime update no longer ends the Claude Code sessions running in your own editor. When a new Runtime took
   over, the old one closed the conversations nobody was watching so it could exit, and that sweep also ended the
   processes it had only joined as mirrors: every update killed the editor's own Claude Code sessions with
