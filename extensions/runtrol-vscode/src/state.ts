@@ -80,6 +80,8 @@ export class RuntimeState implements vscode.Disposable {
   private observedNative: ReadonlySet<string> = new Set();
   /// Daemon-owned terminals delivered by the structural terminal-index watch.
   private terminalRows: readonly TerminalDescriptor[] = [];
+  /// What the terminal watch could not read, generation by generation. Part of why the list is not everything.
+  private terminalWarnings: readonly string[] = [];
   private remember: ((catalogues: readonly NativeChatCatalogue[]) => void) | null = null;
   private rememberUsage: ((usage: readonly ProviderUsageGauge[]) => void) | null = null;
 
@@ -135,7 +137,7 @@ export class RuntimeState implements vscode.Disposable {
   ///
   /// The sentence itself is built by a pure function so it can be tested without an Extension Host.
   get incompleteDiscovery(): string | null {
-    return incompleteDiscovery([...this.nativeCatalogues.values()], this.providerRows);
+    return incompleteDiscovery([...this.nativeCatalogues.values()], this.providerRows, this.terminalWarnings);
   }
 
   /// The click-free coverage summary printed directly above the list.
@@ -241,6 +243,17 @@ export class RuntimeState implements vscode.Disposable {
     ) return;
     this.terminalRows = terminals;
     this.conversationRows = null;
+    this.changedEmitter.fire("rows");
+  }
+
+  /// Replace what the terminal watch could not read. A Runtime generation it cannot follow holds
+  /// conversations this list cannot show, and the reader is told so where the list explains itself.
+  setTerminalWarnings(warnings: readonly string[]): void {
+    if (
+      warnings.length === this.terminalWarnings.length
+      && warnings.every((warning, index) => warning === this.terminalWarnings[index])
+    ) return;
+    this.terminalWarnings = warnings;
     this.changedEmitter.fire("rows");
   }
 

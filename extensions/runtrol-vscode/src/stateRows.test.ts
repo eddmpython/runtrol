@@ -73,6 +73,15 @@ test("a complete catalogue says nothing, because there is nothing to qualify", (
   assert.equal(reasons, null);
 });
 
+test("a Runtime generation the terminal watch could not follow is named beside the services' reasons", () => {
+  const reasons = incompleteDiscovery(
+    [catalogue("claude", { kind: "complete", source: "officialCli" })],
+    [provider("claude", "Claude Code")],
+    ["Runtime generation 519870f2 could not be followed: internal: audit storage is unavailable"],
+  );
+  assert.equal(reasons, "Runtime generation 519870f2 could not be followed: internal: audit storage is unavailable");
+});
+
 test("a partial catalogue is quoted in the service's own words, under its own name", () => {
   const reasons = incompleteDiscovery(
     [catalogue("claude", {

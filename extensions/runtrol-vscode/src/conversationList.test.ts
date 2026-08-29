@@ -233,6 +233,87 @@ test("a daemon-owned terminal is the exact attach target and keeps the provider 
   assert.equal(row?.canOpen, true);
 });
 
+test("a terminal an earlier Runtime generation still owns opens there, even while the roster sees its process", () => {
+  // An update leaves the old generation draining with this conversation's PTY. The provider's own roster keeps
+  // naming the process alive. The row must attach in that generation, not refuse as running outside Runtrol.
+  const terminal = {
+    terminalId: "terminal-old",
+    runtimeGeneration: "generation-old",
+    providerId: "codex",
+    workspace: BETA,
+    nativeSessionId: "n9",
+    processState: "running",
+    openedAtMs: NOW - 1_000,
+    terminalGeneration: 3,
+    geometry: { columns: 120, rows: 40 },
+    memoryBytes: null,
+  } as TerminalDescriptor;
+  const [row] = conversations(
+    [],
+    PROVIDERS,
+    [nativeChat({ nativeSessionId: "n9", title: "Kept across an update" })],
+    null,
+    null,
+    new Map(),
+    new Map(),
+    new Set(),
+    new Map(),
+    [],
+    new Set(),
+    new Set(),
+    new Set([nativeProcessKey("codex", "n9")]),
+    [terminal],
+  );
+
+  assert.equal(row?.hostedTerminal?.runtimeGeneration, "generation-old");
+  assert.equal(row?.canOpen, true);
+  assert.equal(row?.live, true);
+  assert.equal(row ? runningElsewhere(row) : true, false);
+});
+
+test("a second live process of the same conversation is its own row under the conversation's title", () => {
+  const process = (terminalId: string, runtimeGeneration: string, openedAtMs: number): TerminalDescriptor => ({
+    terminalId,
+    runtimeGeneration,
+    providerId: "codex",
+    workspace: BETA,
+    nativeSessionId: "n9",
+    processState: "running",
+    openedAtMs,
+    terminalGeneration: 1,
+    geometry: { columns: 120, rows: 40 },
+    memoryBytes: null,
+  } as TerminalDescriptor);
+  const rows = conversations(
+    [],
+    PROVIDERS,
+    [nativeChat({ nativeSessionId: "n9", title: "Resumed twice" })],
+    null,
+    null,
+    new Map(),
+    new Map(),
+    new Set(),
+    new Map(),
+    [],
+    new Set(),
+    new Set(),
+    new Set(),
+    [process("terminal-new", "generation-new", NOW), process("terminal-old", "generation-old", NOW - 1_000)],
+  );
+
+  assert.equal(rows.length, 2, "two processes are two rows");
+  assert.deepEqual(rows.map((row) => row.title), ["Resumed twice", "Resumed twice"]);
+  assert.deepEqual(
+    new Set(rows.map((row) => row.hostedTerminal?.terminalId)),
+    new Set(["terminal-new", "terminal-old"]),
+  );
+  for (const row of rows) {
+    assert.equal(row.canOpen, true);
+    assert.equal(row.live, true);
+    assert.equal(row.native?.nativeSessionId, "n9", "both rows are the same conversation");
+  }
+});
+
 test("a full terminal index becomes sidebar rows within the fifty millisecond p95 budget", () => {
   const count = 256;
   const chats = Array.from({ length: count }, (_, index) => nativeChat({

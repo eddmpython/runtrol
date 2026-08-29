@@ -27,11 +27,13 @@ import {
   type TerminalOpenParams,
   type TerminalDescriptor,
   type TerminalIndexSnapshot,
+  type TerminalIndexSubscription,
   type TerminalView,
   type ValidatedLocator,
 } from "@runtrol/runtime-client";
 import * as vscode from "vscode";
 
+import { abortableDelay } from "./abortableDelay";
 import {
   cachedControlAction,
   restorableControls,
@@ -40,6 +42,7 @@ import {
   type StoredControlState,
 } from "./runtimeControl";
 import { collectNativeChats } from "./nativeChatCatalogue";
+import { TerminalFleet } from "./terminalFleet";
 import { workspaceIdentity } from "./workspaceCollision";
 import type { NativeChatCatalogue, NativeChatLine } from "./runtimeTypes";
 
@@ -51,6 +54,10 @@ const ENROLLMENT_DECISION_SETTLE_MS = 5_000;
 const ENROLLMENT_DECISION_POLL_MS = 50;
 const RUNTIME_LOCATOR_SETTLE_MS = 12_000;
 const RUNTIME_LOCATOR_POLL_MS = 25;
+// How often the terminal watch lists generations it has not heard of, and how long it leaves one it could
+// not reach alone. Both are slow on purpose: a listing verifies the locator through the Core on Windows.
+const FLEET_RELIST_MS = 60_000;
+const FLEET_RETRY_MS = 15_000;
 // The in-memory lease is authoritative while the Extension Host is alive. Persisting it only
 // improves reload recovery, so SecretStorage latency must not delay an interactive session action.
 const CONTROL_PERSISTENCE_INLINE_MS = 0;
@@ -797,42 +804,161 @@ export class StudioRuntimeClient implements vscode.Disposable {
     }
   }
 
-  /// Follow the daemon's hosted-terminal registry as an event stream.
+  /// Follow the hosted-terminal registry of every Runtime generation as one event stream.
   ///
   /// This is the discovery hot path for provider processes launched through a transparent terminal bridge. Process
   /// birth and exit are structural facts and reach the sidebar without waiting for either the activity clock or
   /// the memory sampling clock.
+  ///
+  /// The generation this window commands is the anchor: losing its stream is losing the Core, and the error says
+  /// so. Every other generation the locator lists is followed beside it, because an update leaves the old
+  /// generation draining next to the new one for as long as its conversations run, and a conversation's terminal
+  /// lives in the exact generation that opened it (`docs/terminalSurface.md`, generation continuity). A row that
+  /// cannot see that terminal cannot attach to it, and this window then took the conversation for one running
+  /// outside Runtrol (measured 2026-08-29: eight conversations in five draining generations, none openable). A
+  /// generation that cannot be followed is named in the merged snapshot's warnings and tried again later; it is
+  /// never read as the Core going away.
   async watchTerminals(
     snapshot: (terminals: TerminalIndexSnapshot) => void,
     signal: AbortSignal,
   ): Promise<void> {
     const watch = Symbol("terminal watch");
     this.terminalWatch = watch;
-    await this.withRuntimeLocator(async (locator) => {
-      const runtime = await this.connector.connectWithRetry(locator, this.requireOptions(), { signal });
-      let subscription: Awaited<ReturnType<ReturnType<RuntimeClient["terminals"]>["watchIndex"]>> | null = null;
-      const close = (): void => subscription?.close();
-      signal.addEventListener("abort", close, { once: true });
+    const fleet = new TerminalFleet();
+    const publish = (): void => {
+      if (this.terminalWatch === watch) snapshot(fleet.merged());
+    };
+    await this.withRuntimeLocator(async (anchor) => {
+      const others = new AbortController();
+      const stopOthers = (): void => others.abort();
+      signal.addEventListener("abort", stopOthers, { once: true });
+      const following = this.followOtherGenerations(anchor.digest, fleet, publish, others.signal);
+      const runtime = await this.connector.connectWithRetry(anchor, this.requireOptions(), { signal });
       try {
-        subscription = await runtime.terminals().watchIndex();
-        if (this.terminalWatch === watch) snapshot(subscription.started.snapshot);
-        while (!signal.aborted) {
-          const notification = await subscription.next();
-          if (notification.kind === "changed") {
-            if (this.terminalWatch === watch) snapshot(notification.changed.snapshot);
-          } else {
-            throw new Error(`the Runtime terminal stream ended: ${notification.ended.reason}`);
-          }
-        }
-      } catch (error) {
-        if (!signal.aborted) throw error;
+        await followTerminalIndex(runtime, anchor.digest, fleet, publish, signal);
       } finally {
-        signal.removeEventListener("abort", close);
-        subscription?.close();
         runtime.close();
+        signal.removeEventListener("abort", stopOthers);
+        others.abort();
+        await following;
         if (this.terminalWatch === watch) this.terminalWatch = null;
       }
     });
+  }
+
+  /// Follow every generation the locator lists beside the anchor, for as long as the anchor watch runs.
+  ///
+  /// Listing is a locator read, which on Windows verifies the file's owner through the Core, so it is not done
+  /// on a fast clock: once at the start, again whenever a followed generation ends (its successor may have
+  /// appeared for the same reason), and on a slow tick for the update case, where a newer build's window starts
+  /// a generation this window has not heard of. A generation this window could not reach is tried again after
+  /// a pause rather than on every listing, so a stale locator entry costs one refused connection a while.
+  private async followOtherGenerations(
+    anchor: string,
+    fleet: TerminalFleet,
+    publish: () => void,
+    signal: AbortSignal,
+  ): Promise<void> {
+    const following = new Map<string, Promise<void>>();
+    const retryAt = new Map<string, number>();
+    let relist = new AbortController();
+    while (!signal.aborted) {
+      const listed = await this.listedGenerations();
+      const wanted = new Set(listed.map((generation) => generation.digest));
+      for (const digest of [...retryAt.keys()]) {
+        if (!wanted.has(digest)) {
+          retryAt.delete(digest);
+          fleet.delete(digest);
+          publish();
+        }
+      }
+      for (const generation of listed) {
+        const digest = generation.digest;
+        if (digest === anchor || following.has(digest) || (retryAt.get(digest) ?? 0) > Date.now()) continue;
+        const run = this.followGeneration(generation, fleet, publish, signal).then(
+          () => {
+            retryAt.delete(digest);
+          },
+          (error: unknown) => {
+            fleet.markUnreachable(digest, error instanceof Error ? error.message : String(error));
+            publish();
+            retryAt.set(digest, Date.now() + FLEET_RETRY_MS);
+          },
+        ).finally(() => {
+          following.delete(digest);
+          // A generation ended: its successor, if any, is worth listing for now rather than at the next tick.
+          relist.abort();
+        });
+        following.set(digest, run);
+      }
+      relist = new AbortController();
+      const stop = (): void => relist.abort();
+      signal.addEventListener("abort", stop, { once: true });
+      try {
+        await abortableDelay(FLEET_RELIST_MS, relist.signal);
+      } finally {
+        signal.removeEventListener("abort", stop);
+      }
+    }
+    await Promise.all(following.values());
+  }
+
+  /// Read one listed generation's terminal index until that generation ends or the watch stops.
+  private async followGeneration(
+    generation: ValidatedLocator,
+    fleet: TerminalFleet,
+    publish: () => void,
+    signal: AbortSignal,
+  ): Promise<void> {
+    const runtime = await this.connector.connect(generation, this.requireOptions(), signal);
+    try {
+      if (!runtime.initialization.serverCapabilities.terminalSurface) {
+        throw new Error("this Runtime generation has no public terminal surface");
+      }
+      await followTerminalIndex(runtime, generation.digest, fleet, publish, signal);
+    } finally {
+      runtime.close();
+      fleet.delete(generation.digest);
+      publish();
+    }
+  }
+
+  /// Every generation the locator lists right now, or none while the locator is being rewritten.
+  ///
+  /// A locator mid-replacement (an update publishing, a generation leaving) reads as malformed for a moment.
+  /// That moment is not a fleet of zero: the generations already followed keep streaming, and the next listing
+  /// sees the settled file. So a failed read changes nothing and the error is not raised, deliberately.
+  private async listedGenerations(): Promise<ReadonlyArray<ValidatedLocator>> {
+    try {
+      return await this.runtimeLocator().inspectAll();
+    } catch {
+      return [];
+    }
+  }
+
+  /// End the provider process behind one hosted terminal, in the exact generation that owns it.
+  ///
+  /// Stopping needs the terminal's control lease, so this attaches a view, takes control, and stops through it.
+  /// The view is closed again at once: this is a sidebar action on a conversation nobody has open here, or one
+  /// whose tab will learn of the exit from its own stream.
+  async stopTerminal(terminal: TerminalDescriptor): Promise<void> {
+    await this.commandClient();
+    const view = await this.attachTerminal(terminal.runtimeGeneration, terminal.terminalId);
+    try {
+      const lease = await view.acquireControl({
+        requestId: newMutationRequestId(),
+        terminalId: view.opened.terminal.terminalId,
+        expectedTerminalGeneration: view.opened.terminal.terminalGeneration,
+      });
+      await view.stop({
+        requestId: newMutationRequestId(),
+        terminalId: view.opened.terminal.terminalId,
+        leaseId: lease.leaseId,
+        leaseGeneration: lease.leaseGeneration,
+      });
+    } finally {
+      view.close();
+    }
   }
 
   async watchEvents(
@@ -1237,6 +1363,42 @@ function nativeCatalogueFailure(providerId: string, warning: string): NativeChat
     loadedAtMs: Date.now(),
     warning,
   };
+}
+
+/// Read one generation's terminal index into the fleet until the stream ends or the watch is stopped.
+///
+/// The generation's entry is not removed here: whether its absence is the Core going away (the anchor) or one
+/// draining generation finishing (any other) is the caller's to say.
+async function followTerminalIndex(
+  runtime: RuntimeClient,
+  generation: string,
+  fleet: TerminalFleet,
+  publish: () => void,
+  signal: AbortSignal,
+): Promise<void> {
+  let subscription: TerminalIndexSubscription | null = null;
+  const close = (): void => subscription?.close();
+  signal.addEventListener("abort", close, { once: true });
+  try {
+    subscription = await runtime.terminals().watchIndex();
+    fleet.set(generation, subscription.started.snapshot);
+    publish();
+    while (!signal.aborted) {
+      const notification = await subscription.next();
+      if (notification.kind === "changed") {
+        fleet.set(generation, notification.changed.snapshot);
+        publish();
+      } else {
+        throw new Error(`the Runtime terminal stream ended: ${notification.ended.reason}`);
+      }
+    }
+  } catch (error) {
+    // Told to stop: a stream failing because its socket was closed under it is the stop, not a fault.
+    if (!signal.aborted) throw error;
+  } finally {
+    signal.removeEventListener("abort", close);
+    subscription?.close();
+  }
 }
 
 async function inspectRuntimeLocator(

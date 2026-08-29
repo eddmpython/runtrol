@@ -195,6 +195,9 @@ export function conversations(
   }
   // A provider process is visible immediately, even before its own store publishes a conversation identity and
   // title. Once that row appears it claims this terminal and `hostedKey` lets an already open tab move in place.
+  // A second live process of a conversation already claimed (an earlier build resumed it again across an
+  // update) is its own row under the conversation's title: it is alive, it attaches, and it can be stopped, and
+  // a row fewer would be a process hidden.
   for (const terminal of terminals) {
     const key = terminalKey(terminal);
     if (
@@ -202,7 +205,10 @@ export function conversations(
       || claimedTerminals.has(key)
       || started.some((pending) => startedCoversTerminal(pending, terminal))
     ) continue;
-    rows.push(hostedRow(terminal, providers, projectlessRoot));
+    const chat = terminal.nativeSessionId
+      ? nativeByKey.get(conversationKey(terminal.providerId, terminal.nativeSessionId)) ?? null
+      : null;
+    rows.push(hostedRow(terminal, chat, providers, projectlessRoot));
   }
   // What runtrol started and the service has not named yet. A placeholder gives way to the row the service
   // finally wrote for it: same service, same folder, and touched at or after the moment the tab opened. Keeping
@@ -798,6 +804,7 @@ function startedRow(
 /// A daemon-owned process whose provider conversation identity has not been published yet.
 function hostedRow(
   terminal: TerminalDescriptor,
+  chat: NativeChatLine | null,
   providers: readonly ProviderLine[],
   projectlessRoot: string | null,
 ): Conversation {
@@ -809,7 +816,9 @@ function hostedRow(
     providerId: terminal.providerId,
     serviceName: providerDisplayName(terminal.providerId, providers),
     serviceIcon: providerIcon(terminal.providerId, providers),
-    title: workspaceName(terminal.workspace) || "New conversation",
+    title: chat
+      ? providerTitle(chat.title, chat.nativeSessionId)
+      : workspaceName(terminal.workspace) || "New conversation",
     homeWorkspace: terminal.workspace,
     workspace: terminal.workspace,
     folder: projectless ? "" : workspaceName(terminal.workspace),
@@ -822,7 +831,7 @@ function hostedRow(
     open: false,
     pinned: false,
     session: null,
-    native: null,
+    native: chat,
     hostedTerminal: terminal,
     hostedKey: key,
     canOpen: true,

@@ -22,8 +22,10 @@ import type {
   ProviderLine,
   ModelCatalog,
   SessionLine,
+  TerminalDescriptor,
   WorkspaceAccess,
 } from "./runtimeTypes";
+import { abortableDelay } from "./abortableDelay";
 import type { Conversation } from "./conversationList";
 import { attentionCount, nativeProcessKey, nextNeedingYou, projects, runningElsewhere } from "./conversationList";
 import { conversationDeletion, deletionQuestion } from "./conversationDeletion";
@@ -1123,6 +1125,11 @@ export class Controller implements vscode.Disposable {
   }
 
   async close(value?: ConversationItem | SessionLine): Promise<void> {
+    const row = value instanceof ConversationItem ? value.conversation : null;
+    if (row && !row.session && row.hostedTerminal) {
+      await this.stopHosted(row, row.hostedTerminal);
+      return;
+    }
     const session = this.sessionOf(value);
     const action = session.lifecycle === "hotRunning" ? "Stop and close" : "Close in Runtrol";
     const project = this.state.conversationOf(session.sessionId)?.folder || path.basename(session.workspace);
@@ -1138,6 +1145,23 @@ export class Controller implements vscode.Disposable {
       return;
     }
     await this.closeResolvedSession(session, session.lifecycle === "hotRunning");
+  }
+
+  /// Stop a conversation Runtrol hosts without supervising: the service's own terminal interface in a PTY that
+  /// some Runtime generation owns. Every conversation kept alive across an update is one of these, and until
+  /// now its Stop went looking for a supervised session and failed (measured 2026-08-29). The process ends in
+  /// the generation that runs it, which is also what lets that generation finish draining.
+  private async stopHosted(row: Conversation, hosted: TerminalDescriptor): Promise<void> {
+    const choice = await vscode.window.showWarningMessage(
+      `Stop ${row.title}?`,
+      {
+        modal: true,
+        detail: "Runtrol ends this conversation's process. The coding service keeps its own chat history.",
+      },
+      "Stop",
+    );
+    if (choice !== "Stop") return;
+    await this.runtime.stopTerminal(hosted);
   }
 
   async closeResolvedSession(
@@ -1350,6 +1374,7 @@ export class Controller implements vscode.Disposable {
   /// project fallback with the provider title without delaying the first sidebar update.
   private applyTerminalIndex(snapshot: TerminalIndexSnapshot): void {
     this.state.setTerminals(snapshot.terminals);
+    this.state.setTerminalWarnings(snapshot.warnings);
     const next = new Map<string, string | null>();
     const changedProviders = new Set<string>();
     for (const terminal of snapshot.terminals) {
@@ -1942,21 +1967,6 @@ function normalizePath(value: string): string {
 
 const MEMORY_POLL_MS = 5_000;
 const NATIVE_ACTIVITY_POLL_MS = 250;
-
-function abortableDelay(milliseconds: number, signal: AbortSignal): Promise<void> {
-  if (signal.aborted) {
-    return Promise.resolve();
-  }
-  return new Promise((resolve) => {
-    const timer = setTimeout(done, milliseconds);
-    signal.addEventListener("abort", done, { once: true });
-    function done(): void {
-      clearTimeout(timer);
-      signal.removeEventListener("abort", done);
-      resolve();
-    }
-  });
-}
 
 function delay(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));

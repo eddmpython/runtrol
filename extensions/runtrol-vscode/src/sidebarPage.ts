@@ -24,6 +24,9 @@ export type SidebarConversationRow = {
   readonly hue: string | null;
   readonly activity: ConversationActivity;
   readonly live: boolean;
+  /// Whether Runtrol can end this conversation's process: it supervises it or hosts its terminal. A process
+  /// alive outside both is shown, and not offered a Stop that would fail.
+  readonly canStop: boolean;
   readonly canOpen: boolean;
   readonly blocked: string | null;
   readonly pinned: boolean;
@@ -213,7 +216,7 @@ function conversationHtml(row: SidebarConversationRow, assets: SidebarAssets): s
     row.signIn ? action("runtrol.signInFromRow", "Sign in", "key") : "",
     action(row.pinned ? "runtrol.unpinConversation" : "runtrol.pinConversation", row.pinned ? "Unpin" : "Pin to the top", row.pinned ? "pinned" : "pin"),
     action("runtrol.renameSession", "Rename", "edit"),
-    row.live ? action("runtrol.closeSession", "Stop", "debug-stop") : "",
+    row.canStop ? action("runtrol.closeSession", "Stop", "debug-stop") : "",
     row.canArchive ? action("runtrol.archiveConversation", "Archive", "archive") : "",
     row.canDelete ? action("runtrol.deleteConversation", "Delete", "trash") : "",
   ].join("");

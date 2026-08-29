@@ -20,6 +20,7 @@ function conversation(overrides: Partial<SidebarConversationRow>): SidebarConver
     hue: "hueBlue",
     activity: "saved",
     live: false,
+    canStop: false,
     canOpen: true,
     blocked: null,
     pinned: false,
@@ -114,7 +115,7 @@ test("a project's colour reaches its heading bar and every conversation under it
 
 test("row actions are buttons that name their command, and only the actions a row can perform", () => {
   const html = sidebarHtml(model({
-    projects: [project({ rows: [conversation({ live: true, activity: "needsYou", canDelete: false, canArchive: true })] })],
+    projects: [project({ rows: [conversation({ live: true, canStop: true, activity: "needsYou", canDelete: false, canArchive: true })] })],
     loose: [],
   }), assets);
   for (const command of ["runtrol.allowFromRow", "runtrol.declineFromRow", "runtrol.closeSession", "runtrol.archiveConversation", "runtrol.pinConversation", "runtrol.renameSession"]) {
@@ -124,6 +125,14 @@ test("row actions are buttons that name their command, and only the actions a ro
   for (const command of ["runtrol.newConversationInProject", "runtrol.enableAgentTools", "runtrol.pinProject", "runtrol.removeProject"]) {
     assert.ok(html.includes(`data-command="${command}"`), command);
   }
+});
+
+test("a conversation alive where Runtrol cannot reach its process is not offered a Stop that would fail", () => {
+  const html = sidebarHtml(model({
+    projects: [project({ rows: [conversation({ live: true, canStop: false, canOpen: false, blocked: "running outside runtrol" })] })],
+    loose: [],
+  }), assets);
+  assert.ok(!html.includes('data-command="runtrol.closeSession"'));
 });
 
 test("memory reads as a short figure and rides the row", () => {

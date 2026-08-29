@@ -50,6 +50,10 @@ export function providerRowsEqual(left: readonly ProviderLine[], right: readonly
 export function incompleteDiscovery(
   catalogues: readonly NativeChatCatalogue[],
   providers: readonly ProviderLine[],
+  /// What the terminal watch could not read: a Runtime generation it could not follow, or a generation's
+  /// own warning. A conversation running there is on the machine and not on the list, which is exactly the
+  /// question this sentence answers.
+  terminalWarnings: readonly string[] = [],
 ): string | null {
   const reasons: string[] = [];
   for (const catalogue of catalogues) {
@@ -60,6 +64,7 @@ export function incompleteDiscovery(
     )?.displayName ?? catalogue.providerId;
     reasons.push(`${name}: ${coverage.why}`);
   }
+  reasons.push(...terminalWarnings);
   return reasons.length === 0 ? null : [...new Set(reasons)].sort().join(" · ");
 }
 

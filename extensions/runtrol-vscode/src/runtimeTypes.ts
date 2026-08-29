@@ -14,6 +14,7 @@ export type {
   SessionDescriptor as SessionLine,
   SessionWorkspaceAccess as WorkspaceAccess,
   TerminalDescriptor,
+  TerminalIndexSnapshot,
 } from "@runtrol/runtime-client";
 
 import type {
