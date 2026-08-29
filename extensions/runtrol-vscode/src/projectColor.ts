@@ -14,34 +14,51 @@
 ///
 /// # Why one slot and three names
 ///
-/// The two surfaces cannot be handed the same thing. A terminal tab takes a `ThemeColor`, and `terminal.ansi` is
-/// the family VS Code names for tab icons. The sidebar is a page under a strict CSP, where the colour has to be a
-/// class its own stylesheet paints, because a nonce covers a `<style>` block and never an inline `style`
-/// attribute: measured on the operator machine 2026-08-28, the band was laid out at full width and painted
-/// nothing at all, for exactly that reason. So the project owns a slot and each surface names that slot the way it
-/// can read it, from one list, which is what lets a tab and its heading be recognised as the same project.
+/// The two surfaces cannot be handed the same thing. A terminal tab takes a `ThemeColor`, and the non-bright
+/// `terminal.ansi` family is the whole vocabulary VS Code paints on tab icons (its own colour stylesheet is
+/// generated from exactly that list; any other id is silently unpainted). The sidebar is a page under a strict
+/// CSP, where the colour has to be a class its own stylesheet paints, because a nonce covers a `<style>` block
+/// and never an inline `style` attribute: measured on the operator machine 2026-08-28, the band was laid out at
+/// full width and painted nothing at all, for exactly that reason. So the project owns a slot and each surface
+/// names that slot the way it can read it, from one list, which is what lets a tab and its heading be recognised
+/// as the same project.
 ///
-/// # Why these five
+/// # Why twelve, and why the tab repeats after six
 ///
-/// They are theme colours, not hex: the editor is the only thing that knows what is readable in the reader's
-/// theme, and a fixed hex that looks right in dark is invisible in light. Five is what both vocabularies name the
-/// same way, and it is within what a person can still tell apart at icon size; a sixth would have to be cyan on
-/// one surface and orange on the other, which is worse than one fewer colour because the pairing is the point.
-/// Projects past the fifth reuse the ring, so the colour narrows the guess rather than settling it, and the
-/// tooltip always carries the project's name for anyone who cannot use the colour at all.
+/// Five slots put two of the operator's six projects in the same colour twice over (operator, 2026-08-29: the
+/// palette keeps handing out the same colour; hold more). The tab side cannot grow past six: black and white are
+/// not identity colours and bright variants are excluded from the editor's own tab stylesheet. So the sidebar
+/// band, which this page paints itself, carries twelve hues, and each of the six extras shares its tab colour
+/// with the base hue of its family. Two projects that land in one family are still told apart everywhere the
+/// band is (the heading and every row), and their tabs narrow the guess to that family instead of settling it.
+/// The tooltip always carries the project's name for anyone who cannot use the colour at all.
+///
+/// # Where the band's colours come from
+///
+/// The first six are the editor's own terminal palette, read as CSS variables, so the band and the tab are one
+/// colour by construction in whatever theme is on. The six extras have no editor name, so they are fixed pairs:
+/// one for dark themes and one for light, applied by the theme kind VS Code stamps on the page's body. A single
+/// hex for both was the mistake this palette was built to avoid.
 
 /// The hues, in the order projects meet them. One row per slot, so the tab and the band can never drift apart.
 ///
-/// `band` is a class name rather than a colour: the sidebar's page is served under a CSP that allows styles only
-/// from its nonced stylesheet, and a nonce does not cover inline `style` attributes. Painting the band from an
-/// attribute is what left it invisible (measured 2026-08-28), so the stylesheet carries the colour and the row
-/// carries the class.
+/// `band` is a class name rather than a colour: the stylesheet carries the colour and the row carries the class
+/// (CSP, above). `dark` and `light` are what the stylesheet paints the band, per theme kind.
 export const HUES = [
-  { band: "hueBlue", tab: "terminal.ansiBlue", chart: "charts.blue" },
-  { band: "hueGreen", tab: "terminal.ansiGreen", chart: "charts.green" },
-  { band: "huePurple", tab: "terminal.ansiMagenta", chart: "charts.purple" },
-  { band: "hueYellow", tab: "terminal.ansiYellow", chart: "charts.yellow" },
-  { band: "hueRed", tab: "terminal.ansiRed", chart: "charts.red" },
+  { band: "hueBlue", tab: "terminal.ansiBlue", dark: "var(--vscode-terminal-ansiBlue)", light: "var(--vscode-terminal-ansiBlue)" },
+  { band: "hueGreen", tab: "terminal.ansiGreen", dark: "var(--vscode-terminal-ansiGreen)", light: "var(--vscode-terminal-ansiGreen)" },
+  { band: "huePurple", tab: "terminal.ansiMagenta", dark: "var(--vscode-terminal-ansiMagenta)", light: "var(--vscode-terminal-ansiMagenta)" },
+  { band: "hueYellow", tab: "terminal.ansiYellow", dark: "var(--vscode-terminal-ansiYellow)", light: "var(--vscode-terminal-ansiYellow)" },
+  { band: "hueRed", tab: "terminal.ansiRed", dark: "var(--vscode-terminal-ansiRed)", light: "var(--vscode-terminal-ansiRed)" },
+  { band: "hueCyan", tab: "terminal.ansiCyan", dark: "var(--vscode-terminal-ansiCyan)", light: "var(--vscode-terminal-ansiCyan)" },
+  // The band-only extras. Each shares its family's tab colour; the pairs are picked to stay apart from the six
+  // above and from each other at band width, in dark and in light.
+  { band: "hueOrange", tab: "terminal.ansiYellow", dark: "#d18616", light: "#b35900" },
+  { band: "hueTeal", tab: "terminal.ansiCyan", dark: "#2bb3a8", light: "#0f766e" },
+  { band: "huePink", tab: "terminal.ansiMagenta", dark: "#e879b6", light: "#be3b88" },
+  { band: "hueLime", tab: "terminal.ansiGreen", dark: "#a3be3c", light: "#5f7d0e" },
+  { band: "hueBrown", tab: "terminal.ansiRed", dark: "#c8a17a", light: "#8a5a2b" },
+  { band: "hueSlate", tab: "terminal.ansiBlue", dark: "#8ea3b8", light: "#52606d" },
 ] as const;
 
 /// The slot one project holds, from the project's own workspace path.

@@ -108,7 +108,7 @@ test("a project's colour reaches its heading bar and every conversation under it
   // stylesheet, and a nonce never covers an inline `style` attribute, so a colour put there paints nothing.
   assert.equal((html.match(/class="bar hueBlue"/gu) ?? []).length, 2, "heading and its one row");
   assert.ok(
-    html.includes(".row .bar.hueBlue { background: var(--vscode-charts-blue); }"),
+    html.includes(".row .bar.hueBlue { background: var(--vscode-terminal-ansiBlue); }"),
     "the page carries the rule that paints the band",
   );
   assert.ok(!html.includes('style="background'), "no colour is written onto an element for the CSP to drop");

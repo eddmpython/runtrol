@@ -92,8 +92,16 @@ export type SidebarAssets = UsageStripAssets;
 ///
 /// In the stylesheet rather than on the element: the page's CSP allows styles from this nonced block only, and a
 /// nonce does not cover inline `style` attributes, so a colour written onto the element is simply dropped.
+/// The first six hues are the editor's own terminal palette and follow the theme through their variables; the
+/// band-only extras have no editor name, so their light value is applied by the theme kind VS Code stamps on
+/// the page's body (absent in the eye harness, which therefore shows the dark pair).
 const HUE_STYLE = HUES
-  .map((hue) => `.row .bar.${hue.band} { background: var(--vscode-${hue.chart.replace(/\./gu, "-")}); }`)
+  .map((hue) => {
+    const rule = `.row .bar.${hue.band} { background: ${hue.dark}; }`;
+    if (hue.light === hue.dark) return rule;
+    return `${rule}
+body[data-vscode-theme-kind="vscode-light"] .row .bar.${hue.band}, body[data-vscode-theme-kind="vscode-high-contrast-light"] .row .bar.${hue.band} { background: ${hue.light}; }`;
+  })
   .join("\n");
 
 /// Bytes as the short figure a row can carry: whole megabytes below a gigabyte, one decimal above.

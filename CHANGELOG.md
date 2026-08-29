@@ -29,6 +29,10 @@ and refactoring that no user can observe do not belong here.
 - The usage panel drops "Within limits" and the sign-in method ("via claude.ai"); the bars and the plan say it.
   A model window's name is shown whole instead of cut to "GPT…Spark".
 - The list's scrollbar sits on the panel's edge instead of 8px inside it.
+- The project palette holds twelve hues instead of five, so a machine with several projects stops handing two
+  of them the same colour. The first six are the editor's own terminal palette; the six extras are band-only,
+  and a tab then narrows a conversation to a colour family of two instead of settling it, which is the most
+  the editor lets a tab icon say.
 - A usage chip whose limits a team manages shows nothing under its ring instead of the words "team-managed",
   which read as a broken state. The detail panel still says why there is no number.
 

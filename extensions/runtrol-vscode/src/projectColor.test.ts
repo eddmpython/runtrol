@@ -20,18 +20,28 @@ test("the tab and the sidebar band name the same hue for one project", () => {
   // The whole point of the colour is that a tab and the heading it came from are recognised as one project.
   // They are read by two surfaces with two vocabularies, so the only thing holding them together is that the
   // lists agree hue for hue. A reordering of either list is caught here rather than by a reader's eye.
-  const hues = new Map([
-    ["terminal.ansiBlue", "hueBlue"],
-    ["terminal.ansiGreen", "hueGreen"],
-    ["terminal.ansiMagenta", "huePurple"],
-    ["terminal.ansiYellow", "hueYellow"],
-    ["terminal.ansiRed", "hueRed"],
+  // Twelve bands over six tab colours: a band names exactly one tab colour (its family), so the pairing is
+  // still a function, band to tab. The reverse stopped being one on purpose: the tab narrows to a family of
+  // two bands, which is what the six-colour cap on tab icons allows.
+  const families = new Map([
+    ["hueBlue", "terminal.ansiBlue"],
+    ["hueGreen", "terminal.ansiGreen"],
+    ["huePurple", "terminal.ansiMagenta"],
+    ["hueYellow", "terminal.ansiYellow"],
+    ["hueRed", "terminal.ansiRed"],
+    ["hueCyan", "terminal.ansiCyan"],
+    ["hueOrange", "terminal.ansiYellow"],
+    ["hueTeal", "terminal.ansiCyan"],
+    ["huePink", "terminal.ansiMagenta"],
+    ["hueLime", "terminal.ansiGreen"],
+    ["hueBrown", "terminal.ansiRed"],
+    ["hueSlate", "terminal.ansiBlue"],
   ]);
-  for (const name of ["alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta", "theta"]) {
-    const workspace = `C:/work/${name}`;
-    const tab = tabColorId(workspace);
-    assert.ok(tab, `${workspace} took no tab colour`);
-    assert.equal(rowHueClass(workspace), hues.get(tab), `${workspace} pairs ${tab} with the wrong band`);
+  for (let index = 0; index < 60; index += 1) {
+    const workspace = `C:/work/project-${index}`;
+    const band = rowHueClass(workspace);
+    assert.ok(band, `${workspace} took no band`);
+    assert.equal(tabColorId(workspace), families.get(band), `${workspace} pairs ${band} with the wrong tab family`);
   }
 });
 
@@ -47,11 +57,13 @@ test("the palette spreads, so a sidebar of projects is not one colour", () => {
     assert.match(colour, /^terminal\.ansi/u);
     counts.set(colour, (counts.get(colour) ?? 0) + 1);
   }
-  assert.equal(counts.size, 5, `unreachable slots: ${[...counts.keys()].join(", ")}`);
+  assert.equal(counts.size, 6, `unreachable tab colours: ${[...counts.keys()].join(", ")}`);
   for (const [colour, count] of counts) {
     assert.ok(count < folders.length * 0.4, `${colour} took ${count} of ${folders.length}`);
   }
   // The band is a class the page's own stylesheet paints. A colour written onto the element instead is dropped
   // by the page's CSP, which is exactly how the band came to be invisible on 2026-08-28.
+  const bands = new Set(folders.map((folder) => rowHueClass(folder)));
+  assert.equal(bands.size, 12, `unreachable bands: ${[...bands].join(", ")}`);
   for (const folder of folders) assert.match(String(rowHueClass(folder)), /^hue[A-Z]/u);
 });

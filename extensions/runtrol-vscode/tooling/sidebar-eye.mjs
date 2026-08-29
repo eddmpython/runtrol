@@ -68,6 +68,12 @@ const THEME = `
   --vscode-notificationsWarningIcon-foreground: #cca700;
   --vscode-errorForeground: #f85149;
   --vscode-testing-iconPassed: #73c991;
+  --vscode-terminal-ansiBlue: #2472c8;
+  --vscode-terminal-ansiGreen: #0dbc79;
+  --vscode-terminal-ansiMagenta: #bc3fbc;
+  --vscode-terminal-ansiYellow: #e5e510;
+  --vscode-terminal-ansiRed: #cd3131;
+  --vscode-terminal-ansiCyan: #11a8cd;
   --vscode-gitDecoration-addedResourceForeground: #81b88b;
   --vscode-gitDecoration-deletedResourceForeground: #c74e39;
   --vscode-gitDecoration-untrackedResourceForeground: #73c991;
@@ -180,7 +186,7 @@ const model = {
       key: "project:runtrol",
       name: "runtrol",
       workspace: "C:\\work\\runtrol",
-      hue: "huePurple",
+      hue: "hueTeal",
       kind: "created",
       pinned: false,
       current: false,
