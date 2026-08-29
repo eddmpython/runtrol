@@ -287,7 +287,11 @@ fn answering(home: &Path, followed: &mut HashMap<Box<str>, Followed>, thread: &s
             known.answering = fresh.1;
             return known.answering;
         }
-        if let Some(state) = boundary_in_range(&known.log, known.read_to, size) {
+        // Back over the straddle: the previous size may have landed inside a boundary token, and a token
+        // that neither look sees is a turn that never starts or never ends until the next one.
+        let straddle = u64::try_from(TURN_OPENED.len().max(TURN_CLOSED.len()) - 1).unwrap_or(0);
+        let from = known.read_to.saturating_sub(straddle);
+        if let Some(state) = boundary_in_range(&known.log, from, size) {
             known.answering = state;
         }
         known.read_to = size;

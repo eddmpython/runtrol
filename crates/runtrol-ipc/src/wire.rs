@@ -973,6 +973,9 @@ pub struct ProviderHelpLine {
     pub why: Option<Box<str>>,
     /// Provider-declared sign-in command for the operator to run.
     pub sign_in: Option<Box<str>>,
+    /// Provider-declared sign-out command for the operator to run. Additive: an older reader skips it.
+    #[serde(default)]
+    pub sign_out: Option<Box<str>>,
     /// Provider-declared diagnosis command for the operator to run.
     pub diagnose: Option<Box<str>>,
     /// Provider-declared installation command for the operator to run.

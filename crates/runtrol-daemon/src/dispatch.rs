@@ -899,7 +899,6 @@ fn provider_help(
         .help
         .unwrap_or(runtrol_runtime_protocol::ProviderHelp {
             sign_in: None,
-            sign_out: None,
             diagnose: None,
             install: None,
         });
@@ -911,6 +910,8 @@ fn provider_help(
             version: provider.installation.version.map(Into::into),
             why: provider.installation.why.map(Into::into),
             sign_in: help.sign_in.map(Into::into),
+            sign_out: crate::runtime_inventory::sign_out_line(composed, provider_id)
+                .map(Into::into),
             diagnose: help.diagnose.map(Into::into),
             install: help.install.map(Into::into),
         },

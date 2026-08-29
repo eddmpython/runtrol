@@ -1599,13 +1599,6 @@
             "string",
             "null"
           ]
-        },
-        "signOut": {
-          "description": "The command that signs out of this service, when it declares one.",
-          "type": [
-            "string",
-            "null"
-          ]
         }
       },
       "type": "object"

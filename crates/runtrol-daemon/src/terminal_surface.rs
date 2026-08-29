@@ -68,6 +68,9 @@ struct Open {
     generation: u64,
     /// A public stop was accepted and process exit is pending.
     stopping: bool,
+    /// A console mirror of a process somebody else started. It holds no native claim (the process is not
+    /// ours to claim), so following the conversation it moves to touches only this table.
+    mirror: bool,
 }
 
 /// A content-free view of one hosted terminal for public Runtime projection.
@@ -144,12 +147,14 @@ impl Terminals {
         if open.native.as_deref() == Some(native) {
             return Ok(false);
         }
-        claims.bind_terminal_native(
-            *terminal_id,
-            provider.as_str(),
-            native,
-            open.workspace.as_str(),
-        )?;
+        if !open.mirror {
+            claims.bind_terminal_native(
+                *terminal_id,
+                provider.as_str(),
+                native,
+                open.workspace.as_str(),
+            )?;
+        }
         let terminal_id = *terminal_id;
         // The process moved to another conversation (`/resume`, `/clear` in its own interface): the old
         // conversation no longer has a terminal here, and the new one is this terminal from now on.
@@ -184,6 +189,7 @@ impl Terminals {
                 opened_at_ms: WallMs::now().as_millis(),
                 generation: 1,
                 stopping: false,
+                mirror: false,
             },
         );
         if let Some(key) = key {
@@ -235,6 +241,7 @@ impl Terminals {
                 opened_at_ms: WallMs::now().as_millis(),
                 generation: 1,
                 stopping: false,
+                mirror: true,
             },
         );
         self.by_conversation.insert((provider, native.into()), id);

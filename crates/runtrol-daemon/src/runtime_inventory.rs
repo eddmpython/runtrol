@@ -454,23 +454,39 @@ pub(crate) async fn invalidate_provider_inventory(composed: &Composed) {
 fn help(provider: &runtrol_core::registry::Provider) -> Option<ProviderHelp> {
     let declared = &provider.manifest.help;
     let command = provider.manifest.bin.names.first()?;
-    let line = |arguments: &[Box<str>]| {
-        (!arguments.is_empty()).then(|| {
-            let mut text = command.to_string();
-            for argument in arguments {
-                text.push(' ');
-                text.push_str(argument);
-            }
-            text
-        })
-    };
     let assembled = ProviderHelp {
-        sign_in: line(&declared.sign_in),
-        sign_out: line(&declared.sign_out),
-        diagnose: line(&declared.diagnose),
+        sign_in: help_line(command, &declared.sign_in),
+        diagnose: help_line(command, &declared.diagnose),
         install: declared.install.as_ref().map(ToString::to_string),
     };
     (!assembled.is_empty()).then_some(assembled)
+}
+
+/// This service's own sign-out command, for the private admin surface only.
+///
+/// Not on the public `ProviderHelp`. Every shipped client validates the public inventory against a closed
+/// schema (`additionalProperties: false`, and the Rust client's `deny_unknown_fields`), so a field added there
+/// makes every window still running an older build reject the new daemon's whole provider list (measured
+/// 2026-08-29 against the 0.1.36 client). The admin wire is additive by contract, and it is the only reader.
+pub(crate) fn sign_out_line(composed: &Composed, provider_id: &str) -> Option<String> {
+    let provider = composed
+        .registry
+        .all()
+        .find(|provider| provider.id().as_str() == provider_id)?;
+    let command = provider.manifest.bin.names.first()?;
+    help_line(command, &provider.manifest.help.sign_out)
+}
+
+/// One of the service's own commands as a person would type it: the binary's first name, then the arguments.
+fn help_line(command: &str, arguments: &[Box<str>]) -> Option<String> {
+    (!arguments.is_empty()).then(|| {
+        let mut text = command.to_string();
+        for argument in arguments {
+            text.push(' ');
+            text.push_str(argument);
+        }
+        text
+    })
 }
 
 fn installation(

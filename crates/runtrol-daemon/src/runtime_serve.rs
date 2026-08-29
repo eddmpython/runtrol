@@ -2461,26 +2461,24 @@ async fn native_activity(
             // process roster is the provider-neutral, content-free proof that binds that identity back to the
             // exact PTY. Publishing the table change makes every window replace the project placeholder with the
             // provider title without opening a second process or parsing the screen.
-            let binding = {
+            {
                 let mut terminals = composed.terminals.lock().await;
-                activity.processes.iter().try_for_each(|process| {
-                    terminals.bind_native_process(
+                for process in &activity.processes {
+                    // One process whose new conversation is already claimed elsewhere (another live
+                    // terminal, a structured session) must not turn the whole provider's activity answer
+                    // into an error: that froze every icon of the service on the last successful round
+                    // (measured 2026-08-29). The conflict is not lost: the same process is offered again
+                    // next round and stays refused until the other claim ends, and its own row keeps
+                    // whatever identity it had.
+                    if let Err(conflict) = terminals.bind_native_process(
                         &composed.native_claims,
                         provider,
                         process.pid,
                         process.native.as_str(),
-                    )?;
-                    Ok::<(), crate::native_claims::TerminalClaimError>(())
-                })
-            };
-            if let Err(error) = binding {
-                return Answer::plain(
-                    id,
-                    RuntimeErrorKind::SessionConflict,
-                    &format!(
-                        "the provider process identity conflicts with a live session claim: {error}"
-                    ),
-                );
+                    ) {
+                        report_binding_conflict(provider, process.pid, conflict);
+                    }
+                }
             }
             mirror_external_sessions(composed, provider, &activity.processes).await;
             Answer::success(
@@ -4741,6 +4739,25 @@ const fn platform_name() -> &'static str {
     } else {
         "linux-aarch64"
     }
+}
+
+/// A live process whose new conversation another live claim already holds.
+///
+/// Said on the daemon's error stream and nowhere else: the answer this round still goes out with every
+/// other process bound, and the same process is offered again next round until the other claim ends.
+#[expect(
+    clippy::print_stderr,
+    reason = "the daemon's error stream is the only surface a background observation has; failing the whole answer froze every icon of the service (2026-08-29)"
+)]
+fn report_binding_conflict(
+    provider: runtrol_provider::ProviderId,
+    pid: u32,
+    conflict: crate::native_claims::TerminalClaimError,
+) {
+    eprintln!(
+        "runtrol: process {pid} of {} names a conversation another live claim holds: {conflict}",
+        provider.as_str()
+    );
 }
 
 #[cfg(test)]
