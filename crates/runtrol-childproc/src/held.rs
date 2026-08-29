@@ -34,13 +34,16 @@ mod platform {
     /// this fail with a sharing violation, which is the answer.
     const SHARE_NONE: u32 = 0;
 
+    /// Read access only: the question is whether somebody else holds the file, and asking it with write
+    /// access would be asking for more than the answer needs. Measured 2026-08-29 on the operator's own
+    /// machine: a read-only open with no sharing is refused on exactly the locks a live process holds, the
+    /// same set a read-write open is refused on.
     pub(super) fn write_locked(path: &Path) -> bool {
         if !path.exists() {
             return false;
         }
         OpenOptions::new()
             .read(true)
-            .write(true)
             .share_mode(SHARE_NONE)
             .open(path)
             .is_err()
@@ -117,7 +120,6 @@ mod tests {
         fs::write(&path, b"").expect("the scratch file is written");
         let holder = OpenOptions::new()
             .read(true)
-            .write(true)
             .share_mode(0)
             .open(&path)
             .expect("this process takes the file");

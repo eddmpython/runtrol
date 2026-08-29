@@ -62,6 +62,12 @@ MAY_MUTATE_DISK = {
     "public Runtime schema from its Rust DTO source of truth",
     "crates/runtrol-security/src/root_identity.rs": "opens an approved directory read-only for its "
     "kernel-issued Windows file identity and never writes provider or workspace data",
+    "crates/runtrol-childproc/src/held.rs": "opens a provider's own lock file read-only with no sharing, "
+    "to ask whether a live process holds it, and never writes; the open lasts microseconds and the file is "
+    "not read (reviewed 2026-08-29)",
+    "crates/runtrol-childproc/src/console_mirror.rs": "opens the console devices (CONIN$, CONOUT$) of a "
+    "console it mirrors; those are kernel console handles, not files, and no provider or workspace data is "
+    "written (reviewed 2026-08-29)",
     # The one reviewed write into a provider's own store, and the only entry here that is not runtrol data.
     # Claude Code publishes no delete command (measured 2.1.241), so the driver removes only the complete
     # measured artifact set of the operator-selected native identity and verifies absence. It creates no
