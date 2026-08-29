@@ -567,6 +567,51 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
       (item) => run(() => afterReady(() => controller.close(item))),
     ),
     vscode.commands.registerCommand(
+      "runtrol.deleteProjectConversations",
+      // Destructive, so guarded: invoked with anything but a project it refuses rather than guessing one.
+      (item: unknown) => run(async () => {
+        if (!(item instanceof ProjectItem)) return;
+        await afterReady(() => controller.deleteProjectConversations(item));
+      }),
+    ),
+    vscode.commands.registerCommand(
+      "runtrol.projectMenu",
+      // The project row's fuller menu, from a right click on the row: the hover actions plus the one action
+      // too destructive to sit among them. The menu names the project so a misread row is caught before
+      // anything runs.
+      (item: unknown) => run(async () => {
+        if (!(item instanceof ProjectItem)) return;
+        const created = item.group.kind === "created";
+        type Entry = vscode.QuickPickItem & { command: string };
+        const entries: Entry[] = [
+          { label: "$(add) New conversation here", command: "runtrol.newConversationInProject" },
+          ...(created
+            ? [
+                { label: "$(edit) Rename project", command: "runtrol.renameProject" },
+                {
+                  label: item.agentToolsEnabled ? "$(sparkle-filled) Turn Agent Tools off" : "$(sparkle) Turn Agent Tools on",
+                  command: item.agentToolsEnabled ? "runtrol.disableAgentTools" : "runtrol.enableAgentTools",
+                },
+                {
+                  label: item.group.pinned ? "$(pinned) Unpin" : "$(pin) Pin to the top",
+                  command: item.group.pinned ? "runtrol.unpinProject" : "runtrol.pinProject",
+                },
+              ]
+            : [{ label: "$(folder-library) Keep this folder as a project", command: "runtrol.createProjectHere" }]),
+          { label: "$(link-external) Open this folder in a window", command: "runtrol.openProjectWorkspace" },
+          { label: "$(trash) Delete all conversations...", command: "runtrol.deleteProjectConversations" },
+          ...(created
+            ? [{ label: "$(close) Remove from the sidebar (the folder stays)", command: "runtrol.removeProject" }]
+            : []),
+        ];
+        const picked = await vscode.window.showQuickPick(entries, {
+          title: item.group.name,
+          placeHolder: "Project actions",
+        });
+        if (picked) await vscode.commands.executeCommand(picked.command, item);
+      }),
+    ),
+    vscode.commands.registerCommand(
       "runtrol.moreActions",
       () => run(() => showMoreActions(sidebar.listingReasons())),
     ),

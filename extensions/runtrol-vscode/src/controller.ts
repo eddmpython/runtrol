@@ -10,6 +10,7 @@ import { CoreClient } from "./core/client";
 import { readGitBranch } from "./gitBranch";
 import { IsolatedWorkspaces } from "./isolatedWorkspace";
 import { isProjectless } from "./projectlessWorkspace";
+import { planProjectDeletion, projectDeletionQuestion } from "./projectDeletion";
 import type { ProjectRecord } from "./projects";
 import type {
   IsolatedWorkspaceLine,
@@ -42,7 +43,7 @@ import {
 import { SelectionStore } from "./selectionStore";
 import { providerDisplayName, sessionTitle, workspaceName } from "./sessionDisplay";
 import { RuntimeState } from "./state";
-import { ConversationItem } from "./sidebarTargets";
+import { ConversationItem, ProjectItem } from "./sidebarTargets";
 import { StudioRuntimeClient } from "./runtimeClient";
 import { sessionStateLabel } from "./runtimeProjection";
 import type { ModelOption } from "./sessionConfiguration";
@@ -1112,6 +1113,83 @@ export class Controller implements vscode.Disposable {
     // whose list it left says which of the two just happened. It claims nothing about getting it back, because
     // that is each service's own business and not the same answer for all of them.
     void vscode.window.showInformationMessage(`Deleted ${title} from ${serviceName}.`);
+  }
+
+  /// Delete every conversation of one project that its service can delete, after one confirmation carrying
+  /// the exact numbers (`projectDeletion.ts`). Reached from the project row's context menu, never from a
+  /// hover icon: a misclick beside "new conversation" must not be able to do this (operator, 2026-08-29).
+  async deleteProjectConversations(item: ProjectItem): Promise<void> {
+    const rows = item.group.rows;
+    const capabilities = new Map<string, ProviderCapabilities | null>();
+    for (const providerId of new Set(rows.map((row) => row.providerId))) {
+      capabilities.set(providerId, await this.capabilitiesFor(providerId));
+    }
+    const plan = planProjectDeletion(rows, (providerId) => capabilities.get(providerId) ?? null);
+    const question = projectDeletionQuestion(item.group.name, plan);
+    if (!question) {
+      const kept = [...plan.undeletable]
+        .map(([service, count]) => `${count} of ${service} (no deletion published)`)
+        .join(", ");
+      const elsewhere = plan.runningElsewhere.length > 0
+        ? `${plan.runningElsewhere.length} running outside Runtrol`
+        : "";
+      const reasons = [kept, elsewhere].filter((reason) => reason !== "").join("; ");
+      void vscode.window.showInformationMessage(
+        `Nothing in ${item.group.name} can be deleted right now${reasons ? `: ${reasons}` : ""}.`,
+      );
+      return;
+    }
+    const buttons = [question.stopAndDelete, question.deleteIdle]
+      .filter((label): label is string => label !== null);
+    const choice = await vscode.window.showWarningMessage(
+      question.message,
+      { modal: true, detail: question.detail },
+      ...buttons,
+    );
+    if (!choice) return;
+    const stopping = choice === question.stopAndDelete ? plan.stoppable : [];
+    const doomed = [...plan.deletable, ...stopping];
+    let deleted = 0;
+    const refused: string[] = [];
+    await vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: `Deleting ${doomed.length} conversations from ${item.group.name}`,
+      },
+      async (progress) => {
+        for (const row of stopping) {
+          progress.report({ message: `stopping ${row.title}` });
+          try {
+            if (row.presence.kind === "hosted") {
+              await this.runtime.stopTerminal(row.presence.terminal);
+            } else if (row.session) {
+              await this.runtime.close(runtimeAction(row.session), true);
+            }
+          } catch (error) {
+            refused.push(`${row.title}: ${error instanceof Error ? error.message : String(error)}`);
+          }
+        }
+        for (const row of doomed) {
+          progress.report({ message: row.title });
+          try {
+            await this.deleteNativeWithoutAsking({ ...row, live: false });
+            deleted += 1;
+          } catch (error) {
+            refused.push(`${row.title}: ${error instanceof Error ? error.message : String(error)}`);
+          }
+        }
+      },
+    );
+    await this.refreshChats();
+    const kept = [...plan.undeletable].map(([service, count]) => `${count} (${service} cannot delete)`);
+    if (plan.runningElsewhere.length > 0) kept.push(`${plan.runningElsewhere.length} running outside Runtrol`);
+    const tail = [
+      kept.length > 0 ? `Kept: ${kept.join(", ")}.` : "",
+      refused.length > 0 ? `Refused: ${refused.join("; ")}` : "",
+    ].filter((line) => line !== "").join(" ");
+    const summary = `Deleted ${deleted} of ${doomed.length} from ${item.group.name}.${tail ? ` ${tail}` : ""}`;
+    if (refused.length > 0) void vscode.window.showWarningMessage(summary);
+    else void vscode.window.showInformationMessage(summary);
   }
 
   /// The deletion itself, after the question (or, for the headless journey, instead of it).

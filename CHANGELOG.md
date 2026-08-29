@@ -29,6 +29,10 @@ and refactoring that no user can observe do not belong here.
 - The usage panel drops "Within limits" and the sign-in method ("via claude.ai"); the bars and the plan say it.
   A model window's name is shown whole instead of cut to "GPT…Spark".
 - The list's scrollbar sits on the panel's edge instead of 8px inside it.
+- A right click on a project row opens its menu: everything the hover icons offer, plus "Delete all
+  conversations". The confirmation carries the exact numbers: how many go, how many a service cannot delete,
+  how many are running (deleted only if stopped first, by their own button) and how many run outside Runtrol
+  and are skipped. Deletion stays permanent, per conversation, in the provider's own store.
 - A signed-in account's usage panel carries a quiet "Sign out of ..." line when its service publishes its own
   sign-out command (all three do: measured against each installed CLI). It runs that command in a terminal
   exactly as sign-in does; Runtrol holds no credentials either way.

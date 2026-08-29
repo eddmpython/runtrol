@@ -519,6 +519,15 @@ const SCRIPT = `
     }
     post({ type: "command", command: "runtrol.selectSession", target: targetOf(row) });
   });
+  // The project row's fuller menu, the way an editor row has one: everything the hover icons offer plus
+  // deleting the project's conversations, which is too destructive to sit beside "new conversation"
+  // (operator, 2026-08-29). The host draws the menu; the page only says which project was asked.
+  document.addEventListener("contextmenu", function (event) {
+    var row = rowOf(event.target);
+    if (!row || row.dataset.kind !== "project") return;
+    event.preventDefault();
+    post({ type: "command", command: "runtrol.projectMenu", target: targetOf(row) });
+  });
   document.addEventListener("keydown", function (event) {
     if (event.key === "Escape") { dismissChoice(); return; }
     var row = rowOf(document.activeElement);
