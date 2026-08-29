@@ -70,7 +70,7 @@ const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 test("a project is measured once on first sight and again only when touched", async () => {
   const git = counting();
-  const watch = new GitChangesWatch(git.read, 5, 50);
+  const watch = new GitChangesWatch(git.read, 5, 50, 0);
   let changed = 0;
   watch.onDidChange(() => { changed += 1; });
   assert.equal(watch.get(WORKSPACE), undefined);
@@ -89,7 +89,7 @@ test("touches inside a burst settle into one measurement, and a burst that never
   const git = counting();
   // Generous margins: a timer on a loaded machine lands late, and a settle shorter than that jitter made this
   // test read a settled burst as a running one.
-  const watch = new GitChangesWatch(git.read, 80, 250);
+  const watch = new GitChangesWatch(git.read, 80, 250, 0);
   watch.ensure(WORKSPACE);
   await tick();
   assert.equal(git.reads.length, 1);
@@ -109,9 +109,36 @@ test("touches inside a burst settle into one measurement, and a burst that never
   watch.dispose();
 });
 
+test("a folder git refuses is measured once and never again on a write", async () => {
+  const git = counting();
+  git.answer = null as unknown as GitChanges;
+  const watch = new GitChangesWatch(git.read, 1, 10, 0);
+  watch.ensure(WORKSPACE);
+  await tick();
+  assert.equal(git.reads.length, 1);
+  watch.touch(WORKSPACE);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(git.reads.length, 1, "not a repository: a write spawns no git");
+  watch.dispose();
+});
+
+test("two touches inside the floor become one measurement after it", async () => {
+  const git = counting();
+  const watch = new GitChangesWatch(git.read, 1, 10, 40);
+  watch.ensure(WORKSPACE);
+  await tick();
+  assert.equal(git.reads.length, 1);
+  watch.touch(WORKSPACE);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(git.reads.length, 1, "inside the floor nothing runs");
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(git.reads.length, 2, "after the floor the touch is honoured once");
+  watch.dispose();
+});
+
 test("an unchanged answer does not redraw, a changed one does", async () => {
   const git = counting();
-  const watch = new GitChangesWatch(git.read, 1, 10);
+  const watch = new GitChangesWatch(git.read, 1, 10, 0);
   let changed = 0;
   watch.onDidChange(() => { changed += 1; });
   watch.ensure(WORKSPACE);
@@ -129,7 +156,7 @@ test("an unchanged answer does not redraw, a changed one does", async () => {
 
 test("a write inside a subfolder touches the project above it and measures nothing else", async () => {
   const git = counting();
-  const watch = new GitChangesWatch(git.read, 1, 10);
+  const watch = new GitChangesWatch(git.read, 1, 10, 0);
   const inside = `${WORKSPACE}${process.platform === "win32" ? "\\packages\\core" : "/packages/core"}`;
   watch.ensure(WORKSPACE);
   await tick();
@@ -143,7 +170,7 @@ test("a write inside a subfolder touches the project above it and measures nothi
 
 test("a change under a repository root touches the projects inside it, spelled either way", async () => {
   const git = counting();
-  const watch = new GitChangesWatch(git.read, 1, 10);
+  const watch = new GitChangesWatch(git.read, 1, 10, 0);
   const inside = `${WORKSPACE}${process.platform === "win32" ? "\\packages\\core" : "/packages/core"}`;
   const elsewhere = process.platform === "win32" ? "C:\\work\\other" : "/work/other";
   watch.ensure(inside);

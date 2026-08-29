@@ -98,9 +98,16 @@ function runGit(workspace: string, args: readonly string[]): Promise<string> {
 ///
 /// An agent writes to the screen in bursts and edits files between them. Measuring on every write would run git
 /// hundreds of times a minute; measuring once the burst settles catches the edit it made.
-const SETTLE_MS = 1_500;
+const SETTLE_MS = 3_000;
 /// A burst that never settles is still measured this often, so a long turn is not a blank chip until it ends.
-const SETTLE_MAX_WAIT_MS = 8_000;
+const SETTLE_MAX_WAIT_MS = 15_000;
+/// The least time between two measurements of one folder, whatever touches it.
+///
+/// A measurement is two git processes, and on Windows a process is the expensive thing: eight agents writing
+/// at once made the extension host spend its time spawning git, and the sidebar's own refresh p95 went from
+/// tens of milliseconds to hundreds on the Windows CI runner (2026-08-29). Five seconds keeps the chip live
+/// enough to read and the process count low enough not to be felt.
+const MEASURE_FLOOR_MS = 5_000;
 
 /// The last answer per project folder, and when to ask again.
 ///
@@ -111,6 +118,8 @@ export class GitChangesWatch {
   private readonly cache = new Map<string, GitChanges | null>();
   /// The folder as the list spells it, per key, so git is run on the path the person sees.
   private readonly folders = new Map<string, string>();
+  /// When each folder was last measured, so a burst of touches cannot turn into a burst of processes.
+  private readonly measuredAt = new Map<string, number>();
   private readonly pending = new Map<string, { timer: NodeJS.Timeout; since: number }>();
   private readonly listeners = new Set<() => void>();
   private disposed = false;
@@ -119,6 +128,7 @@ export class GitChangesWatch {
     private readonly read: (workspace: string) => Promise<GitChanges | null> = readGitChanges,
     private readonly settleMs = SETTLE_MS,
     private readonly maxWaitMs = SETTLE_MAX_WAIT_MS,
+    private readonly floorMs = MEASURE_FLOOR_MS,
   ) {}
 
   /// The last answer for this folder, or undefined when it has never been measured.
@@ -136,9 +146,14 @@ export class GitChangesWatch {
   }
 
   /// Something may have changed in this folder: measure once it settles.
+  ///
+  /// A folder that is not a repository is not measured again from here: git said so once, and asking on every
+  /// write would spawn processes for an answer that cannot change until the person runs `git init`, which the
+  /// next listing (`ensure`) sees. A folder measured moments ago waits out the floor first.
   touch(workspace: string): void {
     if (this.disposed) return;
     const key = keyOf(workspace);
+    if (this.cache.has(key) && this.cache.get(key) === null && this.measuredAt.has(key)) return;
     this.folders.set(key, workspace);
     const now = Date.now();
     const waiting = this.pending.get(key);
@@ -151,10 +166,11 @@ export class GitChangesWatch {
       }
     }
     const since = waiting?.since ?? now;
+    const floor = Math.max(0, (this.measuredAt.get(key) ?? 0) + this.floorMs - now);
     const timer = setTimeout(() => {
       this.pending.delete(key);
       void this.measure(key, workspace);
-    }, this.settleMs);
+    }, Math.max(this.settleMs, floor));
     this.pending.set(key, { timer, since });
   }
 
@@ -183,6 +199,7 @@ export class GitChangesWatch {
       if (wanted.has(key)) continue;
       this.cache.delete(key);
       this.folders.delete(key);
+      this.measuredAt.delete(key);
     }
   }
 
@@ -199,6 +216,7 @@ export class GitChangesWatch {
   }
 
   private async measure(key: string, workspace: string): Promise<void> {
+    this.measuredAt.set(key, Date.now());
     const next = await this.read(workspace);
     if (this.disposed) return;
     const previous = this.cache.get(key);
