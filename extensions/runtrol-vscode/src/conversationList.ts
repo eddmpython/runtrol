@@ -243,20 +243,32 @@ export function conversations(
   }
   // A provider process is visible immediately, even before its own store publishes a conversation identity and
   // title. Once that row appears it claims this terminal and `hostedKey` lets an already open tab move in place.
-  // A second live process of a conversation already claimed (an earlier build resumed it again across an
-  // update) is its own row under the conversation's title: it is alive, it attaches, and it can be stopped, and
-  // a row fewer would be a process hidden.
+  //
+  // One conversation is one row. A conversation already placed above (as a supervised session or a service
+  // row) has taken its terminal, and a terminal whose native identity is already on a placed row is the same
+  // conversation seen through another generation, not a new one: it is skipped, never given a second row
+  // (operator, 2026-08-29: a session showing twice is the bug, and hiding the second is not the fix. The one
+  // terminal per conversation the row keeps is `terminalByConversation`, the most recently opened). A bare
+  // terminal a person started outside Runtrol, whose conversation is on no other row, becomes its own row.
+  const placedNatives = new Set(
+    rows
+      .map((row) => (row.native ? conversationKey(row.providerId, row.native.nativeSessionId) : null))
+      .filter((key): key is string => key !== null),
+  );
   for (const terminal of terminals) {
     const key = terminalKey(terminal);
+    const conversation = terminal.nativeSessionId
+      ? conversationKey(terminal.providerId, terminal.nativeSessionId)
+      : null;
     if (
       terminal.processState !== "running"
       || claimedTerminals.has(key)
+      || (conversation !== null && placedNatives.has(conversation))
       || started.some((pending) => startedCoversTerminal(pending, terminal))
     ) continue;
-    const chat = terminal.nativeSessionId
-      ? nativeByKey.get(conversationKey(terminal.providerId, terminal.nativeSessionId)) ?? null
-      : null;
+    const chat = conversation ? nativeByKey.get(conversation) ?? null : null;
     rows.push(hostedRow(terminal, chat, providers, projectlessRoot));
+    if (conversation !== null) placedNatives.add(conversation);
   }
   // What runtrol started and the service has not named yet. A placeholder gives way to the row the service
   // finally wrote for it: same service, same folder, and touched at or after the moment the tab opened. Keeping

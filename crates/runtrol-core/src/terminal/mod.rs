@@ -417,6 +417,16 @@ impl Terminal {
         }
     }
 
+    /// How many viewers are attached right now.
+    ///
+    /// Every attach subscribes to the output fan-out and every viewer that goes away drops its receiver, so
+    /// the fan-out's receiver count is exactly the number of windows and phones watching this terminal. A
+    /// draining generation reads it to decide it may close a conversation nobody is looking at.
+    #[must_use]
+    pub fn viewer_count(&self) -> usize {
+        self.shared.output.receiver_count()
+    }
+
     async fn write(&self, bytes: &[u8]) -> Result<(), TerminalError> {
         let mut writer = self.shared.writer.lock().await;
         writer

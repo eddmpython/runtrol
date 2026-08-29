@@ -282,6 +282,48 @@ impl Terminals {
 }
 
 /// Drop a terminal from the table and tell the owner, which may be waiting on it to drain.
+/// How long a hosted terminal must sit with no viewer and no output before a draining generation closes it.
+///
+/// A viewer that drops and reconnects (a window reload, a transport blip) must not lose its conversation, so
+/// the terminal is given this grace with nobody watching before it is let go. Fifteen seconds is long enough
+/// to cover a reconnect and short enough that an update's old generations do not pile up for hours.
+const DRAINING_IDLE_GRACE_MS: u64 = 15_000;
+
+/// Close the terminals a draining generation is only keeping alive out of habit, so it can finish.
+///
+/// A draining generation exits when it has no live work, and an open terminal counts as work. The current
+/// generation keeps a viewerless terminal so a window or a phone can reattach to the one session; a draining
+/// generation cannot be that home (its store has moved), so a conversation nobody is watching and that is not
+/// writing is closed here. The provider keeps the conversation, so the next window resumes it in the current
+/// generation. This is why old generations used to linger for hours holding idle sessions (operator,
+/// 2026-08-29). Only a terminal with no viewer and no output for the grace is closed; one a person is watching,
+/// or one a turn is still writing to, is left alone.
+pub(crate) async fn close_idle_while_draining(composed: &Arc<Composed>) {
+    let now = WallMs::now().as_millis();
+    let stale: Vec<TerminalId> = {
+        let terminals = composed.terminals.lock().await;
+        terminals
+            .hosted_all()
+            .into_iter()
+            .filter(|hosted| hosted.terminal.viewer_count() == 0)
+            .filter(|hosted| {
+                let quiet_since = hosted
+                    .terminal
+                    .wrote_at()
+                    .map_or(hosted.opened_at_ms, WallMs::as_millis);
+                now.saturating_sub(quiet_since) >= DRAINING_IDLE_GRACE_MS
+            })
+            .map(|hosted| hosted.id)
+            .collect()
+    };
+    for id in stale {
+        if let Some(hosted) = composed.terminals.lock().await.hosted(id) {
+            drop(hosted.terminal.kill());
+        }
+        forget(composed, id).await;
+    }
+}
+
 async fn forget(composed: &Composed, id: TerminalId) {
     let open = {
         let mut terminals = composed.terminals.lock().await;
@@ -547,6 +589,18 @@ pub(crate) async fn open_mirror(
 ) -> Result<(), TerminalOpenError> {
     let helper = runtrol_childproc::console_mirror::helper_program()
         .map_err(|error| TerminalOpenError::Provider(error.to_string()))?;
+    // A session another Runtime generation already hosts is already a conversation, not a new one: its
+    // terminal reaches this window through the fleet, and mirroring it would be a second terminal for the one
+    // session, which drew the conversation twice (operator, 2026-08-29). A live claim on this native identity,
+    // held here or relayed from a draining generation, is exactly that signal, so a claimed session is never
+    // mirrored. Only a session no generation holds is genuinely external and gets a mirror.
+    if composed
+        .native_claims
+        .blocks_native_mutation(provider.as_str(), native, cwd.as_str())
+        .unwrap_or(true)
+    {
+        return Ok(());
+    }
     let terminal_id = TerminalId::now();
     let (terminal, open) = {
         let mut terminals = composed.terminals.lock().await;

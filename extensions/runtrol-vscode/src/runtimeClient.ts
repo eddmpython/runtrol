@@ -833,11 +833,28 @@ export class StudioRuntimeClient implements vscode.Disposable {
       const stopOthers = (): void => others.abort();
       signal.addEventListener("abort", stopOthers, { once: true });
       const following = this.followOtherGenerations(anchor.digest, fleet, publish, others.signal);
-      const runtime = await this.connector.connectWithRetry(anchor, this.requireOptions(), { signal });
       try {
-        await followTerminalIndex(runtime, anchor.digest, fleet, publish, signal);
+        // The anchor stream ending is not the Core going away: the grant generation moving (a deploy or a
+        // re-enrollment) or this generation draining ends the stream, and the window re-reads the locator and
+        // re-subscribes rather than showing an error and going unreachable (operator, 2026-08-29: "the Runtime
+        // terminal stream ended: authorityChanged" surfaced during a deploy). Only a revoked integration is a
+        // real stop, and a transport error still throws to the outer retry.
+        while (!signal.aborted) {
+          const runtime = await this.connector.connectWithRetry(anchor, this.requireOptions(), { signal });
+          let ended: TerminalStreamEnd;
+          try {
+            ended = await followTerminalIndex(runtime, anchor.digest, fleet, publish, signal);
+          } finally {
+            runtime.close();
+          }
+          if (signal.aborted || ended === null || ended === "integrationRevoked") {
+            if (ended === "integrationRevoked") throw new Error("Runtime access was revoked for this window");
+            break;
+          }
+          // authorityChanged or runtimeUnavailable: a beat, then reconnect through the locator.
+          await abortableDelay(250, signal);
+        }
       } finally {
-        runtime.close();
         signal.removeEventListener("abort", stopOthers);
         others.abort();
         await following;
@@ -1365,17 +1382,23 @@ function nativeCatalogueFailure(providerId: string, warning: string): NativeChat
   };
 }
 
+/// Why a terminal stream stopped: the reason the Runtime gave, or null when this window told it to stop.
+type TerminalStreamEnd = "integrationRevoked" | "authorityChanged" | "runtimeUnavailable" | null;
+
 /// Read one generation's terminal index into the fleet until the stream ends or the watch is stopped.
 ///
-/// The generation's entry is not removed here: whether its absence is the Core going away (the anchor) or one
-/// draining generation finishing (any other) is the caller's to say.
+/// Returns why it ended rather than throwing on it, because most reasons are recoverable and only the caller
+/// knows what to do about them: the grant generation moving (`authorityChanged`) or the Runtime going away
+/// (`runtimeUnavailable`) mean reconnect for the anchor and stop-following for a draining peer, and neither is
+/// a fault to show a person. Only a transport error throws. The generation's fleet entry is not removed here:
+/// whether its absence is the Core going away or one draining generation finishing is the caller's to say.
 async function followTerminalIndex(
   runtime: RuntimeClient,
   generation: string,
   fleet: TerminalFleet,
   publish: () => void,
   signal: AbortSignal,
-): Promise<void> {
+): Promise<TerminalStreamEnd> {
   let subscription: TerminalIndexSubscription | null = null;
   const close = (): void => subscription?.close();
   signal.addEventListener("abort", close, { once: true });
@@ -1389,12 +1412,14 @@ async function followTerminalIndex(
         fleet.set(generation, notification.changed.snapshot);
         publish();
       } else {
-        throw new Error(`the Runtime terminal stream ended: ${notification.ended.reason}`);
+        return notification.ended.reason;
       }
     }
+    return null;
   } catch (error) {
     // Told to stop: a stream failing because its socket was closed under it is the stop, not a fault.
     if (!signal.aborted) throw error;
+    return null;
   } finally {
     signal.removeEventListener("abort", close);
     subscription?.close();

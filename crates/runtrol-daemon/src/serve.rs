@@ -1109,8 +1109,21 @@ async fn serve_surfaces(
         });
     }
 
+    // A draining generation sweeps its terminals on this clock, closing the ones nobody is watching so it can
+    // finish and leave the locator instead of holding idle conversations for hours (operator, 2026-08-29).
+    let mut drain_sweep = tokio::time::interval(std::time::Duration::from_secs(5));
+    drain_sweep.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
     let outcome = loop {
         tokio::select! {
+            _ = drain_sweep.tick(), if draining => {
+                crate::terminal_surface::close_idle_while_draining(&composed).await;
+                generation.update(live_work_of(&sessions, &composed), true);
+                if live_work_of(&sessions, &composed) == 0 {
+                    break Ok(());
+                }
+            }
+
             Some(error) = local_failures.recv() => {
                 break Err(error.into());
             }

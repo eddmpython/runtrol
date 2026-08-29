@@ -329,7 +329,10 @@ test("what a row lets a person do follows from where its process is, and from no
   );
 });
 
-test("a second live process of the same conversation is its own row under the conversation's title", () => {
+test("one conversation is one row, even when two generations each hold a terminal for it", () => {
+  // The same session hosted in two generations (an old draining one and the new one, or a mirror beside the
+  // real process) is one conversation, not two. The sidebar draws it once, on the most recently opened
+  // terminal (operator, 2026-08-29: a session showing twice is the bug).
   const process = (terminalId: string, runtimeGeneration: string, openedAtMs: number): TerminalDescriptor => ({
     terminalId,
     runtimeGeneration,
@@ -345,7 +348,7 @@ test("a second live process of the same conversation is its own row under the co
   const rows = conversations(
     [],
     PROVIDERS,
-    [nativeChat({ nativeSessionId: "n9", title: "Resumed twice" })],
+    [nativeChat({ nativeSessionId: "n9", title: "One session" })],
     null,
     null,
     new Map(),
@@ -359,17 +362,10 @@ test("a second live process of the same conversation is its own row under the co
     [process("terminal-new", "generation-new", NOW), process("terminal-old", "generation-old", NOW - 1_000)],
   );
 
-  assert.equal(rows.length, 2, "two processes are two rows");
-  assert.deepEqual(rows.map((row) => row.title), ["Resumed twice", "Resumed twice"]);
-  assert.deepEqual(
-    new Set(rows.map((row) => row.hostedTerminal?.terminalId)),
-    new Set(["terminal-new", "terminal-old"]),
-  );
-  for (const row of rows) {
-    assert.equal(row.canOpen, true);
-    assert.equal(row.live, true);
-    assert.equal(row.native?.nativeSessionId, "n9", "both rows are the same conversation");
-  }
+  assert.equal(rows.length, 1, "one conversation, one row");
+  assert.equal(rows[0]?.title, "One session");
+  assert.equal(rows[0]?.hostedTerminal?.terminalId, "terminal-new", "on the most recently opened terminal");
+  assert.equal(rows[0]?.canOpen, true);
 });
 
 test("a full terminal index becomes sidebar rows within the fifty millisecond p95 budget", () => {
