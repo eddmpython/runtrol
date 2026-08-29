@@ -267,7 +267,10 @@ export function conversations(
       || started.some((pending) => startedCoversTerminal(pending, terminal))
     ) continue;
     const chat = conversation ? nativeByKey.get(conversation) ?? null : null;
-    rows.push(hostedRow(terminal, chat, providers, projectlessRoot));
+    const working = terminal.nativeSessionId
+      ? activeNative.has(nativeProcessKey(terminal.providerId, terminal.nativeSessionId))
+      : false;
+    rows.push(hostedRow(terminal, chat, providers, projectlessRoot, working));
     if (conversation !== null) placedNatives.add(conversation);
   }
   // What runtrol started and the service has not named yet. A placeholder gives way to the row the service
@@ -869,6 +872,8 @@ function hostedRow(
   chat: NativeChatLine | null,
   providers: readonly ProviderLine[],
   projectlessRoot: string | null,
+  /// Whether the service says a model is answering in this conversation right now, from its process roster.
+  working: boolean,
 ): Conversation {
   const key = terminalKey(terminal);
   const projectless = isProjectless(terminal.workspace, projectlessRoot);
@@ -886,7 +891,10 @@ function hostedRow(
     folder: projectless ? "" : workspaceName(terminal.workspace),
     projectless,
     updatedAtMs: terminal.openedAtMs,
-    activity: "ready",
+    // A hosted terminal turns when the service says it is answering. It used to be fixed at "ready", so a
+    // conversation running in a terminal Runtrol hosts but this window is not viewing never showed it was
+    // working (operator, 2026-08-29: a running session read as not running).
+    activity: working ? "working" : "ready",
     tool: null,
     signInNeeded: false,
     presence: { kind: "hosted", terminal },

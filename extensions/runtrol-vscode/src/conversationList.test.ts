@@ -329,6 +329,40 @@ test("what a row lets a person do follows from where its process is, and from no
   );
 });
 
+test("a session running in a hosted terminal this window does not view still shows it is working", () => {
+  // The service's roster says a model is answering (activeNative). A bare hosted terminal used to be fixed at
+  // "ready", so a running conversation read as not running (operator, 2026-08-29).
+  const terminal = {
+    terminalId: "terminal-busy",
+    runtimeGeneration: "generation-old",
+    providerId: "claude",
+    workspace: BETA,
+    nativeSessionId: "n-busy",
+    processState: "running",
+    openedAtMs: NOW,
+    terminalGeneration: 1,
+    geometry: { columns: 120, rows: 40 },
+    memoryBytes: null,
+  } as TerminalDescriptor;
+  const [row] = conversations(
+    [],
+    PROVIDERS,
+    [],
+    null,
+    null,
+    new Map(),
+    new Map(),
+    new Set(),
+    new Map(),
+    [],
+    new Set(),
+    new Set([nativeProcessKey("claude", "n-busy")]),
+    new Set(),
+    [terminal],
+  );
+  assert.equal(row?.activity, "working", "the roster says it is answering, so the row turns");
+});
+
 test("one conversation is one row, even when two generations each hold a terminal for it", () => {
   // The same session hosted in two generations (an old draining one and the new one, or a mirror beside the
   // real process) is one conversation, not two. The sidebar draws it once, on the most recently opened
