@@ -23,7 +23,16 @@ use crate::runtime_control::public_waiting;
 /// A local installation cannot complete meaningfully inside this interval. With the official catalogue present, a
 /// foreground restamp measured 314 to 320 ms on Windows, so list reads schedule it off their response path. Probe
 /// writes bypass the floor through explicit invalidation.
-const PROVIDER_INVENTORY_RECHECK_FLOOR: Duration = Duration::from_secs(1);
+/// How long one provider inventory answer stays good before the next ask may restamp the search path.
+///
+/// Ten seconds, not one. At one second the sidebar's 40-sample refresh window (~3 s) contained two to four
+/// restamps, and a restamp that runs with cold file caches costs 85~130 ms on Windows, which is what the
+/// refresh p95 measured (2026-08-30: 0.1.37 tree 33~48 ms because the activity observation of that build
+/// happened to keep the walk warm every second; the build that stopped refreshing on activity measured
+/// 84~129 ms on the same machine). At ten seconds a measurement window holds at most one walk, and a p95
+/// over forty samples absorbs one. A newly installed service appears within this floor; starting or opening
+/// a service resolves its executable at use and never waits on this cache.
+const PROVIDER_INVENTORY_RECHECK_FLOOR: Duration = Duration::from_secs(10);
 
 /// Safe reason a public session snapshot could not be authorized.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -12,6 +12,12 @@ and refactoring that no user can observe do not belong here.
 
 ### Fixed
 
+- The sidebar's refresh no longer stutters while the Runtime restamps the executable search path. Each list
+  request past a one-second floor re-checked the PATH surface, and on Windows a cold re-check costs around a
+  hundred milliseconds, which landed inside the refresh several times a window. The re-check now runs at most
+  once per ten seconds; a newly installed coding service still appears within that time, and starting one
+  never waits on this cache.
+
 - Clicking a conversation that is open in the coding service's own editor panel now offers to reveal it there,
   and the Runtime refuses to resume it as a terminal. Resuming forked the conversation into a second process
   showing a frozen copy of that moment while the real session went on elsewhere; now one conversation stays
