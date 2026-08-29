@@ -10,6 +10,8 @@ and refactoring that no user can observe do not belong here.
 
 ## [Unreleased]
 
+## [0.1.37] - 2026-08-29
+
 ### Added
 
 - A project row now shows what its repository holds that is not committed or not pushed: lines added and
