@@ -19,16 +19,17 @@ use runtrol_childproc::{Containment, Program};
 use runtrol_provider::{
     Agent, MAX_MODEL_CHOICES, MAX_NATIVE_CURSOR_BYTES, MAX_NATIVE_SESSION_ITEMS,
     MAX_NATIVE_TIMESTAMP_BYTES, MAX_NATIVE_TITLE_BYTES, MAX_REASONING_CHOICES, ModelCatalog,
-    ModelChoice, NativeCatalogueCoverage, NativeCatalogueSource, NativeResumeCapability,
-    NativeSessionCatalogue, NativeSessionDeletion, NativeSessionEntry, NativeSessionId,
-    NativeSessionQuery, OpenIntent, Provider, ProviderCapabilities, ProviderCapability,
-    ProviderCapabilitySource, ProviderError, ProviderId, ReasoningChoice,
+    ModelChoice, NativeCatalogueCoverage, NativeCatalogueSource, NativeProcessActivity,
+    NativeResumeCapability, NativeSessionCatalogue, NativeSessionDeletion, NativeSessionEntry,
+    NativeSessionId, NativeSessionQuery, OpenIntent, Provider, ProviderCapabilities,
+    ProviderCapability, ProviderCapabilitySource, ProviderError, ProviderId, ReasoningChoice,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
 use crate::codex::agent::CodexAgent;
 use crate::codex::conn::Connection;
+use crate::codex::roster::CodexRoster;
 
 /// What runtrol calls itself in the handshake.
 ///
@@ -123,6 +124,9 @@ struct ListedReasoning {
 
 /// The driver for the CLI whose sessions share one daemon.
 pub struct CodexProvider {
+    /// What the CLI leaves on disk about which conversations are open and answering, for the processes
+    /// runtrol did not start (`roster`).
+    roster: CodexRoster,
     /// Which provider this is, as its manifest declares it.
     id: ProviderId,
     /// The program to run, already resolved with its launchers unwrapped.
@@ -154,6 +158,7 @@ impl CodexProvider {
     #[must_use]
     pub fn new(id: ProviderId, program: Program, contained_by: Arc<Containment>) -> Self {
         Self {
+            roster: CodexRoster::from_environment(),
             id,
             program,
             contained_by,
@@ -370,6 +375,24 @@ impl Provider for CodexProvider {
     /// each row carrying its own `cwd`.
     fn enumerates_machine(&self) -> bool {
         true
+    }
+
+    async fn active_native_sessions(&self) -> Result<Vec<NativeSessionId>, ProviderError> {
+        Ok(self.native_process_activity().await?.active)
+    }
+
+    async fn native_process_activity(&self) -> Result<NativeProcessActivity, ProviderError> {
+        let roster = self.roster.clone();
+        let provider = self.id;
+        // Directory listing, small opens and bounded reads: blocking work, kept off the reactor so a slow
+        // disk cannot stall every other provider's answer on the same observation clock.
+        tokio::task::spawn_blocking(move || roster.activity(provider))
+            .await
+            .map_err(|join| ProviderError::Protocol {
+                provider,
+                doing: "reading which conversations this CLI's live processes own",
+                detail: join.to_string(),
+            })?
     }
 
     async fn native_sessions(

@@ -41,6 +41,11 @@ and refactoring that no user can observe do not belong here.
   identity on every roster round (each answered with an error), and a click on the new conversation's row
   opened a second process on it. The terminal now follows the conversation its process is in, so the row
   joins the terminal that already shows it.
+- Codex conversations now show that they are working. A conversation running in Codex outside Runtrol never
+  turned its icon, because the driver had no way to see one; the sidebar showed it sitting still while a model
+  was answering in it. Codex leaves two facts on disk for every process to read: which conversations a live
+  process holds open, and whether the last turn in one has ended. The sidebar reads both, so a Codex
+  conversation turns while it works and stops when it stops, whichever window or editor started it.
 
 ## [0.1.36] - 2026-08-29
 

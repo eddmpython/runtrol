@@ -512,7 +512,7 @@ mod tests {
 
         let scratch = Scratch::new("home");
         let path = config_path_from(&mut |name| {
-            assert_eq!(name, crate::claude::home::OPERATOR_HOME_ENV);
+            assert_eq!(name, crate::operator::OPERATOR_HOME_ENV);
             Some(scratch.0.clone().into_os_string())
         })
         .expect("an absolute runtime home must resolve");

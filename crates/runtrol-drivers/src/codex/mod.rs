@@ -29,6 +29,7 @@ pub mod conn;
 mod limits;
 pub mod map;
 pub mod provider;
+mod roster;
 
 pub use agent::CodexAgent;
 pub use bound::{

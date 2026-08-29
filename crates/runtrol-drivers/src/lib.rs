@@ -25,6 +25,7 @@ pub mod codex;
 pub mod consult;
 pub mod framing;
 pub mod kinds;
+mod operator;
 mod shipped;
 
 pub use consult::{
