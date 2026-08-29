@@ -17,6 +17,7 @@
 //! tools, its skills and its agents. Nothing here infers a capability from a version string, because nothing
 //! has to.
 
+mod activity;
 pub mod agent;
 mod approval;
 pub mod bound;

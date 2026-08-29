@@ -34,6 +34,7 @@ use runtrol_provider::{
 };
 use serde::Deserialize;
 
+use crate::claude::activity::TranscriptActivity;
 use crate::claude::home::{HomeProblem, config_directory};
 
 /// Where the CLI writes one file per running process of itself.
@@ -104,15 +105,23 @@ fn has_a_console_to_join(entrypoint: Option<&str>, kind: Option<&str>) -> bool {
 #[derive(Clone, Debug)]
 pub(super) struct ClaudeRoster {
     sessions: Result<PathBuf, HomeProblem>,
+    /// Whether an editor-panel session is answering, read from its transcript because such a session writes no
+    /// status into the roster. Cheap and cached: an unchanged transcript is one `stat`.
+    transcript: TranscriptActivity,
 }
 
 impl ClaudeRoster {
     /// Locate the roster from the environment inherited by the CLI. Opens nothing.
     #[must_use]
     pub(super) fn from_environment() -> Self {
+        let config = config_directory(&mut |name| std::env::var_os(name));
+        let projects = match &config {
+            Ok(directory) => Some(directory.clone()),
+            Err(_) => None,
+        };
         Self {
-            sessions: config_directory(&mut |name| std::env::var_os(name))
-                .map(|directory| directory.join(SESSIONS_DIRECTORY)),
+            sessions: config.map(|directory| directory.join(SESSIONS_DIRECTORY)),
+            transcript: TranscriptActivity::new(projects),
         }
     }
 
@@ -120,6 +129,7 @@ impl ClaudeRoster {
     fn at(sessions: PathBuf) -> Self {
         Self {
             sessions: Ok(sessions),
+            transcript: TranscriptActivity::new(None),
         }
     }
 
@@ -156,7 +166,13 @@ impl ClaudeRoster {
                 continue;
             };
             live.insert(native.clone());
-            if entry.status.as_deref() == Some(BUSY) {
+            // A record with a status says whether it is answering; a panel session writes none, so its turn
+            // is read from its transcript instead. Only a session with no status pays that read.
+            let is_answering = match entry.status.as_deref() {
+                Some(status) => status == BUSY,
+                None => self.transcript.answering(entry.session_id.as_str()),
+            };
+            if is_answering {
                 active.insert(native.clone());
             }
             processes.push(NativeProcessBinding {

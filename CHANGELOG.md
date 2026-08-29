@@ -12,6 +12,11 @@ and refactoring that no user can observe do not belong here.
 
 ### Fixed
 
+- Your editor's Claude panel conversation now spins its sidebar icon while the model is answering, and stops
+  the moment the turn ends. A panel session writes no run state into the process roster the way a terminal
+  session does, so the sidebar had no way to know it was working; the turn is now read from the session's own
+  transcript, from the markers the CLI already writes at each turn boundary, never its message text.
+
 - The conversation your editor's Claude panel is running no longer flickers in and out of the sidebar. A panel
   session has no terminal of its own (the Claude extension drives it over a private pipe), but it announced
   itself the same way a real terminal session does, so the Runtime kept trying to mirror a console that was not
