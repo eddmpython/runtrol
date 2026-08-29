@@ -43,6 +43,9 @@ and refactoring that no user can observe do not belong here.
   identity on every roster round (each answered with an error), and a click on the new conversation's row
   opened a second process on it. The terminal now follows the conversation its process is in, so the row
   joins the terminal that already shows it.
+- A conversation running in a terminal Runtrol hosts but this window is not viewing shows that it is working.
+  Its icon stood still whatever the coding service's own roster said, because the row's state was fixed at
+  "ready" the moment it was built.
 - Codex conversations now show that they are working. A conversation running in Codex outside Runtrol never
   turned its icon, because the driver had no way to see one; the sidebar showed it sitting still while a model
   was answering in it. Codex leaves two facts on disk for every process to read: which conversations a live
