@@ -33,6 +33,9 @@ enum Mode {
         state: PathBuf,
         native: String,
     },
+    /// A terminal interface for a hosted PTY: a banner, then every line typed comes back. What the
+    /// generation handover gate hosts, so a terminal can outlive the Runtime generation that opened it.
+    Terminal,
 }
 
 fn main() -> ExitCode {
@@ -43,6 +46,7 @@ fn main() -> ExitCode {
         Mode::Version => writeln!(std::io::stdout().lock(), "acp-fixture 1.0.0").map_err(|_| ()),
         Mode::Serve { state, reply_bytes } => serve(state.as_deref(), reply_bytes),
         Mode::Resume { state, native } => resume(&state, &native),
+        Mode::Terminal => terminal(),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -54,6 +58,7 @@ fn mode() -> Result<Mode, ()> {
     let words = std::env::args().skip(1).collect::<Vec<_>>();
     match words.as_slice() {
         [flag] if flag == "--version" => Ok(Mode::Version),
+        [flag] if flag == "--tui" => Ok(Mode::Terminal),
         [] => Ok(Mode::Serve {
             state: None,
             reply_bytes: None,
@@ -280,6 +285,21 @@ fn read_marker(path: &Path) -> Result<SessionMarker, ()> {
 fn write_marker(path: &Path, marker: &SessionMarker) -> Result<(), ()> {
     let encoded = serde_json::to_vec(marker).map_err(|_| ())?;
     std::fs::write(path, encoded).map_err(|_| ())
+}
+
+/// The fixture as a terminal program: something on the screen at once, then an echo of every line until
+/// the terminal closes. Nothing here is read for meaning, which is the point of a hosted terminal.
+fn terminal() -> Result<(), ()> {
+    let mut output = std::io::stdout().lock();
+    writeln!(output, "acp-fixture terminal ready").map_err(|_| ())?;
+    output.flush().map_err(|_| ())?;
+    let input = std::io::stdin();
+    for line in input.lock().lines() {
+        let line = line.map_err(|_| ())?;
+        writeln!(output, "echo: {line}").map_err(|_| ())?;
+        output.flush().map_err(|_| ())?;
+    }
+    Ok(())
 }
 
 fn resume(path: &Path, native: &str) -> Result<(), ()> {

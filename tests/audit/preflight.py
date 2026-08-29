@@ -118,6 +118,14 @@ GATES: dict[str, tuple[str, list[str]]] = {
         "로컬 IPC 단절과 데몬 재시작 복원력",
         [*PY, f"{HOOKS}/resilienceFaultInjection.py"],
     ),
+    "generationHandoverSelftest": (
+        "세대 handover 게이트 자체 검증",
+        [*PY, f"{HOOKS}/generationHandover.py", "--selftest"],
+    ),
+    "generationHandover": (
+        "업데이트 뒤에도 옛 세대의 터미널에 새 창이 붙는다",
+        [*PY, f"{HOOKS}/generationHandover.py"],
+    ),
     # 게이트가 저장소에 있는 것과 도는 것은 다른 말이다. 이 게이트가 그 차이를 감시한다.
     "gateCoverageSelftest": (
         "게이트 러너 커버리지 자체 검증",

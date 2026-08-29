@@ -438,6 +438,14 @@ jobs:
         env:
           TMPDIR: ${{ matrix.os == 'macos-latest' && '/tmp' || runner.temp }}
         run: python -X utf8 tests/audit/resilienceFaultInjection.py
+      # 업데이트가 옛 세대를 배수시킨 뒤에도 그 세대의 터미널에 새 창이 붙어야 한다. 08-29 나흘 동안 handover 뒤 모든
+      # 공개 접속이 거절되는데도 모든 게이트가 초록이었던 뒤 생긴 게이트다.
+      - name: 세대 handover 게이트 자체 검증
+        run: python -X utf8 tests/audit/generationHandover.py --selftest
+      - name: 업데이트 뒤에도 옛 세대의 터미널에 새 창이 붙는다
+        env:
+          TMPDIR: ${{ matrix.os == 'macos-latest' && '/tmp' || runner.temp }}
+        run: python -X utf8 tests/audit/generationHandover.py
       - name: 독립 ACP 구현 설치
         run: npm install --global --allow-scripts=opencode-ai opencode-ai@1.2.27
       - name: 독립 ACP 구현 게이트 자체 검증
