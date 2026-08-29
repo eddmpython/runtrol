@@ -268,6 +268,39 @@ impl TerminalRuntimeAdapter {
                         "the provider-native conversation is already live as a structured session",
                     ));
                 }
+                // A conversation a live provider process already owns is one session, and resuming it here
+                // would fork it into two processes on one identity (measured 2026-08-30: the editor's Claude
+                // panel session, resumed as a terminal, went on without the terminal seeing another byte).
+                // A terminal this Runtime already hosts for it is the one exception: the open joins it below.
+                if composed
+                    .terminals
+                    .lock()
+                    .await
+                    .open_for(provider, native_session_id)
+                    .is_none()
+                {
+                    let held = match discovering.cached_native_activity(provider).await {
+                        Some(activity) => activity.live,
+                        None => match prepared.driver.native_process_activity().await {
+                            Ok(activity) => {
+                                let live = activity.live.clone();
+                                discovering
+                                    .remember_native_activity(provider, activity)
+                                    .await;
+                                live
+                            }
+                            // A provider that cannot answer about its processes cannot block an open: the
+                            // conversation may simply be stored, which is the common case.
+                            Err(_) => Vec::new(),
+                        },
+                    };
+                    if resume_would_fork(&held, native_session_id.as_str()) {
+                        return Err(TerminalRuntimeFailure::new(
+                            RuntimeErrorKind::NativeConversationBusy,
+                            "the conversation is open in the coding service's own window; a second process is not started for it",
+                        ));
+                    }
+                }
                 native_cursors
                     .open_adoption(
                         &authority,
@@ -870,6 +903,14 @@ impl TerminalRuntimeAdapter {
     }
 }
 
+/// Whether resuming this conversation would fork it: a live provider process already owns the identity.
+///
+/// The caller has already ruled out a terminal this Runtime hosts for it (that open joins instead), so any
+/// live owner left is outside: the service's own window or another program's child.
+fn resume_would_fork(held: &[runtrol_provider::NativeSessionId], native: &str) -> bool {
+    held.iter().any(|owned| owned.as_str() == native)
+}
+
 fn validate_geometry(geometry: TerminalGeometry) -> Result<(), TerminalRuntimeFailure> {
     if !(2..=MAX_TERMINAL_COLUMNS).contains(&geometry.columns)
         || !(1..=MAX_TERMINAL_ROWS).contains(&geometry.rows)
@@ -1286,5 +1327,25 @@ mod tests {
             2,
             "both viewers still write to the one PTY"
         );
+    }
+
+    #[test]
+    fn a_conversation_a_live_process_owns_is_not_resumed_into_a_second_process() {
+        let held = vec![
+            runtrol_provider::NativeSessionId::new("aaaaaaaa-0000-4000-8000-000000000001")
+                .expect("a well-formed native identity parses"),
+        ];
+        assert!(super::resume_would_fork(
+            &held,
+            "aaaaaaaa-0000-4000-8000-000000000001"
+        ));
+        assert!(!super::resume_would_fork(
+            &held,
+            "aaaaaaaa-0000-4000-8000-000000000002"
+        ));
+        assert!(!super::resume_would_fork(
+            &[],
+            "aaaaaaaa-0000-4000-8000-000000000001"
+        ));
     }
 }
