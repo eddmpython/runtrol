@@ -146,7 +146,8 @@ export class CoreClient {
     this.busy = true;
     await this.channel.send(utf8(JSON.stringify({
       ask: "terminalOpen",
-      with: { provider: session.provider, native: session.native, workspace: session.workspace, cols, rows },
+      // A phone is a touch viewer: the Core reports mouse to it and turns taps and swipes into keys.
+      with: { provider: session.provider, native: session.native, workspace: session.workspace, cols, rows, viewer: "touch" },
     })));
     const response = parseResponse(await this.channel.receive());
     if (response.say === "failed") {

@@ -147,6 +147,19 @@ impl std::fmt::Debug for Shared {
     }
 }
 
+/// What is on the other side of a view.
+///
+/// A terminal emulator (an editor's xterm.js, a console, Windows Terminal) has its own mouse: it selects on
+/// drag and scrolls on wheel, and the host must not report mouse toward it. A touch screen has no keys to
+/// send, so the host reports mouse to it and turns each report into keys (`mouse`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ViewerKind {
+    /// A terminal emulator with its own mouse.
+    Terminal,
+    /// A finger on a phone.
+    Touch,
+}
+
 struct State {
     screen: vt100::Parser,
     queries: xterm::QueryCarry,
@@ -225,10 +238,15 @@ impl Terminal {
     }
 
     /// Attach a viewer: the current screen, then live output.
-    pub async fn attach(&self) -> Attachment {
+    ///
+    /// Mouse reporting is switched on toward a touch viewer only. A terminal emulator has its own mouse,
+    /// and reporting to it took its drag selection away and turned clicks into keys (2026-08-29).
+    pub async fn attach(&self, viewer: ViewerKind) -> Attachment {
         let state = self.shared.state.lock().await;
         let mut snapshot = state.screen.screen().state_formatted();
-        snapshot.extend_from_slice(mouse::VIEWER_MOUSE_ON);
+        if viewer == ViewerKind::Touch {
+            snapshot.extend_from_slice(mouse::VIEWER_MOUSE_ON);
+        }
         Attachment {
             snapshot: Bytes::from(snapshot),
             live: self.shared.output.subscribe(),
@@ -236,17 +254,18 @@ impl Terminal {
         }
     }
 
-    /// Bytes a viewer typed. Mouse reports are translated on the screen; terminal answers the viewer sent
-    /// on its own are dropped (this host already answered); everything else reaches the CLI as it is.
+    /// Bytes a viewer typed. A touch viewer's mouse reports are translated on the screen; terminal answers
+    /// the viewer sent on its own are dropped (this host already answered); everything else reaches the
+    /// CLI as it is.
     ///
     /// # Errors
     ///
     /// [`TerminalError::Input`] when the terminal no longer accepts input.
-    pub async fn input(&self, bytes: &[u8]) -> Result<(), TerminalError> {
+    pub async fn input(&self, bytes: &[u8], viewer: ViewerKind) -> Result<(), TerminalError> {
         let forwarded = {
             let mut state = self.shared.state.lock().await;
             let State { screen, mouse, .. } = &mut *state;
-            mouse.translate(bytes, screen.screen())
+            mouse.translate(bytes, screen.screen(), viewer)
         };
         if forwarded.is_empty() {
             return Ok(());
@@ -519,7 +538,7 @@ mod tests {
             size: PtySize { cols: 80, rows: 24 },
         })
         .expect("the shell opens on a hosted terminal");
-        let mut early = terminal.attach().await;
+        let mut early = terminal.attach(ViewerKind::Terminal).await;
         let mut exited = early.exited.clone();
         tokio::time::timeout(Duration::from_secs(10), async {
             loop {
@@ -541,13 +560,22 @@ mod tests {
             text.contains("host-hello"),
             "the early viewer saw the echo: {text:?}"
         );
-        let late = terminal.attach().await;
+        let late = terminal.attach(ViewerKind::Terminal).await;
         let snapshot = String::from_utf8_lossy(&late.snapshot);
         assert!(
             snapshot.contains("host-hello"),
             "the late viewer's snapshot carries the screen: {snapshot:?}"
         );
-        assert!(snapshot.ends_with(std::str::from_utf8(mouse::VIEWER_MOUSE_ON).expect("ascii")));
+        let mouse_on = std::str::from_utf8(mouse::VIEWER_MOUSE_ON).expect("ascii");
+        assert!(
+            !snapshot.contains(mouse_on),
+            "a terminal viewer keeps its own mouse: no reporting is switched on toward it"
+        );
+        let touch = terminal.attach(ViewerKind::Touch).await;
+        assert!(
+            String::from_utf8_lossy(&touch.snapshot).ends_with(mouse_on),
+            "a touch viewer is asked to report mouse"
+        );
     }
 
     #[tokio::test]
@@ -588,14 +616,14 @@ mod tests {
         })
         .expect("the shell opens on a hosted terminal");
         let second_view = first_view.clone();
-        let mut attachment = first_view.attach().await;
+        let mut attachment = first_view.attach(ViewerKind::Terminal).await;
 
         first_view
-            .input(format!("first{line_end}").as_bytes())
+            .input(format!("first{line_end}").as_bytes(), ViewerKind::Terminal)
             .await
             .expect("the first viewer writes");
         second_view
-            .input(format!("second{line_end}").as_bytes())
+            .input(format!("second{line_end}").as_bytes(), ViewerKind::Terminal)
             .await
             .expect("the second viewer writes");
 

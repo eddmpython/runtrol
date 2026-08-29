@@ -10,7 +10,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use runtrol_core::terminal::{Attachment, Terminal, TerminalLaunch};
+use runtrol_core::terminal::{Attachment, Terminal, TerminalLaunch, ViewerKind};
 use runtrol_provider::{AbsPath, ProviderId, TerminalId, WallMs};
 
 use crate::compose::Composed;
@@ -278,6 +278,10 @@ fn forget_on_exit(composed: Arc<Composed>, id: TerminalId, terminal: &Terminal) 
 }
 
 /// Open or join the one shared terminal table after the caller validated provider and root authority.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one open binds provider, native identity, folder, geometry, program and viewer, and bundling them would only rename the list"
+)]
 pub(crate) async fn open_hosted(
     composed: &Arc<Composed>,
     id: ProviderId,
@@ -286,6 +290,7 @@ pub(crate) async fn open_hosted(
     cols: u16,
     rows: u16,
     prepared_program: Option<runtrol_childproc::Program>,
+    viewer: ViewerKind,
 ) -> Result<(TerminalId, Terminal, Attachment), TerminalOpenError> {
     open_with_arguments(
         composed,
@@ -296,8 +301,17 @@ pub(crate) async fn open_hosted(
         rows,
         prepared_program,
         None,
+        viewer,
     )
     .await
+}
+
+/// The private wire's word for a viewer, as the host's own.
+pub(crate) const fn viewer_kind(viewer: runtrol_ipc::wire::TerminalViewer) -> ViewerKind {
+    match viewer {
+        runtrol_ipc::wire::TerminalViewer::Terminal => ViewerKind::Terminal,
+        runtrol_ipc::wire::TerminalViewer::Touch => ViewerKind::Touch,
+    }
 }
 
 /// Open an exact local provider invocation and make the invoking terminal its first viewer.
@@ -305,6 +319,10 @@ pub(crate) async fn open_hosted(
 /// Provider identity and executable still come from the runtime registry. Arguments are the local operator's exact
 /// argv and are never interpreted for meaning. A native identity is bound only when they structurally match the
 /// manifest's discovered resume prefix followed by one opaque id.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one brokered open binds provider, folder, geometry, exact argv, program and viewer, and bundling them would only rename the list"
+)]
 pub(crate) async fn open_brokered(
     composed: &Arc<Composed>,
     id: ProviderId,
@@ -313,6 +331,7 @@ pub(crate) async fn open_brokered(
     rows: u16,
     arguments: Vec<String>,
     prepared_program: runtrol_childproc::Program,
+    viewer: ViewerKind,
 ) -> Result<(TerminalId, Terminal, Attachment), TerminalOpenError> {
     if arguments.len() > MAX_BROKER_ARGUMENTS
         || arguments.iter().map(String::len).sum::<usize>() > MAX_BROKER_ARGUMENT_BYTES
@@ -338,6 +357,7 @@ pub(crate) async fn open_brokered(
         rows,
         Some(prepared_program),
         Some(arguments),
+        viewer,
     )
     .await
 }
@@ -371,6 +391,7 @@ async fn open_with_arguments(
     rows: u16,
     prepared_program: Option<runtrol_childproc::Program>,
     exact_arguments: Option<Vec<String>>,
+    viewer: ViewerKind,
 ) -> Result<(TerminalId, Terminal, Attachment), TerminalOpenError> {
     if let Some(native) = native
         && let Some(existing) = composed.terminals.lock().await.open_for(id, native)
@@ -378,7 +399,7 @@ async fn open_with_arguments(
         if existing.workspace != cwd {
             return Err(TerminalClaimError::WorkspaceConflict.into());
         }
-        let attachment = existing.terminal.attach().await;
+        let attachment = existing.terminal.attach(viewer).await;
         return Ok((existing.id, existing.terminal, attachment));
     }
     let terminal_id = TerminalId::now();
@@ -389,7 +410,7 @@ async fn open_with_arguments(
         cwd.as_str(),
     )? {
         TerminalClaimAdmission::Join(existing) => {
-            let (hosted, attachment) = attach_current(composed, existing)
+            let (hosted, attachment) = attach_current(composed, existing, viewer)
                 .await
                 .map_err(TerminalOpenError::Provider)?;
             return Ok((hosted.id, hosted.terminal, attachment));
@@ -467,7 +488,7 @@ async fn open_with_arguments(
         return Err(error.into());
     }
     forget_on_exit(Arc::clone(composed), terminal_id, &terminal);
-    let attachment = terminal.attach().await;
+    let attachment = terminal.attach(viewer).await;
     Ok((terminal_id, terminal, attachment))
 }
 
@@ -475,6 +496,7 @@ async fn open_with_arguments(
 pub(crate) async fn attach_current(
     composed: &Composed,
     id: TerminalId,
+    viewer: ViewerKind,
 ) -> Result<(HostedTerminal, Attachment), String> {
     let hosted = composed
         .terminals
@@ -482,7 +504,7 @@ pub(crate) async fn attach_current(
         .await
         .hosted(id)
         .ok_or_else(|| format!("no open terminal {id}"))?;
-    let attachment = hosted.terminal.attach().await;
+    let attachment = hosted.terminal.attach(viewer).await;
     Ok((hosted, attachment))
 }
 

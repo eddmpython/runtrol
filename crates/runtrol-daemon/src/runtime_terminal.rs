@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use base64ct::{Base64, Encoding as _};
-use runtrol_core::terminal::Attachment;
+use runtrol_core::terminal::{Attachment, ViewerKind};
 use runtrol_provider::{AbsPath, ProviderId as CoreProviderId, TerminalId, WallMs};
 use runtrol_runtime_protocol::{
     AppScope, IDEMPOTENCY_WINDOW_MS, IntegrationGrant, MAX_IDEMPOTENCY_RECORDS,
@@ -68,15 +68,22 @@ struct ActiveLease {
 pub(crate) struct LocalTerminalControl {
     terminal_id: TerminalId,
     terminal_generation: u64,
+    /// What this local viewer is, so its input is translated or forwarded the way that viewer needs.
+    viewer: ViewerKind,
 }
 
 impl LocalTerminalControl {
     /// Bind the first local viewer to the exact process generation it opened.
-    pub(crate) fn for_hosted(hosted: &HostedTerminal) -> Self {
+    pub(crate) fn for_hosted(hosted: &HostedTerminal, viewer: ViewerKind) -> Self {
         Self {
             terminal_id: hosted.id,
             terminal_generation: hosted.generation,
+            viewer,
         }
+    }
+
+    pub(crate) const fn viewer(&self) -> ViewerKind {
+        self.viewer
     }
 }
 
@@ -306,6 +313,8 @@ impl TerminalRuntimeAdapter {
             params.geometry.columns,
             params.geometry.rows,
             Some(program),
+            // The public surface is an editor's terminal, which has its own mouse.
+            ViewerKind::Terminal,
         )
         .await
         .map_err(|error| {
@@ -388,14 +397,15 @@ impl TerminalRuntimeAdapter {
         terminal_id: TerminalId,
         initial_control: bool,
     ) -> Result<TerminalView, TerminalRuntimeFailure> {
-        let (hosted, attachment) = crate::terminal_surface::attach_current(composed, terminal_id)
-            .await
-            .map_err(|_| {
-                TerminalRuntimeFailure::new(
-                    RuntimeErrorKind::TerminalGone,
-                    "the terminal ended in its recorded Runtime generation",
-                )
-            })?;
+        let (hosted, attachment) =
+            crate::terminal_surface::attach_current(composed, terminal_id, ViewerKind::Terminal)
+                .await
+                .map_err(|_| {
+                    TerminalRuntimeFailure::new(
+                        RuntimeErrorKind::TerminalGone,
+                        "the terminal ended in its recorded Runtime generation",
+                    )
+                })?;
         ensure_visible(&hosted, &authority)?;
         self.finish_view(
             composed,
@@ -627,12 +637,16 @@ impl TerminalRuntimeAdapter {
             params.lease_generation,
             now,
         )?;
-        hosted.terminal.input(&bytes).await.map_err(|_| {
-            TerminalRuntimeFailure::new(
-                RuntimeErrorKind::OutcomeUnknown,
-                "the terminal input outcome is unknown and must not be retried automatically",
-            )
-        })?;
+        hosted
+            .terminal
+            .input(&bytes, ViewerKind::Terminal)
+            .await
+            .map_err(|_| {
+                TerminalRuntimeFailure::new(
+                    RuntimeErrorKind::OutcomeUnknown,
+                    "the terminal input outcome is unknown and must not be retried automatically",
+                )
+            })?;
         remember_done(&mut state, key, fingerprint, now);
         Ok(())
     }
@@ -749,12 +763,16 @@ impl TerminalRuntimeAdapter {
                 )
             })?;
         validate_local_generation(&hosted, control)?;
-        hosted.terminal.input(bytes).await.map_err(|_| {
-            TerminalRuntimeFailure::new(
-                RuntimeErrorKind::OutcomeUnknown,
-                "the brokered terminal input outcome is unknown",
-            )
-        })
+        hosted
+            .terminal
+            .input(bytes, control.viewer())
+            .await
+            .map_err(|_| {
+                TerminalRuntimeFailure::new(
+                    RuntimeErrorKind::OutcomeUnknown,
+                    "the brokered terminal input outcome is unknown",
+                )
+            })
     }
 
     /// Resize the shared PTY from the local terminal that owns the brokered invocation.

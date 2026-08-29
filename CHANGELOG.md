@@ -12,6 +12,10 @@ and refactoring that no user can observe do not belong here.
 
 ### Fixed
 
+- A conversation tab in VS Code behaves like the terminal it is. Clicking inside it no longer brings back an
+  earlier prompt, the wheel no longer walks through prompt history, and dragging selects text again. Runtrol
+  had switched mouse reporting on toward every viewer and turned each click into arrow keys, which is what a
+  phone needs and exactly what an editor's terminal does not; it now does that only for a touch viewer.
 - A conversation kept alive across an update opens again. An update leaves the previous Runtime running
   beside the new one for as long as its conversations last, and the panel followed only the new one, so every
   conversation the old one still held read as "running in a terminal Runtrol did not start" and refused to open

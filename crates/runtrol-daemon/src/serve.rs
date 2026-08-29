@@ -2160,10 +2160,12 @@ async fn converse_inner(
             workspace,
             cols,
             rows,
+            viewer,
             ..
         } = &request
             && conversation.greeted()
         {
+            let viewer = crate::terminal_surface::viewer_kind(*viewer);
             if !conversation.caller().is_at_the_machine() {
                 drop(
                     write(
@@ -2222,7 +2224,7 @@ async fn converse_inner(
                     return;
                 };
                 crate::terminal_surface::open_brokered(
-                    &composed, provider, workspace, *cols, *rows, arguments, program,
+                    &composed, provider, workspace, *cols, *rows, arguments, program, viewer,
                 )
                 .await
             };
@@ -2243,7 +2245,8 @@ async fn converse_inner(
                 );
                 return;
             };
-            let control = crate::runtime_terminal::LocalTerminalControl::for_hosted(&hosted);
+            let control =
+                crate::runtime_terminal::LocalTerminalControl::for_hosted(&hosted, viewer);
             relay_local_broker(
                 &mut connection,
                 &composed,
@@ -2251,6 +2254,7 @@ async fn converse_inner(
                 terminal,
                 attachment,
                 Some(control),
+                viewer,
             )
             .await;
             return;
@@ -2816,6 +2820,7 @@ async fn relay_local_broker(
     terminal: runtrol_core::terminal::Terminal,
     mut attachment: runtrol_core::terminal::Attachment,
     control: Option<crate::runtime_terminal::LocalTerminalControl>,
+    viewer: runtrol_core::terminal::ViewerKind,
 ) {
     let writable = control.is_some();
     let relayed = async {
@@ -2863,7 +2868,7 @@ async fn relay_local_broker(
                         }
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                        attachment = terminal.attach().await;
+                        attachment = terminal.attach(viewer).await;
                         if write(connection, &Response::TerminalLagged {}).await.is_err()
                             || write(
                                 connection,

@@ -3754,7 +3754,11 @@ async fn relay_terminal(connection: &mut Connection, composed: &Composed, mut vi
                         }
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(lost)) => {
-                        let fresh = view.hosted.terminal.attach().await;
+                        let fresh = view
+                            .hosted
+                            .terminal
+                            .attach(runtrol_core::terminal::ViewerKind::Terminal)
+                            .await;
                         if fresh.snapshot.len() > runtrol_runtime_protocol::MAX_TERMINAL_SCREEN_BYTES {
                             return;
                         }

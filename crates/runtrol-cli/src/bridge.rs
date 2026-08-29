@@ -175,6 +175,8 @@ where
             workspace: workspace.into(),
             cols: initial_size.0,
             rows: initial_size.1,
+            // The console this command runs in is a real terminal: it selects and scrolls by itself.
+            viewer: runtrol_ipc::wire::TerminalViewer::Terminal,
         },
     )
     .await?;

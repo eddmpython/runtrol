@@ -1,20 +1,28 @@
-//! One mouse for every CLI: a viewer's clicks and wheel, turned into keys on the screen the CLI drew.
+//! One mouse for every CLI, for the viewer that has none of its own: a touch screen's taps and swipes,
+//! turned into keys on the screen the CLI drew.
 //!
-//! The decision (`docs/terminalSurface.md`, operator-fixed 2026-08-25): the surface does not depend on a
-//! CLI's own mouse support. Claude Code can report mouse in one of its renderers, Codex and Grok report
-//! none, and a person must not learn three feels. So the host switches mouse reporting on toward the
-//! *viewer* only ([`VIEWER_MOUSE_ON`], never sent to the CLI), receives the viewer's SGR mouse reports on
-//! the input path, and translates each one here into the keys that reach the same place. The CLI sees
-//! keys, as it does from a keyboard.
+//! The decision (`docs/terminalSurface.md`, operator-fixed 2026-08-25, narrowed 2026-08-29): the surface
+//! does not depend on a CLI's own mouse support. Claude Code can report mouse in one of its renderers,
+//! Codex and Grok report none, and a person must not learn three feels. So for a touch viewer the host
+//! switches mouse reporting on toward the *viewer* only ([`VIEWER_MOUSE_ON`], never sent to the CLI),
+//! receives the viewer's SGR mouse reports on the input path, and translates each one here into the keys
+//! that reach the same place. The CLI sees keys, as it does from a keyboard.
+//!
+//! A real terminal emulator ([`ViewerKind::Terminal`]) gets none of this. It selects on drag and scrolls
+//! on wheel by itself, and what it sends is forwarded as it is. Switching reporting on toward it turned
+//! every click into arrow keys, which in Claude Code's prompt recalled earlier input, and took drag
+//! selection away (operator, 2026-08-29).
 //!
 //! Translation is geometry on the screen model, not reading: a click on a row above the cursor is that
 //! many Up keys, a wheel notch is a few arrow keys. Nothing here knows what the rows say.
 //!
-//! The same path also drops the answers a viewer's own terminal sends to the CLI's questions (device
-//! attributes, cursor reports and the like): the host answered already, and a second answer from each
-//! attached viewer would reach the CLI as stray input.
+//! The same path also drops, for every viewer, the answers a viewer's own terminal sends to the CLI's
+//! questions (device attributes, cursor reports and the like): the host answered already, and a second
+//! answer from each attached viewer would reach the CLI as stray input.
 
 use vt100::Screen;
+
+use super::ViewerKind;
 
 /// Sent to a viewer with its snapshot: report clicks (1000) and wheel in SGR form (1006). Drag reporting
 /// (1002) is left off, so the viewer's own selection stays a plain drag where its terminal allows.
@@ -34,9 +42,9 @@ pub struct InputCarry {
 }
 
 impl InputCarry {
-    /// The bytes to forward to the CLI for this input: keys as typed, mouse reports translated, terminal
-    /// answers dropped.
-    pub fn translate(&mut self, input: &[u8], screen: &Screen) -> Vec<u8> {
+    /// The bytes to forward to the CLI for this input: keys as typed, terminal answers dropped, and mouse
+    /// reports translated for a touch viewer or forwarded untouched for a terminal.
+    pub fn translate(&mut self, input: &[u8], screen: &Screen, viewer: ViewerKind) -> Vec<u8> {
         let mut window = std::mem::take(&mut self.tail);
         window.extend_from_slice(input);
         let mut out = Vec::with_capacity(window.len());
@@ -50,7 +58,14 @@ impl InputCarry {
             }
             match sequence_at(&window, at) {
                 Scan::Mouse(report, end) => {
-                    translate_mouse(report, screen, &mut out);
+                    match viewer {
+                        ViewerKind::Touch => translate_mouse(report, screen, &mut out),
+                        // A terminal reports mouse only when the CLI itself asked it to, and then the CLI
+                        // is the one that knows what to do with the report.
+                        ViewerKind::Terminal => {
+                            out.extend_from_slice(window.get(at..end).unwrap_or(&[]));
+                        }
+                    }
                     at = end;
                 }
                 Scan::Answer(end) => at = end,
@@ -252,7 +267,7 @@ mod tests {
         let parser = screen_with_cursor_at(0);
         let mut carry = InputCarry::default();
         assert_eq!(
-            carry.translate(b"hello\r\x1b[A\x1b[3~", parser.screen()),
+            carry.translate(b"hello\r\x1b[A\x1b[3~", parser.screen(), ViewerKind::Touch),
             b"hello\r\x1b[A\x1b[3~".to_vec()
         );
     }
@@ -262,11 +277,11 @@ mod tests {
         let parser = screen_with_cursor_at(5);
         let mut carry = InputCarry::default();
         assert_eq!(
-            carry.translate(b"\x1b[<64;10;3M", parser.screen()),
+            carry.translate(b"\x1b[<64;10;3M", parser.screen(), ViewerKind::Touch),
             b"\x1b[A\x1b[A\x1b[A".to_vec()
         );
         assert_eq!(
-            carry.translate(b"\x1b[<65;10;3M", parser.screen()),
+            carry.translate(b"\x1b[<65;10;3M", parser.screen(), ViewerKind::Touch),
             b"\x1b[B\x1b[B\x1b[B".to_vec()
         );
     }
@@ -276,21 +291,25 @@ mod tests {
         let parser = screen_with_cursor_at(5);
         let mut carry = InputCarry::default();
         assert_eq!(
-            carry.translate(b"\x1b[<0;4;9M", parser.screen()),
+            carry.translate(b"\x1b[<0;4;9M", parser.screen(), ViewerKind::Touch),
             b"\x1b[B\x1b[B\x1b[B".to_vec()
         );
         assert_eq!(
-            carry.translate(b"\x1b[<0;4;4M", parser.screen()),
+            carry.translate(b"\x1b[<0;4;4M", parser.screen(), ViewerKind::Touch),
             b"\x1b[A\x1b[A".to_vec()
         );
-        assert!(carry.translate(b"\x1b[<0;4;4m", parser.screen()).is_empty());
+        assert!(
+            carry
+                .translate(b"\x1b[<0;4;4m", parser.screen(), ViewerKind::Touch)
+                .is_empty()
+        );
     }
 
     #[test]
     fn a_click_past_the_screen_is_clamped_to_its_last_row() {
         let parser = screen_with_cursor_at(0);
         let mut carry = InputCarry::default();
-        let out = carry.translate(b"\x1b[<0;1;65535M", parser.screen());
+        let out = carry.translate(b"\x1b[<0;1;65535M", parser.screen(), ViewerKind::Touch);
         assert_eq!(
             out.len(),
             23 * 3,
@@ -303,9 +322,13 @@ mod tests {
     fn a_report_split_across_writes_is_one_report() {
         let parser = screen_with_cursor_at(5);
         let mut carry = InputCarry::default();
-        assert!(carry.translate(b"\x1b[<64;1", parser.screen()).is_empty());
+        assert!(
+            carry
+                .translate(b"\x1b[<64;1", parser.screen(), ViewerKind::Touch)
+                .is_empty()
+        );
         assert_eq!(
-            carry.translate(b"0;3M", parser.screen()),
+            carry.translate(b"0;3M", parser.screen(), ViewerKind::Touch),
             b"\x1b[A\x1b[A\x1b[A".to_vec()
         );
     }
@@ -315,7 +338,29 @@ mod tests {
         let parser = screen_with_cursor_at(0);
         let mut carry = InputCarry::default();
         let input = b"\x1b[?62;22c\x1b[>41;378;0c\x1b[5;10R\x1b[?2026;2$y\x1bP>|xterm(378)\x1b\\x";
-        assert_eq!(carry.translate(input, parser.screen()), b"x".to_vec());
+        assert_eq!(
+            carry.translate(input, parser.screen(), ViewerKind::Touch),
+            b"x".to_vec()
+        );
+    }
+
+    #[test]
+    fn a_terminal_viewers_mouse_report_reaches_the_cli_as_it_is() {
+        // A terminal emulator reports mouse only when the CLI asked it to, and then the CLI reads the report.
+        // Translating it turned a click into arrow keys, which Claude Code's prompt read as recalling earlier
+        // input, and took drag selection away (operator, 2026-08-29).
+        let parser = screen_with_cursor_at(5);
+        let mut carry = InputCarry::default();
+        assert_eq!(
+            carry.translate(b"\x1b[<0;4;9M", parser.screen(), ViewerKind::Terminal),
+            b"\x1b[<0;4;9M".to_vec()
+        );
+        // Its own terminal answers are still dropped: this host already answered the CLI.
+        assert!(
+            carry
+                .translate(b"\x1b[?62;22c", parser.screen(), ViewerKind::Terminal)
+                .is_empty()
+        );
     }
 
     #[test]
@@ -324,7 +369,7 @@ mod tests {
         parser.process(b"\x1b[?1h");
         let mut carry = InputCarry::default();
         assert_eq!(
-            carry.translate(b"\x1b[<0;1;1M", parser.screen()),
+            carry.translate(b"\x1b[<0;1;1M", parser.screen(), ViewerKind::Touch),
             b"\x1bOA\x1bOA".to_vec()
         );
     }
