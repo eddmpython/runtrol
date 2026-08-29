@@ -76,11 +76,15 @@ const MAX_DAY_DIRECTORIES: usize = 400;
 /// Maximum entries read inside one day directory.
 const MAX_DAY_ENTRIES: usize = 4096;
 
-/// How far back the first sight of a conversation reads, looking for its last turn boundary.
+/// How much of a log one backward walk reads at a time.
+const SCAN_CHUNK_BYTES: u64 = 1024 * 1024;
+
+/// How far back the first sight of a conversation walks, looking for its last turn boundary.
 ///
 /// A turn that has written more than this since it started reads as not answering until it writes its next
-/// boundary. Four megabytes covered every turn in the operator's own logs with room to spare.
-const MAX_FIRST_SCAN_BYTES: u64 = 4 * 1024 * 1024;
+/// boundary. Measured on the operator's own log, one turn wrote past four megabytes while it ran, which is
+/// why this is not that number.
+const MAX_BACKWARD_SCAN_BYTES: u64 = 64 * 1024 * 1024;
 
 /// How much growth one later look will read before giving up and scanning backwards from the end instead.
 const MAX_FOLLOW_BYTES: u64 = 8 * 1024 * 1024;
@@ -362,26 +366,17 @@ fn collect_day_directories(at: &Path, depth: usize, into: &mut Vec<PathBuf>) {
     }
 }
 
-/// The state of the last turn boundary in the whole log, and the size the answer was read at.
+/// The state of the last turn boundary in the log, and the size the answer was read at.
 ///
-/// Reads backwards from the end in one bounded window. A log whose last boundary is older than the window
-/// reads as no open turn, which is the safe answer: a conversation is drawn as answering only on proof.
+/// Walks backwards from the end one chunk at a time and stops at the first chunk holding a boundary, which is
+/// the last boundary in the file. A whole turn of this CLI is megabytes of tool calls and reasoning, measured
+/// on the operator's own log: a single window sized for a comfortable read found no boundary at all in a turn
+/// that had been running for half an hour, and reported it as finished. Chunks bound the memory, and
+/// [`MAX_BACKWARD_SCAN_BYTES`] bounds the work.
+///
+/// A log whose last boundary is further back than that reads as no open turn: a conversation turns only on
+/// proof that a turn is open.
 fn last_boundary(log: &Path) -> Option<(u64, bool)> {
-    let bytes = read_window(log, None)?;
-    Some((bytes.0, last_open_turn(&bytes.1).unwrap_or(false)))
-}
-
-/// The state of the last boundary inside one range of the log, or `None` when the range holds none.
-fn boundary_in_range(log: &Path, from: u64, to: u64) -> Option<bool> {
-    let (_, bytes) = read_window(log, Some((from, to)))?;
-    last_open_turn(&bytes)
-}
-
-/// The log's size and one window of its bytes: the named range, or the last [`MAX_FIRST_SCAN_BYTES`].
-///
-/// `None` for anything the filesystem refuses. The caller's own answer for that is written where it is
-/// decided; a read that did not happen must not be turned into a state here.
-fn read_window(log: &Path, range: Option<(u64, u64)>) -> Option<(u64, Vec<u8>)> {
     let Ok(mut file) = fs::File::open(log) else {
         return None;
     };
@@ -389,25 +384,51 @@ fn read_window(log: &Path, range: Option<(u64, u64)>) -> Option<(u64, Vec<u8>)> 
         return None;
     };
     let size = metadata.len();
-    let (start, length) = match range {
-        Some((from, to)) if to >= from => (from, to - from),
-        Some(_) => return None,
-        None => {
-            let window = size.min(MAX_FIRST_SCAN_BYTES);
-            (size - window, window)
+    let floor = size.saturating_sub(MAX_BACKWARD_SCAN_BYTES);
+    // A boundary written across a chunk edge belongs to neither chunk alone, so each chunk carries the first
+    // bytes of the one after it.
+    let straddle = u64::try_from(TURN_OPENED.len().max(TURN_CLOSED.len()) - 1).unwrap_or(0);
+    let mut end = size;
+    while end > floor {
+        let start = end.saturating_sub(SCAN_CHUNK_BYTES).max(floor);
+        let stop = (end + straddle).min(size);
+        let bytes = read_range(&mut file, start, stop)?;
+        if let Some(open) = last_open_turn(&bytes) {
+            return Some((size, open));
         }
+        end = start;
+    }
+    Some((size, false))
+}
+
+/// The state of the last boundary inside one range of the log, or `None` when the range holds none.
+fn boundary_in_range(log: &Path, from: u64, to: u64) -> Option<bool> {
+    let Ok(mut file) = fs::File::open(log) else {
+        return None;
     };
-    if file.seek(SeekFrom::Start(start)).is_err() {
+    let bytes = read_range(&mut file, from, to)?;
+    last_open_turn(&bytes)
+}
+
+/// One range of an open log, or `None` for anything the filesystem refuses.
+///
+/// A read that did not happen must not be turned into a state here; the caller decides what an unread log
+/// means where that is decided.
+fn read_range(file: &mut fs::File, from: u64, to: u64) -> Option<Vec<u8>> {
+    if to < from {
         return None;
     }
-    let Ok(length) = usize::try_from(length) else {
+    if file.seek(SeekFrom::Start(from)).is_err() {
+        return None;
+    }
+    let Ok(length) = usize::try_from(to - from) else {
         return None;
     };
     let mut bytes = vec![0_u8; length];
     if file.read_exact(&mut bytes).is_err() {
         return None;
     }
-    Some((size, bytes))
+    Some(bytes)
 }
 
 /// Whether the last turn boundary in these bytes opens a turn, or `None` when they hold no boundary.
