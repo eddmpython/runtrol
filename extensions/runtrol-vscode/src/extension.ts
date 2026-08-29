@@ -223,15 +223,18 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     if (!provider) throw new Error(`${providerId} is not an installed service`);
     return provider;
   };
-  // Whether a newer release of each service exists, asked of the Core once the Runtime is reached and on a long
-  // clock after that. The sidebar puts the installed version beside the service and an Update button when the
-  // Core confirmed a release it can install and roll back from.
+  // Whether a newer release of each service exists, asked of the Core whenever this window reaches one (a
+  // fresh activation, or a reconnect after an update or restart). No clock: the sidebar puts the installed
+  // version beside the service and an Update button when the Core confirmed a rollback-safe release.
   let releasesAsked = false;
   const releases = new ProviderUpdateWatch(() => controller.inspectProviderUpdates());
   context.subscriptions.push(releases);
   const sidebar = new SidebarView(context, state, projectStore, agentTools, changes, releases, {
     signIn: (providerId) => afterReady(async () => {
       await controller.signInProvider(providerNamed(providerId));
+    }),
+    signOut: (providerId) => afterReady(async () => {
+      controller.signOutProvider(providerNamed(providerId));
     }),
     fix: (providerId) => afterReady(async () => {
       await controller.fixService(providerNamed(providerId));
@@ -244,10 +247,16 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     }),
   }, (error) => void vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error)));
   context.subscriptions.push(state.onDidChange((change) => {
-    // The first time the Core answers, ask it about releases; the watch keeps its own clock from there.
-    if (change === "rows" && state.coreReach === "reached" && !releasesAsked) {
-      releasesAsked = true;
-      void releases.start();
+    if (change !== "rows") return;
+    // Each time the Core is reached anew (activation, or a reconnect after an update), ask about releases
+    // once. Between reaches nothing polls; the manual check command and a finished update ask on their own.
+    if (state.coreReach === "reached") {
+      if (!releasesAsked) {
+        releasesAsked = true;
+        void releases.check();
+      }
+    } else {
+      releasesAsked = false;
     }
   }));
 

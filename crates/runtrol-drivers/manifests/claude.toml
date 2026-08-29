@@ -69,6 +69,9 @@ hint = "npm"
 # named only in help text, which a driver may not read to approximate a capability. Measured against the
 # installed CLI: `claude auth login`, `claude auth status`, `claude doctor` all exist and answer.
 sign_in = ["auth", "login"]
+# `claude auth logout` exists and names itself "Log out from your Anthropic account" (measured 2026-08-29,
+# `claude auth --help` on the installed CLI).
+sign_out = ["auth", "logout"]
 diagnose = ["doctor"]
 install = "npm install --global @anthropic-ai/claude-code"
 

@@ -137,7 +137,8 @@ function chip(providerId, name, percent, rings) {
     // hid the very collision the operator found in their own window (2026-08-28).
     caption: percent === null ? "" : `${percent}%`,
     reached: false,
-    state: "within",
+    state: "available",
+    canSignOut: providerId !== "grok",
     position: "",
     plan: "Max",
     version: providerId === "claude" ? "2.1.251" : "0.63.0",

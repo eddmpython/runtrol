@@ -579,6 +579,11 @@ pub struct HelpCommands {
     /// Empty means this CLI declares none, and the surface offers nothing rather than guessing.
     #[serde(default)]
     pub sign_in: Vec<Box<str>>,
+    /// Arguments to this CLI's own sign-out command, run against its own executable.
+    ///
+    /// Empty means this CLI declares none, and the surface offers nothing rather than guessing.
+    #[serde(default)]
+    pub sign_out: Vec<Box<str>>,
     /// Arguments to this CLI's own self-diagnosis command.
     ///
     /// Worth more than any check runtrol could write: the CLI knows its own installation, configuration, login and
@@ -593,7 +598,12 @@ pub struct HelpCommands {
 impl HelpCommands {
     /// Refuse any text that a shell could read as more than one command.
     fn validate(&self) -> Result<(), ManifestError> {
-        for argument in self.sign_in.iter().chain(&self.diagnose) {
+        for argument in self
+            .sign_in
+            .iter()
+            .chain(&self.sign_out)
+            .chain(&self.diagnose)
+        {
             Self::refuse_unless_one_word(argument)?;
         }
         if let Some(install) = &self.install {

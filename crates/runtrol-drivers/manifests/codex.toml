@@ -61,6 +61,9 @@ hint = "npm"
 # `codex login`, `codex login status` and `codex doctor` exist, and the doctor names installation, config, auth
 # and runtime health as what it diagnoses.
 sign_in = ["login"]
+# `codex logout` exists and names itself "Remove stored authentication credentials" (measured 2026-08-29,
+# `codex --help` on the installed CLI).
+sign_out = ["logout"]
 diagnose = ["doctor"]
 install = "npm install --global @openai/codex"
 

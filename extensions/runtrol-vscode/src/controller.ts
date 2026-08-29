@@ -995,6 +995,21 @@ export class Controller implements vscode.Disposable {
     this.offerInTerminal(signIn, true);
   }
 
+  /// The service's own sign-out command, run in a terminal the same way sign-in is: the CLI clears what it
+  /// stored, and Runtrol holds nothing to clear. Reachable from the usage panel of a signed-in account.
+  signOutProvider(provider: ProviderLine): void {
+    const command = provider.help?.signOut;
+    if (!command) {
+      this.say(`${provider.displayName} declares no sign-out command; sign out at its own surface.`, "info");
+      return;
+    }
+    this.offerInTerminal({
+      label: `Sign out of ${provider.displayName}`,
+      command,
+      because: "this coding service keeps its own login, and its own command is what ends it",
+    }, true);
+  }
+
   /// Answer the question a conversation is waiting on from its row, with the service's own options, without
   /// opening the page. "allow" and "decline" take the first option of that kind; "choose" lists them all.
   async answerFromRow(value: ConversationItem | SessionLine | undefined, how: "allow" | "decline" | "choose"): Promise<void> {

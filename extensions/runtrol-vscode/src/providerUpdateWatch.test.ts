@@ -19,10 +19,10 @@ function line(overrides: Partial<ProviderUpdateLine>): ProviderUpdateLine {
 
 test("an update is offered only when the Core confirms a newer release and an exact rollback", async () => {
   let answer: ProviderUpdateLine[] = [line({})];
-  const watch = new ProviderUpdateWatch(async () => answer, 60_000);
+  const watch = new ProviderUpdateWatch(async () => answer);
   let changed = 0;
   watch.onDidChange(() => { changed += 1; });
-  await watch.start();
+  await watch.check();
   assert.equal(watch.installedFor("claude"), "2.1.251");
   assert.equal(watch.updateTargetFor("claude"), null);
   assert.equal(changed, 1);
@@ -46,8 +46,8 @@ test("a registry that does not answer keeps the previous answer", async () => {
   const watch = new ProviderUpdateWatch(async () => {
     if (fail) throw new Error("registry timeout");
     return [line({ state: "available", target: "2.1.252", rollback: "2.1.251" })];
-  }, 60_000);
-  await watch.start();
+  });
+  await watch.check();
   assert.equal(watch.updateTargetFor("claude"), "2.1.252");
   fail = true;
   await watch.check();
@@ -61,7 +61,7 @@ test("two calls while one inspection is running share it", async () => {
     calls += 1;
     await new Promise((resolve) => setTimeout(resolve, 5));
     return [line({})];
-  }, 60_000);
+  });
   await Promise.all([watch.check(), watch.check(), watch.check()]);
   assert.equal(calls, 1);
   watch.dispose();

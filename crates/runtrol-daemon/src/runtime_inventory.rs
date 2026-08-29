@@ -466,6 +466,7 @@ fn help(provider: &runtrol_core::registry::Provider) -> Option<ProviderHelp> {
     };
     let assembled = ProviderHelp {
         sign_in: line(&declared.sign_in),
+        sign_out: line(&declared.sign_out),
         diagnose: line(&declared.diagnose),
         install: declared.install.as_ref().map(ToString::to_string),
     };

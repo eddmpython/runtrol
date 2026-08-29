@@ -230,7 +230,7 @@ button that runs is that capability with a friendly label. The operator reads th
 
 Every string is validated at the declaration boundary to contain no character a shell could read as a
 separator, so a client can present one without quoting it into something else. */
-export interface ProviderHelp { readonly diagnose?: string | null; readonly install?: string | null; readonly signIn?: string | null; }
+export interface ProviderHelp { readonly diagnose?: string | null; readonly install?: string | null; readonly signIn?: string | null; readonly signOut?: string | null; }
 
 /** An opaque provider identity discovered by Runtime. */
 export type ProviderId = string;

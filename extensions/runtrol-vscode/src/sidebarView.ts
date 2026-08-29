@@ -74,6 +74,7 @@ export type GitChangesPort = {
 
 export type UsageActions = {
   signIn(providerId: string): Promise<void>;
+  signOut(providerId: string): Promise<void>;
   fix(providerId: string): Promise<void>;
   /// Update the service's CLI to the release the Update button names.
   update(providerId: string): Promise<void>;
@@ -245,6 +246,7 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
       const { action, providerId } = message as { action?: unknown; providerId?: unknown };
       if (typeof providerId !== "string") return;
       if (action === "signIn") await this.usageActions.signIn(providerId);
+      else if (action === "signOut") await this.usageActions.signOut(providerId);
       else if (action === "fix") await this.usageActions.fix(providerId);
       else if (action === "update") await this.usageActions.update(providerId);
       return;
@@ -352,6 +354,9 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
     const signInAble = new Set(this.state.providers
       .filter((provider) => provider.help?.signIn)
       .map((provider) => provider.providerId));
+    const signOutAble = new Set(this.state.providers
+      .filter((provider) => provider.help?.signOut)
+      .map((provider) => provider.providerId));
     // The CLI release beside each service's name: Runtime's probe of the binary, or the Core's inspection when
     // the probe said nothing. And the release the Update button goes to, when the Core confirmed one.
     const releases = new Map(this.state.providers.map((provider) => [provider.providerId, {
@@ -362,6 +367,7 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
       usageRows(this.state.usage, this.state.providers, Date.now()),
       signInAble,
       releases,
+      signOutAble,
     );
     const usable = this.state.providers.some(isUsable);
     const firstRun = projectRows.length === 0 && looseRows.length === 0

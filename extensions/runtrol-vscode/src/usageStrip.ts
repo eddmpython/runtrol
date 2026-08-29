@@ -43,6 +43,8 @@ export type UsageChip = {
   readonly action: "signIn" | "fix" | null;
   /// The service publishes a sign-in line, so the panel can offer to sign in whatever the account's state is.
   readonly canSignIn: boolean;
+  /// The service publishes its own sign-out command, so a signed-in account's panel can offer it.
+  readonly canSignOut: boolean;
   /// The installed release of the service's CLI, as Runtime discovered it, or null when it said none.
   readonly version: string | null;
   /// A newer release the Core confirmed it can install and roll back from, or null. Drawn as the Update button.
@@ -62,6 +64,8 @@ export function usageChips(
   signInAble: ReadonlySet<string> = new Set(),
   /// Each service's CLI release and confirmed update, by provider id.
   releases: ReadonlyMap<string, ServiceRelease> = new Map(),
+  /// The services that publish a sign-out command of their own.
+  signOutAble: ReadonlySet<string> = new Set(),
 ): UsageChip[] {
   return rows.map((row) => {
     // The ring is the week when the service published one; otherwise the window it says governs, so a
@@ -91,6 +95,7 @@ export function usageChips(
       meters: row.meters,
       action: chipAction(row, shown !== undefined && shown !== null),
       canSignIn: signInAble.has(row.providerId),
+      canSignOut: signOutAble.has(row.providerId),
       version: releases.get(row.providerId)?.version ?? null,
       updateTo: releases.get(row.providerId)?.updateTo ?? null,
     };
@@ -214,7 +219,7 @@ function panelHtml(chip: UsageChip, index: number): string {
 ${chip.position ? `<p class="position${chip.reached ? " reached" : ""}">${escapeHtml(chip.position)}</p>` : ""}
 ${bars}
 ${chip.age ? `<p class="age">${escapeHtml(chip.age)}</p>` : ""}
-${signInButton(chip)}
+${signInButton(chip)}${signOutButton(chip)}
 </section>`;
 }
 
@@ -238,6 +243,15 @@ function signInButton(chip: UsageChip): string {
     return "";
   }
   return `<button class="action" type="button" data-action="signIn" data-provider="${escapeHtml(chip.providerId)}">Sign in to ${escapeHtml(chip.name)}</button>`;
+}
+
+/// Sign out, for an account that is signed in and whose service publishes its own command for it.
+///
+/// Quiet on purpose: it ends a working login, so it dresses as a link rather than a button and sits last.
+/// The service's own command runs in a terminal exactly as sign-in does (operator, 2026-08-29).
+function signOutButton(chip: UsageChip): string {
+  if (!chip.canSignOut || chip.state !== "available") return "";
+  return `<button class="action quiet" type="button" data-action="signOut" data-provider="${escapeHtml(chip.providerId)}">Sign out of ${escapeHtml(chip.name)}</button>`;
 }
 
 export function escapeHtml(text: string): string {
@@ -304,6 +318,9 @@ ${WIDTH_STYLE}
 .panel .age { font-size: 11px; opacity: 0.7; }
 .action { margin: 2px 0 4px; padding: 2px 10px; border: 1px solid var(--vscode-button-border, transparent); border-radius: 2px; background: var(--vscode-button-background); color: var(--vscode-button-foreground); cursor: pointer; }
 .action:hover { background: var(--vscode-button-hoverBackground); }
+/* Ending a login is not the panel's main move: a quiet line, readable but never louder than the figures. */
+.action.quiet { display: block; background: transparent; border-color: transparent; color: var(--vscode-descriptionForeground); padding: 0; margin: 2px 0 2px; }
+.action.quiet:hover { background: transparent; color: var(--vscode-foreground); text-decoration: underline; }
 `;
 
 // Hover previews, focus previews, Enter or click pins, Escape and a second press close. One panel at a time.

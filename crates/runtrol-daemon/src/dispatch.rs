@@ -899,6 +899,7 @@ fn provider_help(
         .help
         .unwrap_or(runtrol_runtime_protocol::ProviderHelp {
             sign_in: None,
+            sign_out: None,
             diagnose: None,
             install: None,
         });

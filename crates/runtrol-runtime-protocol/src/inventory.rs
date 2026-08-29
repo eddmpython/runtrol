@@ -93,6 +93,9 @@ pub struct ProviderHelp {
     /// The command that signs in to this service, when it declares one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sign_in: Option<String>,
+    /// The command that signs out of this service, when it declares one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sign_out: Option<String>,
     /// The command that makes this service diagnose its own installation, when it declares one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub diagnose: Option<String>,
@@ -105,7 +108,10 @@ impl ProviderHelp {
     /// Whether this carries anything worth offering.
     #[must_use]
     pub const fn is_empty(&self) -> bool {
-        self.sign_in.is_none() && self.diagnose.is_none() && self.install.is_none()
+        self.sign_in.is_none()
+            && self.sign_out.is_none()
+            && self.diagnose.is_none()
+            && self.install.is_none()
     }
 }
 

@@ -29,6 +29,9 @@ and refactoring that no user can observe do not belong here.
 - The usage panel drops "Within limits" and the sign-in method ("via claude.ai"); the bars and the plan say it.
   A model window's name is shown whole instead of cut to "GPT…Spark".
 - The list's scrollbar sits on the panel's edge instead of 8px inside it.
+- A signed-in account's usage panel carries a quiet "Sign out of ..." line when its service publishes its own
+  sign-out command (all three do: measured against each installed CLI). It runs that command in a terminal
+  exactly as sign-in does; Runtrol holds no credentials either way.
 - The project palette holds twelve hues instead of five, so a machine with several projects stops handing two
   of them the same colour. The first six are the editor's own terminal palette; the six extras are band-only,
   and a tab then narrows a conversation to a colour family of two instead of settling it, which is the most

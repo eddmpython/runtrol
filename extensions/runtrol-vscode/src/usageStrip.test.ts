@@ -288,3 +288,23 @@ test("the governing window says when it resets beside its name, not on a line of
   assert.ok(!html.includes("76% used"), html);
   assert.ok(!html.includes('class="detail"'), "the third line is gone");
 });
+
+test("a signed-in account whose service publishes a sign-out command gets a quiet sign-out line", () => {
+  const html = strip(usageChips(
+    [row({ providerId: "claude", state: "available" })],
+    new Set(["claude"]),
+    new Map(),
+    new Set(["claude"]),
+  ));
+  assert.ok(html.includes('data-action="signOut"'));
+  assert.ok(html.includes("Sign out of Codex"));
+  const without = strip(usageChips([row({ providerId: "claude", state: "available" })], new Set(["claude"])));
+  assert.ok(!without.includes('data-action="signOut"'), "no declared command, no line");
+  const signedOut = strip(usageChips(
+    [row({ providerId: "claude", state: "signedOut", meters: [] })],
+    new Set(["claude"]),
+    new Map(),
+    new Set(["claude"]),
+  ));
+  assert.ok(!signedOut.includes('data-action="signOut"'), "a signed-out account has nothing to sign out of");
+});
