@@ -320,7 +320,8 @@ export class Controller implements vscode.Disposable {
     void this.loadNativeChats(providerId, force);
   }
 
-  async checkProviderUpdates(): Promise<void> {
+  /// Ask the Core where every declared service stands against its package registry.
+  async inspectProviderUpdates(): Promise<readonly ProviderUpdateLine[]> {
     const { response } = await this.client.once({ ask: "providerUpdates" });
     if (response.say === "failed") {
       throw new Error(response.with.message);
@@ -328,7 +329,12 @@ export class Controller implements vscode.Disposable {
     if (response.say !== "providerUpdates") {
       throw new Error(`Core answered provider update inspection with ${response.say}`);
     }
-    const choices: Array<vscode.QuickPickItem & { update: ProviderUpdateLine }> = response.with.map((line) => {
+    return response.with;
+  }
+
+  async checkProviderUpdates(): Promise<void> {
+    const lines = await this.inspectProviderUpdates();
+    const choices: Array<vscode.QuickPickItem & { update: ProviderUpdateLine }> = lines.map((line) => {
       const provider = this.state.providers.find((candidate) => candidate.providerId === line.provider);
       const label = provider?.displayName ?? line.provider;
       switch (line.state) {
@@ -375,19 +381,34 @@ export class Controller implements vscode.Disposable {
     if (confirmed !== "Update provider") {
       return;
     }
-    const updated = await this.client.once({
-      ask: "providerUpdate",
-      with: { provider: picked.update.provider },
-    });
-    if (updated.response.say === "failed") {
-      throw new Error(updated.response.with.message);
-    }
-    if (updated.response.say !== "providerUpdated") {
-      throw new Error(`Core answered provider update with ${updated.response.say}`);
-    }
-    const result = updated.response.with;
+    await this.updateProvider(picked.update, picked.label);
+  }
+
+  /// Update one service to the release the Core inspected, and say how it went.
+  ///
+  /// No question here: the Update button already names the release it goes to, and the Core's transaction
+  /// verifies the new release and rolls back to the exact earlier one on failure.
+  async updateProvider(line: ProviderUpdateLine, label: string): Promise<void> {
+    const result = await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title: `Updating ${label} to ${line.target ?? "the latest release"}` },
+      async () => {
+        const updated = await this.client.once({
+          ask: "providerUpdate",
+          with: { provider: line.provider },
+        });
+        if (updated.response.say === "failed") {
+          throw new Error(updated.response.with.message);
+        }
+        if (updated.response.say !== "providerUpdated") {
+          throw new Error(`Core answered provider update with ${updated.response.say}`);
+        }
+        return updated.response.with;
+      },
+    );
+    // The installed release changed under Runtime's probe; ask it again so the sidebar's version follows.
+    await this.refresh();
     if (result.outcome === "updated") {
-      const message = `${picked.label} was updated from ${result.from} to ${result.to}.`;
+      const message = `${label} was updated from ${result.from} to ${result.to}.`;
       if (result.why) {
         await vscode.window.showWarningMessage(`${message} ${result.why}`);
       } else {
@@ -395,10 +416,10 @@ export class Controller implements vscode.Disposable {
       }
     } else if (result.outcome === "rolledBack") {
       await vscode.window.showWarningMessage(
-        `${picked.label} was restored to ${result.to} after update verification failed. ${result.why ?? ""}`.trim(),
+        `${label} was restored to ${result.to} after update verification failed. ${result.why ?? ""}`.trim(),
       );
     } else {
-      await vscode.window.showInformationMessage(`${picked.label} is already current at ${result.to}.`);
+      await vscode.window.showInformationMessage(`${label} is already current at ${result.to}.`);
     }
   }
 

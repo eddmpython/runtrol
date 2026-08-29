@@ -83,7 +83,7 @@ function row(overrides: Partial<UsageRow>): UsageRow {
     state: "available",
     providerId: "codex",
     tooltip: "Codex: within limits\nReported 2m ago",
-    position: "Within limits",
+    position: "",
     plan: null,
     age: "Reported 2m ago",
     unmetered: null,
@@ -166,7 +166,7 @@ test("a chip with nothing to show is a way into that account", () => {
 test("the page draws one bar per reported window and escapes what the service said", () => {
   const html = strip(usageChips([row({
     name: "Codex <pro>",
-    plan: "pro plan via chatgpt",
+    plan: "pro plan",
     meters: [
       { key: "7d", label: "7d", percent: 76, resets: "resets in 6d", governing: true },
       { key: "7d:GPT", label: "7d GPT-5.3", percent: 0, resets: "", governing: false },
@@ -178,8 +178,8 @@ test("the page draws one bar per reported window and escapes what the service sa
   assert.ok(!html.includes("Codex <pro>"));
   assert.ok(html.includes('src="https://icons/codex.svg"'));
   assert.ok(html.includes("Reported 2m ago"));
-  assert.ok(html.includes('<p class="position">Within limits</p>'));
-  assert.ok(html.includes('<span class="plan">pro plan via chatgpt</span>'));
+  assert.ok(!html.includes('class="position"'), "an empty position is not a paragraph");
+  assert.ok(html.includes('<span class="plan">pro plan</span>'));
   assert.ok(!html.includes("Press Enter"));
 });
 

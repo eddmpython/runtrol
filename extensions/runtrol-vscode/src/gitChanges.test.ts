@@ -87,7 +87,9 @@ test("a project is measured once on first sight and again only when touched", as
 
 test("touches inside a burst settle into one measurement, and a burst that never settles is measured anyway", async () => {
   const git = counting();
-  const watch = new GitChangesWatch(git.read, 20, 60);
+  // Generous margins: a timer on a loaded machine lands late, and a settle shorter than that jitter made this
+  // test read a settled burst as a running one.
+  const watch = new GitChangesWatch(git.read, 80, 250);
   watch.ensure(WORKSPACE);
   await tick();
   assert.equal(git.reads.length, 1);
@@ -96,12 +98,12 @@ test("touches inside a burst settle into one measurement, and a burst that never
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
   assert.equal(git.reads.length, 1, "still inside the burst");
-  await new Promise((resolve) => setTimeout(resolve, 40));
+  await new Promise((resolve) => setTimeout(resolve, 160));
   assert.equal(git.reads.length, 2, "the burst settled into one read");
   const started = Date.now();
-  while (Date.now() - started < 90) {
+  while (Date.now() - started < 400) {
     watch.touch(WORKSPACE);
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    await new Promise((resolve) => setTimeout(resolve, 10));
   }
   assert.ok(git.reads.length >= 3, "a burst longer than the ceiling was measured while it ran");
   watch.dispose();

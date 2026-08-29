@@ -43,6 +43,16 @@ export type UsageChip = {
   readonly action: "signIn" | "fix" | null;
   /// The service publishes a sign-in line, so the panel can offer to sign in whatever the account's state is.
   readonly canSignIn: boolean;
+  /// The installed release of the service's CLI, as Runtime discovered it, or null when it said none.
+  readonly version: string | null;
+  /// A newer release the Core confirmed it can install and roll back from, or null. Drawn as the Update button.
+  readonly updateTo: string | null;
+};
+
+/// What the sidebar knows about a service beyond its usage: its CLI release and whether a newer one is ready.
+export type ServiceRelease = {
+  readonly version: string | null;
+  readonly updateTo: string | null;
 };
 
 /// Rows to chips. The order is the rows' order, which is the services' order.
@@ -50,6 +60,8 @@ export function usageChips(
   rows: readonly UsageRow[],
   /// The services that publish a sign-in line of their own.
   signInAble: ReadonlySet<string> = new Set(),
+  /// Each service's CLI release and confirmed update, by provider id.
+  releases: ReadonlyMap<string, ServiceRelease> = new Map(),
 ): UsageChip[] {
   return rows.map((row) => {
     // The ring is the week when the service published one; otherwise the window it says governs, so a
@@ -79,6 +91,8 @@ export function usageChips(
       meters: row.meters,
       action: chipAction(row, shown !== undefined && shown !== null),
       canSignIn: signInAble.has(row.providerId),
+      version: releases.get(row.providerId)?.version ?? null,
+      updateTo: releases.get(row.providerId)?.updateTo ?? null,
     };
   });
 }
@@ -194,12 +208,20 @@ function panelHtml(chip: UsageChip, index: number): string {
 <span class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${meter.percent}" aria-label="${escapeHtml(`${meter.label} ${meter.percent} percent`)}"><span class="value ${widthClass(meter.percent)}"></span></span>
 </div>`).join("");
   return `<section class="panel" id="panel-${index}" hidden>
-<h2>${escapeHtml(chip.name)}${chip.plan ? ` <span class="plan">${escapeHtml(chip.plan)}</span>` : ""}</h2>
-<p class="position${chip.reached ? " reached" : ""}">${escapeHtml(chip.position)}</p>
+<h2><span class="who">${escapeHtml(chip.name)}${chip.plan ? ` <span class="plan">${escapeHtml(chip.plan)}</span>` : ""}${chip.version ? ` <span class="version" title="${escapeHtml(`${chip.name} ${chip.version} is installed`)}">${escapeHtml(chip.version)}</span>` : ""}</span>${updateButton(chip)}</h2>
+${chip.position ? `<p class="position${chip.reached ? " reached" : ""}">${escapeHtml(chip.position)}</p>` : ""}
 ${bars}
 ${chip.age ? `<p class="age">${escapeHtml(chip.age)}</p>` : ""}
 ${signInButton(chip)}
 </section>`;
+}
+
+/// The Update button at the right end of the service's line, only when the Core confirmed a newer release it
+/// can install and roll back from. One press updates; the version it goes to is on the button, so nothing has to
+/// be asked first (operator, 2026-08-29: a new release shows an Update button, a click updates).
+function updateButton(chip: UsageChip): string {
+  if (!chip.updateTo) return "";
+  return `<button class="action update" type="button" data-action="update" data-provider="${escapeHtml(chip.providerId)}" title="${escapeHtml(`Update ${chip.name} to ${chip.updateTo}`)}">Update to ${escapeHtml(chip.updateTo)}</button>`;
 }
 
 /// The detail panel's sign-in button, shown only when signing in is the true next step.
@@ -253,8 +275,13 @@ export const USAGE_STYLE = `
 .chip.reached .caption { color: var(--vscode-errorForeground); }
 .panels { margin-top: 4px; }
 .panel { padding: 6px 4px 2px; border-top: 1px solid var(--vscode-widget-border, rgba(128,128,128,0.35)); }
-.panel h2 { margin: 0 0 2px; font-size: var(--vscode-font-size); font-weight: 600; }
+.panel h2 { margin: 0 0 2px; font-size: var(--vscode-font-size); font-weight: 600; display: flex; align-items: center; gap: 6px; }
+.panel h2 .who { min-width: 0; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .panel .plan { font-weight: 400; opacity: 0.75; }
+.panel .version { font-weight: 400; opacity: 0.6; font-size: 11px; font-variant-numeric: tabular-nums; }
+/* The Update button holds the right end of the line and never wraps; the name yields before it does. */
+.panel .action.update { flex: none; margin: 0; padding: 1px 8px; font-size: 11px; line-height: 16px; border-radius: 3px; border: 1px solid var(--vscode-button-border, transparent); background: var(--vscode-button-background); color: var(--vscode-button-foreground); cursor: pointer; }
+.panel .action.update:hover { background: var(--vscode-button-hoverBackground); }
 .panel p { margin: 0 0 4px; opacity: 0.9; }
 .panel .position.reached { color: var(--vscode-errorForeground); opacity: 1; }
 /* The name has the line, and the bar sits under it. A model window is named by its model, and a model name

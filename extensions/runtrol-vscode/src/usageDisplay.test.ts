@@ -5,7 +5,6 @@ import type { ProviderLine, ProviderUsageGauge, ProviderUsageWindow } from "./ru
 import {
   primarySevenDayMeter,
   setupRows,
-  shortened,
   usageDetail,
   usageMeters,
   usageRows,
@@ -87,17 +86,9 @@ test("a bar is named by what the service scoped it to, never by a phrase compose
     }),
     NOW,
   );
-  // The length leads because it is what tells this bar from the same model's weekly one. The name is cut
-  // from the middle rather than the end: `GPT-5.3-Co...` is the half every bucket of that service shares,
-  // and `GPT...Spark` is the vendor's word and the distinguishing word both.
-  assert.equal(spark?.label, "5h GPT…Spark");
-});
-
-test("a short name the service gave is left exactly as it gave it", () => {
-  // Nothing is renamed and nothing is shortened that fits. `Fable` is five characters and stays five.
-  assert.equal(shortened("Fable"), "Fable");
-  assert.equal(shortened("sonnet"), "sonnet");
-  assert.equal(shortened(null), null);
+  // The length leads because it is what tells this bar from the same model's weekly one. The name is the
+  // service's whole name: cut to `GPT…Spark` it named nothing (operator, 2026-08-29).
+  assert.equal(spark?.label, "5h GPT-5.3-Codex-Spark");
 });
 
 test("the line names the window the service says is governing, not the shortest one", () => {
@@ -409,9 +400,9 @@ test("the account line says what the service said: signed out is an action, a pl
   assert.match(rows[2]?.tooltip ?? "", /publishes no usage or sign-in status/);
   assert.equal(rows[1]?.position, "Not signed in");
   assert.doesNotMatch(rows[1]?.tooltip ?? "", /Press Enter/);
-  assert.equal(rows[0]?.plan, "max plan via claude.ai");
-  assert.equal(rows[0]?.position, "Within limits");
-  assert.match(rows[0]?.tooltip ?? "", /max plan via claude\.ai/);
+  assert.equal(rows[0]?.plan, "max plan", "the plan, never the sign-in method");
+  assert.equal(rows[0]?.position, "", "within limits is what the bars already say");
+  assert.match(rows[0]?.tooltip ?? "", /max plan/);
 });
 
 test("a bar-less row names the cause that matches what the service actually said", () => {

@@ -75,6 +75,15 @@ export type GitChangesPort = {
 export type UsageActions = {
   signIn(providerId: string): Promise<void>;
   fix(providerId: string): Promise<void>;
+  /// Update the service's CLI to the release the Update button names.
+  update(providerId: string): Promise<void>;
+};
+
+/// What the Core last said about each service's release (`ProviderUpdateWatch`).
+export type ProviderReleasePort = {
+  installedFor(providerId: string): string | null;
+  updateTargetFor(providerId: string): string | null;
+  onDidChange(listener: () => void): { dispose(): void };
 };
 
 type ServiceOffer = () => readonly { providerId: string; displayName: string; icon: string }[];
@@ -112,6 +121,7 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
     private readonly projectRecords: ProjectsPort,
     private readonly agentTools: AgentToolsPort,
     private readonly changes: GitChangesPort,
+    private readonly releases: ProviderReleasePort,
     private readonly usageActions: UsageActions,
     private readonly report: (error: unknown) => void,
   ) {
@@ -125,6 +135,7 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
       projectRecords.onDidChange(() => this.render()),
       agentTools.onDidChange(() => this.render()),
       changes.onDidChange(() => this.render()),
+      releases.onDidChange(() => this.render()),
       vscode.workspace.onDidChangeWorkspaceFolders(() => this.render()),
     );
   }
@@ -235,6 +246,7 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
       if (typeof providerId !== "string") return;
       if (action === "signIn") await this.usageActions.signIn(providerId);
       else if (action === "fix") await this.usageActions.fix(providerId);
+      else if (action === "update") await this.usageActions.update(providerId);
       return;
     }
     if (type === "command") {
@@ -279,6 +291,10 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
     const model = this.buildModel();
     this.model = model;
     this.updateBadge(view, model);
+    // The build's version sits in the title bar beside "Runtrol": a single view's title is merged into the
+    // container's as `Runtrol: v0.1.36` (operator, 2026-08-29: put it in the header, not under it).
+    const title = model.version ? `v${model.version}` : "";
+    if (view.title !== title) view.title = title;
     const key = JSON.stringify(model);
     if (key === this.lastRendered) return;
     this.lastRendered = key;
@@ -336,9 +352,16 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
     const signInAble = new Set(this.state.providers
       .filter((provider) => provider.help?.signIn)
       .map((provider) => provider.providerId));
+    // The CLI release beside each service's name: Runtime's probe of the binary, or the Core's inspection when
+    // the probe said nothing. And the release the Update button goes to, when the Core confirmed one.
+    const releases = new Map(this.state.providers.map((provider) => [provider.providerId, {
+      version: provider.installation.version ?? this.releases.installedFor(provider.providerId),
+      updateTo: this.releases.updateTargetFor(provider.providerId),
+    }] as const));
     const usage: UsageChip[] = usageChips(
       usageRows(this.state.usage, this.state.providers, Date.now()),
       signInAble,
+      releases,
     );
     const usable = this.state.providers.some(isUsable);
     const firstRun = projectRows.length === 0 && looseRows.length === 0

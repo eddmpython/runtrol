@@ -82,7 +82,7 @@ export type SidebarModel = {
   readonly serviceChoice: SidebarServiceChoice | null;
   /// Nothing to list and a service to start with: the page offers the two first actions as rows.
   readonly firstRun: boolean;
-  /// This build's version, shown small under the header so a person can name what they are running.
+  /// This build's version. The host puts it in the title bar beside "Runtrol"; the page draws nothing for it.
   readonly version: string;
 };
 
@@ -138,18 +138,10 @@ export function sidebarHtml(model: SidebarModel, assets: SidebarAssets): string 
 /// itself while the hand was still moving towards it, which is the mouse losing its way (operator, 2026-08-28)
 /// and is also the plainest kind of stutter this panel can have.
 export function sidebarBody(model: SidebarModel, assets: SidebarAssets): string {
-  return `${versionHtml(model.version)}
-${model.notices.map(noticeHtml).join("")}
+  return `${model.notices.map(noticeHtml).join("")}
 ${model.serviceChoice ? serviceChoiceHtml(model.serviceChoice, assets) : ""}
 ${model.firstRun ? firstRunHtml() : ""}
 ${zonesHtml(model, assets)}`;
-}
-
-/// The build's version, small and muted at the top of the body, right under the title bar's "Runtrol". The
-/// title bar is the editor's, not the page's, so the version cannot live in it; this is the nearest place the
-/// page owns (operator, 2026-08-29: show the version in the header).
-function versionHtml(version: string): string {
-  return version ? `<div class="version">v${escapeHtml(version)}</div>` : "";
 }
 
 function zonesHtml(model: SidebarModel, assets: SidebarAssets): string {
@@ -336,9 +328,8 @@ html { height: 100%; }
    page drew #121212. So the list sat in a near black box inside a lighter sidebar and the usage strip, the
    one element that did name a colour, stood out as a grey card glued to it (operator, 2026-08-28: why does
    Agent Usage use a black background). One owner for one fact: the strip no longer names it. */
-body { margin: 0; padding: 6px 8px; height: 100%; min-height: 100%; box-sizing: border-box; display: flex; flex-direction: column; overflow: hidden; color: var(--vscode-sideBar-foreground, var(--vscode-foreground)); background: var(--vscode-sideBar-background); font: var(--vscode-font-size) var(--vscode-font-family); user-select: none; }
+body { margin: 0; padding: 6px 0 6px 8px; height: 100%; min-height: 100%; box-sizing: border-box; display: flex; flex-direction: column; overflow: hidden; color: var(--vscode-sideBar-foreground, var(--vscode-foreground)); background: var(--vscode-sideBar-background); font: var(--vscode-font-size) var(--vscode-font-family); user-select: none; }
 button { font: inherit; color: inherit; }
-.version { margin: 2px 6px 0; font-size: 10px; line-height: 12px; opacity: 0.55; letter-spacing: 0.02em; }
 .notice { margin: 4px 4px 0; padding: 4px 6px; border-radius: 4px; font-size: 12px; background: var(--vscode-editorWidget-background); border-left: 3px solid var(--vscode-widget-border); }
 .notice.warn { border-left-color: var(--vscode-editorWarning-foreground); }
 .notice.error { border-left-color: var(--vscode-errorForeground); }
@@ -360,11 +351,13 @@ button { font: inherit; color: inherit; }
    does not change where anything sits: without this the usage zone stopped being the bottom of the panel and
    floated up under the last conversation (measured 2026-08-28). */
 #page { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
-.scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; }
+/* The scrollbar sits on the panel's edge, not 8px inside it: the body gives up its right padding and the
+   scroller carries it, so the bar is outside the padded content (operator, 2026-08-29: why the gap). */
+.scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; padding-right: 8px; }
 .zone { padding: 4px 0 2px; }
 .zone + .zone { border-top: 1px solid var(--vscode-sideBarSectionHeader-border, var(--vscode-widget-border)); margin-top: 4px; }
 .zone-title { display: flex; align-items: center; gap: 4px; margin: 4px 4px 2px; font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; opacity: 0.55; }
-.usage-zone { flex: none; padding-bottom: 4px; border-top: 1px solid var(--vscode-sideBarSectionHeader-border, var(--vscode-widget-border)); }
+.usage-zone { flex: none; padding-bottom: 4px; padding-right: 8px; border-top: 1px solid var(--vscode-sideBarSectionHeader-border, var(--vscode-widget-border)); }
 .row { position: relative; display: flex; align-items: center; gap: 6px; min-height: 24px; padding: 2px 4px 2px 0; border-radius: 4px; cursor: pointer; outline: none; }
 .row:hover { background: var(--vscode-list-hoverBackground); }
 .row:focus-visible { box-shadow: inset 0 0 0 1px var(--vscode-focusBorder); }
@@ -407,8 +400,9 @@ button { font: inherit; color: inherit; }
    and a person glancing at the list sees nothing. The arc is off-centre by construction, so it reads as
    motion while it turns and as a coloured ring when it stands still. It is drawn outside the icon's box, so
    a running row and an idle row put their names in the same place. */
-.conv .glyph-slot.working .glyph { animation: spin 2.4s linear infinite; }
-.conv .glyph-slot.working::after { content: ""; position: absolute; inset: -3px; border-radius: 50%; border: 1.5px solid color-mix(in srgb, var(--runtrol-running) 30%, transparent); border-top-color: var(--runtrol-running); animation: spin 900ms linear infinite; }
+/* The icon alone turns (operator, 2026-08-29: no ring, just the icon). Fast enough that a symmetric mark
+   still reads as moving, and a full turn is a plain transform the compositor can run without a repaint. */
+.conv .glyph-slot.working .glyph { animation: spin 1.1s linear infinite; will-change: transform; }
 @keyframes spin { to { transform: rotate(360deg); } }
 /* One line, and the tail fades out rather than ending in dots: the reader sees there is more without a
    glyph spending width to say so, and two-line rows made the list hard to scan (operator, 2026-08-28). */
@@ -563,12 +557,64 @@ const SCRIPT = `
     });
   });
   }
+  // Repaint by difference. Replacing the whole body rebuilt every element on every tick, and a rebuilt element
+  // starts its animation from zero: with the memory figures ticking, every turning icon jumped back to its
+  // start each time (operator, 2026-08-29: the spinner stutters after a while). Elements that did not change
+  // are left alone, so their animations run on; elements that did are updated in place.
+  function morphInto(target, html) {
+    var template = document.createElement("template");
+    template.innerHTML = html;
+    morphChildren(target, template.content);
+  }
+  function keyOf(node) {
+    if (node.nodeType !== 1) return null;
+    return node.getAttribute("data-key") || node.getAttribute("data-project") || node.id || null;
+  }
+  function morphChildren(from, to) {
+    var wanted = Array.prototype.slice.call(to.childNodes);
+    var have = Array.prototype.slice.call(from.childNodes);
+    var byKey = {};
+    have.forEach(function (node) { var key = keyOf(node); if (key !== null && !byKey[key]) byKey[key] = node; });
+    var used = [];
+    wanted.forEach(function (next, index) {
+      var key = keyOf(next);
+      var match = key !== null ? byKey[key] : null;
+      if (match && match.tagName !== next.tagName) match = null;
+      if (!match && key === null) {
+        var candidate = have[index];
+        if (candidate && used.indexOf(candidate) === -1 && keyOf(candidate) === null
+          && candidate.nodeType === next.nodeType && candidate.tagName === next.tagName) match = candidate;
+      }
+      var current = from.childNodes[index];
+      if (match) {
+        used.push(match);
+        if (match !== current) from.insertBefore(match, current || null);
+        morphNode(match, next);
+      } else {
+        from.insertBefore(next.cloneNode(true), current || null);
+      }
+    });
+    while (from.childNodes.length > wanted.length) from.removeChild(from.lastChild);
+  }
+  function morphNode(node, next) {
+    if (node.nodeType === 3) { if (node.nodeValue !== next.nodeValue) node.nodeValue = next.nodeValue; return; }
+    if (node.nodeType !== 1) return;
+    var names = {};
+    Array.prototype.slice.call(next.attributes).forEach(function (attribute) {
+      names[attribute.name] = true;
+      if (node.getAttribute(attribute.name) !== attribute.value) node.setAttribute(attribute.name, attribute.value);
+    });
+    Array.prototype.slice.call(node.attributes).forEach(function (attribute) {
+      if (!names[attribute.name]) node.removeAttribute(attribute.name);
+    });
+    morphChildren(node, next);
+  }
   bindProjects();
   window.addEventListener("message", function (event) {
     var message = event.data || {};
     if (message.type === "paint") {
       var page = document.getElementById("page");
-      if (page) page.innerHTML = message.body;
+      if (page) morphInto(page, message.body);
       bindProjects();
       if (window.__runtrolBindUsage) window.__runtrolBindUsage();
       return;

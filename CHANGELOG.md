@@ -17,6 +17,18 @@ and refactoring that no user can observe do not belong here.
   first three to zero and pushing takes the last to zero, and a clean, pushed project shows nothing. It is
   measured when an agent in that project writes and when the editor's git extension sees a change, never on a
   timer.
+- Each service's usage panel shows the installed CLI release beside its name, and an "Update to X" button at the
+  right end when a newer release is confirmed with an exact rollback. One press updates; no dialog.
+- The build's version sits in the title bar beside "Runtrol" instead of on a line under it.
+
+### Changed
+
+- A running conversation's icon turns on its own; the ring around it is gone.
+- Repaints update only what changed, so a turning icon no longer jumps back to its start every time a figure
+  on the panel ticks.
+- The usage panel drops "Within limits" and the sign-in method ("via claude.ai"); the bars and the plan say it.
+  A model window's name is shown whole instead of cut to "GPT…Spark".
+- The list's scrollbar sits on the panel's edge instead of 8px inside it.
 
 ## [0.1.36] - 2026-08-29
 

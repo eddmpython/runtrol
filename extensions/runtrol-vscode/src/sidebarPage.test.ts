@@ -115,9 +115,8 @@ test("a project's colour reaches its heading bar and every conversation under it
   assert.ok(html.includes('class="bar"></span>'), "a loose conversation has no project colour");
 });
 
-test("the build's version shows small at the top, and a placeholder build shows none", () => {
-  assert.ok(sidebarHtml(model({ version: "0.1.35" }), assets).includes('class="version">v0.1.35<'), "the version rides the header");
-  assert.ok(!sidebarHtml(model({ version: "" }), assets).includes('class="version"'), "an unpackaged build shows no version");
+test("the build's version is not drawn in the body: the host puts it in the title bar beside Runtrol", () => {
+  assert.ok(!sidebarHtml(model({ version: "0.1.35" }), assets).includes("v0.1.35"), "no version line under the header");
 });
 
 test("row actions are buttons that name their command, and only the actions a row can perform", () => {
@@ -184,7 +183,9 @@ test("a running conversation is marked once at its icon, and action states use w
   assert.ok(html.includes('class="conv-state attention" title="Needs you">Needs you</span>'));
   assert.ok(html.includes('class="conv-state muted" title="running outside runtrol">Elsewhere</span>'));
   assert.ok(html.includes("--runtrol-running: var(--vscode-charts-blue"));
-  assert.ok(html.includes("border-top-color: var(--runtrol-running)"));
+  // The icon alone turns; there is no ring around it (operator, 2026-08-29).
+  assert.ok(html.includes(".conv .glyph-slot.working .glyph { animation: spin"));
+  assert.ok(!html.includes(".glyph-slot.working::after"), "no ring is drawn around a turning icon");
   assert.ok(!html.includes(".conv.blocked .title"), "an externally running conversation stays readable");
 });
 

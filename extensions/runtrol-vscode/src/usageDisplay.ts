@@ -284,7 +284,9 @@ export function positionOf(
     const reason = unmeteredReason(account);
     if (reason) return reason;
   }
-  return "Within limits";
+  // Nothing. The bars say it; "Within limits" under them told the reader what they could already see
+  // (operator, 2026-08-29).
+  return "";
 }
 
 /// The service's own words for having no number, or null when it did not give any.
@@ -328,8 +330,8 @@ export function usageAbsenceCause(account: ProviderLine["account"] | null | unde
 export function accountLine(account: ProviderLine["account"] | null | undefined): string | null {
   if (!account || account.status !== "signedIn") return null;
   const parts: string[] = [];
+  // The plan only. The sign-in method (`via claude.ai`) named a fact nobody acts on (operator, 2026-08-29).
   if (account.plan) parts.push(`${account.plan} plan`);
-  if (account.method && account.method !== account.plan) parts.push(`via ${account.method}`);
   return parts.length > 0 ? parts.join(" ") : "Signed in";
 }
 
@@ -409,27 +411,11 @@ export function meterLabel(window: ProviderUsageWindow): string {
 ///
 /// Separate from [`meterLabel`] because the muted line reads differently: a bar with no name still needs a
 /// caption, but a line that said "limit 48%" would have put a word there that no service used.
-/// The longest a service's own name for something may be before the middle of it is dropped.
-///
-/// A sidebar is narrow and these names are not chosen with one in mind: one service calls a model bucket
-/// `Fable` and another calls one `GPT-5.3-Codex-Spark`.
-const NAME_BUDGET = 12;
-
-/// A name too long for the row, shortened from the middle so the end of it survives.
-///
-/// Cut from the end, `GPT-5.3-Codex-Spark` becomes `GPT-5.3-Co…`, which is the half every one of that
-/// service's buckets shares and none of the half that says which bucket. Cut from the middle it becomes
-/// `GPT…Spark`, the vendor's word and the distinguishing word both. Nothing is renamed: the whole name
-/// is on the row's hover and in the data, and this is only what fits on the row.
-export function shortened(name: string | null): string | null {
-  if (name === null || name.length <= NAME_BUDGET) return name;
-  const head = name.slice(0, 3).replace(/[-_. ]+$/, "");
-  const tail = name.slice(-5).replace(/^[-_. ]+/, "");
-  return head + "…" + tail;
-}
-
 export function windowName(window: ProviderUsageWindow): string | null {
-  const named = shortened(window.scope ?? window.label ?? null);
+  // The service's whole name for the bucket. Cut from the middle it read `GPT…Spark`, which named nothing
+  // (operator, 2026-08-29). The name has the panel's line to itself and the stylesheet ends it with an
+  // ellipsis only when the panel is truly too narrow.
+  const named = window.scope ?? window.label ?? null;
   const length = usageWindowLabel(window.windowMinutes, null);
   // Length first, because it is the short half and the one that tells two windows of the same model apart.
   // Measured the other way round in a real sidebar: one service meters the same model over five hours and

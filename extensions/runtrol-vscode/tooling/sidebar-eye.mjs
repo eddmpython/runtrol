@@ -132,8 +132,10 @@ function chip(providerId, name, percent, rings) {
     caption: percent === null ? "" : `${percent}%`,
     reached: false,
     state: "within",
-    position: "Within limits",
+    position: "",
     plan: "Max",
+    version: providerId === "claude" ? "2.1.251" : "0.63.0",
+    updateTo: providerId === "claude" ? "2.1.252" : null,
     age: "2 min ago",
     meters: rings.map((ring, at) => ({
       label: ring.label,
