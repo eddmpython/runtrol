@@ -673,7 +673,7 @@ impl IntegrationAdmin {
             return Err(AdminError::invalid("the enrollment is terminal or expired"));
         }
         crate::runtime_audit::local(
-            &composed.store,
+            composed,
             None,
             None,
             "integrations/deny",
@@ -686,7 +686,7 @@ impl IntegrationAdmin {
             .deny_enrollment(key)
             .map_err(|_| AdminError::state())?;
         crate::runtime_audit::local(
-            &composed.store,
+            composed,
             None,
             None,
             "integrations/deny",
@@ -706,7 +706,7 @@ impl IntegrationAdmin {
             .map_err(|_| AdminError::state())?;
         let key_generation = row.as_ref().map(|row| row.key_generation);
         crate::runtime_audit::local(
-            &composed.store,
+            composed,
             row.as_ref().map(|_| key),
             key_generation,
             "integrations/revoke",
@@ -720,7 +720,7 @@ impl IntegrationAdmin {
             .map_err(|_| AdminError::state())?
         {
             crate::runtime_audit::local(
-                &composed.store,
+                composed,
                 Some(key),
                 key_generation,
                 "integrations/revoke",
@@ -730,7 +730,7 @@ impl IntegrationAdmin {
             .map_err(|_| AdminError::state())
         } else {
             crate::runtime_audit::local(
-                &composed.store,
+                composed,
                 None,
                 None,
                 "integrations/revoke",
@@ -804,7 +804,7 @@ impl IntegrationAdmin {
             })
             .collect();
         crate::runtime_audit::local(
-            &composed.store,
+            composed,
             Some(key),
             Some(row.key_generation),
             "integrations/changeGrant",
@@ -819,7 +819,7 @@ impl IntegrationAdmin {
         {
             IntegrationGrantChange::Changed(_) | IntegrationGrantChange::Unchanged(_) => {
                 crate::runtime_audit::local(
-                    &composed.store,
+                    composed,
                     Some(key),
                     Some(row.key_generation),
                     "integrations/changeGrant",
@@ -920,7 +920,7 @@ fn commit_approval(
             .is_none()
         {
             crate::runtime_audit::local(
-                &composed.store,
+                composed,
                 Some(key),
                 Some(grant.key_generation),
                 method,
@@ -933,7 +933,7 @@ fn commit_approval(
                 .approve_enrollment(enrollment, key, grant)
                 .map_err(|_| AdminError::state())?;
             crate::runtime_audit::local(
-                &composed.store,
+                composed,
                 Some(key),
                 Some(grant.key_generation),
                 method,

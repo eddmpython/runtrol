@@ -15,6 +15,7 @@
 //! - [`serve`] one owner of the sessions, and a task for every connection beside it
 
 mod account_probe;
+mod audit_relay;
 mod build_identity;
 pub mod compose;
 mod consult;

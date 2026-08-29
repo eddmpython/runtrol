@@ -704,6 +704,10 @@ pub enum Response {
         capabilities: GenerationHandoffCapabilities,
         /// Current draining-generation live claims for successor admission.
         claims: Vec<GenerationLiveClaimLine>,
+        /// Authorization rows the draining generation recorded since the last poll, for the successor's
+        /// store. Absent from a generation built before the relay, which recorded none after handover.
+        #[serde(default)]
+        audit: Vec<GenerationAuditLine>,
     },
 
     /// Every cross-consult direction, each with its current state.
@@ -780,6 +784,46 @@ pub struct GenerationLiveClaimLine {
     pub surface: GenerationLiveClaimSurface,
     /// Surface-local owner identity with no content.
     pub owner_id: Box<str>,
+}
+
+/// One authorization row a draining generation kept for the successor that owns the store.
+///
+/// The private store row, field for field, so the successor appends it as if it had recorded it. Content-free
+/// like the row: opaque identities and stable machine reasons, never caller text.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub struct GenerationAuditLine {
+    /// Decision time.
+    pub occurred_at_ms: u64,
+    /// Private fixed integration store key of the authenticated integration, when there was one.
+    pub integration_key: Option<[u8; 16]>,
+    /// Signing-key generation used for the request.
+    pub key_generation: Option<u64>,
+    /// Stable public or private administration method name.
+    pub method: Box<str>,
+    /// Stable required app scope, when the method has one.
+    pub scope: Option<Box<str>>,
+    /// Opaque approved project identity.
+    pub project: Option<Box<str>>,
+    /// Opaque Runtime session identity.
+    pub session: Option<Box<str>>,
+    /// UUIDv7 mutation identity.
+    pub request_id: Option<Box<str>>,
+    /// Structural decision.
+    pub outcome: GenerationAuditOutcome,
+    /// Stable machine reason.
+    pub reason: Box<str>,
+}
+
+/// The structural decision of one relayed authorization row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum GenerationAuditOutcome {
+    /// The operation entered evaluation after structural parsing.
+    Attempted,
+    /// Authority checks and the operation succeeded.
+    Allowed,
+    /// The operation was refused with the recorded machine reason.
+    Denied,
 }
 
 /// One cross-consult direction, as a surface shows it.
@@ -1423,6 +1467,44 @@ mod tests {
             object.get("ask").and_then(|v| v.as_str()),
             Some("stopEverything")
         );
+    }
+
+    #[test]
+    fn a_handoff_answer_carries_audit_rows_and_one_from_before_the_relay_still_reads() {
+        let line = GenerationAuditLine {
+            occurred_at_ms: 1_700_000_000_000,
+            integration_key: Some([9; 16]),
+            key_generation: Some(2),
+            method: "terminals/attach".into(),
+            scope: Some("session.input.write".into()),
+            project: None,
+            session: Some("sess_7".into()),
+            request_id: None,
+            outcome: GenerationAuditOutcome::Allowed,
+            reason: "allowed".into(),
+        };
+        let answer = Response::GenerationHandoff {
+            capabilities: GenerationHandoffCapabilities {
+                public_terminal: true,
+                authority_relay: true,
+                native_live_claims: true,
+            },
+            claims: Vec::new(),
+            audit: vec![line.clone()],
+        };
+        let encoded = serde_json::to_string(&answer).expect("writable");
+        match serde_json::from_str::<Response>(&encoded).expect("readable") {
+            Response::GenerationHandoff { audit, .. } => assert_eq!(audit, vec![line]),
+            other => panic!("expected the handoff answer back, got {other:?}"),
+        }
+
+        // A draining generation built before the relay answers without the field. It recorded nothing after
+        // handover, and the successor must keep reading its claims rather than counting it as a miss.
+        let older = r#"{"say":"generationHandoff","with":{"capabilities":{"public_terminal":true,"authority_relay":true,"native_live_claims":true},"claims":[]}}"#;
+        match serde_json::from_str::<Response>(older).expect("an older answer still reads") {
+            Response::GenerationHandoff { audit, .. } => assert!(audit.is_empty()),
+            other => panic!("expected the handoff answer, got {other:?}"),
+        }
     }
 
     #[test]

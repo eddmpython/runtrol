@@ -386,7 +386,7 @@ async fn answer(
     let id = request.id;
     if request.jsonrpc != "2.0" {
         if crate::runtime_audit::structural(
-            &composed.store,
+            composed,
             "runtime/invalidEnvelope",
             RuntimeErrorKind::InvalidRequest.as_str(),
         )
@@ -402,7 +402,7 @@ async fn answer(
     }
     let Ok(method) = request.method.parse::<RuntimeMethod>() else {
         if crate::runtime_audit::structural(
-            &composed.store,
+            composed,
             "runtime/unknownMethod",
             RuntimeErrorKind::MethodNotFound.as_str(),
         )
@@ -420,7 +420,7 @@ async fn answer(
     let scope = required_scope(method);
     let (integration, key_generation) = audit_identity(state);
     if crate::runtime_audit::public(
-        &composed.store,
+        composed,
         integration,
         key_generation,
         method,
@@ -458,7 +458,7 @@ async fn answer(
     };
     let (integration, key_generation) = audit_identity(state);
     if crate::runtime_audit::public(
-        &composed.store,
+        composed,
         integration,
         key_generation,
         method,
@@ -2304,7 +2304,7 @@ async fn mutate_native_session(
     match mutated {
         Ok(Ok(())) => mutated_answer(id, mutation, composed, provider, &native, &origin),
         // The provider's own answer, by kind: unsupported stays unsupported, a refusal stays a refusal.
-        Ok(Err(error)) => control_failure(id, crate::runtime_control::provider_failure(&error)),
+        Ok(Err(error)) => control_failure(id, &crate::runtime_control::provider_failure(&error)),
         Err(_) => Answer::plain(
             id,
             RuntimeErrorKind::RuntimeUnavailable,
@@ -2569,7 +2569,7 @@ async fn open_session(
     };
     let request = match build_open_request(method, params, &authority, sessions, composed).await {
         Ok(request) => request,
-        Err(OpenAdmissionFailure::Control(failure)) => return control_failure(id, failure),
+        Err(OpenAdmissionFailure::Control(failure)) => return control_failure(id, &failure),
         Err(OpenAdmissionFailure::Inventory(failure)) => return inventory_failure(id, failure),
         Err(OpenAdmissionFailure::Presence { confirmation_id }) => {
             return Answer::operator_action(
@@ -2621,7 +2621,7 @@ async fn open_session(
             .await
         }
         RuntimeControlReply::Opened(result) => Answer::success(id, &result),
-        RuntimeControlReply::Failed(failure) => control_failure(id, failure),
+        RuntimeControlReply::Failed(failure) => control_failure(id, &failure),
         RuntimeControlReply::Lease(_)
         | RuntimeControlReply::Done
         | RuntimeControlReply::Approvals(_)
@@ -2942,7 +2942,7 @@ async fn perform_runtime_open(
     }
     let method = match guard.opening() {
         Some(opening) => opening.method,
-        None => return control_failure(id, RuntimeControlFailure::outcome_unknown()),
+        None => return control_failure(id, &RuntimeControlFailure::outcome_unknown()),
     };
     let authority = match authorized(state, composed, required_scope(method)) {
         Ok(authority) => authority.clone(),
@@ -2958,7 +2958,7 @@ async fn perform_runtime_open(
     };
     let workspace = match guard.opening() {
         Some(opening) => opening.workspace.clone(),
-        None => return control_failure(id, RuntimeControlFailure::outcome_unknown()),
+        None => return control_failure(id, &RuntimeControlFailure::outcome_unknown()),
     };
     match authorized_workspace(&authority, workspace.as_str()) {
         Ok(current) if current.path == workspace => {}
@@ -2977,7 +2977,7 @@ async fn perform_runtime_open(
     }
     let provider = match guard.opening() {
         Some(opening) => opening.provider,
-        None => return control_failure(id, RuntimeControlFailure::outcome_unknown()),
+        None => return control_failure(id, &RuntimeControlFailure::outcome_unknown()),
     };
     let prepared = {
         let _lane = discovering.lane(provider).await.lock_owned().await;
@@ -3092,7 +3092,7 @@ async fn perform_runtime_open(
             reasoning_effort: opening.reasoning_effort.clone(),
             permission: opening.permission.clone(),
         },
-        None => return control_failure(id, RuntimeControlFailure::outcome_unknown()),
+        None => return control_failure(id, &RuntimeControlFailure::outcome_unknown()),
     };
     let opened = tokio::time::timeout(
         Duration::from_millis(crate::serve::MODEL_PREPARATION_BUDGET_MS),
@@ -3192,7 +3192,7 @@ async fn send_open_denied(
     failure: RuntimeControlFailure,
 ) -> Answer {
     let Some(opening) = guard.take() else {
-        return control_failure(id, RuntimeControlFailure::outcome_unknown());
+        return control_failure(id, &RuntimeControlFailure::outcome_unknown());
     };
     let (answered, hearing) = oneshot::channel();
     if returning
@@ -3217,7 +3217,7 @@ async fn send_open_unknown(
     returning: &mpsc::UnboundedSender<RuntimeReturned>,
 ) -> Answer {
     let Some(opening) = guard.take() else {
-        return control_failure(id, RuntimeControlFailure::outcome_unknown());
+        return control_failure(id, &RuntimeControlFailure::outcome_unknown());
     };
     let (answered, hearing) = oneshot::channel();
     if returning
@@ -3241,7 +3241,7 @@ async fn send_opened(
 ) -> Answer {
     let Some(opening) = guard.take() else {
         drop(agent);
-        return control_failure(id, RuntimeControlFailure::outcome_unknown());
+        return control_failure(id, &RuntimeControlFailure::outcome_unknown());
     };
     let (answered, hearing) = oneshot::channel();
     if returning
@@ -3268,7 +3268,7 @@ async fn finish_open_completion(
 ) -> Answer {
     match completion {
         RuntimeOpenCompletion::Answer(Ok(result)) => Answer::success(id, &result),
-        RuntimeOpenCompletion::Answer(Err(failure)) => control_failure(id, failure),
+        RuntimeOpenCompletion::Answer(Err(failure)) => control_failure(id, &failure),
         RuntimeOpenCompletion::Cleanup { agent, reservation } => {
             drop(agent.close(CloseMode::Kill).await);
             let (answered, hearing) = oneshot::channel();
@@ -3283,7 +3283,7 @@ async fn finish_open_completion(
             }
             match hearing.await {
                 Ok(Ok(result)) => Answer::success(id, &result),
-                Ok(Err(failure)) => control_failure(id, failure),
+                Ok(Err(failure)) => control_failure(id, &failure),
                 Err(_) => runtime_owner_stopped(id),
             }
         }
@@ -3502,14 +3502,14 @@ async fn runtime_control_answer(
         RuntimeControlReply::Watching { result, view } => {
             Answer::watching_events(id, &result, view)
         }
-        RuntimeControlReply::Failed(failure) => control_failure(id, failure),
+        RuntimeControlReply::Failed(failure) => control_failure(id, &failure),
         RuntimeControlReply::Sending {
             mutation,
             taken,
             command,
         } => match perform_runtime_command(mutation, taken, command, returning.clone()).await {
             Some(Ok(())) => Answer::success(id, &EmptyResult {}),
-            Some(Err(failure)) => control_failure(id, failure),
+            Some(Err(failure)) => control_failure(id, &failure),
             None => Answer::plain(
                 id,
                 RuntimeErrorKind::RuntimeUnavailable,
@@ -3519,7 +3519,7 @@ async fn runtime_control_answer(
         RuntimeControlReply::Cooling(cooling) => {
             match perform_runtime_cool(cooling, returning.clone()).await {
                 Some(Ok(())) => Answer::success(id, &EmptyResult {}),
-                Some(Err(failure)) => control_failure(id, failure),
+                Some(Err(failure)) => control_failure(id, &failure),
                 None => Answer::plain(
                     id,
                     RuntimeErrorKind::RuntimeUnavailable,
@@ -3607,8 +3607,8 @@ async fn perform_runtime_command(
     }
 }
 
-fn control_failure(id: JsonRpcId, failure: RuntimeControlFailure) -> Answer {
-    Answer::plain(id, failure.kind, failure.message)
+fn control_failure(id: JsonRpcId, failure: &RuntimeControlFailure) -> Answer {
+    Answer::plain(id, failure.kind, &failure.message)
 }
 
 fn inventory_failure(id: JsonRpcId, failure: RuntimeInventoryFailure) -> Answer {

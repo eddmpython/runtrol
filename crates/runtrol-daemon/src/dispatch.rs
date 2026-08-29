@@ -1400,6 +1400,9 @@ pub(crate) async fn answer_prepared(
                 claims: composed
                     .native_claims
                     .snapshot_except(Some(&successor_digest)),
+                // The rows this generation recorded since the store left. The successor appends them; a
+                // draining generation with no store of its own has nowhere else to make them durable.
+                audit: composed.audit_relay.take(),
             })
         }
 
@@ -3146,6 +3149,45 @@ mod tests {
         match answer(&mut fresh, &composed, &mut idle, Request::Drain).await {
             Reply::Draining => {}
             other => panic!("expected the drain, got {}", shape(&other)),
+        }
+        clean(composed, &path);
+    }
+
+    #[tokio::test]
+    async fn a_draining_generation_hands_the_audit_rows_it_kept_to_the_successor_poll() {
+        let (composed, path) = composed_for("handoff-audit");
+        let mut sessions = SessionManager::new();
+        // Handover as the owner loop does it: freeze the grant ceiling, release the store, drain.
+        composed.generation_authority.freeze(&composed.store);
+        assert!(composed.store.release(), "the store is handed over once");
+        composed
+            .draining
+            .store(true, std::sync::atomic::Ordering::Release);
+        // A request audited after the handover has only the relay to go to, and is not refused.
+        crate::runtime_audit::structural(&composed, "runtime/unknownMethod", "methodNotFound")
+            .expect("kept for the successor rather than refused");
+
+        let poll = || Request::GenerationHandoff {
+            successor_digest: "successor".into(),
+            authorities: Vec::new(),
+            claims: Vec::new(),
+        };
+        let mut conversation = Conversation::at_the_machine();
+        greet(&mut conversation, &composed, &mut sessions).await;
+        match answer(&mut conversation, &composed, &mut sessions, poll()).await {
+            Reply::One(Response::GenerationHandoff { audit, .. }) => {
+                assert_eq!(audit.len(), 1, "the one row recorded after handover");
+                let kept = audit.first().expect("the one row");
+                assert_eq!(&*kept.method, "runtime/unknownMethod");
+                assert_eq!(&*kept.reason, "methodNotFound");
+            }
+            other => panic!("expected the handoff answer, got {}", shape(&other)),
+        }
+        match answer(&mut conversation, &composed, &mut sessions, poll()).await {
+            Reply::One(Response::GenerationHandoff { audit, .. }) => {
+                assert!(audit.is_empty(), "a row is handed over once");
+            }
+            other => panic!("expected the handoff answer, got {}", shape(&other)),
         }
         clean(composed, &path);
     }

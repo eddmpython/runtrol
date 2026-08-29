@@ -294,14 +294,23 @@ pub(crate) async fn relay_generation_state(composed: Arc<Composed>, own_digest: 
                 if let Ok(Some(Response::GenerationHandoff {
                     capabilities,
                     claims,
+                    audit,
                 })) = response
-                    && capabilities.public_terminal
-                    && capabilities.authority_relay
-                    && capabilities.native_live_claims
                 {
-                    composed.native_claims.replace_remote(&peer.digest, claims);
-                    compatible.insert(peer.digest.clone());
-                    misses.remove(&peer.digest);
+                    // The peer's authorization rows since its last answer. This store is the durable one now,
+                    // and a row it cannot take is the store failing, which this generation's own next audit
+                    // row refuses on its own; the peer's grants must not be stranded over it.
+                    drop(crate::audit_relay::persist(&composed.store, audit));
+                    if capabilities.public_terminal
+                        && capabilities.authority_relay
+                        && capabilities.native_live_claims
+                    {
+                        composed.native_claims.replace_remote(&peer.digest, claims);
+                        compatible.insert(peer.digest.clone());
+                        misses.remove(&peer.digest);
+                    } else {
+                        *misses.entry(peer.digest.clone()).or_insert(0) += 1;
+                    }
                 } else {
                     *misses.entry(peer.digest.clone()).or_insert(0) += 1;
                 }
