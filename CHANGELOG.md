@@ -30,6 +30,13 @@ and refactoring that no user can observe do not belong here.
   A model window's name is shown whole instead of cut to "GPT…Spark".
 - The list's scrollbar sits on the panel's edge instead of 8px inside it.
 
+### Fixed
+
+- The Runtime no longer dies when a coding CLI restores a saved cursor after its pane was made smaller. It
+  did, twice in one afternoon, and every window then reported "the daemon connection closed" and "Runtime
+  reconnect deadline expired" at once. The screen emulator (vt100) is updated to the release that fixed it,
+  and a test pins the sequence.
+
 ## [0.1.36] - 2026-08-29
 
 ### Fixed

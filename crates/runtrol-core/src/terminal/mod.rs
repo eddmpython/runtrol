@@ -369,6 +369,7 @@ impl Terminal {
             .lock()
             .await
             .screen
+            .screen_mut()
             .set_size(size.rows, size.cols);
         self.shared
             .geometry
@@ -525,6 +526,21 @@ fn read_terminal(mut reader: Box<dyn Read + Send>, chunks: &mpsc::Sender<Bytes>)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The screen survives a saved cursor being restored after the pane shrank.
+    ///
+    /// Measured 2026-08-29 on the operator's machine: the daemon died twice in one afternoon at
+    /// `vt100 0.15.2 screen.rs:977`, `Option::unwrap()` on `None`. A CLI saves its cursor (DECSC), the editor
+    /// shrinks the pane, the CLI restores it (DECRC) past the new edge and prints. Every window then lost its
+    /// connection at once. vt100 0.16.2 fixed it; this pins that a downgrade turns red here, not in a crash log.
+    #[test]
+    fn a_cursor_restored_past_a_shrunken_screen_does_not_panic() {
+        let mut screen = vt100::Parser::new(24, 80, 0);
+        screen.process(b"\x1b[20;70H\x1b7");
+        screen.screen_mut().set_size(10, 40);
+        screen.process("\x1b8abc \u{AC00}\u{B098}".as_bytes());
+        assert_eq!(screen.screen().size(), (10, 40));
+    }
 
     /// The platform shell on a hosted terminal: its echo reaches a viewer that attached before it ran, a
     /// viewer that attaches after sees it on the snapshot, and the exit is reported to both.
