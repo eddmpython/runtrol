@@ -10,6 +10,8 @@ and refactoring that no user can observe do not belong here.
 
 ## [Unreleased]
 
+## [0.1.38] - 2026-08-30
+
 ### Fixed
 
 - The sidebar's refresh no longer stutters while the Runtime restamps the executable search path. Each list
