@@ -77,6 +77,27 @@ struct Record {
     /// `interactive` for the CLI's own terminal interface; other values are piped or SDK children.
     #[serde(default)]
     kind: Option<String>,
+    /// How the process was launched, in the CLI's own words: `cli` is a real terminal it owns; `claude-vscode`,
+    /// `vscode`, `sdk`, `print` and `mcp` are piped children of another program with no console of their own.
+    /// A record from a CLI too old to write this is `None`, and the launch kind falls back to `kind`.
+    #[serde(default)]
+    entrypoint: Option<String>,
+}
+
+/// Whether a roster record names a process with a console another window can join and type into.
+///
+/// Only the CLI's own terminal launch (`entrypoint` = `cli`) owns a real console. A `claude-vscode`, `vscode`,
+/// `sdk`, `print` or `mcp` process is a piped child of another program: it reports `kind` = `interactive` from
+/// its own point of view, but has no console, so mirroring it attaches a helper to nothing and the mirror dies
+/// the instant it is made (operator, 2026-08-30: the editor's Claude panel session flickered in and out of the
+/// sidebar). The positive test on `cli` fails safe: a launch kind this build has not seen is treated as
+/// non-joinable and shown as running elsewhere, never mirrored. A record from a CLI too old to write an
+/// entrypoint falls back to the older `kind` signal so its terminal sessions still mirror.
+fn has_a_console_to_join(entrypoint: Option<&str>, kind: Option<&str>) -> bool {
+    match entrypoint {
+        Some(launch) => launch == "cli",
+        None => kind == Some("interactive"),
+    }
 }
 
 /// The CLI's roster of its own running processes.
@@ -142,9 +163,10 @@ impl ClaudeRoster {
                 pid: entry.pid,
                 native,
                 cwd: entry.cwd.clone(),
-                // The CLI names its own terminal interface `interactive`; a `--print` child of another
-                // program, or an SDK session, has no screen to join.
-                interactive: entry.kind.as_deref() == Some("interactive"),
+                interactive: has_a_console_to_join(
+                    entry.entrypoint.as_deref(),
+                    entry.kind.as_deref(),
+                ),
             });
         }
         Ok(NativeProcessActivity {
@@ -251,14 +273,18 @@ mod tests {
     }
 
     fn record(pid: u32, session: &str, status: &str) -> String {
+        record_with_entrypoint(pid, session, status, "cli")
+    }
+
+    fn record_with_entrypoint(pid: u32, session: &str, status: &str, entrypoint: &str) -> String {
         format!(
-            "{{\"pid\":{pid},\"sessionId\":\"{session}\",\"cwd\":\"/work\",\"status\":\"{status}\",\"updatedAt\":1}}"
+            "{{\"pid\":{pid},\"sessionId\":\"{session}\",\"cwd\":\"/work\",\"status\":\"{status}\",\"kind\":\"interactive\",\"entrypoint\":\"{entrypoint}\",\"updatedAt\":1}}"
         )
     }
 
     fn record_with_start(pid: u32, session: &str, status: &str, start: &str) -> String {
         format!(
-            "{{\"pid\":{pid},\"procStart\":\"{start}\",\"sessionId\":\"{session}\",\"cwd\":\"/work\",\"status\":\"{status}\",\"updatedAt\":1}}"
+            "{{\"pid\":{pid},\"procStart\":\"{start}\",\"sessionId\":\"{session}\",\"cwd\":\"/work\",\"status\":\"{status}\",\"kind\":\"interactive\",\"entrypoint\":\"cli\",\"updatedAt\":1}}"
         )
     }
 
@@ -328,6 +354,50 @@ mod tests {
         );
         assert_eq!(active, vec![busy.to_owned()]);
         assert_eq!(activity.processes.len(), 3);
+    }
+
+    #[test]
+    fn an_editor_panel_session_is_live_but_has_no_console_to_join() {
+        let mine = std::process::id();
+        let terminal = "bbbbbbbb-0000-4000-8000-000000000001";
+        let panel = "bbbbbbbb-0000-4000-8000-000000000002";
+        let (_kept, roster) = roster(&[
+            (
+                "t.json",
+                record_with_entrypoint(mine, terminal, "idle", "cli"),
+            ),
+            (
+                "p.json",
+                record_with_entrypoint(mine, panel, "idle", "claude-vscode"),
+            ),
+        ]);
+
+        let activity = roster.activity(claude()).expect("the roster is readable");
+        // Both processes own a live conversation: the panel session is real and belongs in the sidebar.
+        let live: Vec<String> = activity.live.iter().map(ToString::to_string).collect();
+        assert_eq!(live, vec![terminal.to_owned(), panel.to_owned()]);
+        // Only the terminal launch can be joined and mirrored; the piped panel child cannot.
+        let joinable: Vec<&str> = activity
+            .processes
+            .iter()
+            .filter(|process| process.interactive)
+            .map(|process| process.native.as_str())
+            .collect();
+        assert_eq!(joinable, vec![terminal]);
+    }
+
+    #[test]
+    fn a_terminal_session_from_a_cli_too_old_to_write_an_entrypoint_still_mirrors() {
+        let mine = std::process::id();
+        let session = "cccccccc-0000-4000-8000-000000000021";
+        // No kind and no entrypoint: the older builder wrote neither. The kind fallback keeps it joinable.
+        let legacy = format!(
+            "{{\"pid\":{mine},\"sessionId\":\"{session}\",\"cwd\":\"/work\",\"status\":\"idle\",\"kind\":\"interactive\",\"updatedAt\":1}}"
+        );
+        let (_kept, roster) = roster(&[("legacy.json", legacy)]);
+        let activity = roster.activity(claude()).expect("the roster is readable");
+        assert_eq!(activity.processes.len(), 1);
+        assert!(activity.processes.iter().all(|process| process.interactive));
     }
 
     #[test]
