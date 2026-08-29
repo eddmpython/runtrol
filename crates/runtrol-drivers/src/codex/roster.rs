@@ -460,7 +460,9 @@ fn last_index_of(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(windows)]
     use std::fs::OpenOptions;
+    #[cfg(windows)]
     use std::io::Write as _;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -481,6 +483,7 @@ mod tests {
     }
 
     const OPEN_THREAD: &str = "01a03afd-5184-7512-8b48-b77dd957d18a";
+    #[cfg(windows)]
     const DONE_THREAD: &str = "01a0471d-786c-7561-a8d5-db5ddb837c0c";
 
     fn opened(id: &str) -> String {

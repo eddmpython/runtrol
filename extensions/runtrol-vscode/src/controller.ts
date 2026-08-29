@@ -326,8 +326,13 @@ export class Controller implements vscode.Disposable {
   }
 
   /// Ask the Core where every declared service stands against its package registry.
-  async inspectProviderUpdates(): Promise<readonly ProviderUpdateLine[]> {
-    const { response } = await this.client.once({ ask: "providerUpdates" });
+  ///
+  /// The Core asks the registry over the network for each service (up to thirty seconds each), and a command
+  /// connection is serial: on the shared one, every other ask of this window waited behind it, which is how
+  /// the refresh p95 went from tens of milliseconds to hundreds on CI (2026-08-29). The sidebar passes a
+  /// connection of its own.
+  async inspectProviderUpdates(channel: CoreClient = this.client): Promise<readonly ProviderUpdateLine[]> {
+    const { response } = await channel.once({ ask: "providerUpdates" });
     if (response.say === "failed") {
       throw new Error(response.with.message);
     }
@@ -1011,8 +1016,11 @@ export class Controller implements vscode.Disposable {
   ///
   /// The private admin answer rather than the public inventory, because the public inventory is validated
   /// against a closed schema by every shipped window and a new field there breaks them (2026-08-29).
-  async providerHelpLine(providerId: string): Promise<{ signOut: string | null } | null> {
-    const { response } = await this.client.once({ ask: "providerHelp", with: { provider_id: providerId } });
+  async providerHelpLine(
+    providerId: string,
+    channel: CoreClient = this.client,
+  ): Promise<{ signOut: string | null } | null> {
+    const { response } = await channel.once({ ask: "providerHelp", with: { provider_id: providerId } });
     if (response.say !== "providerHelp") return null;
     return { signOut: response.with.sign_out ?? null };
   }

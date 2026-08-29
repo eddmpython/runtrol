@@ -233,13 +233,14 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
   // fresh activation, or a reconnect after an update or restart). No clock: the sidebar puts the installed
   // version beside the service and an Update button when the Core confirmed a rollback-safe release.
   let releasesAsked = false;
-  const releases = new ProviderUpdateWatch(() => controller.inspectProviderUpdates());
+  // A command connection is serial, and the shared one carries every ask that a person is waiting on (the
+  // list, closing, answering). The slow asks the sidebar makes on its own (the release inspection's registry
+  // calls, a provider install, the help lines) run on a connection of their own so nothing waits behind them.
+  const sideChannel = new CoreClient(locator);
+  const releases = new ProviderUpdateWatch(() => controller.inspectProviderUpdates(sideChannel));
   // Each service's private help line (its sign-out command), asked once per set of usable services.
-  const help = new ProviderHelpCache((providerId) => controller.providerHelpLine(providerId));
-  // An install takes minutes and a command connection is serial: the Update button runs on a connection of
-  // its own so nothing else this window asks the Core waits behind it.
-  const updateChannel = new CoreClient(locator);
-  context.subscriptions.push(releases, help, updateChannel);
+  const help = new ProviderHelpCache((providerId) => controller.providerHelpLine(providerId, sideChannel));
+  context.subscriptions.push(releases, help, sideChannel);
   const sidebar = new SidebarView(context, state, projectStore, agentTools, changes, releases, help, {
     signIn: (providerId) => afterReady(async () => {
       await controller.signInProvider(providerNamed(providerId));
@@ -253,7 +254,7 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     update: (providerId) => afterReady(async () => {
       const line = releases.get(providerId);
       if (!line) throw new Error(`${providerId} has no update inspection to act on`);
-      await controller.updateProvider(line, providerNamed(providerId).displayName, updateChannel);
+      await controller.updateProvider(line, providerNamed(providerId).displayName, sideChannel);
       await releases.check(true);
     }),
   }, (error) => void vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error)));

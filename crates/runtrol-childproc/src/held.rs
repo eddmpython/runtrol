@@ -56,6 +56,10 @@ mod platform {
     use std::os::fd::AsRawFd as _;
     use std::path::Path;
 
+    #[expect(
+        unsafe_code,
+        reason = "an advisory lock test has no safe wrapper in std; flock is the call itself"
+    )]
     pub(super) fn write_locked(path: &Path) -> bool {
         let Ok(file) = OpenOptions::new().read(true).open(path) else {
             return false;

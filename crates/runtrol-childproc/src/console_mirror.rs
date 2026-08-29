@@ -807,42 +807,75 @@ mod platform {
         }
     }
 
+    /// The helper's own entry point. Not a door on this platform; it says so.
+    ///
+    /// # Errors
+    ///
+    /// Always [`SpawnError::Pty`]: mirroring a foreign console is a Windows door.
     pub fn run_mirror(_pid: u32) -> Result<i32, SpawnError> {
         Err(unsupported("attaching to the session's console"))
     }
 
+    /// The same shape the Windows mirror has, so callers compile everywhere; never constructed here.
     #[derive(Debug)]
     pub struct MirrorChild {
         target: u32,
     }
 
     impl MirrorChild {
-        pub fn spawn(_helper: &std::path::Path, target: u32) -> Result<Self, SpawnError> {
-            drop(target);
+        /// Start a mirror of `target`. Refused on this platform.
+        ///
+        /// # Errors
+        ///
+        /// Always [`SpawnError::Pty`].
+        pub fn spawn(_helper: &std::path::Path, _target: u32) -> Result<Self, SpawnError> {
             Err(unsupported("starting the console mirror helper"))
         }
 
-        pub fn pid(&self) -> u32 {
+        /// The mirrored process.
+        #[must_use]
+        pub const fn pid(&self) -> u32 {
             self.target
         }
 
+        /// The mirror's screen bytes. Refused on this platform.
+        ///
+        /// # Errors
+        ///
+        /// Always [`SpawnError::Pty`].
         pub fn reader(&self) -> Result<Box<dyn Read + Send>, SpawnError> {
             Err(unsupported("reading the console mirror"))
         }
 
+        /// The mirror's input. Refused on this platform.
+        ///
+        /// # Errors
+        ///
+        /// Always [`SpawnError::Pty`].
         pub fn writer(&self) -> Result<Box<dyn Write + Send>, SpawnError> {
             Err(unsupported("writing to the console mirror"))
         }
 
+        /// Whether the mirror ended. Refused on this platform.
+        ///
+        /// # Errors
+        ///
+        /// Always [`SpawnError::Pty`].
         pub fn try_wait(&self) -> Result<Option<i32>, SpawnError> {
             Err(unsupported("asking whether the console mirror still runs"))
         }
 
+        /// End the mirrored process. Refused on this platform.
+        ///
+        /// # Errors
+        ///
+        /// Always [`SpawnError::Pty`].
         pub fn kill(&self) -> Result<(), SpawnError> {
             Err(unsupported("stopping the mirrored process"))
         }
 
-        pub fn finish(&self) {}
+        /// Release the mirror. Nothing to release here.
+        pub const fn finish(&self) {}
     }
 }
 
