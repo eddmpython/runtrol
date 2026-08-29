@@ -224,7 +224,11 @@ fn turn_state(bytes: &[u8]) -> Option<bool> {
     let tool = rfind(bytes, TURN_TOOL);
     let closed = rfind(bytes, TURN_END).max(rfind(bytes, TURN_STOP));
     match (tool, closed) {
-        (None, None) => None,
+        // A conversation's very first turn has no marker at all yet: the person's prompt is in the file and
+        // the first structural marker only arrives with the first tool pause or the turn's end. A user record
+        // with no marker anywhere before it is that open first turn (fresh-gated like every open answer);
+        // with no user record either, the file holds only setup records and nothing is being answered.
+        (None, None) => rfind(bytes, USER_RECORD).is_some().then_some(true),
         (Some(_), None) => Some(true),
         (None, Some(close)) => Some(user_after(bytes, close)),
         (Some(open), Some(close)) => {
@@ -453,5 +457,36 @@ mod tests {
         scratch.transcript("slug", session, &body);
         let activity = TranscriptActivity::rooted(scratch.root.join(PROJECTS_DIRECTORY), RECENT);
         assert!(activity.answering(session));
+    }
+
+    #[test]
+    fn the_very_first_turn_is_answering_before_any_marker_exists() {
+        // A fresh conversation: setup records and the person's prompt, no stop_reason anywhere yet. The model
+        // is generating its first text reply, which writes its only marker at the end (verifier, 2026-08-30).
+        let scratch = Scratch::new();
+        let session = "aaaaaaaa-0000-4000-8000-000000000008";
+        let body = format!(
+            "{{\"type\":\"agent-setting\"}}
+{}",
+            user()
+        );
+        scratch.transcript("slug", session, &body);
+        let activity = TranscriptActivity::rooted(scratch.root.join(PROJECTS_DIRECTORY), RECENT);
+        assert!(activity.answering(session));
+    }
+
+    #[test]
+    fn a_transcript_of_setup_records_with_no_prompt_is_not_answering() {
+        let scratch = Scratch::new();
+        let session = "aaaaaaaa-0000-4000-8000-000000000009";
+        scratch.transcript(
+            "slug",
+            session,
+            "{\"type\":\"agent-setting\"}
+{\"type\":\"mode\"}
+",
+        );
+        let activity = TranscriptActivity::rooted(scratch.root.join(PROJECTS_DIRECTORY), RECENT);
+        assert!(!activity.answering(session));
     }
 }
