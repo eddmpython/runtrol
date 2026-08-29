@@ -4214,7 +4214,11 @@ const fn method_needs_provider_refresh(method: RuntimeMethod) -> bool {
             | RuntimeMethod::ProvidersGetCapabilities
             | RuntimeMethod::ProvidersListModels
             | RuntimeMethod::ProvidersListNativeSessions
-            | RuntimeMethod::ProvidersNativeActivity
+            // Not the activity observation. It arrives four times a second per service from every window,
+            // and each one past the recheck floor rebuilt the whole inventory (a walk of PATH and PATHEXT
+            // per service) in the background, every second, for as long as a window was open. On Windows
+            // that walk is what made every other answer slow (refresh p95 tens to hundreds of ms on CI,
+            // 2026-08-29). A roster read discovers no executable; the requests that can are listed here.
             | RuntimeMethod::SessionsStart
             | RuntimeMethod::SessionsAdoptNative
             | RuntimeMethod::SessionsResume
@@ -5181,6 +5185,7 @@ listen = "stdio"
         for method in [
             RuntimeMethod::Initialize,
             RuntimeMethod::IntegrationsWatchEnrollment,
+            RuntimeMethod::ProvidersNativeActivity,
             RuntimeMethod::SessionsList,
             RuntimeMethod::SessionsWatchIndex,
             RuntimeMethod::SessionsWatchEvents,

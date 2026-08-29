@@ -10,6 +10,15 @@ and refactoring that no user can observe do not belong here.
 
 ## [Unreleased]
 
+### Fixed
+
+- The Runtime no longer rebuilds its provider inventory every second while a window is open. The sidebar's
+  activity observation (four times a second per service) counted as a request that must recheck the executable
+  search path, so the Runtime walked PATH for every service once a second for as long as a window lived; on
+  Windows that walk slowed every other answer, and the sidebar's refresh took several times longer than its
+  budget. Observing activity now rechecks nothing; installing a service is still noticed by the requests that
+  can see it.
+
 ## [0.1.37] - 2026-08-29
 
 ### Added
