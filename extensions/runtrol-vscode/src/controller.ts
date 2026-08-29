@@ -342,6 +342,19 @@ export class Controller implements vscode.Disposable {
     return response.with;
   }
 
+  /// What the Core's last inspection said, without starting one: no package manager, no network, no lane.
+  /// Empty before the Core's first inspection (a few minutes after it starts).
+  async providerUpdateStatus(channel: CoreClient = this.client): Promise<readonly ProviderUpdateLine[]> {
+    const { response } = await channel.once({ ask: "providerUpdateStatus" });
+    if (response.say === "failed") {
+      throw new Error(response.with.message);
+    }
+    if (response.say !== "providerUpdates") {
+      throw new Error(`Core answered provider update status with ${response.say}`);
+    }
+    return response.with;
+  }
+
   async checkProviderUpdates(): Promise<void> {
     const lines = await this.inspectProviderUpdates();
     const choices: Array<vscode.QuickPickItem & { update: ProviderUpdateLine }> = lines.map((line) => {

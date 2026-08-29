@@ -659,10 +659,10 @@ pub(crate) async fn prepare_provider_updates(
     {
         return Prepared::None;
     }
+    let lines = crate::provider_update::inspect_all(composed, discovering).await;
+    *composed.provider_update_status.lock().await = lines.clone();
     Prepared::ProviderUpdates {
-        response: Response::ProviderUpdates(
-            crate::provider_update::inspect_all(composed, discovering).await,
-        ),
+        response: Response::ProviderUpdates(lines),
     }
 }
 
@@ -1095,6 +1095,10 @@ pub(crate) async fn answer_prepared(
                 "provider update inspection was not completed for this request",
             )),
         },
+
+        Request::ProviderUpdateStatus => Reply::One(Response::ProviderUpdates(
+            composed.provider_update_status.lock().await.clone(),
+        )),
 
         Request::WorkspaceIsolatePrepare {
             request_id,

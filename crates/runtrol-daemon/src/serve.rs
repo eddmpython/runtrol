@@ -612,6 +612,7 @@ async fn automatic_provider_updates(
     let mut session_pins = BTreeMap::<ProviderId, Box<str>>::new();
     loop {
         let statuses = crate::provider_update::inspect_all(&composed, &discovering).await;
+        *composed.provider_update_status.lock().await = statuses.clone();
         for status in statuses {
             let Ok(provider) = ProviderId::parse(&status.provider) else {
                 continue;

@@ -84,9 +84,6 @@ const SESSION_SWITCH_ROUNDS = 5;
 /// Whether the performance-only measurement surface is on, asked once. One name for one flag.
 const MEASURED_HOST = process.env.RUNTROL_VSCODE_PERFORMANCE === "1";
 
-/// How long after reaching a Core the release inspection waits, so discovery goes first.
-const RELEASE_CHECK_AFTER_REACH_MS = 15_000;
-
 export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi {
   // Declared below; the private locator only asks it after activation has built it.
   let runtime: StudioRuntimeClient;
@@ -237,7 +234,10 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
   // list, closing, answering). The slow asks the sidebar makes on its own (the release inspection's registry
   // calls, a provider install, the help lines) run on a connection of their own so nothing waits behind them.
   const sideChannel = new CoreClient(locator);
-  const releases = new ProviderUpdateWatch(() => controller.inspectProviderUpdates(sideChannel));
+  // The sidebar never starts an inspection of its own: it reads what the Core's last one said. An
+  // inspection asks the registry over the network for every service and holds their discovery lanes
+  // meanwhile, which stalled the Core's other answers on slow machines (measured 2026-08-29 on CI).
+  const releases = new ProviderUpdateWatch(() => controller.providerUpdateStatus(sideChannel));
   // Each service's private help line (its sign-out command), asked once per set of usable services.
   const help = new ProviderHelpCache((providerId) => controller.providerHelpLine(providerId, sideChannel));
   context.subscriptions.push(releases, help, sideChannel);
@@ -255,6 +255,8 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
       const line = releases.get(providerId);
       if (!line) throw new Error(`${providerId} has no update inspection to act on`);
       await controller.updateProvider(line, providerNamed(providerId).displayName, sideChannel);
+      // The person asked for this one, so a fresh inspection is theirs to wait for; it stores its answer.
+      await controller.inspectProviderUpdates(sideChannel);
       await releases.check(true);
     }),
   }, (error) => void vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error)));
@@ -265,13 +267,11 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
       return;
     }
     void help.refresh(state.providers.filter(isUsable).map((provider) => provider.providerId));
-    // Each time the Core is reached anew (activation, or a reconnect after an update), ask about releases
-    // once, a moment later: the inspection holds each service's discovery lane while it asks the package
-    // registry, and the conversation listing that reach starts must not queue behind a network call.
-    // Between reaches nothing polls; the manual check command and a finished update ask on their own.
+    // Each time the Core is reached anew (activation, or a reconnect after an update), read what its
+    // last inspection said. A cheap read, so nothing waits behind it; between reaches nothing polls.
     if (!releasesAsked) {
       releasesAsked = true;
-      setTimeout(() => void releases.check(), RELEASE_CHECK_AFTER_REACH_MS);
+      void releases.check();
     }
   }));
 

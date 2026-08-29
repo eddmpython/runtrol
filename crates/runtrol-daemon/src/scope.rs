@@ -81,6 +81,7 @@ pub fn needed(request: &Request) -> Needed {
         // Model discovery and consult status both read configuration and touch nothing.
         Request::Models { .. }
         | Request::ProviderUpdates
+        | Request::ProviderUpdateStatus
         | Request::RemoteConnection
         | Request::Consult => Needed::Scope(DeviceScope::ConfigRead),
         Request::ProviderUpdate { .. } => Needed::AtTheMachine(LocalScope::ProviderUpdate),
@@ -320,6 +321,7 @@ mod tests {
                 provider: "example".into(),
             },
             Request::ProviderUpdates,
+            Request::ProviderUpdateStatus,
             Request::ProviderUpdate {
                 provider: "example".into(),
             },

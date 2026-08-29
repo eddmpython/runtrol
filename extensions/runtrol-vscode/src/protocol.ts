@@ -245,6 +245,7 @@ export type DeviceLine = {
 export type Request =
   | { ask: "hello"; with: { wire: number } }
   | { ask: "providerUpdates" }
+  | { ask: "providerUpdateStatus" }
   | { ask: "providerUpdate"; with: { provider: string } }
   | { ask: "remoteConnection" }
   | { ask: "remoteConfigure"; with: { relay_origin: string | null } }

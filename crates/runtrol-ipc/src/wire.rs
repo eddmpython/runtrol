@@ -71,6 +71,13 @@ pub enum Request {
     /// This starts package-manager queries, so it is explicit rather than part of the greeting or session list.
     ProviderUpdates,
 
+    /// What the last inspection said, without starting one.
+    ///
+    /// The daemon inspects on its own clock and after every explicit inspection; this reads that answer. It
+    /// touches no package manager and no network, so a window may ask it whenever it reaches the daemon.
+    /// Empty before the first inspection.
+    ProviderUpdateStatus,
+
     /// Update one installed provider to the greatest plain release in its confirmed registry.
     ProviderUpdate {
         /// Provider whose existing package may change.

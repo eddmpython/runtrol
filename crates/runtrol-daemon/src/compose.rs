@@ -333,6 +333,13 @@ pub struct Composed {
     /// milliseconds apart. The cache contains only public provider descriptors and filesystem identity facts; a
     /// changed search directory, probe cache, or previously resolved executable invalidates it.
     pub(crate) provider_inventory: Mutex<crate::runtime_inventory::ProviderInventoryCache>,
+    /// What the last provider update inspection said, kept so a window can read it without starting one.
+    ///
+    /// An inspection asks the package registry over the network for every provider and holds each provider's
+    /// discovery lane while it does; a window asking for that on every reach stalled the daemon's other
+    /// answers on slow machines (measured 2026-08-29 on CI). The daemon inspects on its own clock and after
+    /// every explicit inspection; this is that answer, and reading it costs nothing.
+    pub(crate) provider_update_status: Mutex<Vec<runtrol_ipc::wire::ProviderUpdateLine>>,
     /// The latest account report per provider, from each service's own status surface.
     ///
     /// Written by the account probe supervisor, read by every provider and usage projection. The
@@ -458,6 +465,7 @@ impl Composed {
             provider_inventory: Mutex::new(
                 crate::runtime_inventory::ProviderInventoryCache::default(),
             ),
+            provider_update_status: Mutex::new(Vec::new()),
             model_catalogues: tokio::sync::Mutex::new(std::collections::BTreeMap::new()),
             pc_identity: machine_identity.noise,
             relay_seed: machine_identity.relay,
@@ -519,6 +527,7 @@ impl Composed {
             provider_inventory: Mutex::new(
                 crate::runtime_inventory::ProviderInventoryCache::default(),
             ),
+            provider_update_status: Mutex::new(Vec::new()),
             model_catalogues: tokio::sync::Mutex::new(std::collections::BTreeMap::new()),
             pc_identity: machine_identity.noise,
             relay_seed: machine_identity.relay,
