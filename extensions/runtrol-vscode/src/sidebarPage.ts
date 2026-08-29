@@ -440,7 +440,14 @@ const SCRIPT = `
     if (!row) return null;
     return { kind: row.dataset.kind, key: row.dataset.key };
   }
+  // The service choice is a question, and a question a person walks away from is withdrawn: a click anywhere
+  // else, Escape, or focus leaving the panel closes it (operator, 2026-08-29: it stayed open until answered).
+  function dismissChoice() {
+    if (document.querySelector(".choice")) post({ type: "dismissChoice" });
+  }
+  window.addEventListener("blur", dismissChoice);
   document.addEventListener("click", function (event) {
+    if (!event.target.closest(".choice")) dismissChoice();
     var button = event.target.closest("[data-command]");
     if (button) {
       event.stopPropagation();
@@ -468,6 +475,7 @@ const SCRIPT = `
     post({ type: "command", command: "runtrol.selectSession", target: targetOf(row) });
   });
   document.addEventListener("keydown", function (event) {
+    if (event.key === "Escape") { dismissChoice(); return; }
     var row = rowOf(document.activeElement);
     if (!row) return;
     if (event.key === "Enter" || event.key === " ") { event.preventDefault(); row.click(); return; }

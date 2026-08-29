@@ -214,6 +214,11 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
       this.render();
       return;
     }
+    if (type === "dismissChoice") {
+      // The person walked away from the service question: a click elsewhere, Escape, or focus leaving.
+      this.clearServiceChoice();
+      return;
+    }
     if (type === "reorder") {
       const { keys } = message as { keys?: unknown };
       if (!Array.isArray(keys) || !keys.every((key) => typeof key === "string")) return;

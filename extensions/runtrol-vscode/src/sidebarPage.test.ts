@@ -127,6 +127,20 @@ test("row actions are buttons that name their command, and only the actions a ro
   }
 });
 
+test("the service choice withdraws on a click elsewhere, on Escape, and when focus leaves the panel", () => {
+  const html = sidebarHtml(model({
+    projects: [],
+    loose: [],
+    serviceChoice: { workspace: "C:\\work\\app", services: [{ providerId: "claude", displayName: "Claude Code", icon: "claude" }] },
+  }), assets);
+  assert.ok(html.includes('class="choice"'), "the choice is on the page");
+  const script = html.slice(html.indexOf("<script"));
+  assert.ok(script.includes('post({ type: "dismissChoice" })'), "the page tells the host to withdraw the choice");
+  assert.ok(script.includes('if (!event.target.closest(".choice")) dismissChoice();'), "a click outside withdraws it");
+  assert.ok(script.includes('if (event.key === "Escape") { dismissChoice(); return; }'), "Escape withdraws it");
+  assert.ok(script.includes('window.addEventListener("blur", dismissChoice);'), "focus leaving withdraws it");
+});
+
 test("a conversation alive where Runtrol cannot reach its process is not offered a Stop that would fail", () => {
   const html = sidebarHtml(model({
     projects: [project({ rows: [conversation({ live: true, canStop: false, canOpen: false, blocked: "running outside runtrol" })] })],

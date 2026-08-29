@@ -12,6 +12,8 @@ and refactoring that no user can observe do not belong here.
 
 ### Fixed
 
+- The service choice that opens from the panel's new-conversation button withdraws when you click anywhere
+  else, press Escape, or leave the panel. It used to stay open until answered.
 - A conversation tab in VS Code behaves like the terminal it is. Clicking inside it no longer brings back an
   earlier prompt, the wheel no longer walks through prompt history, and dragging selects text again. Runtrol
   had switched mouse reporting on toward every viewer and turned each click into arrow keys, which is what a
