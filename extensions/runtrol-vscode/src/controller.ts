@@ -1126,8 +1126,8 @@ export class Controller implements vscode.Disposable {
 
   async close(value?: ConversationItem | SessionLine): Promise<void> {
     const row = value instanceof ConversationItem ? value.conversation : null;
-    if (row && !row.session && row.hostedTerminal) {
-      await this.stopHosted(row, row.hostedTerminal);
+    if (row?.presence.kind === "hosted") {
+      await this.stopHosted(row, row.presence.terminal);
       return;
     }
     const session = this.sessionOf(value);

@@ -27,6 +27,50 @@ export type ConversationActivity =
   | "ready"
   | "saved";
 
+/// Where the conversation's process is right now.
+///
+/// This is the one fact that opening, stopping and deleting all turn on, and for a while it was five facts
+/// folded into one `live` flag that every surface read its own way: a process alive in an older Runtime
+/// generation read as "outside Runtrol", so its row would neither open nor stop, and a click had nowhere to go
+/// (measured 2026-08-29, eight conversations). Every row states its presence once, and `live`, `canOpen`,
+/// `canStop` and `blocked` are read off it in one place (`facts`) and nowhere else.
+export type Presence =
+  /// Runtrol hosts its terminal, in whichever generation opened it. Opens by attaching there; stops there.
+  | { readonly kind: "hosted"; readonly terminal: TerminalDescriptor }
+  /// Runtrol supervises a running structured session.
+  | { readonly kind: "supervised"; readonly session: SessionLine }
+  /// Runtrol started it a moment ago and the service has not described it yet.
+  | { readonly kind: "starting" }
+  /// A provider process is alive in a terminal Runtrol did not start: visible, and not reachable.
+  | { readonly kind: "external" }
+  /// No live process. The service stores it, and `openable` says whether the service can reopen it.
+  | { readonly kind: "stored"; readonly openable: boolean };
+
+/// What a presence lets a person do. The only place these four are decided.
+function facts(presence: Presence): {
+  readonly live: boolean;
+  readonly canOpen: boolean;
+  readonly canStop: boolean;
+  readonly blocked: string | null;
+} {
+  switch (presence.kind) {
+    case "hosted":
+    case "supervised":
+      return { live: true, canOpen: true, canStop: true, blocked: null };
+    case "starting":
+      return { live: true, canOpen: true, canStop: false, blocked: null };
+    case "external":
+      return { live: true, canOpen: false, canStop: false, blocked: RUNNING_ELSEWHERE };
+    case "stored":
+      return {
+        live: false,
+        canOpen: presence.openable,
+        canStop: false,
+        blocked: presence.openable ? null : "This coding service cannot reopen this conversation.",
+      };
+  }
+}
+
 /// One conversation, whichever half of the system currently holds it.
 ///
 /// Runtrol distinguishes a session it supervises from a chat the coding service owns on disk. That distinction is
@@ -69,8 +113,12 @@ export type Conversation = {
   readonly tool: string | null;
   /// Whether the provider said this conversation needs the operator to sign in.
   readonly signInNeeded: boolean;
-  /// Whether a provider process is currently supervising it.
+  /// Where its process is. `live`, `canOpen`, `canStop` and `blocked` are this, read out (`facts`).
+  readonly presence: Presence;
+  /// Whether a provider process is alive for it, wherever that process is.
   readonly live: boolean;
+  /// Whether Runtrol can end its process: it hosts the terminal or supervises the session.
+  readonly canStop: boolean;
   readonly open: boolean;
   /// Whether the operator pinned this conversation to keep it at the top of its list. A local ordering choice,
   /// remembered per machine; it never changes the conversation itself.
@@ -495,6 +543,14 @@ function supervised(
 ): Conversation {
   const homeWorkspace = isolatedWorkspaceHomes.get(workspaceIdentity(session.workspace)) ?? session.workspace;
   const projectless = isProjectless(homeWorkspace, projectlessRoot);
+  // A cold supervised session is stored, and Runtrol itself can resume it, so it is openable.
+  const presence: Presence = hosted
+    ? { kind: "hosted", terminal: hosted }
+    : observedExternal
+      ? { kind: "external" }
+      : session.hot
+        ? { kind: "supervised", session }
+        : { kind: "stored", openable: true };
   return {
     key,
     legacyKey,
@@ -512,15 +568,14 @@ function supervised(
     activity: streaming ? "working" : activityOf(session),
     tool: activity.tool,
     signInNeeded: activity.signInNeeded,
-    live: session.hot || hosted !== null || observedExternal,
+    presence,
+    ...facts(presence),
     open: session.sessionId === selectedSessionId,
     pinned,
     session,
     native,
     hostedTerminal: hosted,
     hostedKey: hosted ? terminalKey(hosted) : null,
-    canOpen: !observedExternal || hosted !== null,
-    blocked: observedExternal && hosted === null ? RUNNING_ELSEWHERE : null,
   };
 }
 
@@ -537,6 +592,11 @@ function providerOwned(
 ): Conversation {
   const resumable = chat.resume === "available" && Boolean(chat.adoptionToken);
   const projectless = isProjectless(chat.cwd, projectlessRoot);
+  const presence: Presence = hosted
+    ? { kind: "hosted", terminal: hosted }
+    : observedExternal
+      ? { kind: "external" }
+      : { kind: "stored", openable: resumable };
   return {
     key,
     // A conversation the service already named has always been keyed by that name.
@@ -553,21 +613,14 @@ function providerOwned(
     activity: working ? "working" : "saved",
     tool: null,
     signInNeeded: false,
-    live: hosted !== null || observedExternal,
+    presence,
+    ...facts(presence),
     open: false,
     pinned,
     session: null,
     native: chat,
     hostedTerminal: hosted,
     hostedKey: hosted ? terminalKey(hosted) : null,
-    canOpen: hosted !== null || (!observedExternal && resumable),
-    blocked: hosted !== null
-      ? null
-      : observedExternal
-        ? RUNNING_ELSEWHERE
-        : resumable
-          ? null
-          : "This coding service cannot reopen this conversation.",
   };
 }
 
@@ -594,10 +647,8 @@ function activityOf(session: SessionLine): ConversationActivity {
 /// The panel can see the service's own running processes, and a terminal it did not create has no attach
 /// channel a public operating system call can take over. So the row says the conversation is alive and refuses
 /// to open it, which is the truth rather than a tab that would fight the terminal already driving it.
-///
-/// This is exactly `live` without `canOpen`: every other reason a row cannot open leaves it not live.
 export function runningElsewhere(row: Conversation): boolean {
-  return row.live && !row.canOpen;
+  return row.presence.kind === "external";
 }
 
 /// Whether this conversation has stopped and cannot continue until the reader does something.
@@ -789,15 +840,14 @@ function startedRow(
     activity: "ready",
     tool: null,
     signInNeeded: false,
-    live: true,
+    presence: { kind: "starting" },
+    ...facts({ kind: "starting" }),
     open: true,
     pinned: false,
     session: null,
     native: null,
     hostedTerminal: null,
     hostedKey: null,
-    canOpen: true,
-    blocked: null,
   };
 }
 
@@ -827,15 +877,14 @@ function hostedRow(
     activity: "ready",
     tool: null,
     signInNeeded: false,
-    live: true,
+    presence: { kind: "hosted", terminal },
+    ...facts({ kind: "hosted", terminal }),
     open: false,
     pinned: false,
     session: null,
     native: chat,
     hostedTerminal: terminal,
     hostedKey: key,
-    canOpen: true,
-    blocked: null,
   };
 }
 

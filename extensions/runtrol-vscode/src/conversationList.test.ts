@@ -271,6 +271,64 @@ test("a terminal an earlier Runtime generation still owns opens there, even whil
   assert.equal(row ? runningElsewhere(row) : true, false);
 });
 
+test("what a row lets a person do follows from where its process is, and from nothing else", () => {
+  const hosted = {
+    terminalId: "terminal-1",
+    runtimeGeneration: "generation-1",
+    providerId: "codex",
+    workspace: BETA,
+    nativeSessionId: "n-hosted",
+    processState: "running",
+    openedAtMs: NOW,
+    terminalGeneration: 1,
+    geometry: { columns: 120, rows: 40 },
+    memoryBytes: null,
+  } as TerminalDescriptor;
+  const rows = conversations(
+    [session({ sessionId: "s-hot", hot: true, lifecycle: "hotIdle" })],
+    PROVIDERS,
+    [
+      nativeChat({ nativeSessionId: "n-hosted", title: "Hosted" }),
+      nativeChat({ nativeSessionId: "n-external", title: "External" }),
+      nativeChat({ nativeSessionId: "n-stored", title: "Stored" }),
+      nativeChat({ nativeSessionId: "n-cold", title: "Cold", resume: "unavailable" }),
+    ],
+    null,
+    null,
+    new Map(),
+    new Map(),
+    new Set(),
+    new Map(),
+    [],
+    new Set(),
+    new Set(),
+    new Set([nativeProcessKey("codex", "n-external")]),
+    [hosted],
+  );
+  const byTitle = new Map(rows.map((row) => [row.title, row]));
+  const expect = (title: string, kind: string, live: boolean, canOpen: boolean, canStop: boolean) => {
+    const row = byTitle.get(title);
+    assert.ok(row, title);
+    assert.equal(row.presence.kind, kind, `${title} presence`);
+    assert.deepEqual(
+      { live: row.live, canOpen: row.canOpen, canStop: row.canStop },
+      { live, canOpen, canStop },
+      `${title} facts`,
+    );
+    assert.equal(row.blocked !== null, !canOpen, `${title} is blocked exactly when it cannot open`);
+  };
+  expect("Hosted", "hosted", true, true, true);
+  expect("External", "external", true, false, false);
+  expect("Stored", "stored", false, true, false);
+  expect("Cold", "stored", false, false, false);
+  const supervised = rows.find((row) => row.session?.sessionId === "s-hot");
+  assert.equal(supervised?.presence.kind, "supervised");
+  assert.deepEqual(
+    { live: supervised?.live, canOpen: supervised?.canOpen, canStop: supervised?.canStop },
+    { live: true, canOpen: true, canStop: true },
+  );
+});
+
 test("a second live process of the same conversation is its own row under the conversation's title", () => {
   const process = (terminalId: string, runtimeGeneration: string, openedAtMs: number): TerminalDescriptor => ({
     terminalId,

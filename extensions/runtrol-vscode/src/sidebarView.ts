@@ -389,7 +389,7 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
       hue,
       activity: row.activity,
       live: row.live,
-      canStop: row.live && (row.session !== null || row.hostedTerminal !== null),
+      canStop: row.canStop,
       canOpen: row.canOpen,
       blocked: row.blocked,
       pinned: row.pinned,
