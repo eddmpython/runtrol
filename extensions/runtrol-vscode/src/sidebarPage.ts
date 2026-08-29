@@ -524,8 +524,13 @@ const SCRIPT = `
     if (next) next.focus();
   });
   var dragging = null;
+  // Elements survive a repaint now, so a listener bound once must not be bound again: a second drop handler
+  // would post the reorder twice.
+  var boundProjects = new WeakSet();
   function bindProjects() {
   document.querySelectorAll('.project[draggable="true"]').forEach(function (project) {
+    if (boundProjects.has(project)) return;
+    boundProjects.add(project);
     project.addEventListener("dragstart", function (event) {
       dragging = project;
       project.classList.add("dragging");

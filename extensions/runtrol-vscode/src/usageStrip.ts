@@ -333,11 +333,16 @@ export const USAGE_SCRIPT = `
   var hideTimer = null;
   function keepOpen() { if (hideTimer !== null) { clearTimeout(hideTimer); hideTimer = null; } }
   function scheduleSettle() { keepOpen(); hideTimer = setTimeout(function () { hideTimer = null; settle(); }, 150); }
+  // A repaint keeps the elements it can, so each one is bound once: bound twice, a chip's click would pin and
+  // unpin in the same press and the Update button would ask for two updates.
+  var bound = new WeakSet();
+  function once(node) { if (bound.has(node)) return false; bound.add(node); return true; }
   function bind() {
   chips = Array.prototype.slice.call(document.querySelectorAll(".chip"));
   panels = Array.prototype.slice.call(document.querySelectorAll(".panel"));
   if (pinned !== null && pinned >= chips.length) pinned = null;
   chips.forEach(function (chip, index) {
+    if (!once(chip)) return;
     chip.addEventListener("mouseenter", function () { keepOpen(); if (pinned === null) show(index, false); });
     chip.addEventListener("focus", function () { if (pinned === null) show(index, true); });
     chip.addEventListener("click", function () {
@@ -351,14 +356,16 @@ export const USAGE_SCRIPT = `
     });
   });
   var strip = document.querySelector(".chips");
-  if (strip) strip.addEventListener("mouseleave", scheduleSettle);
+  if (strip && once(strip)) strip.addEventListener("mouseleave", scheduleSettle);
   // The panel is part of the same hover region: entering it cancels the pending close, leaving it schedules
   // one, so a person can travel from a chip to its panel and press the button there.
   panels.forEach(function (panel) {
+    if (!once(panel)) return;
     panel.addEventListener("mouseenter", keepOpen);
     panel.addEventListener("mouseleave", scheduleSettle);
   });
   Array.prototype.slice.call(document.querySelectorAll(".action")).forEach(function (button) {
+    if (!once(button)) return;
     button.addEventListener("click", function () {
       vscode.postMessage({ type: "action", action: button.dataset.action, providerId: button.dataset.provider });
     });
