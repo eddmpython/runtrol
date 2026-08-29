@@ -34,6 +34,7 @@ const STOP_SETTLE_MS = 10_000;
 import type { Conversation } from "./conversationList";
 import { attentionCount, nativeProcessKey, nextNeedingYou, projects, runningElsewhere } from "./conversationList";
 import { conversationDeletion, deletionQuestion } from "./conversationDeletion";
+import { editorPanelFor } from "./editorPanels";
 import { archivalQuestion, conversationArchival } from "./conversationArchival";
 import { awaitsVerification, isUsable, unaskedUsable } from "./providerHealth";
 import type { HelpOffer, ServiceTrouble } from "./serviceHelp";
@@ -558,11 +559,25 @@ export class Controller implements vscode.Disposable {
   /// only thing Runtrol can actually do for them is start another conversation in the same folder.
   private async offerAnotherHere(row: Conversation): Promise<void> {
     const start = "Start a conversation here";
+    // A conversation living in the service's own editor panel has no terminal to join, but the panel itself
+    // is right here in this editor: the click can put the person in front of the real surface (operator,
+    // 2026-08-30: the editor's Claude panel session, resumed as a terminal, showed a frozen copy instead).
+    const panel = row.native
+      ? editorPanelFor(row.providerId, (extension) => vscode.extensions.getExtension(extension) !== undefined)
+      : null;
+    const revealLabel = `Open in ${row.serviceName}`;
     // The row already carries the sentence, so the message says what the tooltip says and cannot drift from it.
     const why = row.blocked ?? `${row.title} cannot be opened here.`;
-    // The button is offered only where it leads somewhere: a conversation with no folder has nowhere to start.
-    const offered = row.workspace ? [start] : [];
+    // Buttons are offered only where they lead somewhere: a conversation with no folder has nowhere to start.
+    const offered = [
+      ...(panel ? [revealLabel] : []),
+      ...(row.workspace ? [start] : []),
+    ];
     const said = await vscode.window.showInformationMessage(why, ...offered);
+    if (said === revealLabel && panel && row.native) {
+      await vscode.commands.executeCommand(panel.reveal, row.native.nativeSessionId);
+      return;
+    }
     if (said !== start || !row.workspace) return;
     await this.startSessionInWorkspace(row.workspace);
   }

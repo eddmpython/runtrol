@@ -12,6 +12,11 @@ and refactoring that no user can observe do not belong here.
 
 ### Fixed
 
+- Clicking a conversation that is open in the coding service's own editor panel now offers to reveal it there,
+  and the Runtime refuses to resume it as a terminal. Resuming forked the conversation into a second process
+  showing a frozen copy of that moment while the real session went on elsewhere; now one conversation stays
+  one process, and the click leads to the surface where it actually lives.
+
 - Your editor's Claude panel conversation now spins its sidebar icon while the model is answering, and stops
   the moment the turn ends. A panel session writes no run state into the process roster the way a terminal
   session does, so the sidebar had no way to know it was working; the turn is now read from the session's own
