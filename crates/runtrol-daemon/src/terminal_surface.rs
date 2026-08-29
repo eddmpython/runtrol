@@ -316,8 +316,8 @@ const DRAINING_IDLE_GRACE_MS: u64 = 15_000;
 /// A mirror is let go, never killed. Its process belongs to whoever started it (the operator's Claude Code
 /// window, another tool), and killing it ended the operator's own sessions with `0xC0000001` at every Runtime
 /// update, minutes after each new generation started (five times on 2026-08-29, two sessions at once each
-/// time). Dropping the mirror closes the helper's stdin, the helper exits, and the current generation observes
-/// the still-running process again and mirrors it afresh.
+/// time). Releasing the mirror ends only its console helper; the current generation observes the still-running
+/// process again and mirrors it afresh.
 pub(crate) async fn close_idle_while_draining(composed: &Arc<Composed>) {
     let now = WallMs::now().as_millis();
     let stale: Vec<(TerminalId, DrainAction)> = {
@@ -340,10 +340,12 @@ pub(crate) async fn close_idle_while_draining(composed: &Arc<Composed>) {
             .collect()
     };
     for (id, action) in stale {
-        if action == DrainAction::Kill {
-            let hosted = composed.terminals.lock().await.hosted(id);
-            if let Some(hosted) = hosted {
-                drop(hosted.terminal.kill());
+        let hosted = composed.terminals.lock().await.hosted(id);
+        if let Some(hosted) = hosted {
+            match action {
+                DrainAction::Kill => drop(hosted.terminal.kill()),
+                DrainAction::Release => hosted.terminal.release(),
+                DrainAction::Keep => {}
             }
         }
         forget(composed, id).await;

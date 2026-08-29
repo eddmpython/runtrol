@@ -407,6 +407,13 @@ impl Terminal {
         Ok(self.shared.child.kill()?)
     }
 
+    /// Let go of the child without ending its process: what a mirror does when the Runtime stops watching a
+    /// process it never started. The helper that relayed the console exits; the mirrored process runs on.
+    /// For a process the Runtime started this only releases the console handles, which is what exit does.
+    pub fn release(&self) {
+        self.shared.finish();
+    }
+
     /// When this CLI last wrote anything, or nothing if it has not written yet.
     ///
     /// What it is for: a conversation held as a terminal has no turn boundary anybody can subscribe to, so
