@@ -224,6 +224,8 @@ struct State {
     screen: vt100::Parser,
     queries: xterm::QueryCarry,
     mouse: mouse::InputCarry,
+    /// The CLI's mouse-mode switches are taken out of its output here, before the model or a viewer sees it.
+    strip: mouse::OutputCarry,
 }
 
 impl std::fmt::Debug for State {
@@ -290,6 +292,7 @@ impl Terminal {
                 screen: vt100::Parser::new(size.rows, size.cols, 0),
                 queries: xterm::QueryCarry::default(),
                 mouse: mouse::InputCarry::default(),
+                strip: mouse::OutputCarry::default(),
             }),
             writer: Mutex::new(writer),
             output,
@@ -455,11 +458,15 @@ fn unpack_size(packed: u32) -> PtySize {
 impl Shared {
     /// One chunk the CLI wrote: into the screen, answered if it asked anything, and out to every viewer.
     async fn take_output(&self, chunk: Bytes) {
-        let answers = {
+        let (chunk, answers) = {
             let mut state = self.state.lock().await;
+            // The mouse is a touch-screen concept here (`mouse`): a CLI switching a terminal's mouse on
+            // never reaches the model or a viewer.
+            let chunk = Bytes::from(state.strip.strip(&chunk));
             state.screen.process(&chunk);
             let cursor = state.screen.screen().cursor_position();
-            state.queries.answers(&chunk, cursor)
+            let answers = state.queries.answers(&chunk, cursor);
+            (chunk, answers)
         };
         if !answers.is_empty() {
             let mut writer = self.writer.lock().await;

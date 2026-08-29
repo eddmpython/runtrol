@@ -8,10 +8,15 @@
 //! receives the viewer's SGR mouse reports on the input path, and translates each one here into the keys
 //! that reach the same place. The CLI sees keys, as it does from a keyboard.
 //!
-//! A real terminal emulator ([`ViewerKind::Terminal`]) gets none of this. It selects on drag and scrolls
-//! on wheel by itself, and what it sends is forwarded as it is. Switching reporting on toward it turned
-//! every click into arrow keys, which in Claude Code's prompt recalled earlier input, and took drag
-//! selection away (operator, 2026-08-29).
+//! A real terminal emulator ([`ViewerKind::Terminal`]) gets none of this. **The mouse is a touch-screen
+//! concept in this product and nothing else** (operator, 2026-08-29, fixed in the ledger): on a computer the
+//! terminal keeps its own mouse, selecting on drag and scrolling on wheel, and no click ever reaches the
+//! CLI. That takes two things. The host never switches reporting on toward a terminal, and the CLI's own
+//! attempts to switch it on (`ESC [ ? 1000 h` and its relatives, which one renderer of Claude Code sends)
+//! are taken out of the stream before it reaches any viewer or the screen model ([`OutputCarry`]), so the
+//! viewer's terminal never enters mouse mode and a later snapshot cannot replay it. Any mouse report a
+//! terminal viewer sends anyway is dropped here instead of forwarded. Before this, every click became arrow
+//! keys, which in Claude Code's prompt recalled earlier input, and drag selection was gone.
 //!
 //! Translation is geometry on the screen model, not reading: a click on a row above the cursor is that
 //! many Up keys, a wheel notch is a few arrow keys. Nothing here knows what the rows say.
@@ -60,11 +65,10 @@ impl InputCarry {
                 Scan::Mouse(report, end) => {
                     match viewer {
                         ViewerKind::Touch => translate_mouse(report, screen, &mut out),
-                        // A terminal reports mouse only when the CLI itself asked it to, and then the CLI
-                        // is the one that knows what to do with the report.
-                        ViewerKind::Terminal => {
-                            out.extend_from_slice(window.get(at..end).unwrap_or(&[]));
-                        }
+                        // A terminal viewer has no mouse toward the CLI at all: the CLI's own request to
+                        // report was stripped from the stream, so a report that arrives anyway is the
+                        // viewer's terminal acting on its own, and it goes nowhere.
+                        ViewerKind::Terminal => {}
                     }
                     at = end;
                 }
@@ -87,6 +91,132 @@ impl InputCarry {
             }
         }
         out
+    }
+}
+
+/// DEC private modes that switch a terminal's mouse reporting on or off, in every flavour a CLI sends:
+/// X10 (9), normal (1000), highlight (1001), button motion (1002), any motion (1003), and the UTF-8, SGR,
+/// urxvt and pixel encodings (1005, 1006, 1015, 1016).
+const MOUSE_MODES: &[u32] = &[9, 1000, 1001, 1002, 1003, 1005, 1006, 1015, 1016];
+
+/// The CLI's output with every mouse-mode switch taken out.
+///
+/// Applied before the screen model and before any viewer sees the bytes, so neither a live viewer nor a
+/// later snapshot (the model replays the modes it holds) can put a terminal into mouse mode. Other private
+/// modes in the same sequence (`ESC [ ? 1049 ; 1000 h`) are kept; only the mouse parameters leave. A
+/// sequence split across two writes is carried to the next one, bounded.
+#[derive(Debug, Default)]
+pub struct OutputCarry {
+    tail: Vec<u8>,
+}
+
+impl OutputCarry {
+    /// `chunk` with the mouse-mode switches removed, plus whatever the previous chunk left unfinished.
+    pub fn strip(&mut self, chunk: &[u8]) -> Vec<u8> {
+        let mut window = std::mem::take(&mut self.tail);
+        window.extend_from_slice(chunk);
+        let mut out = Vec::with_capacity(window.len());
+        let mut at = 0usize;
+        while at < window.len() {
+            let Some(&byte) = window.get(at) else { break };
+            if byte != 0x1b {
+                out.push(byte);
+                at += 1;
+                continue;
+            }
+            match private_mode_at(&window, at) {
+                ModeScan::Complete {
+                    end,
+                    params,
+                    action,
+                } => {
+                    let kept: Vec<u32> = params
+                        .iter()
+                        .copied()
+                        .filter(|mode| !MOUSE_MODES.contains(mode))
+                        .collect();
+                    if kept.len() == params.len() {
+                        out.extend_from_slice(window.get(at..end).unwrap_or(&[]));
+                    } else if !kept.is_empty() {
+                        out.extend_from_slice(b"\x1b[?");
+                        for (index, mode) in kept.iter().enumerate() {
+                            if index > 0 {
+                                out.push(b';');
+                            }
+                            out.extend_from_slice(mode.to_string().as_bytes());
+                        }
+                        out.push(action);
+                    }
+                    at = end;
+                }
+                ModeScan::Incomplete => {
+                    let rest = window.get(at..).unwrap_or(&[]);
+                    if rest.len() <= CARRY_BYTES {
+                        self.tail = rest.to_vec();
+                    } else {
+                        out.extend_from_slice(rest);
+                    }
+                    return out;
+                }
+                ModeScan::Other => {
+                    out.push(byte);
+                    at += 1;
+                }
+            }
+        }
+        out
+    }
+}
+
+enum ModeScan {
+    /// `ESC [ ? p1 ; p2 ... h|l`, ending at `end` (exclusive).
+    Complete {
+        end: usize,
+        params: Vec<u32>,
+        action: u8,
+    },
+    Incomplete,
+    Other,
+}
+
+/// What begins at `start` (an ESC), if it is a DEC private mode set or reset.
+fn private_mode_at(window: &[u8], start: usize) -> ModeScan {
+    let Some(rest) = window.get(start + 1..) else {
+        return ModeScan::Incomplete;
+    };
+    if rest.is_empty() {
+        return ModeScan::Incomplete;
+    }
+    let Some(after) = rest.strip_prefix(b"[?") else {
+        // `ESC [` alone may still become `ESC [ ?` on the next write.
+        return if rest == b"[" {
+            ModeScan::Incomplete
+        } else {
+            ModeScan::Other
+        };
+    };
+    let body = after
+        .iter()
+        .take_while(|b| b.is_ascii_digit() || **b == b';')
+        .count();
+    match after.get(body) {
+        Some(&action @ (b'h' | b'l')) if body > 0 => {
+            let mut params = Vec::new();
+            for piece in after.get(..body).unwrap_or(&[]).split(|b| *b == b';') {
+                match decimal(piece) {
+                    Some(value) => params.push(u32::from(value)),
+                    // A parameter this does not read as a number is not one it may rewrite.
+                    None => return ModeScan::Other,
+                }
+            }
+            ModeScan::Complete {
+                end: start + 3 + body + 1,
+                params,
+                action,
+            }
+        }
+        None if body < 16 => ModeScan::Incomplete,
+        Some(_) | None => ModeScan::Other,
     }
 }
 
@@ -345,15 +475,16 @@ mod tests {
     }
 
     #[test]
-    fn a_terminal_viewers_mouse_report_reaches_the_cli_as_it_is() {
-        // A terminal emulator reports mouse only when the CLI asked it to, and then the CLI reads the report.
-        // Translating it turned a click into arrow keys, which Claude Code's prompt read as recalling earlier
-        // input, and took drag selection away (operator, 2026-08-29).
+    fn a_terminal_viewers_mouse_report_goes_nowhere() {
+        // The mouse is a touch-screen concept: on a computer the terminal keeps its own mouse and no click
+        // reaches the CLI. Forwarding the report turned a click into arrow keys in Claude Code's prompt,
+        // which recalled earlier input (operator, 2026-08-29, three times).
         let parser = screen_with_cursor_at(5);
         let mut carry = InputCarry::default();
-        assert_eq!(
-            carry.translate(b"\x1b[<0;4;9M", parser.screen(), ViewerKind::Terminal),
-            b"\x1b[<0;4;9M".to_vec()
+        assert!(
+            carry
+                .translate(b"\x1b[<0;4;9M", parser.screen(), ViewerKind::Terminal)
+                .is_empty()
         );
         // Its own terminal answers are still dropped: this host already answered the CLI.
         assert!(
@@ -372,5 +503,43 @@ mod tests {
             carry.translate(b"\x1b[<0;1;1M", parser.screen(), ViewerKind::Touch),
             b"\x1bOA\x1bOA".to_vec()
         );
+    }
+
+    #[test]
+    fn the_clis_mouse_switches_leave_the_stream_and_everything_else_stays() {
+        let mut carry = OutputCarry::default();
+        assert_eq!(carry.strip(b"a\x1b[?1000h\x1b[?1006hb"), b"ab".to_vec());
+        assert_eq!(carry.strip(b"\x1b[?1002l\x1b[?1003l"), Vec::<u8>::new());
+        // Other private modes in the same sequence stay; only the mouse parameters leave.
+        assert_eq!(
+            carry.strip(b"\x1b[?1049;1000;25h"),
+            b"\x1b[?1049;25h".to_vec()
+        );
+        assert_eq!(
+            carry.strip(b"\x1b[?25l\x1b[2J\x1b[H"),
+            b"\x1b[?25l\x1b[2J\x1b[H".to_vec()
+        );
+        assert_eq!(carry.strip(b"\x1b[?1h"), b"\x1b[?1h".to_vec());
+    }
+
+    #[test]
+    fn a_mouse_switch_split_across_two_writes_is_still_taken_out() {
+        let mut carry = OutputCarry::default();
+        let mut out = carry.strip(b"x\x1b[?10");
+        out.extend(carry.strip(b"00hy"));
+        assert_eq!(out, b"xy".to_vec());
+        let mut split_at_bracket = OutputCarry::default();
+        let mut out = split_at_bracket.strip(b"\x1b");
+        out.extend(split_at_bracket.strip(b"[?1006h!"));
+        assert_eq!(out, b"!".to_vec());
+    }
+
+    #[test]
+    fn a_stripped_stream_leaves_the_screen_model_with_no_mouse_mode_to_replay() {
+        let mut carry = OutputCarry::default();
+        let mut parser = vt100::Parser::new(5, 20, 0);
+        parser.process(&carry.strip(b"\x1b[?1000h\x1b[?1006hhello"));
+        let replay = parser.screen().contents_formatted();
+        assert!(!replay.windows(6).any(|w| w == b"?1000h" || w == b"?1006h"));
     }
 }
