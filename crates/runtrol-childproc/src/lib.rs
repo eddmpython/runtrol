@@ -38,6 +38,7 @@
 
 pub mod alive;
 pub mod argv;
+pub mod console_mirror;
 pub mod console_window;
 pub mod contain;
 pub mod error;
@@ -52,6 +53,7 @@ pub mod stall;
 
 pub use alive::{alive, matches_process_start};
 pub use argv::{MAX_ARGUMENT_LEN, check_all, check_one};
+pub use console_mirror::{MirrorChild, run_mirror};
 pub use console_window::hide_console_window;
 #[cfg(unix)]
 pub use contain::bootstrap_if_requested;

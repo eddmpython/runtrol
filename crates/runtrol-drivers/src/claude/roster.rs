@@ -71,6 +71,12 @@ struct Record {
     /// What the process is doing. Absent in a record written before the CLI had the field.
     #[serde(default)]
     status: Option<String>,
+    /// Where the process works. Read so a mirrored terminal can be filed under its folder.
+    #[serde(default)]
+    cwd: Option<String>,
+    /// `interactive` for the CLI's own terminal interface; other values are piped or SDK children.
+    #[serde(default)]
+    kind: Option<String>,
 }
 
 /// The CLI's roster of its own running processes.
@@ -135,6 +141,10 @@ impl ClaudeRoster {
             processes.push(NativeProcessBinding {
                 pid: entry.pid,
                 native,
+                cwd: entry.cwd.clone(),
+                // The CLI names its own terminal interface `interactive`; a `--print` child of another
+                // program, or an SDK session, has no screen to join.
+                interactive: entry.kind.as_deref() == Some("interactive"),
             });
         }
         Ok(NativeProcessActivity {

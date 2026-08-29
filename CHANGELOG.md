@@ -10,6 +10,16 @@ and refactoring that no user can observe do not belong here.
 
 ## [Unreleased]
 
+### Added
+
+- A conversation you started outside Runtrol on Windows can now be opened and driven inside it. When a coding
+  CLI is already running in another window, another app, or a previous Runtime that an update left behind,
+  Runtrol attaches a helper to that process's console, streams its screen into every Runtrol window, and sends
+  your keystrokes back to it. The process keeps running where it was started; Runtrol becomes another view of
+  the one session rather than starting a second copy, so clicking the row attaches instead of resuming. Linux
+  needs process-trace permission and macOS has no such door; there, a session is one only when Runtrol started
+  it. (Piped or SDK sessions have no screen to join and are left as they are.)
+
 ### Fixed
 
 - The service choice that opens from the panel's new-conversation button withdraws when you click anywhere

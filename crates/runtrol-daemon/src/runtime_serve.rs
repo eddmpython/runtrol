@@ -2370,9 +2370,44 @@ fn refuse_supervised(
 /// No folder filter and no per-row authorisation: an identity the caller was already shown by the catalogue,
 /// answered on the owner-only local endpoint, adds nothing the caller does not have. The same argument the
 /// machine-wide catalogue makes for itself (`docs/runtimeProtocol.md`).
+/// Mirror the sessions a person started outside Runtrol so they become one session, streamed to every window.
+///
+/// A session started anywhere is still one session. A live terminal interface the daemon does not already host
+/// as its own PTY child is mirrored: a helper joins its console (Windows) so every window sees the same screen
+/// and can type into it, and the row becomes a hosted one that a click attaches to instead of resuming a copy.
+/// A piped or SDK child has no screen to join, so only an interactive process is mirrored. Failure to mirror
+/// one process leaves it observed-external, the honest fallback, and never fails the activity answer.
+async fn mirror_external_sessions(
+    composed: &Arc<Composed>,
+    provider: runtrol_provider::ProviderId,
+    processes: &[runtrol_provider::NativeProcessBinding],
+) {
+    for process in processes {
+        if !process.interactive {
+            continue;
+        }
+        let Some(folder) = process.cwd.as_deref() else {
+            continue;
+        };
+        let Ok(cwd) = runtrol_provider::AbsPath::new(folder) else {
+            continue;
+        };
+        drop(
+            crate::terminal_surface::open_mirror(
+                composed,
+                provider,
+                process.native.as_str(),
+                process.pid,
+                cwd,
+            )
+            .await,
+        );
+    }
+}
+
 async fn native_activity(
     state: &mut PublicState,
-    composed: &Composed,
+    composed: &Arc<Composed>,
     discovering: &crate::serve::DiscoveryGates,
     id: JsonRpcId,
     params: serde_json::Value,
@@ -2447,6 +2482,7 @@ async fn native_activity(
                     ),
                 );
             }
+            mirror_external_sessions(composed, provider, &activity.processes).await;
             Answer::success(
                 id,
                 &runtrol_runtime_protocol::NativeActivity {

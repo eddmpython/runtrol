@@ -200,6 +200,43 @@ impl Terminals {
         removed
     }
 
+    /// Whether any hosted terminal already runs on this process. A mirror is never opened for a process the
+    /// daemon already hosts as its own PTY child.
+    pub(crate) fn hosts_pid(&self, pid: u32) -> bool {
+        self.by_id.values().any(|open| open.terminal.pid() == pid)
+    }
+
+    /// Register a mirrored terminal: a viewer onto a process some other owner started.
+    ///
+    /// Unlike [`Self::insert`] behind a reservation, a mirror takes no native claim. It does not create a
+    /// process for the conversation; it joins the one that exists, so the claim belongs to whoever started
+    /// that process (another window, or an older Runtime generation). Filed by `(provider, native)` so the
+    /// sidebar row binds and a click attaches here, and by pid so a second observation does not open a
+    /// second mirror.
+    fn insert_mirror(
+        &mut self,
+        id: TerminalId,
+        provider: ProviderId,
+        native: &str,
+        terminal: Terminal,
+        workspace: AbsPath,
+    ) {
+        self.by_id.insert(
+            id,
+            Open {
+                provider,
+                terminal,
+                workspace,
+                native: Some(native.into()),
+                opened_at_ms: WallMs::now().as_millis(),
+                generation: 1,
+                stopping: false,
+            },
+        );
+        self.by_conversation.insert((provider, native.into()), id);
+        self.publish_change();
+    }
+
     pub(crate) fn len(&self) -> usize {
         self.by_id.len()
     }
@@ -490,6 +527,56 @@ async fn open_with_arguments(
     forget_on_exit(Arc::clone(composed), terminal_id, &terminal);
     let attachment = terminal.attach(viewer).await;
     Ok((terminal_id, terminal, attachment))
+}
+
+/// Open a mirror of a process the daemon did not start, and register it as a hosted terminal.
+///
+/// This is the door for "a session started anywhere is still one session, streamed to every viewer": the
+/// process keeps running wherever it was started (another window, another app, an older Runtime generation
+/// that no longer answers), and a helper joins its console so every Runtrol window sees the same screen and
+/// can type into it. The row becomes a hosted one, so a click attaches rather than resuming a second copy.
+///
+/// It opens nothing new for the conversation and takes no native claim: the claim, if any, stays with the
+/// owner that started the process. A process the daemon already hosts, or already mirrors, is left alone.
+pub(crate) async fn open_mirror(
+    composed: &Arc<Composed>,
+    provider: ProviderId,
+    native: &str,
+    pid: u32,
+    cwd: AbsPath,
+) -> Result<(), TerminalOpenError> {
+    let helper = runtrol_childproc::console_mirror::helper_program()
+        .map_err(|error| TerminalOpenError::Provider(error.to_string()))?;
+    let terminal_id = TerminalId::now();
+    let (terminal, open) = {
+        let mut terminals = composed.terminals.lock().await;
+        if terminals.hosts_pid(pid) || terminals.open_for(provider, native).is_some() {
+            return Ok(());
+        }
+        if terminals.len() >= MAX_HOSTED_TERMINALS {
+            return Err(TerminalOpenError::NoRoom {
+                held: terminals.len(),
+                limit: MAX_HOSTED_TERMINALS,
+            });
+        }
+        let terminal = Terminal::mirror(
+            &helper,
+            pid,
+            runtrol_childproc::PtySize {
+                cols: 120,
+                rows: 40,
+            },
+        )
+        .map_err(|error| TerminalOpenError::Provider(error.to_string()))?;
+        terminals.insert_mirror(terminal_id, provider, native, terminal.clone(), cwd);
+        let open = terminals.len();
+        (terminal, open)
+    };
+    composed
+        .open_terminals
+        .store(open, std::sync::atomic::Ordering::Release);
+    forget_on_exit(Arc::clone(composed), terminal_id, &terminal);
+    Ok(())
 }
 
 /// Attach without resizing. Public attach never grants geometry authority implicitly.

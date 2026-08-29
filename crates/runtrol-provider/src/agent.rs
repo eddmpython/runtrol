@@ -49,6 +49,11 @@ pub struct NativeProcessBinding {
     pub pid: u32,
     /// Provider-owned conversation identity held by that exact process.
     pub native: NativeSessionId,
+    /// Where that process works, when the provider's roster says. A mirrored terminal is filed under it.
+    pub cwd: Option<String>,
+    /// Whether the process is the provider's own terminal interface rather than a piped child of some other
+    /// program. Only a terminal interface has a screen anybody can join.
+    pub interactive: bool,
 }
 
 /// Provider-owned process roster, separated into existence and current model activity.

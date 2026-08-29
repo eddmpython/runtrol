@@ -20,7 +20,7 @@ use runtrol_provider::WallMs;
 use std::time::Duration;
 
 use bytes::Bytes;
-use runtrol_childproc::{Program, PtyChild, PtySize, PtySpawn, SpawnError};
+use runtrol_childproc::{MirrorChild, Program, PtyChild, PtySize, PtySpawn, SpawnError};
 use runtrol_provider::AbsPath;
 use tokio::sync::{Mutex, broadcast, mpsc, watch};
 
@@ -115,8 +115,68 @@ pub struct Terminal {
     shared: Arc<Shared>,
 }
 
+/// What is on the other side of the host: a pseudo terminal this process created, or a helper that joined
+/// a console some other process owns. The host asks both the same five things.
+#[derive(Debug)]
+enum Child {
+    Pty(PtyChild),
+    Mirror(MirrorChild),
+}
+
+impl Child {
+    fn pid(&self) -> u32 {
+        match self {
+            Self::Pty(child) => child.pid(),
+            Self::Mirror(child) => child.pid(),
+        }
+    }
+
+    fn reader(&self) -> Result<Box<dyn std::io::Read + Send>, runtrol_childproc::SpawnError> {
+        match self {
+            Self::Pty(child) => child.reader(),
+            Self::Mirror(child) => child.reader(),
+        }
+    }
+
+    fn writer(&self) -> Result<Box<dyn Write + Send>, runtrol_childproc::SpawnError> {
+        match self {
+            Self::Pty(child) => child.writer(),
+            Self::Mirror(child) => child.writer(),
+        }
+    }
+
+    /// A mirrored console keeps the size its own host gave it; asking is not refused, it is simply not ours.
+    fn resize(&self, size: PtySize) -> Result<(), runtrol_childproc::SpawnError> {
+        match self {
+            Self::Pty(child) => child.resize(size),
+            Self::Mirror(_) => Ok(()),
+        }
+    }
+
+    fn try_wait(&self) -> Result<Option<i32>, runtrol_childproc::SpawnError> {
+        match self {
+            Self::Pty(child) => child.try_wait(),
+            Self::Mirror(child) => child.try_wait(),
+        }
+    }
+
+    fn kill(&self) -> Result<(), runtrol_childproc::SpawnError> {
+        match self {
+            Self::Pty(child) => child.kill(),
+            Self::Mirror(child) => child.kill(),
+        }
+    }
+
+    fn finish(&self) {
+        match self {
+            Self::Pty(child) => child.finish(),
+            Self::Mirror(child) => child.finish(),
+        }
+    }
+}
+
 struct Shared {
-    child: PtyChild,
+    child: Child,
     /// The screen model, the mouse translator's carry, and the query carry: one lock because every input
     /// and output byte touches the same picture.
     state: Mutex<State>,
@@ -186,8 +246,6 @@ impl Terminal {
     ///
     /// [`TerminalError::Spawn`] when the platform refuses; [`TerminalError::Runtime`] outside a runtime.
     pub fn open(launch: &TerminalLaunch<'_>) -> Result<Self, TerminalError> {
-        let handle = tokio::runtime::Handle::try_current()
-            .map_err(|error| TerminalError::Runtime(error.to_string()))?;
         let size = bounded_size(launch.size);
         let child = PtyChild::spawn(PtySpawn {
             program: launch.program,
@@ -197,6 +255,31 @@ impl Terminal {
             env_unset: &launch.env_unset,
             size,
         })?;
+        Self::host(Child::Pty(child), size)
+    }
+
+    /// Join a console some other process owns and host it as if it were ours.
+    ///
+    /// The session keeps its own process; a helper (`helper` is this executable, answering
+    /// `console-mirror`) attaches to that process's console and relays its screen and input. From here on
+    /// the terminal is a hosted one: viewers, leases, the sidebar row and Stop all apply. Windows only; on
+    /// other platforms the spawn refuses and says why.
+    ///
+    /// # Errors
+    ///
+    /// [`TerminalError::Spawn`] when the helper cannot start; [`TerminalError::Runtime`] outside a runtime.
+    pub fn mirror(
+        helper: &std::path::Path,
+        target_pid: u32,
+        size: PtySize,
+    ) -> Result<Self, TerminalError> {
+        let child = MirrorChild::spawn(helper, target_pid)?;
+        Self::host(Child::Mirror(child), bounded_size(size))
+    }
+
+    fn host(child: Child, size: PtySize) -> Result<Self, TerminalError> {
+        let handle = tokio::runtime::Handle::try_current()
+            .map_err(|error| TerminalError::Runtime(error.to_string()))?;
         let reader = child.reader()?;
         let writer = child.writer()?;
         let (output, _) = broadcast::channel(RING_CHUNKS);
