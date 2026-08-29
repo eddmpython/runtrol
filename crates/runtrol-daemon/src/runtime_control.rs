@@ -3,6 +3,7 @@
 //! This module is an adapter over Core session authority. It records only structural mutation metadata and a keyed
 //! authenticator. Caller input exists only in the request and the provider command handed out for asynchronous I/O.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::str::FromStr as _;
 use std::sync::Arc;
@@ -353,15 +354,30 @@ impl Drop for RuntimeCoolGuard {
 }
 
 /// Stable safe refusal returned through the public error envelope.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+///
+/// The message is Runtrol's own sentence, and once a coding service's own refusal reason: that reason is the
+/// one thing a person needs to act on a refusal, and dropping it left "refused this request" standing for
+/// six different causes (measured 2026-08-29).
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct RuntimeControlFailure {
     pub(crate) kind: RuntimeErrorKind,
-    pub(crate) message: &'static str,
+    pub(crate) message: Cow<'static, str>,
 }
 
 impl RuntimeControlFailure {
     pub(crate) const fn new(kind: RuntimeErrorKind, message: &'static str) -> Self {
-        Self { kind, message }
+        Self {
+            kind,
+            message: Cow::Borrowed(message),
+        }
+    }
+
+    /// A refusal that carries the coding service's own reason.
+    fn with_reason(kind: RuntimeErrorKind, sentence: &'static str, reason: &str) -> Self {
+        Self {
+            kind,
+            message: Cow::Owned(format!("{sentence}: {reason}")),
+        }
     }
 
     const fn internal() -> Self {
@@ -1626,7 +1642,7 @@ impl RuntimeControl {
         key: IntegrationMutationKey,
         failure: RuntimeControlFailure,
     ) -> RuntimeControlReply {
-        match self.finish(store, key, MutationOutcome::Failed(failure)) {
+        match self.finish(store, key, MutationOutcome::Failed(failure.clone())) {
             Ok(()) => RuntimeControlReply::Failed(failure),
             Err(storage) => RuntimeControlReply::Failed(storage),
         }
@@ -1802,7 +1818,7 @@ fn compare_replay(
         MutationOutcome::Lease(lease) => Ok(RuntimeControlReply::Lease(lease.clone())),
         MutationOutcome::Done => Ok(RuntimeControlReply::Done),
         MutationOutcome::Open(result) => Ok(RuntimeControlReply::Opened(result.clone())),
-        MutationOutcome::Failed(failure) => Ok(RuntimeControlReply::Failed(*failure)),
+        MutationOutcome::Failed(failure) => Ok(RuntimeControlReply::Failed(failure.clone())),
     }
 }
 
@@ -2032,10 +2048,13 @@ pub(crate) fn provider_failure(error: &ProviderError) -> RuntimeControlFailure {
         // The capability exists and the service declined this one request (measured: Codex refuses to
         // resume a thread another Codex window is writing, "already has an active writer"). The same
         // category, because the caller's branch is the same, but not the same sentence: "does not
-        // offer" would send a person looking for a missing feature that is not missing.
-        ProviderError::NativeRefused { .. } => RuntimeControlFailure::new(
+        // offer" would send a person looking for a missing feature that is not missing. The service's
+        // own reason rides along: it is the only thing that tells "another window has it" from "it is
+        // already gone", and a person cannot act on the category alone.
+        ProviderError::NativeRefused { detail, .. } => RuntimeControlFailure::with_reason(
             RuntimeErrorKind::CapabilityUnavailable,
             "this coding service refused this request for the conversation",
+            detail,
         ),
         // The CLI changed shape underneath us. Distinct from the above because the fix is a vendor
         // bug report, and reporting it as anything else buries the one failure worth escalating.
@@ -3224,6 +3243,15 @@ mod tests {
         assert_eq!(refused.kind, absent.kind);
         assert_ne!(refused.message, absent.message);
         assert!(refused.message.contains("refused"));
+        // The service's own reason is the part a person acts on: it tells "another window has it" from
+        // "it is already gone", which the category alone never could.
+        assert!(
+            refused
+                .message
+                .contains("thread already has an active writer"),
+            "the reason rides with the refusal: {}",
+            refused.message
+        );
     }
 
     #[test]

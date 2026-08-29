@@ -921,7 +921,7 @@ async fn serve_surfaces(
     let mut runtime_control = crate::runtime_control::RuntimeControl::with_native_claims(
         Arc::clone(&composed.native_claims),
     )
-    .map_err(|error| ServeError::RuntimeBootstrap(error.message.to_owned()))?;
+    .map_err(|error| ServeError::RuntimeBootstrap(error.message.into_owned()))?;
     let runtime_native_cursors = Arc::new(
         crate::runtime_native_sessions::NativeCursorCodec::new().map_err(|_| {
             ServeError::RuntimeBootstrap(

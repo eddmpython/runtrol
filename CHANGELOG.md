@@ -12,6 +12,29 @@ and refactoring that no user can observe do not belong here.
 
 ### Fixed
 
+- A conversation kept alive across an update opens again. An update leaves the previous Runtime running
+  beside the new one for as long as its conversations last, and the panel followed only the new one, so every
+  conversation the old one still held read as "running in a terminal Runtrol did not start" and refused to open
+  (on one machine, eight conversations across five earlier Runtimes, all of them dead ends). The panel now
+  follows every Runtime the machine lists, and pressing such a conversation attaches to the terminal that
+  already runs it, in the Runtime that owns it, instead of refusing or starting a second copy.
+- The previous Runtime keeps answering after an update. It hands its store to the new Runtime and then
+  refused every request, including a window's first connection, because it had nowhere to write its
+  authorization record ("Runtime authorization audit storage is unavailable"). That is what made every
+  conversation from before an update unreachable. It now keeps those records for the new Runtime, which
+  collects them on its next poll and writes them into the one store.
+- A refusal from a coding service now says why. Codex declining to resume a thread another window is writing,
+  or Claude Code declining to delete a conversation a live process still has open, both arrived as one
+  sentence ("refused this request for the conversation") and the Claude Code case even as "answered in a shape
+  Runtrol cannot read". The service's own reason now rides with the refusal, so "another window has it" and
+  "stop its process first" can be told apart and acted on.
+- Stop now works on a conversation Runtrol hosts without supervising, which is every conversation kept alive
+  across an update. It used to look for a supervised session and fail with "is not open yet". A conversation
+  alive in a terminal Runtrol cannot reach is no longer offered a Stop that would fail.
+- A second live process of one conversation, left behind when an earlier build resumed it again after an
+  update, is shown as its own row under the conversation's title, so it can be opened and stopped rather than
+  living on unseen.
+
 - Pressing a conversation that is running in your own terminal now offers something to do. The panel can see
   those conversations, and it cannot open one: a terminal it did not start has no channel to take over. It used
   to answer with an error in protocol words and nothing else, which on a machine that keeps its CLIs open all

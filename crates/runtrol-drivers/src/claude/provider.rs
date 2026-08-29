@@ -310,35 +310,40 @@ impl Provider for ClaudeProvider {
         &self,
         deletion: NativeSessionDeletion,
     ) -> Result<(), ProviderError> {
+        const DOING: &str = "deleting a stored conversation";
         let store = self.store.clone();
         let roster = self.roster.clone();
         let provider = self.id;
         let native = deletion.native.as_str().to_owned();
         // Bounded history rewrite and filesystem removal: blocking work, kept off the reactor so a slow disk
         // cannot stall every other provider's answer.
+        //
+        // Three different answers, kept apart because a person acts on them differently. A live process
+        // still owning the conversation is the CLI refusing, and the sentence says what to do about it. A
+        // disk that will not cooperate is an operating system failure. Only a worker that never answered is
+        // a shape Runtrol cannot read. Folding all three into the last one sent "answered in a shape Runtrol
+        // cannot read" to a person whose conversation was merely still open (measured 2026-08-29).
         tokio::task::spawn_blocking(move || {
-            if roster
-                .owns_live(provider, &native)
-                .map_err(|error| std::io::Error::other(error.to_string()))?
-            {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::WouldBlock,
-                    "the provider still has this conversation open; close its live process before deleting it",
-                ));
+            if roster.owns_live(provider, &native)? {
+                return Err(ProviderError::NativeRefused {
+                    provider,
+                    doing: DOING,
+                    detail: "the CLI still has this conversation open; stop its live process before deleting it"
+                        .to_owned(),
+                });
             }
-            store.delete(&native)
-        })
-            .await
-            .map_err(|join| ProviderError::Protocol {
+            store.delete(&native).map_err(|source| ProviderError::Io {
                 provider,
-                doing: "deleting a stored conversation",
-                detail: join.to_string(),
-            })?
-            .map_err(|error| ProviderError::Protocol {
-                provider,
-                doing: "deleting a stored conversation",
-                detail: error.to_string(),
+                doing: DOING,
+                source,
             })
+        })
+        .await
+        .map_err(|join| ProviderError::Protocol {
+            provider,
+            doing: DOING,
+            detail: join.to_string(),
+        })?
     }
 
     /// Two questions this CLI answers about the account, neither of them a turn.
