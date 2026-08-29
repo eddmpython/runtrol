@@ -10,6 +10,8 @@ and refactoring that no user can observe do not belong here.
 
 ## [Unreleased]
 
+## [0.1.35] - 2026-08-29
+
 ### Changed
 
 - The symbol that shows while a conversation opens is now the Runtrol mark held still, with a coral light
