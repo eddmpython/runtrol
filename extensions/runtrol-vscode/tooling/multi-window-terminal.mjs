@@ -23,7 +23,8 @@ const ownerUserData = path.join(workRoot, "owner-user");
 const mirrorUserData = path.join(workRoot, "mirror-user");
 const ownerExtensions = path.join(workRoot, "owner-extensions");
 const mirrorExtensions = path.join(workRoot, "mirror-extensions");
-const ownerPidPath = requiredEnvironment("RUNTROL_ACP_FIXTURE_TUI_PID_PATH");
+const ownerPidPath = process.env.RUNTROL_ACP_FIXTURE_TUI_PID_PATH || null;
+const inputMode = process.env.RUNTROL_VSCODE_INPUT_MODE || "text";
 const testEnvironment = withoutHostIdentity();
 let owner = null;
 let mirror = null;
@@ -63,23 +64,25 @@ try {
 
   owner = launch("owner", ownerUserData, ownerExtensions);
   const ownerReady = await waitForPublished("owner-ready.json", 60_000);
-  const ownerPid = await readOwnerPid(ownerPidPath);
-  const ownerAliveBeforeMirror = processAlive(ownerPid);
-  if (!ownerAliveBeforeMirror) throw new Error(`terminal owner PID ${ownerPid} exited before the mirror opened`);
+  const ownerPid = ownerPidPath ? await readOwnerPid(ownerPidPath) : null;
+  const ownerAliveBeforeMirror = ownerPid === null ? null : processAlive(ownerPid);
+  if (ownerAliveBeforeMirror === false) throw new Error(`terminal owner PID ${ownerPid} exited before the mirror opened`);
 
   mirror = launch("mirror", mirrorUserData, mirrorExtensions);
   const mirrorArmed = await waitForPublished("mirror-armed.json", 60_000);
-  const ownerAliveWhileBothOpen = processAlive(ownerPid);
+  const ownerAliveWhileBothOpen = ownerPid === null ? null : processAlive(ownerPid);
   await waitForPublished("owner-result.json", 60_000);
   await requireCleanExit(owner, "owner VS Code", 20_000);
   await terminateExactProcesses(ownerUserData, null);
-  const ownerAliveAfterOwnerWindowClosed = processAlive(ownerPid);
+  const ownerAliveAfterOwnerWindowClosed = ownerPid === null ? null : processAlive(ownerPid);
   await publish("owner-closed.json", { ownerPid });
 
   const mirrorResult = await waitForPublished("mirror-result.json", 60_000);
   await requireCleanExit(mirror, "mirror VS Code", 20_000);
   await terminateExactProcesses(mirrorUserData, null);
-  const providerStopped = await waitForProcessExit(ownerPid, 10_000);
+  const providerStopped = ownerPid === null
+    ? mirrorResult.stopAccepted === true
+    : await waitForProcessExit(ownerPid, 10_000);
   const ownerResult = await readPublished("owner-result.json");
   const sameTerminal = sameTerminalIdentity(ownerReady, mirrorArmed)
     && sameTerminalIdentity(ownerReady, ownerResult.terminal)
@@ -88,8 +91,11 @@ try {
     sameTerminal,
     terminalId: ownerReady.terminalId,
     runtimeGeneration: ownerReady.runtimeGeneration,
+    terminalGeneration: ownerReady.terminalGeneration,
+    providerId: ownerReady.providerId,
+    workspace: ownerReady.workspace,
     ownerPid,
-    oneOwnerPid: Number.isSafeInteger(ownerPid) && ownerPid > 0,
+    oneOwnerPid: ownerPid === null ? null : Number.isSafeInteger(ownerPid) && ownerPid > 0,
     ownerAliveBeforeMirror,
     ownerAliveWhileBothOpen,
     ownerAliveAfterOwnerWindowClosed,
@@ -137,6 +143,7 @@ function launch(role, userData, extensions) {
       RUNTROL_VSCODE_REAL_PROVIDER_JOURNEY: "1",
       RUNTROL_VSCODE_ROLE: role,
       RUNTROL_VSCODE_COORDINATION: coordination,
+      RUNTROL_VSCODE_INPUT_MODE: inputMode,
     },
     stdio: "inherit",
     windowsHide: true,

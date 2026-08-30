@@ -28,6 +28,11 @@ export const isolatedProfileSettings = Object.freeze({
   "telemetry.telemetryLevel": "off",
   "workbench.enableExperiments": false,
   "workbench.startupEditor": "none",
+  // Headless gates exercise extension behavior, not editor tokenization or terminal GPU rendering. Both workers
+  // load through vscode-file URLs that Electron can reject in a headless archive, stalling an otherwise healthy
+  // Extension Host and adding hundreds of milliseconds to unrelated event-loop measurements.
+  "editor.experimental.asyncTokenization": false,
+  "terminal.integrated.gpuAcceleration": "off",
 });
 
 export const isolatedLaunchArguments = Object.freeze([

@@ -106,6 +106,14 @@ After the first window exits, the exact provider PID generation remains alive an
 the next input before stopping that provider. The fixture uses a create-new PID marker, so a second owner fails closed
 instead of letting a duplicate process satisfy the journey.
 
+Two operator gates add the installed-provider layer without spending a model turn. `providerTerminalParity` measures
+Claude and Codex through independent public Runtime clients, requires byte-identical fresh snapshots, closes one
+viewer, hands input to a new writer, caps delivery at 250 ms, stops the exact terminal, and proves it can no longer be
+attached. `vscodeRealProviderMultiWindow` runs the production extension in two simultaneous isolated VS Code windows
+for each installed TUI. The first window's input reaches both windows, the first window exits, and the second writes
+within 500 ms and stops the terminal. Both gates use reversible navigation when a provider startup modal ignores
+printable bytes. They never submit a line, parse provider text, or retain a transcript.
+
 Fresh open needs `session.start`; native resume needs `session.resume`; listing and viewing need
 `session.output.read`; write and lifecycle mutations need the corresponding input or stop scope plus an unexpired
 control lease. Canonical root checks and provider capabilities are the same boundaries used by structured sessions.

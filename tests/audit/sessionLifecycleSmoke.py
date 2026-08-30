@@ -28,6 +28,7 @@ and the store it writes are its own. The operator's daemon is never contacted an
 Usage::
 
     python -X utf8 tests/audit/sessionLifecycleSmoke.py
+    python -X utf8 tests/audit/sessionLifecycleSmoke.py --providers=claude,codex
     python -X utf8 tests/audit/sessionLifecycleSmoke.py --selftest
 
 Exit codes:
@@ -153,6 +154,28 @@ def shippedProviders() -> dict[str, list[str]]:
 def installed(names: list[str]) -> bool:
     """Whether any of a provider's executable names resolves on this machine."""
     return any(shutil.which(name) is not None for name in names)
+
+
+def providerScope(argv: list[str], shipped: dict[str, list[str]]) -> list[str]:
+    """Select an explicit provider subset while keeping manifest discovery authoritative.
+
+    The default remains every shipped provider. A local operator can narrow a real-account run without changing
+    PATH, manifests, or product code, and an unknown or duplicate provider is rejected rather than silently skipped.
+    """
+    arguments = [word for word in argv if word != "--selftest"]
+    if not arguments:
+        return list(shipped)
+    if len(arguments) != 1 or not arguments[0].startswith("--providers="):
+        raise Failed("usage: sessionLifecycleSmoke.py [--selftest] [--providers=id,id]")
+    selected = arguments[0].removeprefix("--providers=").split(",")
+    if not selected or any(not provider for provider in selected):
+        raise Failed("--providers must name at least one provider id")
+    if len(set(selected)) != len(selected):
+        raise Failed("--providers contains a duplicate provider id")
+    unknown = [provider for provider in selected if provider not in shipped]
+    if unknown:
+        raise Failed(f"--providers names an unshipped provider: {', '.join(unknown)}")
+    return selected
 
 
 def buildBinary() -> Path:
@@ -387,14 +410,19 @@ def main(argv: list[str]) -> int:
         return 0
 
     shipped = shippedProviders()
-    present = [provider for provider, names in shipped.items() if installed(names)]
-    absent = [provider for provider in shipped if provider not in present]
+    try:
+        selected = providerScope(argv, shipped)
+    except Failed as failure:
+        print(f"[sessionLifecycleSmoke] {failure}", file=sys.stderr)
+        return 2
+    present = [provider for provider in selected if installed(shipped[provider])]
+    absent = [provider for provider in selected if provider not in present]
 
     if not present:
         # Loud rather than green. A machine without the CLIs proves nothing about them, and a gate that said
         # OK here would be reporting coverage it does not have.
         print(
-            f"[sessionLifecycleSmoke] SKIP: none of {', '.join(shipped)} is installed on this machine. "
+            f"[sessionLifecycleSmoke] SKIP: none of {', '.join(selected)} is installed on this machine. "
             f"this axis is unverified here."
         )
         return 0
@@ -450,6 +478,20 @@ def selftest() -> int:
         ),
     ]
     problems: list[str] = []
+
+    shipped = {"claude": ["claude"], "codex": ["codex"]}
+    if providerScope([], shipped) != ["claude", "codex"]:
+        problems.append("the default provider scope did not retain manifest order")
+    if providerScope(["--providers=codex,claude"], shipped) != ["codex", "claude"]:
+        problems.append("an explicit provider scope was not preserved")
+    for invalid in (["--providers="], ["--providers=claude,claude"], ["--providers=grok"], ["--unknown"]):
+        refused = False
+        try:
+            providerScope(invalid, shipped)
+        except Failed:
+            refused = True
+        if not refused:
+            problems.append(f"invalid provider scope was accepted: {invalid!r}")
     for what, text in cases:
         refused = False
         try:

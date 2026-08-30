@@ -32,6 +32,7 @@ ROOT = Path(__file__).resolve().parents[2]
 EXTENSION = ROOT / "extensions" / "runtrol-vscode"
 MARKER = "RUNTROL_VSCODE_REAL_PROVIDER "
 TIMEOUT_S = 240.0
+PROCESS_SAMPLE_S = 0.25
 
 
 class Failed(Exception):
@@ -251,20 +252,8 @@ def closeExactSessions(binary: Path, env: dict[str, str], sessions: tuple[str, .
 def processIdentityTable() -> dict[int, ProcessRow]:
     """Read process generations without retaining arguments or environment data."""
     if sys.platform == "win32":
-        command = (
-            "Get-CimInstance Win32_Process | Where-Object { $_.CreationDate } | ForEach-Object { "
-            "'{0}|{1}|{2}' -f $_.ProcessId,$_.ParentProcessId,$_.CreationDate.ToUniversalTime().Ticks }"
-        )
-        listed = subprocess.run(
-            ["powershell", "-NoProfile", "-NonInteractive", "-Command", command],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=30.0,
-            check=False,
-        )
-    elif sys.platform == "darwin":
+        return windowsProcessIdentityTable()
+    if sys.platform == "darwin":
         listed = subprocess.run(
             ["ps", "-axo", "pid=,ppid=,state=,lstart="],
             env={**os.environ, "LC_ALL": "C"},
@@ -320,6 +309,47 @@ def processIdentityTable() -> dict[int, ProcessRow]:
             continue
         if pid > 0 and started:
             found[pid] = ProcessRow(parent, started, age, state)
+    return found
+
+
+def windowsProcessIdentityTable() -> dict[int, ProcessRow]:
+    """Read Windows parentage and creation tokens in one bounded kernel snapshot, without WMI."""
+    import ctypes
+    from ctypes import wintypes
+
+    query = ctypes.WinDLL("ntdll").NtQuerySystemInformation
+    query.argtypes = (wintypes.ULONG, ctypes.c_void_p, wintypes.ULONG, ctypes.POINTER(wintypes.ULONG))
+    query.restype = ctypes.c_long
+    size = 1 << 20
+    while True:
+        buffer = ctypes.create_string_buffer(size)
+        needed = wintypes.ULONG()
+        status = query(5, buffer, size, ctypes.byref(needed))
+        if status == 0:
+            break
+        if ctypes.c_ulong(status).value != 0xC0000004:
+            raise Failed(f"Windows process snapshot failed with status {ctypes.c_ulong(status).value:#x}")
+        size = max(size * 2, int(needed.value) + (1 << 16))
+        if size > 64 << 20:
+            raise Failed("Windows process snapshot exceeded the 64 MiB diagnostic bound")
+
+    pointer_size = ctypes.sizeof(ctypes.c_void_p)
+    pid_offset = 80 if pointer_size == 8 else 68
+    found: dict[int, ProcessRow] = {}
+    offset = 0
+    while True:
+        next_offset = int.from_bytes(buffer[offset:offset + 4], "little")
+        created = int.from_bytes(buffer[offset + 32:offset + 40], "little", signed=True)
+        pid = int.from_bytes(buffer[offset + pid_offset:offset + pid_offset + pointer_size], "little")
+        parent = int.from_bytes(
+            buffer[offset + pid_offset + pointer_size:offset + pid_offset + (2 * pointer_size)],
+            "little",
+        )
+        if pid > 0 and created > 0:
+            found[pid] = ProcessRow(parent, str(created), None, "")
+        if next_offset == 0:
+            break
+        offset += next_offset
     return found
 
 
@@ -424,8 +454,8 @@ def stopMarkedProcesses(marker: Path) -> bool:
     for identity in owned:
         try:
             os.kill(identity.pid, signal.SIGTERM)
-        except ProcessLookupError:
-            # ok: this exact generation already exited, which is the cleanup outcome the next identity scan verifies.
+        except (ProcessLookupError, PermissionError):
+            # ok: Windows can deny a signal while a process exits; the next exact-generation scan decides cleanup.
             continue
     survivors = aliveIdentities(owned)
     deadline = time.monotonic() + 5.0
@@ -436,8 +466,8 @@ def stopMarkedProcesses(marker: Path) -> bool:
     for identity in survivors:
         try:
             os.kill(identity.pid, force_signal)
-        except ProcessLookupError:
-            # ok: this exact generation exited before the forced signal, and the next identity scan verifies it.
+        except (ProcessLookupError, PermissionError):
+            # ok: a racing exit can reject the signal; the next exact-generation scan still has to prove it gone.
             continue
     deadline = time.monotonic() + 5.0
     while survivors and time.monotonic() < deadline:
@@ -473,16 +503,16 @@ def stopExactIdentities(identities: set[ProcessIdentity]) -> set[ProcessIdentity
     for identity in survivors:
         try:
             os.kill(identity.pid, signal.SIGTERM)
-        except ProcessLookupError:
-            # ok: this exact generation exited between the identity scan and the signal.
+        except (ProcessLookupError, PermissionError):
+            # ok: a racing exit can reject the signal; the next exact-generation scan still has to prove it gone.
             continue
     survivors = waitIdentitiesGone(survivors)
     force_signal = signal.SIGTERM if sys.platform == "win32" else signal.SIGKILL
     for identity in survivors:
         try:
             os.kill(identity.pid, force_signal)
-        except ProcessLookupError:
-            # ok: the graceful signal won the race before the forced signal.
+        except (ProcessLookupError, PermissionError):
+            # ok: the signal race is settled only by the exact-generation scan below.
             continue
     return waitIdentitiesGone(survivors)
 
@@ -581,7 +611,7 @@ def exercise(claude: str) -> None:
                     while host.poll() is None and time.monotonic() < deadline:
                         daemon_processes.update(ownedDescendants(daemon.pid, daemon_generation))
                         host_processes.update(ownedDescendants(host.pid, host_generation))
-                        time.sleep(0.05)
+                        time.sleep(PROCESS_SAMPLE_S)
                     if host.poll() is None:
                         host.terminate()
                         try:

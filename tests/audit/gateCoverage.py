@@ -64,6 +64,16 @@ LOCAL_ONLY: dict[str, str] = {
     "sessionLifecycleSmokeSelftest": "the same script with a flag. it needs no CLI and could run in CI, but "
     "it proves the gate above can fail, and a proof that runs where the thing it proves does not is a proof "
     "of nothing",
+    "providerTerminalParity": "it opens the operator's authenticated Claude and Codex TUIs and measures their "
+    "real terminal bytes without submitting a model turn. hosted runners have neither personal login, so this "
+    "runs only in the operator's preflight",
+    "providerTerminalParitySelftest": "the mutation proof stays beside the real-account terminal gate whose "
+    "judgements it verifies",
+    "vscodeRealProviderMultiWindow": "it opens two actual isolated VS Code Extension Hosts against each "
+    "operator-authenticated Claude and Codex TUI. hosted runners have no personal provider login, so this runs "
+    "only in the operator's preflight",
+    "vscodeRealProviderMultiWindowSelftest": "the mutation proof stays beside the real-account two-window gate "
+    "whose judgements it verifies",
     "crossConsultSmoke": "it registers the real installed CLIs into each other through their own commands, "
     "and judges the result with their own answers. hosted runners have neither CLI nor the person-shaped "
     "logins they need, so it runs where they live: the operator's own preflight",

@@ -11,6 +11,7 @@ import { extensionUnderTest } from "./extensionUnderTest.test";
 const OWNER_TEXT = "runtrol-owner-window-input";
 const MIRROR_TEXT = "runtrol-mirror-window-input";
 const DEADLINE_MS = 30_000;
+const NAVIGATION_MODE = process.env.RUNTROL_VSCODE_INPUT_MODE === "navigation";
 
 type Role = "owner" | "mirror";
 
@@ -38,20 +39,19 @@ async function ownerJourney(coordination: string): Promise<void> {
   const journey = requireJourney(api);
   await waitForUsableProvider(journey, provider);
   const terminal = await journey.terminalStart(provider, workspace, DEADLINE_MS);
+  if (NAVIGATION_MODE) {
+    await delay(8_000);
+    await warmNavigationPath(journey, terminal);
+  }
   await publish(coordination, "owner-ready.json", terminal);
 
-  const ownerOutput = journey.terminalWaitForOutput(
-    terminal.runtimeGeneration,
-    terminal.terminalId,
-    OWNER_TEXT,
-    DEADLINE_MS,
-  );
+  const ownerOutput = waitForInputOutput(journey, terminal, OWNER_TEXT);
   await publish(coordination, "owner-armed.json", terminal);
   const mirror = await readPublished<JourneyTerminal>(coordination, "mirror-armed.json", DEADLINE_MS);
   requireSameTerminal(terminal, mirror);
 
   const started = performance.now();
-  journey.terminalWrite(terminal.runtimeGeneration, terminal.terminalId, OWNER_TEXT);
+  await writeInput(journey, terminal, NAVIGATION_MODE ? "\x1b[B" : OWNER_TEXT);
   await ownerOutput;
   const ownerInputMs = performance.now() - started;
   await publish(coordination, "owner-observed.json", { ownerInputMs });
@@ -82,26 +82,17 @@ async function mirrorJourney(coordination: string): Promise<void> {
   requireSameTerminal(owner, terminal);
 
   const ownerOutputStarted = performance.now();
-  const ownerOutput = journey.terminalWaitForOutput(
-    terminal.runtimeGeneration,
-    terminal.terminalId,
-    OWNER_TEXT,
-    DEADLINE_MS,
-  );
-  const mirrorOutput = journey.terminalWaitForOutput(
-    terminal.runtimeGeneration,
-    terminal.terminalId,
-    MIRROR_TEXT,
-    DEADLINE_MS,
-  );
+  const ownerOutput = waitForInputOutput(journey, terminal, OWNER_TEXT);
+  const textMirrorOutput = NAVIGATION_MODE ? null : waitForInputOutput(journey, terminal, MIRROR_TEXT);
   await publish(coordination, "mirror-armed.json", terminal);
   await ownerOutput;
   const mirrorSawOwnerMs = performance.now() - ownerOutputStarted;
   await publish(coordination, "mirror-observed-owner.json", { mirrorSawOwnerMs });
 
   await readPublished(coordination, "owner-closed.json", DEADLINE_MS);
+  const mirrorOutput = textMirrorOutput ?? waitForInputOutput(journey, terminal, MIRROR_TEXT);
   const handoffStarted = performance.now();
-  journey.terminalWrite(terminal.runtimeGeneration, terminal.terminalId, MIRROR_TEXT);
+  await writeInput(journey, terminal, NAVIGATION_MODE ? "\x1b[A" : MIRROR_TEXT);
   await mirrorOutput;
   const mirrorInputAfterHandoffMs = performance.now() - handoffStarted;
   await journey.terminalStop(terminal.runtimeGeneration, terminal.terminalId, DEADLINE_MS);
@@ -109,8 +100,45 @@ async function mirrorJourney(coordination: string): Promise<void> {
     terminal,
     mirrorSawOwnerMs,
     mirrorInputAfterHandoffMs,
+    stopAccepted: true,
     vscode: vscode.version,
   });
+}
+
+function waitForInputOutput(
+  journey: NonNullable<RuntrolExtensionApi["journey"]>,
+  terminal: JourneyTerminal,
+  text: string,
+): Promise<void> {
+  return journey.terminalWaitForOutput(
+    terminal.runtimeGeneration,
+    terminal.terminalId,
+    NAVIGATION_MODE ? "\x1b[" : text,
+    DEADLINE_MS,
+  );
+}
+
+async function warmNavigationPath(
+  journey: NonNullable<RuntrolExtensionApi["journey"]>,
+  terminal: JourneyTerminal,
+): Promise<void> {
+  for (const text of ["\x1b[A", "\x1b[B"]) {
+    const output = waitForInputOutput(journey, terminal, text);
+    await writeInput(journey, terminal, text);
+    await output;
+  }
+}
+
+async function writeInput(
+  journey: NonNullable<RuntrolExtensionApi["journey"]>,
+  terminal: JourneyTerminal,
+  text: string,
+): Promise<void> {
+  if (NAVIGATION_MODE) {
+    await vscode.commands.executeCommand("workbench.action.terminal.sendSequence", { text });
+    return;
+  }
+  journey.terminalWrite(terminal.runtimeGeneration, terminal.terminalId, text);
 }
 
 async function activate(): Promise<RuntrolExtensionApi> {

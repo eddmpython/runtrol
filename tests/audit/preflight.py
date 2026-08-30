@@ -243,6 +243,22 @@ GATES: dict[str, tuple[str, list[str]]] = {
         "동시에 열린 두 VS Code 창의 동일 provider TUI, 출력 fan-out, 입력 승계, 정확한 종료",
         [*PY, f"{HOOKS}/vscodeMultiWindowTerminal.py"],
     ),
+    "providerTerminalParitySelftest": (
+        "실물 provider TUI 다중 뷰 게이트 자체 검증",
+        [*PY, f"{HOOKS}/providerTerminalParity.py", "--selftest"],
+    ),
+    "providerTerminalParity": (
+        "실물 Claude와 Codex TUI의 public Runtime fan-out, writer 승계, 정확한 종료",
+        [*PY, f"{HOOKS}/providerTerminalParity.py", "--providers=claude,codex"],
+    ),
+    "vscodeRealProviderMultiWindowSelftest": (
+        "실물 provider 두 VS Code 창 게이트 자체 검증",
+        [*PY, f"{HOOKS}/vscodeRealProviderMultiWindow.py", "--selftest"],
+    ),
+    "vscodeRealProviderMultiWindow": (
+        "실물 Claude와 Codex TUI의 두 VS Code 창 fan-out, 창 종료 승계, 정확한 종료",
+        [*PY, f"{HOOKS}/vscodeRealProviderMultiWindow.py", "--providers=claude,codex"],
+    ),
     "vscodeRealProviderJourneySelftest": (
         "VS Code 실물 provider 전체 여정 게이트 자체 검증",
         [*PY, f"{HOOKS}/vscodeRealProviderJourney.py", "--selftest"],
@@ -397,7 +413,7 @@ GATES: dict[str, tuple[str, list[str]]] = {
     ),
     "sessionLifecycleSmoke": (
         "세션 시작·목록·닫기·재개 (실물 CLI)",
-        [*PY, f"{HOOKS}/sessionLifecycleSmoke.py"],
+        [*PY, f"{HOOKS}/sessionLifecycleSmoke.py", "--providers=claude,codex"],
     ),
     # 북극성 `AI 끼리 서로 자문` 축의 게이트. 토글이 실물 두 CLI 의 공식 명령으로 등록·검증·원상복구를
     # 해내는지 격리 홈에서 몰아본다. tools/list 검증까지 포함해 토큰을 쓰지 않는다. 턴 중 실수신은 실물
@@ -548,6 +564,8 @@ CARGO_GATES = frozenset(
         "cargoBuild",
         "vscodeHostPerformance",
         "vscodeMultiWindowTerminal",
+        "providerTerminalParity",
+        "vscodeRealProviderMultiWindow",
         "vscodeRealProviderJourney",
         "vscodeUpgradeRollback",
         "cargoTest",
@@ -597,6 +615,7 @@ def skipReasonFor(name: str) -> str | None:
         "runtimeClientSdk",
         "vscodeHostPerformance",
         "vscodeMultiWindowTerminal",
+        "vscodeRealProviderMultiWindow",
         "vscodeRealProviderJourney",
         "vscodeUpgradeRollback",
     } and shutil.which("npm") is None:
@@ -606,6 +625,7 @@ def skipReasonFor(name: str) -> str | None:
         "runtimeClientSdk",
         "vscodeHostPerformance",
         "vscodeMultiWindowTerminal",
+        "vscodeRealProviderMultiWindow",
         "vscodeRealProviderJourney",
         "vscodeUpgradeRollback",
     } and shutil.which("node") is None:
@@ -620,6 +640,10 @@ def skipReasonFor(name: str) -> str | None:
         return f"{CROSS_TARGET} 미설치 (rustup target add {CROSS_TARGET})"
     if name == "clippyCrossCfg" and not hasCrossCompiler():
         return f"{CROSS_TARGET} C 컴파일러 없음"
+    if name in {"providerTerminalParity", "vscodeRealProviderMultiWindow"}:
+        absent = [provider for provider in ("claude", "codex") if shutil.which(provider) is None]
+        if absent:
+            return f"실물 provider CLI 미설치: {', '.join(absent)}"
     if name == "externalAcpSmoke" and shutil.which("opencode") is None:
         return "독립 ACP CLI 미설치 (npm install --global opencode-ai@1.2.27)"
     if name in {

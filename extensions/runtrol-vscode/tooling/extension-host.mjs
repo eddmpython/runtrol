@@ -99,7 +99,11 @@ coreEnvironment.RUNTROL_ACP_FIXTURE_UNIQUE_SESSIONS = "1";
 // only reader of that stderr: a close that exceeds the CLI timeout is then diagnosed from the last step named
 // instead of from the two words ETIMEDOUT carries.
 coreEnvironment.RUNTROL_CLOSE_TRACE = "1";
-coreEnvironment[pathKey] = `${path.dirname(fixture)}${path.delimiter}${process.env[pathKey] ?? ""}`;
+// The performance contract measures the declared fixture and its 30 sessions. Inheriting the operator's PATH
+// also discovers and probes every installed coding CLI while the clock runs, so an account probe or a cold CLI
+// filesystem walk becomes a random refresh result. The exact fixture directory is the complete provider surface
+// for this isolated home; Code, Core, and the fixture itself are already launched by absolute path.
+coreEnvironment[pathKey] = path.dirname(fixture);
 let daemon = null;
 const daemonStderrPath = path.join(temporary, "core-stderr.log");
 // Everything the daemon has written so far, read back from its spool.

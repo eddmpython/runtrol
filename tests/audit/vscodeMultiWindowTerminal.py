@@ -280,7 +280,7 @@ def exercise() -> Evidence:
                         if raw_pid.isdigit() and int(raw_pid) > 0:
                             owner_pid = int(raw_pid)
                             owner_identity = process.ProcessIdentity(owner_pid, process.processGeneration(owner_pid))
-                    time.sleep(0.05)
+                    time.sleep(process.PROCESS_SAMPLE_S)
                 if host.poll() is None:
                     raise Failed(f"the multi-window journey exceeded {TIMEOUT_S:.0f} seconds")
                 host_output.seek(0)
