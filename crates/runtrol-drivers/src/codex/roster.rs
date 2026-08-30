@@ -148,7 +148,31 @@ pub(super) struct CodexRoster {
     followed: Arc<Mutex<HashMap<Box<str>, Followed>>>,
     /// The process each conversation's lock names, and that conversation's folder. Shared for the same reason.
     bound: Arc<Mutex<HashMap<Box<str>, Bound>>>,
+    /// How the holder of a lock is asked for. The product asks through a short-lived helper, which keeps the
+    /// cost of that machinery out of the Runtime; a test asks in its own process, because a test binary is not
+    /// a helper this executable knows how to be.
+    ask_holder: fn(&Path) -> Option<u32>,
 }
+
+/// What this machine has been told about its own conversations, kept for the life of the process.
+///
+/// A driver is built afresh for every observation (`provider_prepare::prepare_driver`), so a cache owned by a
+/// driver instance is an empty cache. The facts below are about the machine and not about any one instance:
+/// which conversations a live process holds, how far each log has been read, and which process holds which
+/// lock. Asking the operating system who holds a file loads its Restart Manager, which measured 2026-08-30 as
+/// two megabytes at rest and nearly five more under load when it was asked again on every observation, over a
+/// budget of five for eight live sessions. Asked once per conversation, it is paid once.
+struct MachineFacts {
+    owned: Arc<Mutex<Option<Ownership>>>,
+    followed: Arc<Mutex<HashMap<Box<str>, Followed>>>,
+    bound: Arc<Mutex<HashMap<Box<str>, Bound>>>,
+}
+
+static MACHINE: std::sync::LazyLock<MachineFacts> = std::sync::LazyLock::new(|| MachineFacts {
+    owned: Arc::new(Mutex::new(None)),
+    followed: Arc::new(Mutex::new(HashMap::new())),
+    bound: Arc::new(Mutex::new(HashMap::new())),
+});
 
 impl CodexRoster {
     /// Locate the CLI's home from the environment it inherits. Opens nothing.
@@ -165,19 +189,44 @@ impl CodexRoster {
         Self::holding(home, OWNERSHIP_FOR)
     }
 
+    /// The product's roster, sharing what this process has already learned about the machine.
     fn holding(home: Result<PathBuf, HomeProblem>, owned_for: Duration) -> Self {
+        Self {
+            home,
+            owned: Arc::clone(&MACHINE.owned),
+            owned_for,
+            followed: Arc::clone(&MACHINE.followed),
+            bound: Arc::clone(&MACHINE.bound),
+            ask_holder: runtrol_childproc::holder_of,
+        }
+    }
+
+    /// A roster that remembers nothing anyone else learned. Tests hold their own scratch homes and reuse the
+    /// same conversation names, so sharing the machine's memory between them would let one answer another.
+    #[cfg(test)]
+    fn alone(home: Result<PathBuf, HomeProblem>, owned_for: Duration) -> Self {
         Self {
             home,
             owned: Arc::new(Mutex::new(None)),
             owned_for,
             followed: Arc::new(Mutex::new(HashMap::new())),
             bound: Arc::new(Mutex::new(HashMap::new())),
+            ask_holder: runtrol_childproc::holder_of_here,
         }
     }
 
     #[cfg(test)]
     fn rooted(home: PathBuf) -> Self {
-        Self::holding(Ok(home), Duration::ZERO)
+        Self::alone(Ok(home), Duration::ZERO)
+    }
+
+    /// The directory this CLI keeps one writer lock per open conversation in. Its file set changing is this
+    /// CLI's own statement that a conversation was opened or closed.
+    pub(super) fn locks_directory(&self) -> Option<PathBuf> {
+        match &self.home {
+            Ok(home) => Some(home.join(LOCKS_DIRECTORY)),
+            Err(_) => None,
+        }
     }
 
     /// The conversations this CLI has open, and the subset with a model answering.
@@ -228,7 +277,9 @@ impl CodexRoster {
             if answering {
                 active.push(thread.clone());
             }
-            if let Some(binding) = holder(&locks, home, &mut bound, thread.as_str()) {
+            if let Some(binding) =
+                holder(self.ask_holder, &locks, home, &mut bound, thread.as_str())
+            {
                 processes.push(NativeProcessBinding {
                     pid: binding.pid,
                     native: thread.clone(),
@@ -263,6 +314,7 @@ impl CodexRoster {
 /// A kept answer is reused while its process is still alive, so the Restart Manager session is opened once per
 /// conversation rather than on every observation.
 fn holder(
+    ask: fn(&Path) -> Option<u32>,
     locks: &Path,
     home: &Path,
     bound: &mut HashMap<Box<str>, Bound>,
@@ -273,7 +325,7 @@ fn holder(
     {
         return Some(known.clone());
     }
-    let pid = runtrol_childproc::holder_of(&locks.join(format!("{thread}.{LOCK_EXTENSION}")))?;
+    let pid = ask(&locks.join(format!("{thread}.{LOCK_EXTENSION}")))?;
     let fresh = Bound {
         pid,
         cwd: workspace_of(home, thread),

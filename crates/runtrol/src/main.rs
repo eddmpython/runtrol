@@ -46,6 +46,8 @@ enum Personality {
     },
     /// Join one other process's console for the daemon that spawned this helper, until that process ends.
     ConsoleMirror(u32),
+    /// Say which live process holds one file, for the Runtime that spawned this helper, and end.
+    WhoHolds(std::path::PathBuf),
     /// Materialize runtime-discovered transparent provider launchers.
     ProviderShims(std::path::PathBuf),
     /// Administer public Runtime integrations from an owner terminal.
@@ -122,6 +124,15 @@ fn main() -> ExitCode {
             provider,
             arguments,
         } => run(bridging(&provider, &arguments)),
+        // One question, one line, then gone: the machinery this answer needs costs the asking process
+        // megabytes for its whole life, so the asking process is this one and its life is milliseconds.
+        Personality::WhoHolds(path) => {
+            if runtrol_childproc::held::run_who_holds(&path) {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::FAILURE
+            }
+        }
         // Attached to one console for its whole life: no runtime, no daemon, just the mirror loop.
         Personality::ConsoleMirror(pid) => match runtrol_childproc::run_mirror(pid) {
             Ok(code) => ExitCode::from(u8::try_from(code).unwrap_or(1)),
@@ -172,6 +183,10 @@ fn choose(words: &[String]) -> Personality {
         Some("shims") => match words.get(1..) {
             Some([directory]) => Personality::ProviderShims(directory.into()),
             _ => Personality::Usage("runtrol shims <dedicated-directory>".to_owned()),
+        },
+        Some(word) if word == runtrol_childproc::held::HOLDER_SUBCOMMAND => match words.get(1) {
+            Some(path) => Personality::WhoHolds(path.into()),
+            None => Personality::Usage(format!("runtrol {word} <path>")),
         },
         Some(word) if word == runtrol_childproc::console_mirror::SUBCOMMAND => {
             match words.get(1).map(|pid| pid.parse::<u32>()) {

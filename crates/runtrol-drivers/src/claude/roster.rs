@@ -133,6 +133,15 @@ impl ClaudeRoster {
         }
     }
 
+    /// The directory this CLI keeps one record per live process in. Its file set changing is this CLI's own
+    /// statement that a session started or ended.
+    pub(super) fn sessions_directory(&self) -> Option<PathBuf> {
+        match &self.sessions {
+            Ok(directory) => Some(directory.clone()),
+            Err(_) => None,
+        }
+    }
+
     /// The conversations of this CLI whose model is answering right now.
     ///
     /// A roster this driver cannot locate answers with nothing, which is what a machine where the CLI has

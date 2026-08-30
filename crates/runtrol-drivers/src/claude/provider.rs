@@ -290,6 +290,10 @@ impl Provider for ClaudeProvider {
             })?
     }
 
+    fn session_directory(&self) -> Option<std::path::PathBuf> {
+        self.roster.sessions_directory()
+    }
+
     async fn native_process_activity(
         &self,
     ) -> Result<runtrol_provider::NativeProcessActivity, ProviderError> {

@@ -381,6 +381,10 @@ impl Provider for CodexProvider {
         Ok(self.native_process_activity().await?.active)
     }
 
+    fn session_directory(&self) -> Option<std::path::PathBuf> {
+        self.roster.locks_directory()
+    }
+
     async fn native_process_activity(&self) -> Result<NativeProcessActivity, ProviderError> {
         let roster = self.roster.clone();
         let provider = self.id;

@@ -245,54 +245,98 @@ async fn prewarm_providers(composed: Arc<Composed>, discovering: Arc<DiscoveryGa
     runtrol_childproc::footprint::release_unused_memory();
 }
 
-/// How often this Runtime looks for provider sessions on its own.
+/// How long a watcher waits before looking again on its own.
+///
+/// A floor under the operating system's own notification, not a poll: it fires only when nothing has changed
+/// for this long, so an idle machine wakes twice a minute. The Runtime is held to one percent of one CPU while
+/// idle (`tests/audit/idleFootprintRatchet.py`), which a clock fast enough to feel would spend on nothing.
+const LOOK_AGAIN_AFTER: Duration = Duration::from_secs(30);
+
+/// How long a provider whose directory cannot be watched waits before trying to watch it again.
+///
+/// A CLI that has never run on this machine has no directory yet, and the person installing it should not have
+/// to restart the Runtime for their first session to appear.
+const RETRY_WATCH_AFTER: Duration = Duration::from_mins(1);
+
+/// Find, bind and mirror provider sessions with no window involved.
 ///
 /// Discovery used to happen only inside a window's activity question: the only callers of a provider's process
 /// roster were one request handler and one open guard (measured 2026-08-30). A machine with no window open
-/// therefore found nothing at all, and a window that had just opened watched its own list fill in. On this
-/// clock the Runtime binds and mirrors a session started anywhere before anybody asks, so the first window to
-/// open finds the work already done. It also costs less than what it replaces: one sweep for the machine
-/// instead of one question per window four times a second.
-const NATIVE_SWEEP: Duration = Duration::from_millis(500);
-
-/// How many sweeps pass before the executable search path is walked again for newly installed services.
-///
-/// Installing a coding service is rare and the walk is the expensive part of asking, so it is asked twice a
-/// minute rather than twice a second. A service installed in between is still found by every request that can
-/// see it.
-const SWEEPS_BETWEEN_INSTALL_CHECKS: u32 = 60;
-
-/// Find, bind and mirror provider sessions with no window involved.
+/// therefore found nothing at all, and a window that had just opened watched its own list fill in. Each
+/// provider is now waited on rather than asked, so a session started anywhere is bound and mirrored at once
+/// and the first window to open finds the work already done.
 async fn watch_native_sessions(composed: Arc<Composed>, discovering: Arc<DiscoveryGates>) {
-    let mut sweep = tokio::time::interval(NATIVE_SWEEP);
-    sweep.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    let mut providers = Vec::new();
-    let mut since_install_check = SWEEPS_BETWEEN_INSTALL_CHECKS;
+    let providers = providers_to_prewarm(&composed.registry, |manifest| {
+        runtrol_core::locate(manifest).is_ok()
+    });
+    let mut watching = JoinSet::new();
+    for provider in providers {
+        watching.spawn(watch_one_provider(
+            Arc::clone(&composed),
+            Arc::clone(&discovering),
+            provider,
+        ));
+    }
+    while watching.join_next().await.is_some() {}
+}
+
+/// Wait on one provider's own statement that its open conversations changed, and act on each one.
+async fn watch_one_provider(
+    composed: Arc<Composed>,
+    discovering: Arc<DiscoveryGates>,
+    provider: ProviderId,
+) {
+    // Sessions already open when this Runtime started are found here, before any change arrives.
+    look_again(&composed, &discovering, provider).await;
     loop {
-        sweep.tick().await;
         // A draining generation is on its way out and opens nothing new; its successor is doing this now.
         if composed.draining.load(std::sync::atomic::Ordering::Acquire) {
+            return;
+        }
+        let Some(mut changes) = watch_of(&composed, provider).await else {
+            tokio::time::sleep(RETRY_WATCH_AFTER).await;
             continue;
-        }
-        if since_install_check >= SWEEPS_BETWEEN_INSTALL_CHECKS {
-            providers = providers_to_prewarm(&composed.registry, |manifest| {
-                runtrol_core::locate(manifest).is_ok()
-            });
-            since_install_check = 0;
-        }
-        since_install_check += 1;
-        for provider in &providers {
-            // A provider that cannot be prepared or will not answer leaves the last answer standing. Nothing
-            // here is reported: this sweep has no request waiting on it, and every failure it could meet is
-            // one a real request meets again and reports to the person who asked.
-            if let Ok(Ok(activity)) =
-                crate::runtime_serve::observe_native_activity(&composed, &discovering, *provider)
-                    .await
-            {
-                crate::runtime_serve::reconcile_native_activity(&composed, *provider, &activity)
-                    .await;
+        };
+        loop {
+            match tokio::time::timeout(LOOK_AGAIN_AFTER, changes.recv()).await {
+                // A change, or the floor under it. Both mean the same act.
+                Ok(Some(())) | Err(_) => look_again(&composed, &discovering, provider).await,
+                // The watch ended. Ask for a new one rather than going blind.
+                Ok(None) => break,
+            }
+            if composed.draining.load(std::sync::atomic::Ordering::Acquire) {
+                return;
             }
         }
+    }
+}
+
+/// A watch on the directory this provider says names its open conversations, or nothing when it has none.
+async fn watch_of(
+    composed: &Arc<Composed>,
+    provider: ProviderId,
+) -> Option<tokio::sync::mpsc::Receiver<()>> {
+    // A CLI that is absent or mid-update has nothing to watch yet, which the retry above tries again.
+    let Ok(prepared) = crate::provider_prepare::prepared_driver(composed, provider).await else {
+        return None;
+    };
+    let directory = prepared.driver.session_directory()?;
+    runtrol_childproc::watch_directory(&directory)
+}
+
+/// Ask this provider what it has open and act on the answer.
+async fn look_again(
+    composed: &Arc<Composed>,
+    discovering: &Arc<DiscoveryGates>,
+    provider: ProviderId,
+) {
+    // A provider that cannot be prepared or will not answer leaves the last answer standing. Nothing is
+    // reported here: this watch has no request waiting on it, and every failure it could meet is one a real
+    // request meets again and reports to the person who asked.
+    if let Ok(Ok(activity)) =
+        crate::runtime_serve::observe_native_activity(composed, discovering, provider).await
+    {
+        crate::runtime_serve::reconcile_native_activity(composed, provider, &activity).await;
     }
 }
 

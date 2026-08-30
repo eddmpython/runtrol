@@ -24,6 +24,40 @@ pub fn write_locked(path: &Path) -> bool {
     platform::write_locked(path)
 }
 
+/// The subcommand this executable answers when it is asked, as a helper, who holds a file.
+pub const HOLDER_SUBCOMMAND: &str = "who-holds";
+
+/// Print the process holding one path, for a caller that spawned this executable to ask.
+///
+/// Prints the process identifier alone, or nothing when nobody holds it. The exit code is the answer's
+/// presence so a caller that cannot read output still learns something.
+#[must_use]
+pub fn run_who_holds(path: &Path) -> bool {
+    match platform::holder_of(path) {
+        Some(pid) => {
+            // A helper whose one line cannot be written has failed to answer, which the exit code then says.
+            std::io::Write::write_fmt(
+                &mut std::io::stdout().lock(),
+                format_args!(
+                    "{pid}
+"
+                ),
+            )
+            .is_ok()
+        }
+        None => false,
+    }
+}
+
+/// The same answer as [`holder_of`], asked here instead of in a helper.
+///
+/// Costs this process the machinery named there, for the life of the process. It exists for the helper itself
+/// and for tests, which are measuring the answer rather than paying for a Runtime.
+#[must_use]
+pub fn holder_of_here(path: &Path) -> Option<u32> {
+    platform::holder_of(path)
+}
+
 /// Which live process holds this path, when the operating system will say.
 ///
 /// [`write_locked`] answers "is somebody holding it"; this answers "who". A CLI that keeps one lock file per
@@ -35,9 +69,31 @@ pub fn write_locked(path: &Path) -> bool {
 ///
 /// Measured 2026-08-30 on the operator's machine: asking this of one live `thread-writer-locks/<id>.lock`
 /// returned exactly one holder, `codex.exe` pid 20404, which was the process running that conversation.
+#[expect(
+    clippy::result_map_or_into_option,
+    reason = "this workspace refuses Result::ok because it discards a cause; a helper that printed something other than a process identifier has no cause to keep"
+)]
 #[must_use]
 pub fn holder_of(path: &Path) -> Option<u32> {
-    platform::holder_of(path)
+    // Asked in a helper of its own, not here. Windows answers this through its Restart Manager, and loading
+    // that machinery costs the asking process 5.3 MiB of resident memory for the life of the process
+    // (measured 2026-08-30: 10.3 MiB before the first ask, 15.6 after it, 15.8 after twenty more). A Runtime
+    // held to twenty megabytes while idle cannot spend a quarter of that on one question, and a process that
+    // exits after answering spends nothing that lasts.
+    let Ok(program) = std::env::current_exe() else {
+        return None;
+    };
+    let asked = std::process::Command::new(program)
+        .arg(HOLDER_SUBCOMMAND)
+        .arg(path)
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output();
+    let Ok(answer) = asked else {
+        return None;
+    };
+    let printed = String::from_utf8_lossy(&answer.stdout);
+    printed.trim().parse().map_or(None, Some)
 }
 
 #[cfg(windows)]
@@ -229,7 +285,7 @@ mod tests {
         let path = scratch("holder");
         fs::write(&path, b"").expect("the scratch file is written");
         assert_eq!(
-            holder_of(&path),
+            platform::holder_of(&path),
             None,
             "a file nobody has open has no holder"
         );
@@ -238,14 +294,45 @@ mod tests {
             .share_mode(0)
             .open(&path)
             .expect("this process takes the file");
-        assert_eq!(holder_of(&path), Some(std::process::id()));
+        assert_eq!(platform::holder_of(&path), Some(std::process::id()));
+        drop(holder);
+        drop(fs::remove_file(&path));
+    }
+
+    /// What asking the operating system who holds a file costs this process, printed rather than asserted.
+    ///
+    /// `cargo test -p runtrol-childproc --lib held::tests::what_asking -- --ignored --nocapture`
+    #[ignore = "prints a measurement of this machine"]
+    #[cfg(windows)]
+    #[test]
+    fn what_asking_who_holds_a_file_costs() {
+        use std::fs::OpenOptions;
+        use std::os::windows::fs::OpenOptionsExt as _;
+
+        let path = scratch("cost");
+        fs::write(&path, b"").expect("the scratch file is written");
+        let holder = OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(&path)
+            .expect("this process takes the file");
+        let before = crate::footprint::resident_bytes(std::process::id());
+        assert_eq!(platform::holder_of(&path), Some(std::process::id()));
+        let once = crate::footprint::resident_bytes(std::process::id());
+        for _ in 0..20 {
+            let _asked = platform::holder_of(&path);
+        }
+        let many = crate::footprint::resident_bytes(std::process::id());
+        println!(
+            "resident bytes: before={before:?} after one ask={once:?} after twenty more={many:?}"
+        );
         drop(holder);
         drop(fs::remove_file(&path));
     }
 
     #[test]
     fn a_missing_path_has_no_holder() {
-        assert_eq!(holder_of(&scratch("absent-holder")), None);
+        assert_eq!(platform::holder_of(&scratch("absent-holder")), None);
     }
 
     #[cfg(windows)]

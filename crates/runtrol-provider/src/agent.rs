@@ -170,6 +170,19 @@ pub trait Provider: Send + Sync + 'static {
         Ok(Vec::new())
     }
 
+    /// The one directory whose file set changing means this CLI's open conversations changed.
+    ///
+    /// A CLI that keeps one file per open conversation (a process record, a writer lock) says by creating and
+    /// removing those files exactly when a session started or ended. A Runtime that waits on that directory
+    /// notices at once and costs nothing while nothing happens, instead of asking on a clock forever and still
+    /// answering late. `None` means this driver has no such directory, and the Runtime falls back to noticing
+    /// on the requests that can see a change.
+    ///
+    /// The path is this driver's own business. Nothing outside it knows or names the directory.
+    fn session_directory(&self) -> Option<std::path::PathBuf> {
+        None
+    }
+
     /// Which conversations have a provider process now, and which of those are answering.
     ///
     /// The default preserves source compatibility with older drivers: activity they already report also proves

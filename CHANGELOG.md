@@ -14,9 +14,10 @@ and refactoring that no user can observe do not belong here.
 
 - Conversations you start in a terminal now appear in the sidebar without waiting for a window to ask for them.
   The Runtime looked for coding sessions only while answering a window, so a machine with no Runtrol window open
-  found none at all, and a window that had just opened watched its own list fill in. The Runtime now looks on its
-  own clock, so a session started anywhere is already bound and ready to click by the time you look, and the
-  machine does one search instead of one per window several times a second.
+  found none at all, and a window that had just opened watched its own list fill in. The Runtime now waits on
+  each coding service's own record of what it has open and reacts the moment that changes, so a session started
+  anywhere is already bound and ready to click by the time you look. Waiting costs nothing while nothing happens:
+  an idle Runtime measured 63 milliseconds of processor time across ten seconds, inside its hundred.
 
 - A Codex conversation you are working in no longer reads as running somewhere else. Codex keeps one lock file
   per open conversation, and the Runtime could see that a conversation was open but never which process had it,
