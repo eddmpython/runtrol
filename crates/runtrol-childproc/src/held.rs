@@ -208,10 +208,6 @@ mod platform {
     use std::os::fd::AsRawFd as _;
     use std::path::Path;
 
-    #[expect(
-        unsafe_code,
-        reason = "an advisory lock test has no safe wrapper in std; flock is the call itself"
-    )]
     /// Unix has no portable "who holds this advisory lock" call. `fcntl(F_GETLK)` names a holder for record
     /// locks but not for `flock`, and walking `/proc/*/fd` is Linux only and costs a scan of every process.
     /// Answering `None` keeps the caller honest (no binding known) until a unix user needs one measured here.
@@ -219,6 +215,10 @@ mod platform {
         None
     }
 
+    #[expect(
+        unsafe_code,
+        reason = "an advisory lock test has no safe wrapper in std; flock is the call itself"
+    )]
     pub(super) fn write_locked(path: &Path) -> bool {
         let Ok(file) = OpenOptions::new().read(true).open(path) else {
             return false;

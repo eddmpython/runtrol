@@ -20,6 +20,7 @@ use std::path::Path;
 /// The renewal exists so a watcher whose reader has gone away ends within a bounded time, and as a floor under
 /// a notification the operating system never delivers. Long enough that an idle machine wakes twice a minute,
 /// which is far inside the one percent of one CPU an idle Runtime is held to.
+#[cfg(windows)]
 const RENEW_AFTER_SECONDS: u32 = 30;
 
 /// Watch one directory's file set. `None` when the path cannot be watched, which a caller reads as "this
@@ -157,10 +158,9 @@ mod platform {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
-    use std::time::Duration;
-    use std::{fs, thread};
 
     use super::*;
 
@@ -183,6 +183,9 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn a_file_appearing_wakes_the_watcher() {
+        use std::thread;
+        use std::time::Duration;
+
         let root = scratch();
         let mut changes = watch_directory(&root).expect("a real directory is watchable");
         // The watcher is already waiting; the write below is the event it is waiting for.
