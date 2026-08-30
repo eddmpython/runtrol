@@ -294,16 +294,30 @@ mod tests {
         // A manifest names bare executables and nothing else, so what this proves is that an ACP service is
         // found on the operator's own search path. Runtime resolves what is already installed; it has never had
         // a way to fetch one, and a manifest that named a downloader would be that way.
-        let manifest: Manifest = MANIFESTS
-            .iter()
-            .map(|text| toml::from_str(text).expect("shipped manifest parses"))
-            .find(|manifest: &Manifest| manifest.kind.as_str() == "acp")
-            .expect("this build ships an ACP service");
+        let manifest: Manifest = toml::from_str(
+            r#"
+schema = 1
+id = "fixture-acp"
+display_name = "ACP Fixture"
+kind = "acp"
+
+[bin]
+names = ["runtrol-acp-discovery-fixture"]
+
+[probe]
+version = { args = ["--version"], parse = "semver-anywhere" }
+
+[transport]
+argv = []
+listen = "stdio"
+"#,
+        )
+        .expect("the external ACP fixture manifest parses");
         let bare = manifest
             .bin
             .names
             .first()
-            .expect("an ACP manifest names its executable")
+            .expect("the ACP fixture manifest names its executable")
             .as_ref()
             .to_owned();
         if let Some(expected) = std::env::var_os(CHILD_MARKER) {
@@ -311,7 +325,7 @@ mod tests {
             assert_eq!(
                 std::fs::canonicalize(resolved.path().as_std_path()).expect("resolved path exists"),
                 std::fs::canonicalize(expected).expect("fixture path exists"),
-                "the generated manifest found the locally installed executable"
+                "the external manifest found the locally installed executable"
             );
             return;
         }

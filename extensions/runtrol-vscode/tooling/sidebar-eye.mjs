@@ -20,7 +20,7 @@
 // Usage: node tooling/sidebar-eye.mjs [outputPng]
 
 import { spawn } from "node:child_process";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -138,7 +138,7 @@ function chip(providerId, name, percent, rings) {
     caption: percent === null ? "" : `${percent}%`,
     reached: false,
     state: "available",
-    canSignOut: providerId !== "grok",
+    canSignOut: true,
     position: "",
     plan: "Max",
     version: providerId === "claude" ? "2.1.251" : "0.63.0",
@@ -212,16 +212,6 @@ const model = {
       { label: "claude-opus-5 weekly", percent: 74 },
     ]),
     chip("codex", "Codex", 13, [{ label: "7 days", percent: 13 }]),
-    // A service that answered and has no number of its own: measured, one account is metered by a team and
-    // that CLI publishes no percentage for it at all. This is the state the caption used to call "No report",
-    // and it is only reachable in a picture from here.
-    {
-      ...chip("grok", "Grok", null, []),
-      caption: "",
-      position: "team-managed",
-      plan: "SuperGrok",
-      meters: [],
-    },
   ],
   serviceChoice: null,
   firstRun: false,
@@ -310,4 +300,5 @@ const captured = await new Promise((resolve) => shot.on("close", resolve));
 if (captured !== 0) {
   throw new Error(`the sidebar page could not be photographed (chrome exited ${captured})`);
 }
+await rm(temporary, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 console.log(`sidebar eye -> ${out}`);

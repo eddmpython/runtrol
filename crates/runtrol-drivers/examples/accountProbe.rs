@@ -11,7 +11,7 @@
 //!
 //! Usage:
 //!   accountProbe                     every shipped service found on this machine
-//!   accountProbe <provider-id>...    only the named ones (`claude`, `codex`, `grok`)
+//!   accountProbe <provider-id>...    only the named ones (`claude`, `codex`)
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
@@ -39,7 +39,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         report(&id, manifest, &contained_by).await;
     }
     if asked == 0 {
-        return Err("no shipped service matched; try claude, codex or grok".into());
+        return Err("no shipped service matched; try claude or codex".into());
     }
     Ok(())
 }

@@ -479,7 +479,7 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
     } else if (!usable) {
       notices.push({
         tone: "warn",
-        text: "No coding-agent CLI was found on this machine. Runtrol supervises Claude Code, Codex and Grok; install one and sign in with its own command.",
+        text: "No coding-agent CLI was found on this machine. Runtrol supervises Claude Code and Codex; install one and sign in with its own command.",
         command: "runtrol.setUpServices",
         label: "Set up",
       });
