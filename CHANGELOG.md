@@ -20,6 +20,10 @@ and refactoring that no user can observe do not belong here.
   until the coding service draws its first line. Until now the tab showed four bracket characters standing in
   for the mark, which read as brackets and not as the mark.
 
+- A running conversation shows it from its edge as well: a light runs down the project colour band beside
+  the row, in step with its turning icon, so a glance at the list finds the rows that are working without
+  reading each 14 px icon. The band keeps its colour, so it still names the project.
+
 ### Fixed
 
 - The opening mark stays up until the coding service draws something a person can see. It used to come

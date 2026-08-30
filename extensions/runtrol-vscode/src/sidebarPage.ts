@@ -263,9 +263,10 @@ function conversationHtml(row: SidebarConversationRow, assets: SidebarAssets): s
   // A native tooltip only where it says the one thing the row cannot show: why an open would be refused.
   // Everything else the tooltip used to repeat (service, activity, model) is already on the row, and a
   // tooltip floating beside the hover actions reads as clutter (operator, 2026-08-27).
-  return `<div class="row conv${row.canOpen ? "" : " blocked"}${row.pinned ? " pinned" : ""}" role="button" tabindex="0" data-kind="conversation" data-key="${escapeHtml(row.key)}"${row.blocked ? ` title="${escapeHtml(row.blocked)}"` : ""}>
+  // Running is a state of the whole row, said once on the row: the icon turns and the band flows from it.
+  return `<div class="row conv${row.canOpen ? "" : " blocked"}${row.pinned ? " pinned" : ""}${row.activity === "working" ? " working" : ""}" role="button" tabindex="0" data-kind="conversation" data-key="${escapeHtml(row.key)}"${row.blocked ? ` title="${escapeHtml(row.blocked)}"` : ""}>
 <span class="bar${row.hue ? ` ${row.hue}` : ""}"></span>
-<span class="glyph-slot${row.activity === "working" ? " working" : ""}"><img class="glyph" src="${escapeHtml(iconUri)}" alt="${escapeHtml(row.serviceName)}" draggable="false"></span>
+<span class="glyph-slot"><img class="glyph" src="${escapeHtml(iconUri)}" alt="${escapeHtml(row.serviceName)}" draggable="false"></span>
 <span class="title">${escapeHtml(row.title)}</span>
 ${state}
 <span class="tail">
@@ -414,8 +415,17 @@ button { font: inherit; color: inherit; }
    a running row and an idle row put their names in the same place. */
 /* The icon alone turns (operator, 2026-08-29: no ring, just the icon). Fast enough that a symmetric mark
    still reads as moving, and a full turn is a plain transform the compositor can run without a repaint. */
-.conv .glyph-slot.working .glyph { animation: spin 1.1s linear infinite; will-change: transform; }
+.conv.working .glyph { animation: spin 1.1s linear infinite; will-change: transform; }
 @keyframes spin { to { transform: rotate(360deg); } }
+/* The project band of a running row moves too: a light runs down it, once per turn of the icon, so the row
+   reads as working from its edge and not only from a 14 px icon (operator, 2026-08-30: not just the icon,
+   the colour bar as well). The light is a pseudo-element the compositor slides with a transform; nothing is
+   repainted per frame and the band itself keeps its colour, so an idle row and a running row still name the
+   same project. What a working row costs is one small compositor layer for the light, the same as the
+   turning icon already costs. */
+.row .bar { position: relative; overflow: hidden; }
+.conv.working .bar::after { content: ""; position: absolute; left: 0; right: 0; top: 0; height: 100%; background: linear-gradient(to bottom, transparent, rgba(255, 255, 255, 0.75), transparent); animation: flow 1.1s linear infinite; will-change: transform; }
+@keyframes flow { from { transform: translateY(-100%); } to { transform: translateY(100%); } }
 /* One line, and the tail fades out rather than ending in dots: the reader sees there is more without a
    glyph spending width to say so, and two-line rows made the list hard to scan (operator, 2026-08-28). */
 .conv .title { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; line-height: 1.4; -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 20px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 20px), transparent); }

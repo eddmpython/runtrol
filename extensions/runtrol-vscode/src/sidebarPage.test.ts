@@ -177,15 +177,23 @@ test("a running conversation is marked once at its icon, and action states use w
   }), assets);
   // The mark is on the slot around the icon, not on the icon itself: an image cannot carry the arc, and the
   // arc is what a person sees when the service's own icon is symmetric enough that turning it shows nothing.
-  assert.equal(html.match(/class="glyph-slot working"/gu)?.length, 1);
+  // Running is said once, on the row, and the icon and the band both read it from there.
+  assert.equal(html.match(/class="row conv working"/gu)?.length, 1);
+  assert.ok(!html.includes('class="glyph-slot working"'), "the icon slot no longer carries its own copy of the state");
   assert.ok(html.includes('<span class="glyph-slot"><img class="glyph"'), "an idle row carries no mark");
   assert.ok(!html.includes('class="dot'), "no unexplained status dot is drawn");
   assert.ok(html.includes('class="conv-state attention" title="Needs you">Needs you</span>'));
   assert.ok(html.includes('class="conv-state muted" title="running outside runtrol">Elsewhere</span>'));
   assert.ok(html.includes("--runtrol-running: var(--vscode-charts-blue"));
   // The icon alone turns; there is no ring around it (operator, 2026-08-29).
-  assert.ok(html.includes(".conv .glyph-slot.working .glyph { animation: spin"));
+  assert.ok(html.includes(".conv.working .glyph { animation: spin"));
   assert.ok(!html.includes(".glyph-slot.working::after"), "no ring is drawn around a turning icon");
+  // The band of a running row carries a light sliding down it, as a compositor transform and never a repaint
+  // of the band (operator, 2026-08-30: the colour bar should move too, unless that costs memory).
+  assert.ok(html.includes(".conv.working .bar::after {"), "the light lives on the band of a working row");
+  assert.ok(html.includes("animation: flow 1.1s linear infinite"), "in step with the turning icon");
+  assert.ok(html.includes("@keyframes flow { from { transform: translateY(-100%); } to { transform: translateY(100%); } }"));
+  assert.ok(html.includes(".row .bar { position: relative; overflow: hidden; }"), "the light is clipped to the band");
   assert.ok(!html.includes(".conv.blocked .title"), "an externally running conversation stays readable");
 });
 

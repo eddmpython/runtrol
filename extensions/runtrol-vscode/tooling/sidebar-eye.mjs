@@ -268,6 +268,16 @@ html = html.replace("</body>", `<script nonce="${assets.nonce}">
     if (chip) chip.click();
   });
 </script></body>`);
+// A moving state, held at one instant. The shutter opens right after load, when every animation is at its
+// first frame: a light that starts outside its band is not in the picture at all, and the picture then says
+// "nothing moves" about a page where something does. RUNTROL_EYE_FREEZE_MS puts every animation that many
+// milliseconds into its run and holds it there, so the frame photographed is a chosen one.
+const freezeMs = Number(process.env.RUNTROL_EYE_FREEZE_MS ?? "");
+if (Number.isFinite(freezeMs) && freezeMs > 0) {
+  html = html.replace("</head>", `<style nonce="${assets.nonce}">
+*, *::before, *::after { animation-delay: -${freezeMs}ms !important; animation-play-state: paused !important; }
+</style></head>`);
+}
 const page = path.join(temporary, "sidebar.html");
 await writeFile(page, html, "utf8");
 
