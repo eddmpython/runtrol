@@ -23,6 +23,8 @@ inherits new provider features without prompt injection, semantic parsing, or a 
   Runtime admits at most eight hosted provider terminals, for a 24 MiB complete-set ceiling. Viewers reuse that
   fan-out and add no payload ring of their own; control records are bounded separately.
 - Runtime answers terminal capability and cursor-position queries once at the host. Viewers do not race to answer.
+- Snapshot creation and live fan-out share one output-state critical section. A viewer receives a chunk in its
+  snapshot or subscribes before that chunk is published, never both and never neither.
 - Mouse reports are normalized into provider-visible key input. Provider-specific launch behavior remains declarative
   in the manifest `[tui]` section through `new`, `resume`, `attach`, `stop`, `env`, and `env_unset`.
 - No Runtime, Studio, SDK, or phone code selects behavior by a hardcoded provider name.
@@ -67,7 +69,10 @@ official target may differ from the durable native conversation identity and is 
 
 Official attachment is lazy for memory and process efficiency. Merely listing a live conversation retains only its
 bounded roster record. Before the first open it allocates no renderer process, PTY, screen model, or output ring. Once
-opened, all viewers share the same renderer and the existing 3 MiB per-terminal ceiling.
+opened, all viewers share the same renderer and the existing 3 MiB per-terminal ceiling. Official attachments and
+console mirrors hold a content-free terminal-surface admission claim while their renderer is live. The external CLI
+still owns the conversation and transcript; the claim only prevents another Runtime generation from allocating a
+second renderer, ring, and screen for that owner.
 
 ## Public Runtime contract
 
@@ -85,6 +90,10 @@ Application integrations use the public Runtime methods:
 Open and attach return a terminal descriptor, a view ID, the current base64 screen, and an optional control lease.
 Output sequence numbers are per view. A lag notification includes the complete replacement screen and next sequence,
 so a client never attempts to reconstruct missing bytes semantically.
+
+`terminals/detach` ends only the selected view and returns its dedicated connection to ordinary request mode. An SDK
+may open or attach another view on that same authenticated connection. Process exit, lost authority, malformed input,
+and transport failure still end the connection.
 
 Each view has its own renewable lease generation. One window renewing, expiring, releasing, or closing its lease does
 not invalidate another window. Authorized writes from all live views are serialized through the one PTY writer, so
@@ -105,9 +114,11 @@ and replace its screen from the returned snapshot. It must not redirect to the c
 `terminalWorkspaceConflict`, `nativeConversationBusy`, and `legacyGenerationBusy` are distinct typed failures. Input,
 resize, stop, control acquisition, and approval mutations are never retried after an uncertain outcome.
 
-One atomic native claim registry prevents a native conversation from having both a structured owner and a terminal
-owner, including during generation handover. A draining generation may serve terminals it already owns but cannot
-open new ones.
+One atomic live-admission registry prevents a native conversation from having both a structured owner and a terminal
+surface, including during generation handover. Runtime-owned TUI processes, official attachment renderers, and console
+mirrors all export their terminal-surface claim. A terminal reservation is exported before process startup completes,
+so a generation handoff cannot lose the launch interval. A draining generation may serve terminals it already owns
+but cannot open new ones.
 
 ## Clients
 
@@ -131,7 +142,11 @@ A terminal lives while its provider CLI runs. Closing a Studio tab or SDK view d
 provider exits, Runtime drains the final frame before releasing the terminal. An explicit stop ends an owned PTY or
 Windows console owner directly; an official attachment invokes the paired provider stop command and then releases only
 its attachment renderer. A draining Runtime generation releases a quiet console mirror without stopping its external
-owner and ends an official attachment renderer without claiming ownership of the provider transcript.
+owner and ends an official attachment renderer without claiming ownership of the provider transcript. Idle retirement
+rechecks viewer count and output age at the same lock boundary where attach subscribes, then marks the renderer
+stopping. A reconnect either installs its receiver first and keeps the renderer or receives `terminalGone`. The process
+slot and terminal-surface claim remain held until observed exit, so a slow retirement cannot admit a replacement above
+the process or memory ceiling.
 
 Opening a Studio window is observation, not permission to start work. Activation restores selection and subscribes to
 the live indexes, but never runs `continue` or `resume`. A cold native conversation starts a process only after an

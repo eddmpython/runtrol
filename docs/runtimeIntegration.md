@@ -98,7 +98,9 @@ lease, or terminal mutations and never reacquire control silently.
 
 Each watcher or terminal view owns a dedicated streaming transport. Closing one cancels its pending receive and
 cannot strand local pipe capacity during rapid view switching. Ordinary request-response clients retain graceful
-close behavior.
+close behavior. A successful terminal detach returns that authenticated transport to request-response mode, so the
+same client can open or attach another terminal without reconnecting. Any uncertain mutation or broken transport still
+follows the no-blind-retry rule.
 
 The TypeScript and Python packages ship the complete JSON Schema. Generated validators and types come from the same
 Rust definitions, preserving closed objects, unions, formats, numeric bounds, and method names.

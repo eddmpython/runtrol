@@ -465,7 +465,7 @@ fn unpack_size(packed: u32) -> PtySize {
 impl Shared {
     /// One chunk the CLI wrote: into the screen, answered if it asked anything, and out to every viewer.
     async fn take_output(&self, chunk: Bytes) {
-        let (chunk, answers) = {
+        let answers = {
             let mut state = self.state.lock().await;
             // The mouse is a touch-screen concept here (`mouse`): a CLI switching a terminal's mouse on
             // never reaches the model or a viewer.
@@ -473,7 +473,13 @@ impl Shared {
             state.screen.process(&chunk);
             let cursor = state.screen.screen().cursor_position();
             let answers = state.queries.answers(&chunk, cursor);
-            (chunk, answers)
+            self.wrote_at
+                .store(WallMs::now().as_millis(), Ordering::Relaxed);
+            // Snapshot creation subscribes while holding this same state lock. Sending before releasing it makes the
+            // boundary exact: an attaching viewer either snapshots this chunk and subscribes after it, or snapshots
+            // the prior screen and receives the chunk live. It can never receive the same bytes through both paths.
+            drop(self.output.send(chunk));
+            answers
         };
         if !answers.is_empty() {
             let mut writer = self.writer.lock().await;
@@ -481,11 +487,6 @@ impl Shared {
             // one place that state belongs. ok: nothing downstream waits on this write.
             drop(writer.write_all(&answers).and_then(|()| writer.flush()));
         }
-        self.wrote_at
-            .store(WallMs::now().as_millis(), Ordering::Relaxed);
-        // ok: no receiver means no viewer is attached right now; the ring keeps nothing for nobody and the
-        // screen model already holds what a later viewer needs.
-        drop(self.output.send(chunk));
     }
 
     /// Watch the CLI's exit; on exit, let the last frame drain, then release the terminal.

@@ -146,7 +146,11 @@ pub(crate) async fn serve_connection(
             return;
         }
         if let Some(watching) = answered.watching {
-            relay_watch(&mut connection, watching, &mut sessions, composed.as_ref()).await;
+            if relay_watch(&mut connection, watching, &mut sessions, composed.as_ref()).await
+                == RelayOutcome::ResumeRequests
+            {
+                continue;
+            }
             return;
         }
     }
@@ -346,6 +350,12 @@ enum Watching {
 struct TerminalViewResponse {
     response: JsonRpcResponse,
     detach: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RelayOutcome {
+    CloseConnection,
+    ResumeRequests,
 }
 
 impl TerminalViewResponse {
@@ -3714,13 +3724,16 @@ async fn relay_watch(
     watching: Watching,
     sessions: &mut watch::Receiver<Arc<RuntimeSessionCatalogue>>,
     composed: &Composed,
-) {
+) -> RelayOutcome {
     match watching {
         Watching::Events {
             subscription_id,
             session_id,
             view,
-        } => relay_events(connection, subscription_id, session_id, view).await,
+        } => {
+            relay_events(connection, subscription_id, session_id, view).await;
+            RelayOutcome::CloseConnection
+        }
         Watching::SessionIndex {
             subscription_id,
             last,
@@ -3735,6 +3748,7 @@ async fn relay_watch(
                 authority,
             )
             .await;
+            RelayOutcome::CloseConnection
         }
         Watching::Providers {
             subscription_id,
@@ -3753,6 +3767,7 @@ async fn relay_watch(
                 authority,
             )
             .await;
+            RelayOutcome::CloseConnection
         }
         Watching::Terminal(view) => relay_terminal(connection, composed, *view).await,
         Watching::TerminalIndex {
@@ -3770,6 +3785,7 @@ async fn relay_watch(
                 authority,
             )
             .await;
+            RelayOutcome::CloseConnection
         }
     }
 }
@@ -3778,7 +3794,11 @@ async fn relay_watch(
     clippy::too_many_lines,
     reason = "one dedicated terminal transport orders exact output, lag replacement, exit, authority refresh, and control replies"
 )]
-async fn relay_terminal(connection: &mut Connection, composed: &Composed, mut view: TerminalView) {
+async fn relay_terminal(
+    connection: &mut Connection,
+    composed: &Composed,
+    mut view: TerminalView,
+) -> RelayOutcome {
     let mut sequence = 1_u64;
     let mut authority_tick = tokio::time::interval(Duration::from_millis(500));
     authority_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -3795,7 +3815,7 @@ async fn relay_terminal(connection: &mut Connection, composed: &Composed, mut vi
             )
             .await,
         );
-        return;
+        return RelayOutcome::CloseConnection;
     }
     loop {
         tokio::select! {
@@ -3803,7 +3823,7 @@ async fn relay_terminal(connection: &mut Connection, composed: &Composed, mut vi
                 match output {
                     Ok(chunk) => {
                         if chunk.len() > runtrol_runtime_protocol::MAX_TERMINAL_OUTPUT_BYTES {
-                            return;
+                            return RelayOutcome::CloseConnection;
                         }
                         let notification = TerminalOutputNotification {
                             view_id: view.opened.view_id.clone(),
@@ -3815,7 +3835,7 @@ async fn relay_terminal(connection: &mut Connection, composed: &Composed, mut vi
                             .await
                             .is_err()
                         {
-                            return;
+                            return RelayOutcome::CloseConnection;
                         }
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(lost)) => {
@@ -3825,7 +3845,7 @@ async fn relay_terminal(connection: &mut Connection, composed: &Composed, mut vi
                             .attach(runtrol_core::terminal::ViewerKind::Terminal)
                             .await;
                         if fresh.snapshot.len() > runtrol_runtime_protocol::MAX_TERMINAL_SCREEN_BYTES {
-                            return;
+                            return RelayOutcome::CloseConnection;
                         }
                         view.attachment.live = fresh.live;
                         view.attachment.exited = fresh.exited;
@@ -3839,22 +3859,24 @@ async fn relay_terminal(connection: &mut Connection, composed: &Composed, mut vi
                             .await
                             .is_err()
                         {
-                            return;
+                            return RelayOutcome::CloseConnection;
                         }
                     }
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        return RelayOutcome::CloseConnection;
+                    }
                 }
             }
             changed = view.attachment.exited.changed() => {
                 if changed.is_err() {
-                    return;
+                    return RelayOutcome::CloseConnection;
                 }
                 let Some(exit_code) = *view.attachment.exited.borrow() else {
                     continue;
                 };
                 while let Ok(chunk) = view.attachment.live.try_recv() {
                     if chunk.len() > runtrol_runtime_protocol::MAX_TERMINAL_OUTPUT_BYTES {
-                        return;
+                        return RelayOutcome::CloseConnection;
                     }
                     let notification = TerminalOutputNotification {
                         view_id: view.opened.view_id.clone(),
@@ -3866,7 +3888,7 @@ async fn relay_terminal(connection: &mut Connection, composed: &Composed, mut vi
                         .await
                         .is_err()
                     {
-                        return;
+                        return RelayOutcome::CloseConnection;
                     }
                 }
                 drop(
@@ -3880,23 +3902,26 @@ async fn relay_terminal(connection: &mut Connection, composed: &Composed, mut vi
                     )
                     .await,
                 );
-                return;
+                return RelayOutcome::CloseConnection;
             }
             inbound = connection.recv() => {
                 let Ok(Some(payload)) = inbound else {
-                    return;
+                    return RelayOutcome::CloseConnection;
                 };
                 let Ok(request) = serde_json::from_slice::<JsonRpcRequest>(&payload) else {
-                    return;
+                    return RelayOutcome::CloseConnection;
                 };
                 let handled = terminal_view_request(composed, &mut view, request).await;
-                if send_response(connection, &handled.response).await.is_err() || handled.detach {
-                    return;
+                if send_response(connection, &handled.response).await.is_err() {
+                    return RelayOutcome::CloseConnection;
+                }
+                if handled.detach {
+                    return RelayOutcome::ResumeRequests;
                 }
             }
             _ = authority_tick.tick() => {
                 let Ok(current) = refresh_current(composed, &view.authority) else {
-                    return;
+                    return RelayOutcome::CloseConnection;
                 };
                 if !has_scopes(&current.grant, &[AppScope::SessionOutputRead])
                     || composed
@@ -3905,7 +3930,7 @@ async fn relay_terminal(connection: &mut Connection, composed: &Composed, mut vi
                         .await
                         .is_err()
                 {
-                    return;
+                    return RelayOutcome::CloseConnection;
                 }
                 view.authority = current;
             }
@@ -4827,6 +4852,10 @@ fn report_binding_conflict(
         provider.as_str()
     );
 }
+
+#[cfg(test)]
+#[path = "../tests/support/runtime_serve_official_attach.rs"]
+mod official_attach_tests;
 
 #[cfg(test)]
 mod tests {

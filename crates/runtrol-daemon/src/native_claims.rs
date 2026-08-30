@@ -1,4 +1,4 @@
-//! Content-free provider-process ownership projected across daemon generations.
+//! Content-free provider-process and terminal-surface admission projected across daemon generations.
 //!
 //! A claim contains only provider identity, provider-native identity when it is already known, canonical
 //! workspace, surface kind, and an opaque owner identity. Conversation bytes and provider output never enter it.
@@ -388,6 +388,7 @@ impl NativeLiveClaimRegistry {
         state
             .structured
             .values()
+            .chain(state.pending_terminals.values())
             .chain(state.terminals.values())
             .chain(
                 state
@@ -530,6 +531,22 @@ mod tests {
         );
         assert!(registry.snapshot_except(Some("new")).is_empty());
         assert_eq!(registry.snapshot_except(None).len(), 1);
+    }
+
+    #[test]
+    fn a_pending_terminal_claim_is_exported_until_its_reservation_ends() {
+        let registry = NativeLiveClaimRegistry::default();
+        let admission = registry
+            .reserve_terminal(TerminalId::now(), "example", Some("native"), "/work", false)
+            .expect("reserve the terminal claim");
+        assert!(matches!(&admission, TerminalClaimAdmission::Reserved(_)));
+        assert_eq!(
+            registry.snapshot_except(None).len(),
+            1,
+            "generation handoff must see a launch before its process finishes starting"
+        );
+        drop(admission);
+        assert!(registry.snapshot_except(None).is_empty());
     }
 
     #[test]

@@ -169,7 +169,10 @@ The consumer accepts a cursor only after it has consumed the event. Reconnect re
 
 Terminal views stream monotonic output sequence numbers. A lag notification carries the complete current screen and
 the next sequence. A reconnect re-reads the exact generation's screen snapshot rather than replaying or interpreting
-missing bytes.
+missing bytes. Snapshot subscription and output publication are one atomic boundary: a chunk appears in the snapshot
+or in the subsequent live stream, never both. After a successful `terminals/detach`, the connection returns to normal
+request dispatch and may open or attach another view; terminal exit and authority loss still close the dedicated
+stream.
 
 Queues and replay are bounded. Lag ends or marks the subscription with the first unavailable cursor. The SDK never
 accumulates an unbounded transcript and never treats provider source offsets as reconnect cursors.

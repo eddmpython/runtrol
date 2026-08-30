@@ -642,6 +642,15 @@ impl RuntimeSessionCatalogue {
     }
 
     #[cfg(test)]
+    pub(crate) const fn empty_for_tests() -> Self {
+        Self {
+            sessions: Vec::new(),
+            unreadable: 0,
+            available: true,
+        }
+    }
+
+    #[cfg(test)]
     pub(crate) fn one_for_tests(
         provider: CoreProviderId,
         native: &str,

@@ -240,13 +240,12 @@ impl Terminals {
         self.by_id.values().any(|open| open.terminal.pid() == pid)
     }
 
-    /// Register a mirrored terminal: a viewer onto a process some other owner started.
+    /// Register a terminal renderer onto a process some other owner started.
     ///
-    /// Unlike [`Self::insert`] behind a reservation, a mirror takes no native claim. It does not create a
-    /// process for the conversation; it joins the one that exists, so the claim belongs to whoever started
-    /// that process (another window, or an older Runtime generation). Filed by `(provider, native)` so the
-    /// sidebar row binds and a click attaches here, and by pid so a second observation does not open a
-    /// second mirror.
+    /// The caller reserves a terminal-surface claim before reaching this insertion. That claim does not own the
+    /// external conversation, but it does make this the only central renderer across Runtime generations. Filed by
+    /// `(provider, native)` so the sidebar row binds and a click attaches here, and by pid so a second observation
+    /// does not open a second local renderer.
     fn insert_external(
         &mut self,
         id: TerminalId,
@@ -341,13 +340,34 @@ const DRAINING_IDLE_GRACE_MS: u64 = 15_000;
 /// time). Releasing the mirror ends only its console helper; the current generation observes the still-running
 /// process again and mirrors it afresh.
 pub(crate) async fn close_idle_while_draining(composed: &Arc<Composed>) {
-    let now = WallMs::now().as_millis();
-    let stale: Vec<(TerminalId, DrainAction)> = {
+    close_idle_at(composed, WallMs::now().as_millis(), DRAINING_IDLE_GRACE_MS).await;
+}
+
+#[cfg(test)]
+pub(crate) async fn close_idle_now_for_tests(composed: &Arc<Composed>) {
+    close_idle_at(composed, WallMs::now().as_millis(), 0).await;
+}
+
+async fn close_idle_at(composed: &Arc<Composed>, now: u64, idle_grace_ms: u64) {
+    let candidates: Vec<TerminalId> = {
         let terminals = composed.terminals.lock().await;
         terminals
             .hosted_all()
             .into_iter()
-            .filter_map(|hosted| {
+            .map(|hosted| hosted.id)
+            .collect()
+    };
+    for id in candidates {
+        // Revalidate and mark stopping under the terminal-table lock. `attach_current` takes the same lock through
+        // snapshot subscription, so either the new receiver exists and keeps this renderer or stopping wins and the
+        // attach observes TerminalGone. Keep the table slot and live claim until the exit observer sees the process
+        // end; otherwise a slow exit could temporarily exceed the process and memory ceilings with a replacement.
+        let retired = {
+            let mut terminals = composed.terminals.lock().await;
+            terminals.hosted(id).and_then(|hosted| {
+                if hosted.stopping {
+                    return None;
+                }
                 let quiet_since = hosted
                     .terminal
                     .wrote_at()
@@ -356,21 +376,23 @@ pub(crate) async fn close_idle_while_draining(composed: &Arc<Composed>) {
                     &hosted.origin,
                     hosted.terminal.viewer_count(),
                     now.saturating_sub(quiet_since),
+                    idle_grace_ms,
                 );
-                (action != DrainAction::Keep).then_some((hosted.id, action))
+                if action == DrainAction::Keep {
+                    None
+                } else {
+                    terminals.mark_stopping(id).then_some((hosted, action))
+                }
             })
-            .collect()
-    };
-    for (id, action) in stale {
-        let hosted = composed.terminals.lock().await.hosted(id);
-        if let Some(hosted) = hosted {
-            match action {
-                DrainAction::Kill => drop(hosted.terminal.kill()),
-                DrainAction::Release => hosted.terminal.release(),
-                DrainAction::Keep => {}
-            }
+        };
+        let Some((hosted, action)) = retired else {
+            continue;
+        };
+        match action {
+            DrainAction::Kill => drop(hosted.terminal.kill()),
+            DrainAction::Release => hosted.terminal.release(),
+            DrainAction::Keep => {}
         }
-        forget(composed, id).await;
     }
 }
 
@@ -385,8 +407,13 @@ enum DrainAction {
     Kill,
 }
 
-fn drain_action(origin: &TerminalOrigin, viewers: usize, quiet_for_ms: u64) -> DrainAction {
-    if viewers > 0 || quiet_for_ms < DRAINING_IDLE_GRACE_MS {
+fn drain_action(
+    origin: &TerminalOrigin,
+    viewers: usize,
+    quiet_for_ms: u64,
+    idle_grace_ms: u64,
+) -> DrainAction {
+    if viewers > 0 || quiet_for_ms < idle_grace_ms {
         return DrainAction::Keep;
     }
     match origin {
@@ -656,8 +683,9 @@ async fn open_with_arguments(
 /// that no longer answers), and a helper joins its console so every Runtrol window sees the same screen and
 /// can type into it. The row becomes a hosted one, so a click attaches rather than resuming a second copy.
 ///
-/// It opens nothing new for the conversation and takes no native claim: the claim, if any, stays with the
-/// owner that started the process. A process the daemon already hosts, or already mirrors, is left alone.
+/// It opens nothing new for the conversation. It does reserve the one terminal-surface claim while the mirror is
+/// live: that claim owns no transcript or conversation, but it prevents another Runtime generation from allocating a
+/// second renderer for the same external owner. A process the daemon already hosts, or already mirrors, is left alone.
 pub(crate) async fn open_mirror(
     composed: &Arc<Composed>,
     provider: ProviderId,
@@ -667,19 +695,34 @@ pub(crate) async fn open_mirror(
 ) -> Result<(), TerminalOpenError> {
     let helper = runtrol_childproc::console_mirror::helper_program()
         .map_err(|error| TerminalOpenError::Provider(error.to_string()))?;
-    // A session another Runtime generation already hosts is already a conversation, not a new one: its
-    // terminal reaches this window through the fleet, and mirroring it would be a second terminal for the one
-    // session, which drew the conversation twice (operator, 2026-08-29). A live claim on this native identity,
-    // held here or relayed from a draining generation, is exactly that signal, so a claimed session is never
-    // mirrored. Only a session no generation holds is genuinely external and gets a mirror.
-    if composed
-        .native_claims
-        .blocks_native_mutation(provider.as_str(), native, cwd.as_str())
-        .unwrap_or(true)
     {
-        return Ok(());
+        let terminals = composed.terminals.lock().await;
+        if terminals.hosts_pid(pid) || terminals.open_for(provider, native).is_some() {
+            return Ok(());
+        }
     }
+    // A session another Runtime generation already hosts is already a conversation, not a new one: its terminal
+    // reaches this window through the fleet. The reservation also covers an external mirror already hosted by a peer,
+    // so two generations cannot allocate two helpers, rings, and screen models for one owner. Claims that identify an
+    // existing owner are an expected no-op for this background observer; state failures remain fail-closed.
     let terminal_id = TerminalId::now();
+    let reservation = match composed.native_claims.reserve_terminal(
+        terminal_id,
+        provider.as_str(),
+        Some(native),
+        cwd.as_str(),
+        false,
+    ) {
+        Ok(TerminalClaimAdmission::Reserved(reservation)) => reservation,
+        Ok(TerminalClaimAdmission::Join(_))
+        | Err(
+            TerminalClaimError::StructuredBusy
+            | TerminalClaimError::TerminalAlreadyLive
+            | TerminalClaimError::WorkspaceConflict
+            | TerminalClaimError::LegacyGenerationBusy,
+        ) => return Ok(()),
+        Err(error @ TerminalClaimError::State) => return Err(error.into()),
+    };
     let (terminal, open) = {
         let mut terminals = composed.terminals.lock().await;
         if terminals.hosts_pid(pid) || terminals.open_for(provider, native).is_some() {
@@ -714,6 +757,11 @@ pub(crate) async fn open_mirror(
     composed
         .open_terminals
         .store(open, std::sync::atomic::Ordering::Release);
+    if let Err(error) = reservation.commit() {
+        drop(terminal.kill());
+        forget(composed, terminal_id).await;
+        return Err(error.into());
+    }
     forget_on_exit(Arc::clone(composed), terminal_id, &terminal);
     Ok(())
 }
@@ -726,7 +774,8 @@ pub(crate) async fn open_mirror(
 /// commands that reach and stop it.
 #[expect(
     clippy::too_many_arguments,
-    reason = "one official attachment binds its provider, native identity, folder, geometry, program and viewer"
+    clippy::too_many_lines,
+    reason = "one official attachment keeps reservation, provider declaration, exact argv, renderer insertion and claim commit in one auditable boundary"
 )]
 pub(crate) async fn open_official_attach(
     composed: &Arc<Composed>,
@@ -758,6 +807,25 @@ pub(crate) async fn open_official_attach(
             "{provider} declares no complete official live terminal attachment"
         )));
     }
+    // The provider process remains the conversation owner. This claim owns only the shared terminal surface, so a
+    // concurrent open or a successor Runtime generation joins the indexed renderer instead of allocating another
+    // attachment client, output ring, and screen for the same owner.
+    let terminal_id = TerminalId::now();
+    let reservation = match composed.native_claims.reserve_terminal(
+        terminal_id,
+        provider.as_str(),
+        Some(native),
+        cwd.as_str(),
+        false,
+    )? {
+        TerminalClaimAdmission::Join(existing) => {
+            let (hosted, attachment) = attach_current(composed, existing, viewer)
+                .await
+                .map_err(TerminalOpenError::Provider)?;
+            return Ok((hosted.id, hosted.terminal, attachment));
+        }
+        TerminalClaimAdmission::Reserved(reservation) => reservation,
+    };
     let arguments = tui
         .attach
         .iter()
@@ -786,7 +854,6 @@ pub(crate) async fn open_official_attach(
         env: env.clone(),
         env_unset: env_unset.clone(),
     };
-    let terminal_id = TerminalId::now();
     let (terminal, open) = {
         let mut terminals = composed.terminals.lock().await;
         if let Some(existing) = terminals.open_for(provider, native) {
@@ -825,6 +892,11 @@ pub(crate) async fn open_official_attach(
     composed
         .open_terminals
         .store(open, std::sync::atomic::Ordering::Release);
+    if let Err(error) = reservation.commit() {
+        drop(terminal.kill());
+        forget(composed, terminal_id).await;
+        return Err(error.into());
+    }
     forget_on_exit(Arc::clone(composed), terminal_id, &terminal);
     let attachment = terminal.attach(viewer).await;
     Ok((terminal_id, terminal, attachment))
@@ -904,13 +976,17 @@ pub(crate) async fn attach_current(
     id: TerminalId,
     viewer: ViewerKind,
 ) -> Result<(HostedTerminal, Attachment), String> {
-    let hosted = composed
-        .terminals
-        .lock()
-        .await
+    let terminals = composed.terminals.lock().await;
+    let hosted = terminals
         .hosted(id)
         .ok_or_else(|| format!("no open terminal {id}"))?;
+    if hosted.stopping {
+        return Err(format!("terminal {id} is stopping"));
+    }
+    // Keep the table lock until `Terminal::attach` has subscribed under the terminal state lock. Draining takes the
+    // same table lock before testing `viewer_count`, which makes attach versus retirement one exact ordering point.
     let attachment = hosted.terminal.attach(viewer).await;
+    drop(terminals);
     Ok((hosted, attachment))
 }
 
@@ -983,29 +1059,47 @@ mod tests {
         use super::{DRAINING_IDLE_GRACE_MS, DrainAction, TerminalOrigin, drain_action};
         let grace = DRAINING_IDLE_GRACE_MS;
         assert_eq!(
-            drain_action(&TerminalOrigin::Owned, 0, grace),
+            drain_action(&TerminalOrigin::Owned, 0, grace, grace),
             DrainAction::Kill
         );
         assert_eq!(
-            drain_action(&TerminalOrigin::Owned, 1, grace),
+            drain_action(&TerminalOrigin::Owned, 1, grace, grace),
             DrainAction::Keep
         );
         assert_eq!(
-            drain_action(&TerminalOrigin::Owned, 0, grace - 1),
+            drain_action(&TerminalOrigin::Owned, 0, grace - 1, grace),
             DrainAction::Keep
         );
         // The operator's own Claude Code process, joined by a mirror: let go, never killed.
         assert_eq!(
-            drain_action(&TerminalOrigin::ConsoleMirror, 0, grace),
+            drain_action(&TerminalOrigin::ConsoleMirror, 0, grace, grace),
             DrainAction::Release
         );
         assert_eq!(
-            drain_action(&TerminalOrigin::ConsoleMirror, 0, grace * 100),
+            drain_action(&TerminalOrigin::ConsoleMirror, 0, grace * 100, grace),
             DrainAction::Release
         );
         assert_eq!(
-            drain_action(&TerminalOrigin::ConsoleMirror, 1, grace),
+            drain_action(&TerminalOrigin::ConsoleMirror, 1, grace, grace),
             DrainAction::Keep
+        );
+        let official = TerminalOrigin::OfficialAttach(Box::new(super::OfficialStop {
+            program: runtrol_childproc::resolve("rustc").expect("the Rust compiler is installed"),
+            arguments: Vec::new(),
+            cwd: runtrol_provider::AbsPath::canonicalize(
+                std::env::current_dir()
+                    .expect("the test has a current directory")
+                    .to_string_lossy()
+                    .as_ref(),
+            )
+            .expect("the test directory canonicalizes"),
+            env: Vec::new(),
+            env_unset: Vec::new(),
+        }));
+        assert_eq!(
+            drain_action(&official, 0, grace, grace),
+            DrainAction::Kill,
+            "draining ends only the attachment renderer, not the external owner"
         );
     }
 }
