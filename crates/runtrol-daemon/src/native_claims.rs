@@ -139,7 +139,9 @@ impl NativeLiveClaimRegistry {
             .chain(state.terminals.values())
             .chain(state.remote.values().flatten())
         {
-            if let Some(error) = claim_conflict(provider_id, native_session_id, workspace, claim) {
+            if let Some(error) =
+                claim_conflict(provider_id, native_session_id, workspace, claim, false)
+            {
                 return Err(error);
             }
         }
@@ -163,12 +165,22 @@ impl NativeLiveClaimRegistry {
     }
 
     /// Atomically reserve a terminal launch against every local and inherited process claim.
+    /// Take a terminal claim for one conversation, or say why it cannot be taken.
+    ///
+    /// `holder_known` says the caller has already asked the coding service which of its conversations a live
+    /// process holds, and this one is not among them. It matters because of the rule below: a terminal whose
+    /// conversation nobody has named yet blocks every conversation in its folder, since it might be any of
+    /// them. That guard is right when nothing can tell them apart and wrong the moment something can. A
+    /// generation that cannot name its own terminals (a build from before it could) would otherwise hold a
+    /// whole project hostage for as long as it drains, which is what it did: on 2026-08-30 an operator's
+    /// stored conversation in a project with one such terminal opened into an error instead of a session.
     pub(crate) fn reserve_terminal(
         &self,
         terminal: TerminalId,
         provider_id: &str,
         native_session_id: Option<&str>,
         workspace: &str,
+        holder_known: bool,
     ) -> Result<TerminalClaimAdmission<'_>, TerminalClaimError> {
         let mut state = self.state.write().map_err(|_| TerminalClaimError::State)?;
         if native_session_id.is_some() && !state.legacy_generations.is_empty() {
@@ -188,7 +200,13 @@ impl NativeLiveClaimRegistry {
             .chain(state.terminals.values())
             .chain(state.remote.values().flatten())
         {
-            if let Some(error) = claim_conflict(provider_id, native_session_id, workspace, claim) {
+            if let Some(error) = claim_conflict(
+                provider_id,
+                native_session_id,
+                workspace,
+                claim,
+                holder_known,
+            ) {
                 return Err(error);
             }
         }
@@ -287,9 +305,13 @@ impl NativeLiveClaimRegistry {
             )
             .chain(state.remote.values().flatten())
         {
-            if let Some(error) =
-                claim_conflict(provider_id, Some(native_session_id), workspace, claim)
-            {
+            if let Some(error) = claim_conflict(
+                provider_id,
+                Some(native_session_id),
+                workspace,
+                claim,
+                false,
+            ) {
                 return Err(error);
             }
         }
@@ -408,6 +430,7 @@ fn claim_conflict(
     native_session_id: Option<&str>,
     workspace: &str,
     claim: &GenerationLiveClaimLine,
+    holder_known: bool,
 ) -> Option<TerminalClaimError> {
     if claim.provider_id.as_ref() != provider_id {
         return None;
@@ -417,7 +440,11 @@ fn claim_conflict(
     if exact_native && claim.workspace.as_ref() != workspace {
         return Some(TerminalClaimError::WorkspaceConflict);
     }
-    let unresolved_collision = native_session_id.is_some()
+    // A claim whose conversation nobody has named could be this one, so it blocks. Unless the service itself
+    // has been asked and did not name this conversation among the ones its live processes hold: then the
+    // unnamed terminal is provably some other conversation, and refusing this one protects nothing.
+    let unresolved_collision = !holder_known
+        && native_session_id.is_some()
         && claim.native_session_id.is_none()
         && claim.workspace.as_ref() == workspace;
     let collision = exact_native || unresolved_collision;
@@ -433,6 +460,60 @@ fn claim_conflict(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A terminal another generation cannot name blocks every conversation in its folder, because it might be
+    /// any of them. It stops blocking the moment the coding service itself has been asked and did not name the
+    /// conversation being opened: then the unnamed terminal is provably a different one.
+    ///
+    /// Measured 2026-08-30 on the operator's machine: a generation from a build that could not name its own
+    /// terminals held one in a project, and every stored conversation in that project opened into an error
+    /// instead of a session for as long as that generation drained.
+    #[test]
+    fn an_unnamed_terminal_elsewhere_stops_blocking_once_the_service_has_answered() {
+        let registry = NativeLiveClaimRegistry::default();
+        registry.replace_remote(
+            "draining",
+            vec![GenerationLiveClaimLine {
+                provider_id: "example".into(),
+                // The other generation has a terminal here and cannot say which conversation is in it.
+                native_session_id: None,
+                workspace: "/work".into(),
+                surface: GenerationLiveClaimSurface::Terminal,
+                owner_id: "terminal".into(),
+            }],
+        );
+        // Nobody asked the service: the guard holds, because the unnamed terminal could be this conversation.
+        assert!(matches!(
+            registry.reserve_terminal(TerminalId::now(), "example", Some("stored"), "/work", false),
+            Err(TerminalClaimError::TerminalAlreadyLive)
+        ));
+        // The service answered and did not name this conversation: it is free, and refusing it protects
+        // nothing.
+        assert!(matches!(
+            registry.reserve_terminal(TerminalId::now(), "example", Some("stored"), "/work", true),
+            Ok(TerminalClaimAdmission::Reserved(_))
+        ));
+    }
+
+    /// Having asked the service never overrides a claim that names this exact conversation.
+    #[test]
+    fn a_named_claim_refuses_however_well_the_service_answered() {
+        let registry = NativeLiveClaimRegistry::default();
+        registry.replace_remote(
+            "draining",
+            vec![GenerationLiveClaimLine {
+                provider_id: "example".into(),
+                native_session_id: Some("stored".into()),
+                workspace: "/work".into(),
+                surface: GenerationLiveClaimSurface::Terminal,
+                owner_id: "terminal".into(),
+            }],
+        );
+        assert!(matches!(
+            registry.reserve_terminal(TerminalId::now(), "example", Some("stored"), "/work", true),
+            Err(TerminalClaimError::TerminalAlreadyLive)
+        ));
+    }
 
     #[test]
     fn a_peer_does_not_receive_its_own_claims_back() {
@@ -465,11 +546,23 @@ mod tests {
             }],
         );
         assert!(matches!(
-            registry.reserve_terminal(TerminalId::now(), "example", Some("native"), "/first"),
+            registry.reserve_terminal(
+                TerminalId::now(),
+                "example",
+                Some("native"),
+                "/first",
+                false
+            ),
             Err(TerminalClaimError::StructuredBusy)
         ));
         assert!(matches!(
-            registry.reserve_terminal(TerminalId::now(), "example", Some("native"), "/second"),
+            registry.reserve_terminal(
+                TerminalId::now(),
+                "example",
+                Some("native"),
+                "/second",
+                false
+            ),
             Err(TerminalClaimError::WorkspaceConflict)
         ));
     }
@@ -477,13 +570,14 @@ mod tests {
     #[test]
     fn an_unresolved_launch_blocks_a_native_resume_in_the_same_workspace() {
         let registry = NativeLiveClaimRegistry::default();
-        let first = match registry.reserve_terminal(TerminalId::now(), "example", None, "/work") {
-            Ok(admission) => admission,
-            Err(error) => panic!("the fresh terminal did not reserve its claim: {error}"),
-        };
+        let first =
+            match registry.reserve_terminal(TerminalId::now(), "example", None, "/work", false) {
+                Ok(admission) => admission,
+                Err(error) => panic!("the fresh terminal did not reserve its claim: {error}"),
+            };
         assert!(matches!(&first, TerminalClaimAdmission::Reserved(_)));
         assert!(matches!(
-            registry.reserve_terminal(TerminalId::now(), "example", Some("native"), "/work"),
+            registry.reserve_terminal(TerminalId::now(), "example", Some("native"), "/work", false),
             Err(TerminalClaimError::TerminalAlreadyLive)
         ));
     }
@@ -492,7 +586,7 @@ mod tests {
     fn unresolved_fresh_work_does_not_block_other_fresh_work() {
         let registry = NativeLiveClaimRegistry::default();
         let terminal = registry
-            .reserve_terminal(TerminalId::now(), "example", None, "/work")
+            .reserve_terminal(TerminalId::now(), "example", None, "/work", false)
             .expect("fresh terminal claim");
         let structured = registry
             .reserve_structured(SessionId::now(), "example", None, "/work")
@@ -506,7 +600,7 @@ mod tests {
         let registry = NativeLiveClaimRegistry::default();
         let terminal_id = TerminalId::now();
         let TerminalClaimAdmission::Reserved(terminal) = registry
-            .reserve_terminal(terminal_id, "example", None, "/work")
+            .reserve_terminal(terminal_id, "example", None, "/work", false)
             .expect("fresh terminal claim")
         else {
             panic!("fresh terminal unexpectedly joined");
@@ -537,7 +631,7 @@ mod tests {
         let registry = NativeLiveClaimRegistry::default();
         let terminal_id = TerminalId::now();
         let TerminalClaimAdmission::Reserved(terminal) = registry
-            .reserve_terminal(terminal_id, "example", None, "/work")
+            .reserve_terminal(terminal_id, "example", None, "/work", false)
             .expect("fresh terminal claim")
         else {
             panic!("fresh terminal unexpectedly joined");
@@ -557,11 +651,11 @@ mod tests {
         // A resume of the new conversation joins this terminal instead of opening a second process, and the
         // old identity no longer joins anything.
         assert!(matches!(
-            registry.reserve_terminal(TerminalId::now(), "example", Some("second"), "/work"),
+            registry.reserve_terminal(TerminalId::now(), "example", Some("second"), "/work", false),
             Ok(TerminalClaimAdmission::Join(id)) if id == terminal_id
         ));
         assert!(matches!(
-            registry.reserve_terminal(TerminalId::now(), "example", Some("first"), "/work"),
+            registry.reserve_terminal(TerminalId::now(), "example", Some("first"), "/work", false),
             Ok(TerminalClaimAdmission::Reserved(_))
         ));
         // Another live claim on the target still refuses, exactly as a first binding would.
@@ -584,7 +678,7 @@ mod tests {
             .commit();
         let terminal_id = TerminalId::now();
         let TerminalClaimAdmission::Reserved(terminal) = registry
-            .reserve_terminal(terminal_id, "example", None, "/work")
+            .reserve_terminal(terminal_id, "example", None, "/work", false)
             .expect("fresh unresolved terminal claim")
         else {
             panic!("fresh terminal unexpectedly joined");
@@ -606,7 +700,7 @@ mod tests {
             .commit();
         let terminal_id = TerminalId::now();
         let TerminalClaimAdmission::Reserved(terminal) = registry
-            .reserve_terminal(terminal_id, "example", None, "/two")
+            .reserve_terminal(terminal_id, "example", None, "/two", false)
             .expect("identity-pending terminal")
         else {
             panic!("fresh terminal unexpectedly joined");
@@ -643,13 +737,13 @@ mod tests {
             .expect("structured claim")
             .commit();
         assert!(matches!(
-            registry.reserve_terminal(TerminalId::now(), "example", Some("native"), "/work"),
+            registry.reserve_terminal(TerminalId::now(), "example", Some("native"), "/work", false),
             Err(TerminalClaimError::StructuredBusy)
         ));
 
         let other = NativeLiveClaimRegistry::default();
         let TerminalClaimAdmission::Reserved(terminal) = other
-            .reserve_terminal(TerminalId::now(), "example", Some("native"), "/work")
+            .reserve_terminal(TerminalId::now(), "example", Some("native"), "/work", false)
             .expect("terminal claim")
         else {
             panic!("first terminal unexpectedly joined");
@@ -666,12 +760,12 @@ mod tests {
         let registry = NativeLiveClaimRegistry::default();
         registry.replace_legacy_generations(["legacy"].into_iter());
         assert!(matches!(
-            registry.reserve_terminal(TerminalId::now(), "example", Some("native"), "/work"),
+            registry.reserve_terminal(TerminalId::now(), "example", Some("native"), "/work", false),
             Err(TerminalClaimError::LegacyGenerationBusy)
         ));
         registry.replace_legacy_generations(std::iter::empty());
         assert!(matches!(
-            registry.reserve_terminal(TerminalId::now(), "example", Some("native"), "/work"),
+            registry.reserve_terminal(TerminalId::now(), "example", Some("native"), "/work", false),
             Ok(TerminalClaimAdmission::Reserved(_))
         ));
     }

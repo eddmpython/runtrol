@@ -420,6 +420,7 @@ pub(crate) async fn open_hosted(
     rows: u16,
     prepared_program: Option<runtrol_childproc::Program>,
     viewer: ViewerKind,
+    holder_known: bool,
 ) -> Result<(TerminalId, Terminal, Attachment), TerminalOpenError> {
     open_with_arguments(
         composed,
@@ -431,6 +432,7 @@ pub(crate) async fn open_hosted(
         prepared_program,
         None,
         viewer,
+        holder_known,
     )
     .await
 }
@@ -487,6 +489,9 @@ pub(crate) async fn open_brokered(
         Some(prepared_program),
         Some(arguments),
         viewer,
+        // An exact invocation from a broker names its own conversation and nobody asked the service about it,
+        // so the unnamed-terminal guard stays in force here.
+        false,
     )
     .await
 }
@@ -521,6 +526,7 @@ async fn open_with_arguments(
     prepared_program: Option<runtrol_childproc::Program>,
     exact_arguments: Option<Vec<String>>,
     viewer: ViewerKind,
+    holder_known: bool,
 ) -> Result<(TerminalId, Terminal, Attachment), TerminalOpenError> {
     if let Some(native) = native
         && let Some(existing) = composed.terminals.lock().await.open_for(id, native)
@@ -537,6 +543,7 @@ async fn open_with_arguments(
         id.as_str(),
         native,
         cwd.as_str(),
+        holder_known,
     )? {
         TerminalClaimAdmission::Join(existing) => {
             let (hosted, attachment) = attach_current(composed, existing, viewer)

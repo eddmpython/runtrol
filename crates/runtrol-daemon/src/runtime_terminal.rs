@@ -253,6 +253,10 @@ impl TerminalRuntimeAdapter {
                     )
                 })?
         };
+        // Whether the coding service was asked which conversations its live processes hold, and answered
+        // without naming this one. It travels to the claim reservation, where an unnamed terminal in the same
+        // folder would otherwise refuse this conversation on the chance of being it.
+        let mut holder_known = false;
         let native = match &params.target {
             TerminalOpenTarget::Fresh => None,
             TerminalOpenTarget::Native {
@@ -279,27 +283,33 @@ impl TerminalRuntimeAdapter {
                     .open_for(provider, native_session_id)
                     .is_none()
                 {
-                    let held = match discovering.cached_native_activity(provider).await {
-                        Some(activity) => activity.live,
+                    // `None` is a service that could not be asked, which proves nothing either way. It is
+                    // told apart from a service that answered with no live conversation, because the second
+                    // is proof that this conversation is free and the first is not.
+                    let answered = match discovering.cached_native_activity(provider).await {
+                        Some(activity) => Some(activity.live),
                         None => match prepared.driver.native_process_activity().await {
                             Ok(activity) => {
                                 let live = activity.live.clone();
                                 discovering
                                     .remember_native_activity(provider, activity)
                                     .await;
-                                live
+                                Some(live)
                             }
                             // A provider that cannot answer about its processes cannot block an open: the
                             // conversation may simply be stored, which is the common case.
-                            Err(_) => Vec::new(),
+                            Err(_) => None,
                         },
                     };
+                    let held = answered.clone().unwrap_or_default();
                     if resume_would_fork(&held, native_session_id.as_str()) {
                         return Err(TerminalRuntimeFailure::new(
                             RuntimeErrorKind::NativeConversationBusy,
                             "the conversation is open in the coding service's own window; a second process is not started for it",
                         ));
                     }
+                    // The service answered, and this conversation was not among the ones it named.
+                    holder_known = answered.is_some();
                 }
                 native_cursors
                     .open_adoption(
@@ -348,6 +358,10 @@ impl TerminalRuntimeAdapter {
             Some(program),
             // The public surface is an editor's terminal, which has its own mouse.
             ViewerKind::Terminal,
+            // The service was asked above which conversations its live processes hold, and this one was not
+            // among them (`resume_would_fork`). A terminal in this folder that nobody has named is therefore
+            // provably some other conversation, and must not hold this one back.
+            holder_known,
         )
         .await
         .map_err(|error| {

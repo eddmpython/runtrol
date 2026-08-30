@@ -12,6 +12,12 @@ and refactoring that no user can observe do not belong here.
 
 ### Fixed
 
+- A stored conversation in a project that has a terminal open again opens instead of failing. A Runtime
+  generation on its way out could be holding a terminal whose conversation it was never able to name, and
+  every stored conversation in that project was refused on the chance of being that one. The coding service is
+  now asked directly, and a conversation it does not name as open is no longer held back by an unnamed
+  terminal somewhere else.
+
 - A Grok conversation that is already open is no longer offered as if it were closed. Grok publishes no list of
   what it has running, so every conversation looked stored and clicking one could have started a second process
   on the same conversation. Grok keeps a directory per conversation and holds a file inside it while that
