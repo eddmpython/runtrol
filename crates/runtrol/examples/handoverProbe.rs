@@ -27,7 +27,7 @@ use std::time::{Duration, Instant};
 use runtrol_runtime_client::protocol::{
     AppScope, EnrollmentDecision, InstallationState, IntegrationGrant, MutationRequestId,
     RuntimeTerminalId, TerminalAcquireControlParams, TerminalAttachParams, TerminalGeometry,
-    TerminalOpenParams, TerminalOpenTarget, TerminalStopParams,
+    TerminalOpenParams, TerminalOpenTarget, TerminalStopParams, TerminalWriteParams,
 };
 use runtrol_runtime_client::{
     ClientOptions, EnrollmentProposal, IntegrationCredentials, IntegrationIdentity, LocatorState,
@@ -119,7 +119,10 @@ fn main() -> ExitCode {
             ["stop", home, identity, digest, terminal] => {
                 stop(Path::new(home), Path::new(identity), digest, terminal).await
             }
-            _ => Err("usage: handoverProbe enroll|open|attach|stop ...".to_owned()),
+            ["parity", home, identity, digest, terminal] => {
+                parity(Path::new(home), Path::new(identity), digest, terminal).await
+            }
+            _ => Err("usage: handoverProbe enroll|open|attach|stop|parity ...".to_owned()),
         }
     });
     match outcome {
@@ -375,6 +378,170 @@ async fn attach(
         r#"{{"attached":true,"generation":"{digest}","draining":{draining},"listed":{known},"processState":"{state}","screenBytes":{}}}"#,
         view.initial_screen().len()
     ))
+}
+
+/// Two live views of one terminal see the same session: input typed on one arrives on both, and a fresh
+/// look afterwards reads one identical screen.
+///
+/// This is the product's central promise measured over the public wire (goal 1.1, first slice): viewer A and
+/// viewer B attach on connections that share nothing, B takes the control lease and types a nonce, both live
+/// streams carry the echo, and two fresh attaches then read byte-identical screens. Byte equality of the
+/// final screens is the parity fact; the nonce on both live streams is the input-through fact.
+async fn parity(
+    home: &Path,
+    identity_file: &Path,
+    digest: &str,
+    terminal: &str,
+) -> Result<String, String> {
+    let stored = read_stored(identity_file)?;
+    let generation = generation(home, digest)?;
+    let terminal_id = terminal
+        .parse::<RuntimeTerminalId>()
+        .map_err(|error| format!("terminal id: {error}"))?;
+    let mut client_a = RuntimeClient::connect_to(generation.clone(), options_with(&stored))
+        .await
+        .map_err(|error| format!("connect viewer A: {error}"))?;
+    let mut client_b = RuntimeClient::connect_to(generation.clone(), options_with(&stored))
+        .await
+        .map_err(|error| format!("connect viewer B: {error}"))?;
+    let mut terminals_a = client_a.terminals();
+    let mut view_a = terminals_a
+        .attach(&TerminalAttachParams {
+            terminal_id: terminal_id.clone(),
+        })
+        .await
+        .map_err(|error| format!("attach viewer A: {error}"))?;
+    let mut terminals_b = client_b.terminals();
+    let mut view_b = terminals_b
+        .attach(&TerminalAttachParams {
+            terminal_id: terminal_id.clone(),
+        })
+        .await
+        .map_err(|error| format!("attach viewer B: {error}"))?;
+    let lease = view_b
+        .acquire_control(&TerminalAcquireControlParams {
+            request_id: MutationRequestId::now(),
+            terminal_id: terminal_id.clone(),
+            expected_terminal_generation: view_b.opened().terminal.terminal_generation,
+        })
+        .await
+        .map_err(|error| format!("acquire the control lease on B: {error}"))?;
+    let nonce = format!(
+        "parity-{}-{}",
+        std::process::id(),
+        Instant::now().elapsed().as_nanos()
+    );
+    let typed = format!(
+        "{nonce}
+"
+    );
+    view_b
+        .write(&TerminalWriteParams {
+            request_id: MutationRequestId::now(),
+            terminal_id: terminal_id.clone(),
+            lease_id: lease.lease_id.clone(),
+            lease_generation: lease.lease_generation,
+            bytes_base64: encode_base64(typed.as_bytes()),
+        })
+        .await
+        .map_err(|error| format!("write through viewer B: {error}"))?;
+    let first_byte = Instant::now();
+    let (echoed_first, waited_first_ms) =
+        drain_until(&mut view_a, nonce.as_bytes(), first_byte).await;
+    let (echoed_second, waited_second_ms) =
+        drain_until(&mut view_b, nonce.as_bytes(), first_byte).await;
+    // Let the echo land in the shared screen model before the fresh looks read it.
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    let fresh_a = fresh_screen(&stored, home, digest, terminal_id.clone()).await?;
+    let fresh_b = fresh_screen(&stored, home, digest, terminal_id).await?;
+    let equal = fresh_a == fresh_b;
+    let nonce_on_screen = contains(&fresh_a, nonce.as_bytes());
+    Ok(format!(
+        r#"{{"parity":{equal},"screenBytes":{},"nonceOnBothStreams":{},"nonceOnScreen":{nonce_on_screen},"firstEchoMsA":{waited_first_ms},"firstEchoMsB":{waited_second_ms}}}"#,
+        fresh_a.len(),
+        echoed_first && echoed_second,
+    ))
+}
+
+/// Read one fresh attach's initial screen on a connection that did not exist before.
+async fn fresh_screen(
+    stored: &Stored,
+    home: &Path,
+    digest: &str,
+    terminal_id: RuntimeTerminalId,
+) -> Result<Vec<u8>, String> {
+    let generation = generation(home, digest)?;
+    let mut client = RuntimeClient::connect_to(generation, options_with(stored))
+        .await
+        .map_err(|error| format!("connect a fresh look: {error}"))?;
+    let mut terminals = client.terminals();
+    let view = terminals
+        .attach(&TerminalAttachParams { terminal_id })
+        .await
+        .map_err(|error| format!("attach a fresh look: {error}"))?;
+    Ok(view.initial_screen().to_vec())
+}
+
+/// Drain one view's live output until the needle appears or the view goes quiet, and say when it arrived.
+async fn drain_until(
+    view: &mut runtrol_runtime_client::TerminalView<'_>,
+    needle: &[u8],
+    since: Instant,
+) -> (bool, u128) {
+    let mut gathered: Vec<u8> = view.initial_screen().to_vec();
+    if contains(&gathered, needle) {
+        return (true, 0);
+    }
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        let next = tokio::time::timeout(Duration::from_millis(600), view.next()).await;
+        match next {
+            Ok(Ok(notification)) => {
+                if let runtrol_runtime_client::TerminalNotification::Output { bytes, .. } =
+                    notification
+                {
+                    gathered.extend_from_slice(&bytes);
+                    if contains(&gathered, needle) {
+                        return (true, since.elapsed().as_millis());
+                    }
+                }
+            }
+            Ok(Err(_)) | Err(_) => break,
+        }
+    }
+    (false, since.elapsed().as_millis())
+}
+
+fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+    !needle.is_empty()
+        && haystack.len() >= needle.len()
+        && haystack
+            .windows(needle.len())
+            .any(|window| window == needle)
+}
+
+/// Standard base64, inline so the probe adds no dependency for one encode.
+fn encode_base64(bytes: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let b = [
+            *chunk.first().unwrap_or(&0),
+            *chunk.get(1).unwrap_or(&0),
+            *chunk.get(2).unwrap_or(&0),
+        ];
+        let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
+        let keep = chunk.len() + 1;
+        for (index, shift) in [18_u32, 12, 6, 0].into_iter().enumerate() {
+            // A six-bit index into a 64-entry table cannot miss; the fallback keeps the lint honest.
+            let quad = TABLE
+                .get((n >> shift) as usize & 63)
+                .copied()
+                .unwrap_or(b'=');
+            out.push(if index < keep { char::from(quad) } else { '=' });
+        }
+    }
+    out
 }
 
 /// End one terminal's process in the exact generation that owns it.

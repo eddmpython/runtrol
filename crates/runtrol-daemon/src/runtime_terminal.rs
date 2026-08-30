@@ -388,10 +388,13 @@ impl TerminalRuntimeAdapter {
                     RuntimeErrorKind::ResourceExhausted,
                     "the bounded hosted terminal process table is full",
                 ),
-                TerminalOpenError::Provider(_) => TerminalRuntimeFailure::new(
-                    RuntimeErrorKind::ProviderUnavailable,
-                    "the provider terminal could not be opened",
-                ),
+                TerminalOpenError::Provider(detail) => {
+                    report_open_refusal(&detail);
+                    TerminalRuntimeFailure::new(
+                        RuntimeErrorKind::ProviderUnavailable,
+                        "the provider terminal could not be opened",
+                    )
+                }
             }
         })?;
         self.remember(key, fingerprint, MutationOutcome::Opened(terminal_id))
@@ -909,6 +912,19 @@ impl TerminalRuntimeAdapter {
 /// live owner left is outside: the service's own window or another program's child.
 fn resume_would_fork(held: &[runtrol_provider::NativeSessionId], native: &str) -> bool {
     held.iter().any(|owned| owned.as_str() == native)
+}
+
+/// Say on the Runtime's operational stderr why a terminal open was refused.
+///
+/// The public answer stays a fixed sentence; the exact cause (a missing terminal declaration, a spawn
+/// failure) goes where an operator reads the daemon's own log. A probe measured this arm answering with no
+/// recorded cause anywhere (2026-08-30).
+#[expect(
+    clippy::print_stderr,
+    reason = "a refused open has no waiting log sink; stderr is the daemon's operational failure channel"
+)]
+fn report_open_refusal(detail: &str) {
+    eprintln!("terminal open refused: {detail}");
 }
 
 fn validate_geometry(geometry: TerminalGeometry) -> Result<(), TerminalRuntimeFailure> {
