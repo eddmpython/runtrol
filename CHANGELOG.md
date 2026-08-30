@@ -12,6 +12,14 @@ and refactoring that no user can observe do not belong here.
 
 ### Fixed
 
+- A Codex conversation you are working in no longer reads as running somewhere else. Codex keeps one lock file
+  per open conversation, and the Runtime could see that a conversation was open but never which process had it,
+  so a terminal the Runtime was itself hosting stayed unattached to the conversation you opened inside it and its
+  row offered nothing to click. The Runtime now asks the operating system which process holds each lock, which
+  binds the conversation to its terminal.
+
+### Fixed
+
 - A window connecting right after a Runtime update is no longer refused once. The old generation keeps serving
   its terminals while it drains, but it answers new connections against the successor's authority relay, and
   that relay arrives on its own one-second cadence; on a busy machine the first connection could land first and

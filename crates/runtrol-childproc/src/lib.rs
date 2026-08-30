@@ -63,7 +63,7 @@ pub use contain::{ChildGuard, Containment, Strength, TrackedCommand};
 pub use error::SpawnError;
 pub use footprint::resident_bytes;
 pub use handoff::keep_handles_to_ourselves;
-pub use held::write_locked;
+pub use held::{holder_of, write_locked};
 pub use local_terminal::{LocalTerminal, LocalTerminalSize};
 pub use pty::{PtyChild, PtySize, PtySpawn};
 pub use resolve::{LauncherKept, Program, ProgramKind, resolve};

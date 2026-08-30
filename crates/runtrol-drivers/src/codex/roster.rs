@@ -42,7 +42,9 @@ use std::time::{Duration, Instant};
 
 use tokio::sync::Mutex;
 
-use runtrol_provider::{NativeProcessActivity, NativeSessionId, ProviderError, ProviderId};
+use runtrol_provider::{
+    NativeProcessActivity, NativeProcessBinding, NativeSessionId, ProviderError, ProviderId,
+};
 
 use crate::operator::{HomeProblem, provider_home};
 
@@ -114,6 +116,17 @@ struct Followed {
     answering: bool,
 }
 
+/// The process a conversation's lock named, and where that conversation works.
+///
+/// Kept because asking the operating system who holds a file opens a short Restart Manager session, which is
+/// far more than the four-times-a-second observation clock should pay per conversation. The answer only
+/// changes when the conversation changes hands, and the holder ending is what this checks before reusing it.
+#[derive(Clone, Debug)]
+struct Bound {
+    pid: u32,
+    cwd: Option<String>,
+}
+
 /// Which conversations were held, and when that was asked.
 #[derive(Clone, Debug)]
 struct Ownership {
@@ -133,6 +146,8 @@ pub(super) struct CodexRoster {
     /// Where each conversation's log is and how far it has been read, so a later look reads only what was
     /// appended. Shared because the driver hands clones to the blocking pool.
     followed: Arc<Mutex<HashMap<Box<str>, Followed>>>,
+    /// The process each conversation's lock names, and that conversation's folder. Shared for the same reason.
+    bound: Arc<Mutex<HashMap<Box<str>, Bound>>>,
 }
 
 impl CodexRoster {
@@ -156,6 +171,7 @@ impl CodexRoster {
             owned: Arc::new(Mutex::new(None)),
             owned_for,
             followed: Arc::new(Mutex::new(HashMap::new())),
+            bound: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -196,6 +212,10 @@ impl CodexRoster {
         };
         let mut live = Vec::with_capacity(owned.len());
         let mut active = Vec::new();
+        let mut processes = Vec::new();
+        let locks = home.join(LOCKS_DIRECTORY);
+        let mut bound = self.bound.blocking_lock();
+        bound.retain(|thread, _| owned.iter().any(|owned| owned.as_str() == thread.as_ref()));
         // Conversations nobody owns any more stop being followed, so a machine that has run for a week is
         // not carrying an entry per conversation it once saw.
         // Taken with the blocking form on purpose: every caller reaches this from the blocking pool (the
@@ -208,17 +228,94 @@ impl CodexRoster {
             if answering {
                 active.push(thread.clone());
             }
+            if let Some(binding) = holder(&locks, home, &mut bound, thread.as_str()) {
+                processes.push(NativeProcessBinding {
+                    pid: binding.pid,
+                    native: thread.clone(),
+                    cwd: binding.cwd.clone(),
+                    // Whether that process draws a screen another window can join is a separate question
+                    // this cannot answer yet. Both surfaces of this CLI (its terminal interface and the
+                    // editor extension's app server) are the same executable, so the two were told apart on
+                    // this machine only by a command line, which reading from another process on Windows
+                    // costs an undocumented walk of its memory. Claiming a screen that is not there made a
+                    // row appear and vanish four times a second (2026-08-30, the editor's Claude panel), so
+                    // nothing is claimed until a measured signal exists. Binding does not need it.
+                    interactive: false,
+                });
+            }
             live.push(thread);
         }
         Ok(NativeProcessActivity {
             live,
             active,
-            // This CLI's locks name the conversation, never the process that holds it. A terminal runtrol
-            // hosts is bound by the identity its own child reported, and nothing here can bind one it did
-            // not start, so no binding is claimed.
-            processes: Vec::new(),
+            processes,
         })
     }
+}
+
+/// The process holding one conversation's lock, and that conversation's folder, asked once and kept.
+///
+/// The operating system names the holder of a lock file (`runtrol_childproc::holder_of`), which is what turns
+/// this CLI's per-conversation lock into a binding between a conversation and a live process. Without it a
+/// terminal this Runtime started stays unbound to the conversation the person then opened inside it, and its
+/// row reads as running somewhere else (operator, 2026-08-30, a conversation this Runtime was itself hosting).
+///
+/// A kept answer is reused while its process is still alive, so the Restart Manager session is opened once per
+/// conversation rather than on every observation.
+fn holder(
+    locks: &Path,
+    home: &Path,
+    bound: &mut HashMap<Box<str>, Bound>,
+    thread: &str,
+) -> Option<Bound> {
+    if let Some(known) = bound.get(thread)
+        && runtrol_childproc::alive(known.pid)
+    {
+        return Some(known.clone());
+    }
+    let pid = runtrol_childproc::holder_of(&locks.join(format!("{thread}.{LOCK_EXTENSION}")))?;
+    let fresh = Bound {
+        pid,
+        cwd: workspace_of(home, thread),
+    };
+    bound.insert(thread.into(), fresh.clone());
+    Some(fresh)
+}
+
+/// Where a conversation works, from the first record its own log opens with.
+///
+/// The CLI writes that record when it creates the conversation and never rewrites it, so one bounded read of
+/// the head answers for the life of the conversation. Only the folder is taken: a structural key found as
+/// bytes, with no message decoded and no copy kept.
+fn workspace_of(home: &Path, thread: &str) -> Option<String> {
+    const MAX_HEAD_BYTES: usize = 64 * 1024;
+
+    let log = locate_log(home, thread)?;
+    // A log that cannot be opened or read names no folder, which is the same answer a log with no folder
+    // record gives: the conversation is bound to its process without one rather than filed under a guess.
+    let Ok(file) = fs::File::open(log) else {
+        return None;
+    };
+    let mut head = String::new();
+    if file
+        .take(MAX_HEAD_BYTES as u64)
+        .read_to_string(&mut head)
+        .is_err()
+    {
+        return None;
+    }
+    folder_in_head(head.lines().next()?)
+}
+
+/// The folder named by one opening record, found as bytes.
+fn folder_in_head(line: &str) -> Option<String> {
+    const FOLDER_KEY: &str = "\"cwd\":\"";
+    let start = line.find(FOLDER_KEY)? + FOLDER_KEY.len();
+    let rest = line.get(start..)?;
+    let end = rest.find('\"')?;
+    let escaped = rest.get(..end)?;
+    // The record is JSON, so a Windows path arrives with its separators escaped.
+    Some(escaped.replace("\\\\", "\\"))
 }
 
 /// The conversations whose writer lock a live process is holding.
@@ -589,7 +686,27 @@ mod tests {
             .collect();
         assert_eq!(live, vec![OPEN_THREAD, DONE_THREAD]);
         assert_eq!(active, vec![OPEN_THREAD]);
-        assert!(activity.processes.is_empty());
+        // The lock names its holder, and in this test that holder is this process. Binding a live
+        // conversation to the process that owns it is what lets a row find the terminal it belongs to.
+        let bound: Vec<(u32, &str)> = activity
+            .processes
+            .iter()
+            .map(|process| (process.pid, process.native.as_str()))
+            .collect();
+        assert_eq!(
+            bound,
+            vec![
+                (std::process::id(), OPEN_THREAD),
+                (std::process::id(), DONE_THREAD)
+            ]
+        );
+        // A screen to join is a claim this cannot make yet, so it makes none.
+        assert!(
+            activity
+                .processes
+                .iter()
+                .all(|process| !process.interactive)
+        );
     }
 
     /// The second look reads only what was appended, and the turn ending there ends the answer.
@@ -652,7 +769,21 @@ mod tests {
         println!("open conversations: {}", activity.live.len());
         for thread in &activity.live {
             let answering = activity.active.contains(thread);
-            println!("  {} answering={answering}", thread.as_str());
+            let bound = activity
+                .processes
+                .iter()
+                .find(|process| process.native == *thread);
+            let held = bound.map_or_else(
+                || "unbound".to_owned(),
+                |process| {
+                    format!(
+                        "pid={} cwd={}",
+                        process.pid,
+                        process.cwd.as_deref().unwrap_or("unknown")
+                    )
+                },
+            );
+            println!("  {} answering={answering} {held}", thread.as_str());
         }
     }
 
@@ -669,5 +800,25 @@ mod tests {
             last_open_turn((opened("a") + &chatter() + &closed("a")).as_bytes()),
             Some(false)
         );
+    }
+
+    #[test]
+    fn the_opening_record_names_the_folder_with_its_separators_restored() {
+        let line = concat!(
+            r#"{"timestamp":"t","type":"session_meta","payload":{"session_id":"a","#,
+            r#""cwd":"c:\Users\MSI\Desktop\taxly","originator":"codex_vscode"}}"#
+        );
+        assert_eq!(
+            folder_in_head(line).as_deref(),
+            Some(r"c:\Users\MSI\Desktop\taxly")
+        );
+        assert_eq!(
+            folder_in_head(r#"{"payload":{"cwd":"/work/app"}}"#).as_deref(),
+            Some("/work/app")
+        );
+        // A record with no folder, and one that stops before its closing quote, name nothing rather than
+        // guessing: an unknown folder files a conversation nowhere, a wrong one files it under the wrong project.
+        assert_eq!(folder_in_head(r#"{"payload":{"id":"a"}}"#), None);
+        assert_eq!(folder_in_head(r#"{"cwd":"unterminated"#), None);
     }
 }
