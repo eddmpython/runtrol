@@ -318,7 +318,7 @@ class RuntimeTerminal implements vscode.Pseudoterminal {
   /// the tab opens must not lose the first keys.
   private pending: Uint8Array[] = [];
   private pendingBytes = 0;
-  /// The mark turning in the middle of the pane until the service's own screen arrives.
+  /// The mark standing in the middle of the pane, lit in passes, until the service's own screen arrives.
   private opening: ReturnType<typeof setInterval> | null = null;
 
   constructor(
@@ -389,7 +389,7 @@ class RuntimeTerminal implements vscode.Pseudoterminal {
     });
   }
 
-  /// Turn the mark until there is something real to draw.
+  /// Keep the light passing over the mark until there is something real to draw.
   private startOpeningMark(): void {
     if (this.opening) return;
     let at = 0;

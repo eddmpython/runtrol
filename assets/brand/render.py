@@ -241,6 +241,31 @@ def draw_mark(canvas: Canvas, geometry, size: float, dx: float, dy: float, accen
                 canvas.blend(x, y, colors[arm["role"]], inside / (SUPERSAMPLE * SUPERSAMPLE))
 
 
+def mark_cells(geometry, size: int) -> list[str]:
+    """The mark as `size` rows of `size` letters: the arm under each cell's centre (`a` accent, `i` ink) or `.`.
+
+    A terminal paints this with half blocks, two cells per character row, each half in its own colour. That
+    surface has no anti-aliasing to offer, so a cell is either inside an arm or not, and the hinted geometry is
+    what keeps that honest: at 32 the stroke, the gap and the arc radius all land on whole cells.
+    """
+    arms, half = arm_primitives(geometry, size / geometry[3], 0.0, 0.0)
+    letters = {"accent": "a", "ink": "i"}
+    rows = []
+    for y in range(size):
+        row = ""
+        for x in range(size):
+            role = next((arm["role"] for arm in arms if arm_distance(x + 0.5, y + 0.5, arm) <= half), None)
+            row += letters[role] if role else "."
+        rows.append(row)
+    return rows
+
+
+def symbol_cells_json(rows: list[str]) -> str:
+    """The cell grid as the JSON the Studio bundles: the legend beside the rows, one row per line."""
+    body = ",\n".join(f'    "{row}"' for row in rows)
+    return '{\n  "accent": "a",\n  "ink": "i",\n  "empty": ".",\n  "rows": [\n' + body + "\n  ]\n}\n"
+
+
 def flatten_path(d: str, scale: float, dx: float, dy: float) -> list[list[tuple[float, float]]]:
     """Flattens M/L/H/V/C/Z (absolute or relative) into closed polygons."""
     tokens = re.findall(r"[MLHVCZmlhvcz]|-?\d*\.?\d+(?:e-?\d+)?", d)
@@ -418,6 +443,7 @@ def main() -> None:
     write("icon-16.png", hinted[16])
     write("icon-32.png", hinted[32])
     write("favicon.ico", ico([(16, hinted[16]), (32, hinted[32]), (48, hinted[48])]))
+    write("symbol-cells.json", symbol_cells_json(mark_cells(HINTED, 32)))
 
     for size in (192, 512):
         write(f"icon-{size}.png", draw_tile(size, MARK, 0.64, 0.0).png())

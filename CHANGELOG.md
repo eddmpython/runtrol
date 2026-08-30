@@ -10,6 +10,22 @@ and refactoring that no user can observe do not belong here.
 
 ## [Unreleased]
 
+### Changed
+
+- Live provider conversations now use a measured capture ladder: the existing Runtime PTY first, a lazily allocated
+  official provider TUI attachment second, a Microsoft Windows console mirror third, and an honest observe-only state
+  otherwise. Every VS Code window shares one bounded terminal renderer and opening a live row never runs `resume`.
+- While a conversation opens, the tab shows the Runtrol mark itself: the four curved arms, two coral and two in
+  the terminal's own text colour, drawn from the brand's 32 px geometry, with a coral light passing over it
+  until the coding service draws its first line. Until now the tab showed four bracket characters standing in
+  for the mark, which read as brackets and not as the mark.
+
+### Fixed
+
+- The opening mark stays up until the coding service draws something a person can see. It used to come
+  down on the first clear-screen or cursor-hide the service sent, leaving the empty rectangle it exists to
+  prevent.
+
 ## [0.1.40] - 2026-08-30
 
 ### Fixed
