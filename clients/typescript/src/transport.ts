@@ -68,7 +68,10 @@ function waitForConnection(socket: Socket, signal?: AbortSignal): Promise<void> 
 class FramedSocket implements RuntimeTransport {
   readonly #socket: Socket;
   readonly #incoming: AsyncIterator<Buffer>;
-  #buffer = Buffer.alloc(0);
+  // Retain one socket chunk. A fragmented frame gets one exact allocation, which keeps hostile
+  // fragmentation from causing either repeated full-frame copies or an unbounded segment list.
+  #chunk: Buffer | null = null;
+  #chunkOffset = 0;
 
   public constructor(socket: Socket) {
     this.#socket = socket;
@@ -120,7 +123,28 @@ class FramedSocket implements RuntimeTransport {
   }
 
   async #readExact(length: number): Promise<Buffer> {
-    while (this.#buffer.byteLength < length) {
+    if (length === 0) return Buffer.alloc(0);
+
+    await this.#fillChunk();
+    if (this.#availableBytes() >= length) return this.#take(length);
+
+    const answer = Buffer.allocUnsafe(length);
+    let written = 0;
+    while (written < length) {
+      const available = this.#availableBytes();
+      if (available === 0) {
+        await this.#fillChunk();
+        continue;
+      }
+      const segment = this.#take(Math.min(available, length - written));
+      segment.copy(answer, written);
+      written += segment.byteLength;
+    }
+    return answer;
+  }
+
+  async #fillChunk(): Promise<void> {
+    while (this.#availableBytes() === 0) {
       let next: IteratorResult<Buffer>;
       try {
         next = await this.#incoming.next();
@@ -128,10 +152,28 @@ class FramedSocket implements RuntimeTransport {
         throw new RuntimeTransportError("Runtime frame read failed", { cause: error });
       }
       if (next.done) throw new RuntimeTransportError("Runtime closed during a frame");
-      this.#buffer = Buffer.concat([this.#buffer, next.value]);
+      if (next.value.byteLength === 0) continue;
+      this.#chunk = next.value;
+      this.#chunkOffset = 0;
     }
-    const answer = this.#buffer.subarray(0, length);
-    this.#buffer = this.#buffer.subarray(length);
+  }
+
+  #availableBytes(): number {
+    return this.#chunk === null ? 0 : this.#chunk.byteLength - this.#chunkOffset;
+  }
+
+  #take(length: number): Buffer {
+    const chunk = this.#chunk;
+    if (chunk === null || length > this.#availableBytes()) {
+      throw new RuntimeTransportError("Runtime frame reader lost its buffered bytes");
+    }
+    const start = this.#chunkOffset;
+    const answer = chunk.subarray(start, start + length);
+    this.#chunkOffset += length;
+    if (this.#chunkOffset === chunk.byteLength) {
+      this.#chunk = null;
+      this.#chunkOffset = 0;
+    }
     return answer;
   }
 }
