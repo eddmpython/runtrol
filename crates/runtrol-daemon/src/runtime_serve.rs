@@ -514,7 +514,7 @@ async fn dispatch_public(
         }
     } else {
         match method {
-            RuntimeMethod::Initialize => initialize(state, instance_id, composed, id, params),
+            RuntimeMethod::Initialize => initialize(state, instance_id, composed, id, params).await,
             RuntimeMethod::IntegrationsRequestEnrollment => {
                 request_integration(state, composed, id, params)
             }
@@ -1021,7 +1021,7 @@ fn audit_unavailable(id: JsonRpcId) -> Answer {
     }
 }
 
-fn initialize(
+async fn initialize(
     state: &mut PublicState,
     instance_id: &str,
     composed: &Composed,
@@ -1072,7 +1072,7 @@ fn initialize(
         capabilities: params.client_capabilities,
     };
     let authority = match params.authentication.as_ref() {
-        Some(proof) => match authenticate_current(composed, &context, proof) {
+        Some(proof) => match authenticate_with_relay_patience(composed, &context, proof).await {
             Ok(authorized) => PublicAuthority::Authorized(authorized),
             Err(failure) => return Answer::failure(id, failure),
         },
@@ -4595,6 +4595,39 @@ fn authorized_scopes<'a>(
         });
     }
     Ok(current)
+}
+
+/// How long a draining generation waits for its successor's authority relay before refusing a connection.
+///
+/// A new window's first request lands on a draining generation the moment the locator shows it, and the
+/// successor's relay arrives on its own one-second cadence. On a busy machine the first relay can land after
+/// the first request (measured 2026-08-30: the handover gate's fresh connection was refused with "the
+/// successor authority relay is unavailable" whenever two real Runtime generations also ran on the machine,
+/// and passed when the box was otherwise idle). Waiting a few relay rounds turns that race into a slightly
+/// slower first answer instead of a refusal the person sees once after every update.
+const RELAY_PATIENCE_STEP: Duration = Duration::from_millis(400);
+const RELAY_PATIENCE_TRIES: u32 = 6;
+
+/// Authenticate, and while this generation is draining give the successor's relay a moment to arrive.
+async fn authenticate_with_relay_patience(
+    composed: &Composed,
+    context: &ClientContext,
+    authentication: &runtrol_runtime_protocol::IntegrationAuthentication,
+) -> Result<AuthorizedIntegration, AuthorizationFailure> {
+    let mut attempt = 0;
+    loop {
+        match authenticate_current(composed, context, authentication) {
+            Err(failure)
+                if failure.kind == RuntimeErrorKind::RuntimeUnavailable
+                    && composed.draining.load(std::sync::atomic::Ordering::Acquire)
+                    && attempt < RELAY_PATIENCE_TRIES =>
+            {
+                attempt += 1;
+                tokio::time::sleep(RELAY_PATIENCE_STEP).await;
+            }
+            answered => return answered,
+        }
+    }
 }
 
 fn authenticate_current(

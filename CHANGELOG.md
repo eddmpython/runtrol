@@ -10,6 +10,14 @@ and refactoring that no user can observe do not belong here.
 
 ## [Unreleased]
 
+### Fixed
+
+- A window connecting right after a Runtime update is no longer refused once. The old generation keeps serving
+  its terminals while it drains, but it answers new connections against the successor's authority relay, and
+  that relay arrives on its own one-second cadence; on a busy machine the first connection could land first and
+  be turned away. The draining generation now waits out a few relay rounds before answering, so the first
+  request after an update is a moment slower instead of failing.
+
 ## [0.1.38] - 2026-08-30
 
 ### Fixed
