@@ -445,10 +445,7 @@ async fn parity(
         Instant::now().elapsed().as_nanos()
     );
     let typed = if submit_line {
-        format!(
-            "{nonce}
-"
-        )
+        format!("{nonce}\r\n")
     } else {
         nonce.clone()
     };
