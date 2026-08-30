@@ -41,7 +41,9 @@ pub use account::{
     AccountLimits, AccountReport, AccountStatus, LimitsAbsent, MAX_ACCOUNT_TOKEN_BYTES,
     account_token,
 };
-pub use agent::{Agent, NativeProcessActivity, NativeProcessBinding, Provider};
+pub use agent::{
+    Agent, NativeProcessActivity, NativeProcessBinding, NativeTerminalAccess, Provider,
+};
 pub use capability::{
     ProviderCapabilities, ProviderCapability, ProviderCapabilitySource, ProviderCapabilityState,
 };
@@ -60,8 +62,8 @@ pub use event::{
     Window, WithdrawnReason,
 };
 pub use id::{
-    ApprovalId, IdError, MessageId, NativeSessionId, OptionId, ProviderId, SessionId, StreamId,
-    TerminalId, ToolCallId, TurnId,
+    ApprovalId, IdError, MessageId, NativeSessionId, NativeTerminalTarget, OptionId, ProviderId,
+    SessionId, StreamId, TerminalId, ToolCallId, TurnId,
 };
 pub use manifest::{
     AccountIdentitySpec, AccountSpec, AccountUnmeteredSpec, AccountWindowSpec, BinSpec, EventsSpec,

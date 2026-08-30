@@ -30,7 +30,8 @@ use std::fs;
 use std::path::PathBuf;
 
 use runtrol_provider::{
-    NativeProcessActivity, NativeProcessBinding, NativeSessionId, ProviderError, ProviderId,
+    NativeProcessActivity, NativeProcessBinding, NativeSessionId, NativeTerminalAccess,
+    NativeTerminalTarget, ProviderError, ProviderId,
 };
 use serde::Deserialize;
 
@@ -83,6 +84,16 @@ struct Record {
     /// A record from a CLI too old to write this is `None`, and the launch kind falls back to `kind`.
     #[serde(default)]
     entrypoint: Option<String>,
+    /// Provider-owned live peer protocol. Version one publishes the attachment socket used by `claude attach`.
+    #[serde(default)]
+    peer_protocol: Option<u32>,
+    /// Provider-owned endpoint for another official TUI client. Runtime never opens or persists this path; its
+    /// presence beside a job identity is part of the provider's proof that `claude attach <job>` is available.
+    #[serde(default)]
+    messaging_socket_path: Option<String>,
+    /// Opaque background job identity accepted by the provider's `attach` and `stop` commands.
+    #[serde(default)]
+    job_id: Option<String>,
 }
 
 /// Whether a roster record names a process with a console another window can join and type into.
@@ -96,8 +107,31 @@ struct Record {
 /// entrypoint falls back to the older `kind` signal so its terminal sessions still mirror.
 fn has_a_console_to_join(entrypoint: Option<&str>, kind: Option<&str>) -> bool {
     match entrypoint {
-        Some(launch) => launch == "cli",
+        Some(launch) => launch == "cli" && kind == Some("interactive"),
         None => kind == Some("interactive"),
+    }
+}
+
+/// The strongest honest route into a live terminal session.
+///
+/// Official attachment wins over console mirroring because it preserves the provider's own byte stream and works
+/// for background jobs that own no interactive operating-system console. A record without the provider's complete
+/// attachment target falls back to the measured console rule used by older CLI versions.
+fn terminal_access(record: &Record) -> NativeTerminalAccess {
+    let has_official_peer = record.peer_protocol.is_some_and(|version| version >= 1)
+        && record
+            .messaging_socket_path
+            .as_deref()
+            .is_some_and(|path| !path.is_empty());
+    if has_official_peer
+        && let Some(raw_target) = record.job_id.as_deref()
+        && let Ok(target) = NativeTerminalTarget::new(raw_target)
+    {
+        NativeTerminalAccess::Official { target }
+    } else if has_a_console_to_join(record.entrypoint.as_deref(), record.kind.as_deref()) {
+        NativeTerminalAccess::Console
+    } else {
+        NativeTerminalAccess::Unavailable
     }
 }
 
@@ -188,10 +222,7 @@ impl ClaudeRoster {
                 pid: entry.pid,
                 native,
                 cwd: entry.cwd.clone(),
-                interactive: has_a_console_to_join(
-                    entry.entrypoint.as_deref(),
-                    entry.kind.as_deref(),
-                ),
+                terminal_access: terminal_access(&entry),
             });
         }
         Ok(NativeProcessActivity {
@@ -313,6 +344,12 @@ mod tests {
         )
     }
 
+    fn record_with_peer(pid: u32, session: &str, entrypoint: &str) -> String {
+        format!(
+            "{{\"pid\":{pid},\"sessionId\":\"{session}\",\"cwd\":\"/work\",\"status\":\"idle\",\"kind\":\"bg\",\"entrypoint\":\"{entrypoint}\",\"peerProtocol\":1,\"messagingSocketPath\":\"provider-peer\",\"jobId\":\"job-1\"}}"
+        )
+    }
+
     fn roster(files: &[(&str, String)]) -> (Scratch, ClaudeRoster) {
         let serial = NEXT_SCRATCH.fetch_add(1, Ordering::Relaxed);
         let path = std::env::temp_dir().join(format!(
@@ -405,10 +442,61 @@ mod tests {
         let joinable: Vec<&str> = activity
             .processes
             .iter()
-            .filter(|process| process.interactive)
+            .filter(|process| matches!(&process.terminal_access, NativeTerminalAccess::Console))
             .map(|process| process.native.as_str())
             .collect();
         assert_eq!(joinable, vec![terminal]);
+    }
+
+    #[test]
+    fn a_background_job_with_an_official_target_is_attachable_without_a_console() {
+        let mine = std::process::id();
+        let session = "bbbbbbbb-0000-4000-8000-000000000003";
+        let (_kept, roster) = roster(&[(
+            "peer.json",
+            record_with_peer(mine, session, "claude-vscode"),
+        )]);
+
+        let activity = roster.activity(claude()).expect("the roster is readable");
+        assert_eq!(activity.processes.len(), 1);
+        let process = activity
+            .processes
+            .first()
+            .expect("one process was reported");
+        assert_eq!(
+            &process.terminal_access,
+            &NativeTerminalAccess::Official {
+                target: NativeTerminalTarget::new("job-1").expect("a valid opaque target")
+            }
+        );
+    }
+
+    #[test]
+    fn an_unbounded_official_target_is_observed_but_never_reaches_argv() {
+        let mine = std::process::id();
+        let session = "bbbbbbbb-0000-4000-8000-000000000004";
+        let oversized = "j".repeat(NativeTerminalTarget::MAX_LEN + 1);
+        let record = record_with_peer(mine, session, "claude-vscode").replace("job-1", &oversized);
+        let (_kept, roster) = roster(&[("peer.json", record)]);
+
+        let activity = roster.activity(claude()).expect("the roster is readable");
+        assert_eq!(activity.processes.len(), 1);
+        let process = activity
+            .processes
+            .first()
+            .expect("one process was reported");
+        assert!(matches!(
+            &process.terminal_access,
+            NativeTerminalAccess::Unavailable
+        ));
+        assert_eq!(
+            activity
+                .live
+                .first()
+                .expect("the live conversation was reported")
+                .as_str(),
+            session
+        );
     }
 
     #[test]
@@ -422,7 +510,12 @@ mod tests {
         let (_kept, roster) = roster(&[("legacy.json", legacy)]);
         let activity = roster.activity(claude()).expect("the roster is readable");
         assert_eq!(activity.processes.len(), 1);
-        assert!(activity.processes.iter().all(|process| process.interactive));
+        assert!(
+            activity
+                .processes
+                .iter()
+                .all(|process| matches!(&process.terminal_access, NativeTerminalAccess::Console))
+        );
     }
 
     #[test]

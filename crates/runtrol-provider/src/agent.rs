@@ -34,10 +34,29 @@ use crate::catalog::ModelCatalog;
 use crate::command::{AgentCommand, CloseMode, OpenIntent, Produced};
 use crate::error::ProviderError;
 use crate::event::ApprovalRequest;
-use crate::id::{ApprovalId, NativeSessionId, ProviderId, SessionId};
+use crate::id::{ApprovalId, NativeSessionId, NativeTerminalTarget, ProviderId, SessionId};
 use crate::native_catalogue::{
     NativeSessionArchival, NativeSessionCatalogue, NativeSessionDeletion, NativeSessionQuery,
 };
+
+/// How Runtime can reach the live terminal surface owned by another process.
+///
+/// This is a structural capability reported by the provider driver. Runtime chooses the strongest honest
+/// route and never infers one from a provider name or terminal output.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum NativeTerminalAccess {
+    /// The process is live, but no safe terminal attachment is known.
+    #[default]
+    Unavailable,
+    /// The process owns an operating-system console that can be mirrored after launch.
+    Console,
+    /// The provider publishes an official command that attaches its TUI to this live conversation.
+    Official {
+        /// Provider-owned opaque target accepted by that attachment command. It may differ from the durable
+        /// conversation identity, as it does for a background job that owns one conversation.
+        target: NativeTerminalTarget,
+    },
+}
 
 /// A provider-verified operating-system process to native-conversation binding.
 ///
@@ -51,9 +70,8 @@ pub struct NativeProcessBinding {
     pub native: NativeSessionId,
     /// Where that process works, when the provider's roster says. A mirrored terminal is filed under it.
     pub cwd: Option<String>,
-    /// Whether the process is the provider's own terminal interface rather than a piped child of some other
-    /// program. Only a terminal interface has a screen anybody can join.
-    pub interactive: bool,
+    /// The strongest live terminal route the driver measured for this process.
+    pub terminal_access: NativeTerminalAccess,
 }
 
 /// Provider-owned process roster, separated into existence and current model activity.

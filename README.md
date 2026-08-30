@@ -27,7 +27,8 @@ runtrol status --json
 >   목록은 어느 창에서 열어도 같다.
 > - 새 대화는 누른 자리에서 서비스를 고른다. 편집기 상단으로 눈이 끌려가지 않는다.
 > - 대화를 누르면 그 CLI 자신의 화면이 편집기 탭으로 열리고 바로 타이핑해서 답이 온다. 살아 있는 대화는 새로
->   resume하지 않고 데몬이 가진 정확한 PTY에 붙는다. 탭은 provider가 지은 대화명을 달고 프로젝트의 색을 쓴다.
+>   resume하지 않고 데몬의 정확한 PTY, provider 공식 attach, Windows 콘솔 미러 중 증명된 경로에 붙는다. 탭은
+>   provider가 지은 대화명을 달고 프로젝트의 색을 쓴다.
 > - 새 터미널의 provider 명령은 설치된 투명 브리지를 지나 원래 터미널과 모든 Runtrol 창이 같은 프로세스, 같은
 >   출력, 같은 입력 순서를 본다. 브리지 밖에서 이미 돌던 프로세스는 보존하고 중복 resume을 막으며, 공식 attach
 >   통로가 없으면 외부 실행 상태를 정직하게 표시한다.
@@ -63,7 +64,7 @@ Code-hot workspace는 bounded 상태를 유지한다. streaming과 background �
 ### 변하지 않는 핵심
 
 - **기능과 속도는 하나의 계약이다.** 기능이 많아져도 기다림과 버벅임은 허용하지 않는다. 보이는 지연, frame drop, 입력 지연은 출시를 막는 버그다.
-- **멀티세션 비용은 세션 수에 비례하지 않는다.** 15개 세션은 일상 운용 기준이고 30개는 release gate 부하다. 논리 세션은 더 많이 존재할 수 있지만 hot process는 최대 8개다. 대화마다 provider process, PTY, bounded ring, screen은 정확히 하나이고 여러 renderer는 그것을 복제하지 않고 함께 본다. 선택 세션 고정, 즉시 검색, 안정 정렬, workspace 전환은 30개에서도 같은 조작이어야 한다.
+- **멀티세션 비용은 세션 수에 비례하지 않는다.** 15개 세션은 일상 운용 기준이고 30개는 release gate 부하다. 논리 세션은 더 많이 존재할 수 있지만 hot terminal은 최대 8개다. 대화마다 살아 있는 owner는 하나이고 Runtime의 중앙 renderer, bounded ring, screen도 최대 하나다. 여러 VS Code 창과 폰은 그것을 복제하지 않고 함께 본다. 공식 attach 대상은 누가 열기 전까지 renderer와 화면 메모리를 쓰지 않는다. 선택 세션 고정, 즉시 검색, 안정 정렬, workspace 전환은 30개에서도 같은 조작이어야 한다.
 - **멀티에이전트는 provider-neutral이다.** 지원되는 설치형 CLI를 자동 발견하고 한 목록과 같은 조작법으로 운영한다. 새 provider는 core 수정 없이 manifest 또는 driver로 추가한다.
 - **에이전트가 저장소를 자율적으로 변경한다.** provider CLI가 작업과 대화를 소유하고 runtrol은 session, workspace, worktree, process lifecycle, collision boundary만 감독한다.
 - **대화 선택과 workspace 전환을 결박한다.** session 선택 즉시 대화와 파일 맥락을 전환하고, 실제 편집이 필요할 때만 정확한 workspace 또는 worktree를 Code-hot으로 승격한다. 대화 본문을 읽어 경로를 추측하지 않는다.

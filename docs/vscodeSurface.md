@@ -113,9 +113,11 @@ verified process record to that PTY and Studio rekeys the existing row and tab i
 the project placeholder, while the project colour remains on both the row and tab.
 
 A process already running outside the broker appears as live when a provider publishes a cheap process roster. Studio
-does not attempt a duplicate resume. Without an official provider or terminal-host attach channel, the row states that
-it is running in another terminal and cannot be opened from this surface. Studio's 250 ms compatibility requests are
-coalesced by Runtime's provider-specific 200 ms cache, so adding windows does not multiply roster filesystem scans.
+does not attempt a duplicate resume. Runtime opens the same public terminal surface when the provider publishes an
+official live target or when Microsoft Windows exposes a compatible interactive console; otherwise the row states that
+it is running elsewhere and cannot be opened from this surface. VS Code windows are independent viewers, not process
+owners or operating-system capture boundaries. Studio's 250 ms compatibility requests are coalesced by Runtime's
+provider-specific 200 ms cache, so adding windows does not multiply roster filesystem scans.
 
 No published Studio version before this public terminal contract persisted a private terminal attachment identity,
 so there is no discoverable legacy tab to migrate. Runtime's native claim registry and `legacyGenerationBusy` error

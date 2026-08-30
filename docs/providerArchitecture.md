@@ -30,6 +30,7 @@ A manifest may declare only facts needed to reach the process:
 - provider-owned credential directories used by the workspace wall
 - an update channel hint
 - the CLI's own sign-in, self-diagnosis, and install commands
+- provider TUI launch and lifecycle argument prefixes, including paired official live `attach` and `stop` commands
 
 Capabilities, model catalogues, account state, and supported flags are discovered from the installed CLI at runtime. Probe policy, caching, model honesty, and loader-time manifest linting are defined in [provider discovery](providerDiscovery.md), not in the adapter boundary.
 
@@ -54,6 +55,27 @@ an installer, or an update command, and resolves only executables already on the
 Driver kinds live in one explicit table. Each entry either constructs a provider-neutral driver or gives a visible reason that the build cannot serve that kind. There is no distributed registration and no provider-name branch in the core.
 
 The generic ACP v1 driver accepts an external manifest and supervises a separate stdio child process. The same path handles session creation, loading, prompts, streamed updates, and provider-declared turn completion. Cancellation is implemented by the driver but is not part of the hosted ACP journey yet.
+
+## Live terminal access
+
+A driver may publish a validated process-to-native binding with one `NativeTerminalAccess` value:
+
+| Value | Meaning |
+|---|---|
+| `Unavailable` | The process owns the conversation, but no safe shared terminal surface was measured |
+| `Console` | The process owns a Microsoft Windows console that Runtime can mirror |
+| `Official { target }` | The provider publishes an opaque target accepted by its declared attach and stop commands |
+
+This is a per-process observation, not a permanent capability attached to a provider name. The official target may
+differ from the durable native conversation identity. The driver validates the provider's structural evidence, while
+the provider-neutral daemon only selects the route. An official renderer is started lazily on `terminals/open`; a
+console mirror is captured eagerly because its live PID and console are the only attachment identity. Unsupported
+processes remain visible and block duplicate resume without allocating a terminal.
+
+The manifest requires `tui.attach` and `tui.stop` together. Runtime appends the opaque target as one argument and never
+passes it through a shell. The target is limited to 256 bytes and rejects control characters before it reaches core.
+Explicit stop uses the paired provider command before releasing the attachment renderer. Runtrol never opens or
+persists a provider peer socket itself and never treats `resume` as a live attachment.
 
 ## Session ownership
 

@@ -103,7 +103,7 @@ pub(super) fn activity(
                 // Whether that process draws a screen another window can join is a separate question this
                 // evidence does not answer. Claiming a screen that is not there makes a row appear and vanish
                 // (2026-08-30, an editor panel session), so nothing is claimed here.
-                interactive: false,
+                terminal_access: runtrol_provider::NativeTerminalAccess::Unavailable,
             });
         }
         live.push(held.native);

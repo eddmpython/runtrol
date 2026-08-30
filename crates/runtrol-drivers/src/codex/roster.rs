@@ -291,7 +291,7 @@ impl CodexRoster {
                     // costs an undocumented walk of its memory. Claiming a screen that is not there made a
                     // row appear and vanish four times a second (2026-08-30, the editor's Claude panel), so
                     // nothing is claimed until a measured signal exists. Binding does not need it.
-                    interactive: false,
+                    terminal_access: runtrol_provider::NativeTerminalAccess::Unavailable,
                 });
             }
             live.push(thread);
@@ -753,12 +753,12 @@ mod tests {
             ]
         );
         // A screen to join is a claim this cannot make yet, so it makes none.
-        assert!(
-            activity
-                .processes
-                .iter()
-                .all(|process| !process.interactive)
-        );
+        assert!(activity.processes.iter().all(|process| {
+            matches!(
+                &process.terminal_access,
+                runtrol_provider::NativeTerminalAccess::Unavailable
+            )
+        }));
     }
 
     /// The second look reads only what was appended, and the turn ending there ends the answer.

@@ -9,7 +9,10 @@ use std::sync::Arc;
 
 use base64ct::{Base64, Encoding as _};
 use runtrol_core::terminal::{Attachment, ViewerKind};
-use runtrol_provider::{AbsPath, ProviderId as CoreProviderId, TerminalId, WallMs};
+use runtrol_provider::{
+    AbsPath, NativeTerminalAccess, NativeTerminalTarget, ProviderId as CoreProviderId, TerminalId,
+    WallMs,
+};
 use runtrol_runtime_protocol::{
     AppScope, IDEMPOTENCY_WINDOW_MS, IntegrationGrant, MAX_IDEMPOTENCY_RECORDS,
     MAX_TERMINAL_COLUMNS, MAX_TERMINAL_INDEX_ITEMS, MAX_TERMINAL_ROWS, MAX_TERMINAL_SCREEN_BYTES,
@@ -257,6 +260,9 @@ impl TerminalRuntimeAdapter {
         // without naming this one. It travels to the claim reservation, where an unnamed terminal in the same
         // folder would otherwise refuse this conversation on the chance of being it.
         let mut holder_known = false;
+        // A provider-owned live peer is attached lazily after the adoption proof is revalidated. Keeping only
+        // this structural decision here means an unviewed session allocates no TUI renderer or screen model.
+        let mut official_attach_target: Option<NativeTerminalTarget> = None;
         let native = match &params.target {
             TerminalOpenTarget::Fresh => None,
             TerminalOpenTarget::Native {
@@ -287,29 +293,38 @@ impl TerminalRuntimeAdapter {
                     // told apart from a service that answered with no live conversation, because the second
                     // is proof that this conversation is free and the first is not.
                     let answered = match discovering.cached_native_activity(provider).await {
-                        Some(activity) => Some(activity.live),
+                        Some(activity) => Some(activity),
                         None => match prepared.driver.native_process_activity().await {
                             Ok(activity) => {
-                                let live = activity.live.clone();
                                 discovering
-                                    .remember_native_activity(provider, activity)
+                                    .remember_native_activity(provider, activity.clone())
                                     .await;
-                                Some(live)
+                                Some(activity)
                             }
                             // A provider that cannot answer about its processes cannot block an open: the
                             // conversation may simply be stored, which is the common case.
                             Err(_) => None,
                         },
                     };
-                    let held = answered.clone().unwrap_or_default();
-                    if resume_would_fork(&held, native_session_id.as_str()) {
-                        return Err(TerminalRuntimeFailure::new(
-                            RuntimeErrorKind::NativeConversationBusy,
-                            "the conversation is open in the coding service's own window; a second process is not started for it",
-                        ));
+                    if let Some(activity) = answered.as_ref() {
+                        if resume_would_fork(&activity.live, native_session_id.as_str()) {
+                            official_attach_target = official_attach_target_for(
+                                activity,
+                                native_session_id.as_str(),
+                                &workspace,
+                            );
+                            if official_attach_target.is_none() {
+                                return Err(TerminalRuntimeFailure::new(
+                                    RuntimeErrorKind::NativeConversationBusy,
+                                    "the conversation is open in the coding service's own window, and that process publishes no safe live terminal attachment",
+                                ));
+                            }
+                        } else {
+                            // The provider answered and did not name this conversation. That is the proof the
+                            // claim reservation needs to distinguish a cold conversation from an unnamed owner.
+                            holder_known = true;
+                        }
                     }
-                    // The service answered, and this conversation was not among the ones it named.
-                    holder_known = answered.is_some();
                 }
                 native_cursors
                     .open_adoption(
@@ -348,22 +363,43 @@ impl TerminalRuntimeAdapter {
                 "the selected provider has no exact prepared terminal program",
             )
         })?;
-        let (terminal_id, _terminal, attachment) = crate::terminal_surface::open_hosted(
-            composed,
-            provider,
-            native,
-            workspace,
-            params.geometry.columns,
-            params.geometry.rows,
-            Some(program),
-            // The public surface is an editor's terminal, which has its own mouse.
-            ViewerKind::Terminal,
-            // The service was asked above which conversations its live processes hold, and this one was not
-            // among them (`resume_would_fork`). A terminal in this folder that nobody has named is therefore
-            // provably some other conversation, and must not hold this one back.
-            holder_known,
-        )
-        .await
+        let opened = if let Some(attach_target) = official_attach_target {
+            crate::terminal_surface::open_official_attach(
+                composed,
+                provider,
+                native.ok_or_else(|| {
+                    TerminalRuntimeFailure::new(
+                        RuntimeErrorKind::InvalidRequest,
+                        "an official attachment requires one native conversation",
+                    )
+                })?,
+                &attach_target,
+                workspace,
+                params.geometry.columns,
+                params.geometry.rows,
+                program,
+                ViewerKind::Terminal,
+            )
+            .await
+        } else {
+            crate::terminal_surface::open_hosted(
+                composed,
+                provider,
+                native,
+                workspace,
+                params.geometry.columns,
+                params.geometry.rows,
+                Some(program),
+                // The public surface is an editor's terminal, which has its own mouse.
+                ViewerKind::Terminal,
+                // The service was asked above which conversations its live processes hold, and this one was not
+                // among them (`resume_would_fork`). A terminal in this folder that nobody has named is therefore
+                // provably some other conversation, and must not hold this one back.
+                holder_known,
+            )
+            .await
+        };
+        let (terminal_id, _terminal, attachment) = opened
         .map_err(|error| {
             use crate::native_claims::TerminalClaimError;
             use crate::terminal_surface::TerminalOpenError;
@@ -773,12 +809,14 @@ impl TerminalRuntimeAdapter {
             params.lease_generation,
             now,
         )?;
-        hosted.terminal.kill().map_err(|_| {
-            TerminalRuntimeFailure::new(
-                RuntimeErrorKind::OutcomeUnknown,
-                "the terminal stop outcome is unknown",
-            )
-        })?;
+        crate::terminal_surface::stop_hosted(&hosted)
+            .await
+            .map_err(|_| {
+                TerminalRuntimeFailure::new(
+                    RuntimeErrorKind::OutcomeUnknown,
+                    "the terminal stop outcome is unknown",
+                )
+            })?;
         remember_done(&mut state, key, fingerprint, now);
         state
             .leases
@@ -926,6 +964,27 @@ impl TerminalRuntimeAdapter {
 /// live owner left is outside: the service's own window or another program's child.
 fn resume_would_fork(held: &[runtrol_provider::NativeSessionId], native: &str) -> bool {
     held.iter().any(|owned| owned.as_str() == native)
+}
+
+/// Select the provider's exact official attachment target for one native conversation and workspace.
+///
+/// The target is deliberately not inferred from the durable native identity. Some providers publish a shorter
+/// live-job identity for attachment, and confusing the two either fails closed or starts the wrong renderer.
+fn official_attach_target_for(
+    activity: &runtrol_provider::NativeProcessActivity,
+    native: &str,
+    workspace: &AbsPath,
+) -> Option<NativeTerminalTarget> {
+    activity.processes.iter().find_map(|process| {
+        let NativeTerminalAccess::Official { target } = &process.terminal_access else {
+            return None;
+        };
+        (process.native.as_str() == native
+            && process.cwd.as_deref().is_some_and(|folder| {
+                AbsPath::new(folder).is_ok_and(|reported| reported == *workspace)
+            }))
+        .then(|| target.clone())
+    })
 }
 
 /// Say on the Runtime's operational stderr why a terminal open was refused.
@@ -1377,5 +1436,63 @@ mod tests {
             &[],
             "aaaaaaaa-0000-4000-8000-000000000001"
         ));
+    }
+
+    #[test]
+    fn official_attachment_requires_the_exact_native_identity_and_workspace() {
+        let current = std::env::current_dir().expect("the test process has a current directory");
+        let workspace = AbsPath::canonicalize(&current.to_string_lossy())
+            .expect("the current directory is canonical");
+        let native = runtrol_provider::NativeSessionId::new("aaaaaaaa-0000-4000-8000-000000000001")
+            .expect("a well-formed native identity parses");
+        let activity = runtrol_provider::NativeProcessActivity {
+            live: vec![native.clone()],
+            active: Vec::new(),
+            processes: vec![runtrol_provider::NativeProcessBinding {
+                pid: std::process::id(),
+                native,
+                cwd: Some(workspace.as_str().to_owned()),
+                terminal_access: NativeTerminalAccess::Official {
+                    target: runtrol_provider::NativeTerminalTarget::new("job-opaque-1")
+                        .expect("a valid opaque target"),
+                },
+            }],
+        };
+
+        assert_eq!(
+            official_attach_target_for(
+                &activity,
+                "aaaaaaaa-0000-4000-8000-000000000001",
+                &workspace,
+            )
+            .as_ref()
+            .map(NativeTerminalTarget::as_str),
+            Some("job-opaque-1")
+        );
+        assert!(
+            official_attach_target_for(
+                &activity,
+                "aaaaaaaa-0000-4000-8000-000000000002",
+                &workspace,
+            )
+            .is_none()
+        );
+        let other_workspace = AbsPath::canonicalize(
+            workspace
+                .as_std_path()
+                .parent()
+                .expect("the current directory has a parent")
+                .to_string_lossy()
+                .as_ref(),
+        )
+        .expect("the parent directory is canonical");
+        assert!(
+            official_attach_target_for(
+                &activity,
+                "aaaaaaaa-0000-4000-8000-000000000001",
+                &other_workspace,
+            )
+            .is_none()
+        );
     }
 }

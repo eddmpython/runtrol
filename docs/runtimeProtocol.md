@@ -114,7 +114,10 @@ answering now. It is separate from the catalogue because a panel asks it on a 25
 catalogue is not cheap. A listing reads every stored conversation's head; the activity request reads only the
 provider's bounded process roster. The measured driver validates both PID and kernel process-start identity, so a
 stale roster file cannot alias a reused PID. Runtime may use the same content-free binding internally to attach a
-provider-minted native identity to the exact daemon-owned PTY process.
+provider-minted native identity to the exact daemon-owned PTY process or to select a measured live terminal route.
+That internal route is not added to the public activity payload. `terminals/open` remains the single public operation:
+for a live native target it joins the existing Runtime terminal or a structurally proven official attachment and never
+runs the provider's resume command; for a cold target it performs the explicit native resume.
 
 A folderless request is answered on the owner-only local endpoint, where a caller already holds
 machine-wide authority through the private administration wire, and where the managed session index

@@ -2451,7 +2451,10 @@ async fn mirror_external_sessions(
     processes: &[runtrol_provider::NativeProcessBinding],
 ) {
     for process in processes {
-        if !process.interactive {
+        // Official provider peers are opened lazily by `terminals/open`: keeping a live row in the sidebar
+        // costs only this roster record until somebody actually asks to see its TUI. Console mirroring remains
+        // eager because an older CLI exposes no durable attachment identity beyond the console it owns.
+        if !should_eagerly_mirror(&process.terminal_access) {
             continue;
         }
         let Some(folder) = process.cwd.as_deref() else {
@@ -2471,6 +2474,12 @@ async fn mirror_external_sessions(
             .await,
         );
     }
+}
+
+/// Only an operating-system console must be captured while its ephemeral process identity is still valid.
+/// Official provider attachments have durable opaque targets and stay allocation-free until a viewer opens them.
+fn should_eagerly_mirror(access: &runtrol_provider::NativeTerminalAccess) -> bool {
+    matches!(access, runtrol_provider::NativeTerminalAccess::Console)
 }
 
 async fn native_activity(
@@ -6185,5 +6194,21 @@ listen = "stdio"
         drop(published);
         drop(composed);
         drop(std::fs::remove_dir_all(directory));
+    }
+
+    #[test]
+    fn only_console_access_allocates_an_eager_external_mirror() {
+        use runtrol_provider::NativeTerminalAccess;
+
+        assert!(super::should_eagerly_mirror(&NativeTerminalAccess::Console));
+        assert!(!super::should_eagerly_mirror(
+            &NativeTerminalAccess::Official {
+                target: runtrol_provider::NativeTerminalTarget::new("job-opaque-1")
+                    .expect("a valid opaque target"),
+            }
+        ));
+        assert!(!super::should_eagerly_mirror(
+            &NativeTerminalAccess::Unavailable
+        ));
     }
 }

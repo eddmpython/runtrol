@@ -4,7 +4,8 @@
 //!
 //! - **runtrol mints it** ([`SessionId`], [`TurnId`], [`ApprovalId`], [`OptionId`]). The format is
 //!   runtrol's own promise, so each is a fixed-size `Copy` value with a documented layout.
-//! - **a provider supplies it** ([`ProviderId`], [`NativeSessionId`], [`ToolCallId`]). The format
+//! - **a provider supplies it** ([`ProviderId`], [`NativeSessionId`], [`NativeTerminalTarget`],
+//!   [`ToolCallId`]). The format
 //!   belongs to the provider, so each is bounded, reference-counted, opaque text. runtrol compares
 //!   these and never parses them for meaning.
 //!
@@ -116,6 +117,8 @@ macro_rules! provider_text_id {
         impl $name {
             /// Name of this identifier type, as it appears in [`IdError`] messages.
             pub const WHAT: &'static str = $what;
+            /// Longest provider-owned text this identifier accepts.
+            pub const MAX_LEN: usize = MAX_PROVIDER_TEXT;
 
             /// Validate provider-supplied text and take ownership of it.
             ///
@@ -186,6 +189,15 @@ provider_text_id! {
     /// It never assumes a format: the Claude case where this happens to equal [`SessionId`] is a
     /// convenience the driver may exploit, not a rule the core may rely on.
     NativeSessionId = "native session id"
+}
+
+provider_text_id! {
+    /// A provider's opaque command-line target for reaching one already-live terminal conversation.
+    ///
+    /// This is deliberately distinct from [`NativeSessionId`]. A provider may publish a short-lived job
+    /// identity for attachment while the durable conversation keeps another identity. Runtime appends this value
+    /// as one argument and never interprets it or sends it through a shell.
+    NativeTerminalTarget = "native terminal target"
 }
 
 provider_text_id! {
@@ -721,6 +733,10 @@ mod tests {
                 matches!(NativeSessionId::new(bad), Err(IdError::Control { .. })),
                 "accepted {bad:?}"
             );
+            assert!(
+                matches!(NativeTerminalTarget::new(bad), Err(IdError::Control { .. })),
+                "accepted terminal target {bad:?}"
+            );
         }
     }
 
@@ -733,6 +749,10 @@ mod tests {
         ));
         assert!(ToolCallId::new(&"a".repeat(MAX_PROVIDER_TEXT)).is_ok());
         assert!(matches!(ToolCallId::new(""), Err(IdError::Empty { .. })));
+        assert!(matches!(
+            NativeTerminalTarget::new(&long),
+            Err(IdError::TooLong { .. })
+        ));
     }
 
     #[test]

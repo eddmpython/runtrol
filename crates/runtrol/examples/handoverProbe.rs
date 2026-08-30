@@ -13,6 +13,8 @@
 //! ```text
 //! handoverProbe enroll <home> <runtrol exe> <identity file> <workspace>
 //! handoverProbe open   <home> <identity file> <provider> <workspace>
+//! handoverProbe open-native <home> <identity file> <provider> <native> <workspace>
+//! handoverProbe find-native <home> <identity file> <provider> <native>
 //! handoverProbe attach <home> <identity file> <digest> <terminal id>
 //! handoverProbe stop   <home> <identity file> <digest> <terminal id>
 //! ```
@@ -40,6 +42,7 @@ const PROBE_VERSION: &str = "0.0.0";
 const DECISION_SETTLE: Duration = Duration::from_secs(5);
 /// How long a freshly started generation may take to observe a provider usable.
 const PROVIDER_SETTLE: Duration = Duration::from_mins(1);
+const TERMINAL_SETTLE: Duration = Duration::from_secs(15);
 const GEOMETRY: TerminalGeometry = TerminalGeometry {
     columns: 100,
     rows: 30,
@@ -113,6 +116,19 @@ fn main() -> ExitCode {
             ["open", home, identity, provider, workspace] => {
                 open(Path::new(home), Path::new(identity), provider, workspace).await
             }
+            ["open-native", home, identity, provider, native, workspace] => {
+                open_native(
+                    Path::new(home),
+                    Path::new(identity),
+                    provider,
+                    native,
+                    workspace,
+                )
+                .await
+            }
+            ["find-native", home, identity, provider, native] => {
+                find_native(Path::new(home), Path::new(identity), provider, native).await
+            }
             ["attach", home, identity, digest, terminal] => {
                 attach(Path::new(home), Path::new(identity), digest, terminal).await
             }
@@ -134,7 +150,10 @@ fn main() -> ExitCode {
                 )
                 .await
             }
-            _ => Err("usage: handoverProbe enroll|open|attach|stop|parity ...".to_owned()),
+            _ => Err(
+                "usage: handoverProbe enroll|open|open-native|find-native|attach|stop|parity ..."
+                    .to_owned(),
+            ),
         }
     });
     match outcome {
@@ -354,6 +373,127 @@ async fn open(
         opened.terminal.runtime_generation,
         view.initial_screen().len()
     ))
+}
+
+/// Open one exact provider-native conversation through a fresh catalogue proof.
+///
+/// If the provider reports that another live process owns it, Runtime must attach through that process's
+/// official peer rather than run the manifest's resume command. The returned descriptor proves which path won
+/// without reading or writing conversation content.
+async fn open_native(
+    home: &Path,
+    identity_file: &Path,
+    provider: &str,
+    native: &str,
+    workspace: &str,
+) -> Result<String, String> {
+    let stored = read_stored(identity_file)?;
+    let generation = current(home)?;
+    let mut client = RuntimeClient::connect_to(generation, options_with(&stored))
+        .await
+        .map_err(|error| format!("connect to open the native terminal: {error}"))?;
+    wait_until_usable(&mut client, provider).await?;
+    let catalogue = client
+        .providers()
+        .list_native_sessions(runtrol_runtime_client::protocol::ListNativeSessionsParams {
+            provider_id: runtrol_runtime_client::protocol::ProviderId::new(provider),
+            root: Some(workspace.to_owned()),
+            cursor: None,
+        })
+        .await
+        .map_err(|error| format!("list the provider-native sessions: {error}"))?;
+    let listed = catalogue
+        .sessions
+        .into_iter()
+        .find(|session| session.native_session_id == native)
+        .ok_or_else(|| format!("the native catalogue did not name {provider}/{native}"))?;
+    let adoption_token = listed.adoption_token.ok_or_else(|| {
+        format!("the native catalogue gave {provider}/{native} no adoption proof")
+    })?;
+    let params = TerminalOpenParams {
+        request_id: MutationRequestId::now(),
+        provider_id: runtrol_runtime_client::protocol::ProviderId::new(provider),
+        workspace: workspace.to_owned(),
+        target: TerminalOpenTarget::Native {
+            native_session_id: native.to_owned(),
+            adoption_token,
+        },
+        geometry: GEOMETRY,
+    };
+    let mut terminals = client.terminals();
+    let view = terminals
+        .open(&params)
+        .await
+        .map_err(|error| format!("open the provider-native terminal: {error}"))?;
+    let opened = view.opened();
+    Ok(serde_json::json!({
+        "terminalId": opened.terminal.terminal_id.as_str(),
+        "generation": opened.terminal.runtime_generation,
+        "provider": opened.terminal.provider_id.as_str(),
+        "native": opened.terminal.native_session_id,
+        "workspace": opened.terminal.workspace,
+        "processState": format!("{:?}", opened.terminal.process_state),
+        "screenBytes": view.initial_screen().len(),
+    })
+    .to_string())
+}
+
+/// Find a terminal that the Runtime discovered from a provider-owned native process.
+///
+/// The caller knows no Runtime terminal identity. That is the state of a new window looking at a CLI started
+/// elsewhere: the provider roster supplies the native identity, the daemon binds or mirrors it, and the public
+/// terminal index becomes the only attach target. Wait for that published target and prove it already has a
+/// screen without opening or resuming another provider process.
+async fn find_native(
+    home: &Path,
+    identity_file: &Path,
+    provider: &str,
+    native: &str,
+) -> Result<String, String> {
+    let stored = read_stored(identity_file)?;
+    let generation = current(home)?;
+    let digest = generation.digest().to_owned();
+    let mut client = RuntimeClient::connect_to(generation, options_with(&stored))
+        .await
+        .map_err(|error| format!("connect to find the native terminal: {error}"))?;
+    wait_until_usable(&mut client, provider).await?;
+    let deadline = Instant::now() + TERMINAL_SETTLE;
+    loop {
+        let mut terminals = client.terminals();
+        let listed = terminals.list().await.map_err(|error| {
+            format!("list terminals while finding {provider}/{native}: {error}")
+        })?;
+        if let Some(descriptor) = listed.terminals.into_iter().find(|descriptor| {
+            descriptor.provider_id.as_str() == provider
+                && descriptor.native_session_id.as_deref() == Some(native)
+        }) {
+            let view = terminals
+                .attach(&TerminalAttachParams {
+                    terminal_id: descriptor.terminal_id.clone(),
+                })
+                .await
+                .map_err(|error| format!("attach the discovered terminal: {error}"))?;
+            if !view.initial_screen().is_empty() {
+                return Ok(serde_json::json!({
+                    "terminalId": descriptor.terminal_id.as_str(),
+                    "generation": digest,
+                    "provider": descriptor.provider_id.as_str(),
+                    "native": descriptor.native_session_id,
+                    "workspace": descriptor.workspace,
+                    "processState": format!("{:?}", descriptor.process_state),
+                    "screenBytes": view.initial_screen().len(),
+                })
+                .to_string());
+            }
+        }
+        if Instant::now() >= deadline {
+            return Err(format!(
+                "no mirrored terminal for {provider}/{native} acquired a screen within {}s",
+                TERMINAL_SETTLE.as_secs()
+            ));
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
 }
 
 /// Attach to one terminal in the exact generation that owns it, on a connection that did not exist before.

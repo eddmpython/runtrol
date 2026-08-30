@@ -51,10 +51,10 @@ PTY 하나를 여러 화면에 붙이는 기술 자체는 새 발명이 아니�
 
 runtrol 의 핵심은 다음 조건을 한 계약으로 묶는 데 있다.
 
-1. provider process 와 PTY 는 대화마다 하나만 태어나고 Runtime 이 그 수명과 입력 순서를 소유한다
-2. VS Code 창, 원래 터미널, 폰과 공개 SDK 는 그 하나의 출력과 화면을 복제하지 않고 같은 generation 에 붙는다
+1. provider conversation owner 는 대화마다 하나이고, Runtime 은 owner PTY, 공식 attach renderer, Windows 콘솔 미러 중 증명된 한 중앙 표면의 입력 순서를 소유한다
+2. VS Code 창, 원래 터미널, 폰과 공개 SDK 는 그 중앙 출력과 화면을 복제하지 않고 같은 generation 에 붙는다
 3. 새 창을 여는 행위는 관찰일 뿐이며 자동 continue 나 resume 을 만들지 않는다
-4. broker 밖에서 이미 돌던 세션은 발견 즉시 모든 창의 목록에 나타나지만, 공식 attach 표면이 없으면 원본을 죽이거나 빼앗지 않고 `Elsewhere` 로 정직하게 남긴다
+4. broker 밖에서 이미 돌던 세션은 발견 즉시 모든 창의 목록에 나타나며, provider 공식 attach 또는 Microsoft Windows 콘솔 미러가 구조적으로 증명되면 같은 TUI로 붙고, 둘 다 없으면 원본을 죽이거나 빼앗지 않고 `Elsewhere` 로 정직하게 남긴다
 5. provider 가 지은 대화명과 프로젝트 색은 같은 세션을 보는 모든 Studio 표면에서 하나의 신원으로 갱신된다
 
 이 결합이 사용자가 위치를 기억하지 않아도 되는 수준으로 빠르고 안정적으로 작동할 때 제품 혁신에 가깝다.

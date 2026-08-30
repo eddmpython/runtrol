@@ -151,6 +151,10 @@ pub enum ManifestError {
         why: &'static str,
     },
 
+    /// An official terminal attachment declaration lacks its matching lifecycle command.
+    #[error("tui.attach and tui.stop must either both be declared or both be absent")]
+    TuiAttachPair,
+
     /// An identifier in the file is not one runtrol accepts.
     #[error(transparent)]
     Id(#[from] IdError),
@@ -881,6 +885,16 @@ pub struct TuiSpec {
     /// publishes no way to reopen by identity from the command line.
     #[serde(default)]
     pub resume: Vec<Box<str>>,
+    /// Arguments that attach this CLI's terminal interface to one already-live conversation; the opaque
+    /// provider target reported by its live roster is appended last. Empty means no official live attach
+    /// command is declared.
+    #[serde(default)]
+    pub attach: Vec<Box<str>>,
+    /// Arguments that stop one conversation reached through [`Self::attach`]; the same opaque provider target
+    /// is appended last. The two declarations are a pair so Runtime never presents an attached renderer as the
+    /// process owner while lacking an honest stop operation.
+    #[serde(default)]
+    pub stop: Vec<Box<str>>,
     /// Environment the TUI expects, name to value, applied on top of the operator's own.
     #[serde(default)]
     pub env: std::collections::BTreeMap<Box<str>, Box<str>>,
@@ -899,8 +913,17 @@ pub struct TuiSpec {
 
 impl TuiSpec {
     fn validate(&self) -> Result<(), ManifestError> {
-        for argument in self.new.iter().chain(&self.resume) {
+        for argument in self
+            .new
+            .iter()
+            .chain(&self.resume)
+            .chain(&self.attach)
+            .chain(&self.stop)
+        {
             HelpCommands::refuse_unless_one_word(argument)?;
+        }
+        if self.attach.is_empty() != self.stop.is_empty() {
+            return Err(ManifestError::TuiAttachPair);
         }
         for (name, value) in &self.env {
             let refuse = |why: &'static str| ManifestError::Token {
@@ -1619,6 +1642,23 @@ argv = ["exec", "--json"]
         manifest
             .validate()
             .expect("bare tokens are what this is for");
+    }
+
+    #[test]
+    fn official_terminal_attach_and_stop_are_one_lifecycle_declaration() {
+        let complete = format!(
+            "{MINIMAL}\n[tui]\nnew = []\nresume = []\nattach = [\"attach\"]\nstop = [\"stop\"]\n"
+        );
+        let manifest = parse(&complete).expect("the terminal declaration parses");
+        manifest
+            .validate()
+            .expect("a complete official attachment lifecycle is accepted");
+
+        for incomplete in ["[tui]\nattach = [\"attach\"]", "[tui]\nstop = [\"stop\"]"] {
+            let text = format!("{MINIMAL}\n{incomplete}\n");
+            let manifest = parse(&text).expect("the incomplete declaration still parses");
+            assert_eq!(manifest.validate(), Err(ManifestError::TuiAttachPair));
+        }
     }
 
     #[test]

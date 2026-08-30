@@ -18,8 +18,9 @@
 > - Add a project by choosing its folder, and every conversation in it arrives at once, whichever service holds
 >   it. The order is yours, and the list is the same in every window.
 > - A new conversation asks which service where you pressed, never at the top of the window.
-> - Pressing a conversation opens that CLI's own screen as an editor tab, and typing there is answered. The tab
->   carries the conversation's name and its project's colour.
+> - Pressing a conversation opens that CLI's own screen as an editor tab, and typing there is answered. A live
+>   conversation joins its exact Runtime PTY, an official provider attachment, or a Windows console mirror instead
+>   of running `resume`. The tab carries the conversation's name and its project's colour.
 > - Pin, rename and delete live on the row. Delete calls the service's own deletion, so it really deletes.
 > - Each service has one primary seven-day usage line. Hover or the vertical menu reveals every limit window and
 >   reset the service reported. A missing number is explained, never invented.
@@ -53,7 +54,7 @@ between the user's PC and the provider. runtrol does not get in between.**
 ### Immutable core
 
 - **Features and speed are one contract.** More capability never excuses waiting or stutter. Visible latency, frame drops, and input delay block a release.
-- **Multisession cost does not scale with session count.** Fifteen sessions are the daily-use baseline and 30 are the release-gate load. More logical sessions may exist, but at most eight own a hot process. Each conversation has exactly one provider process, PTY, bounded ring, and screen; multiple renderers share them instead of duplicating them. Selection pinning, instant search, stable ordering, and workspace switching use the same interaction at 30 sessions.
+- **Multisession cost does not scale with session count.** Fifteen sessions are the daily-use baseline and 30 are the release-gate load. More logical sessions may exist, but at most eight terminals are hot. Each conversation has one live owner and at most one central Runtime renderer, bounded ring, and screen. Multiple VS Code windows and phones share them instead of duplicating them. An official attachment allocates no renderer or screen memory before somebody opens it. Selection pinning, instant search, stable ordering, and workspace switching use the same interaction at 30 sessions.
 - **Multi-agent operation is provider-neutral.** Supported installed CLIs are discovered automatically and use one list and one interaction model. A new provider requires a manifest or driver, never a core edit.
 - **Agents change repositories autonomously.** The provider CLI owns the work and conversation. runtrol supervises only session, workspace, worktree, process lifecycle, and collision boundaries.
 - **Conversation selection is bound to workspace switching.** Selecting a session changes conversation and file context immediately. The exact workspace or worktree becomes Code-hot only when editing requires it. runtrol never reads conversation text to guess a path.

@@ -81,6 +81,15 @@ install = "npm install --global @anthropic-ai/claude-code"
 # DECRQM 2026) and waits for answers, so the surface hosting it answers like xterm. It enables its own mouse
 # reporting; the surface's common translation covers it, so that reporting is switched off here.
 resume = ["--resume"]
+# Measured on 2.1.251 (2026-08-30): a background process roster record with `peerProtocol: 1`, a
+# `messagingSocketPath`, and `jobId` accepts `claude attach <job id>`. That command opens the provider's own TUI
+# as a second presentation client of the same live session and does not resume or create a second conversation.
+# `claude stop <job id>` is its matching owner lifecycle command. A VS Code session also publishes a peer socket
+# but no job id and `claude attach <session id>` refuses it, so the driver requires all three fields and leaves
+# that row observed-only. Runtime declares only how to reach these surfaces; the driver decides per process
+# whether the exact official target exists.
+attach = ["attach"]
+stop = ["stop"]
 mouse = true
 # Markers this CLI leaves in its own children. A daemon started from inside a Claude Code session inherits
 # them, and the hosted TUI read them as "you are a child session" (measured 2026-08-25: transcript saving
