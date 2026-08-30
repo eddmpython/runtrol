@@ -87,6 +87,20 @@ format = "protocol"
 # our omission rather than the service's.
 delete = ["sessions", "delete"]
 
+[store.live]
+# How this CLI says, without being asked, which conversations a process has open right now. Measured
+# 2026-08-30 on 1.0.13: resuming one conversation left `events.jsonl` inside that conversation's own
+# directory held by the running process, and the operating system named that process. Every other file in
+# the same directory was held by nobody, so this one is the signal.
+#
+# Its own `active_sessions.json` looks like the right answer and is not: the structure for it is in the
+# binary and the file stays `[]` through every session (measured the same day, twice).
+root = [".grok/sessions"]
+# The conversation directories sit under one directory per working folder, whose name is that folder
+# percent-escaped (`C%3A%5CUsers%5C...`).
+grouped_by_workspace = true
+held = "events.jsonl"
+
 [account]
 # No status command is published: this CLI answers about the account over its own protocol extensions, which
 # the blocks below name. Measured 2026-08-26 on 1.0.5 by handshaking the real binary over `agent stdio`, with

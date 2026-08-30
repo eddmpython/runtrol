@@ -29,6 +29,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         Arc::new(Containment::without_any()),
         runtrol_provider::ModelAliases::default(),
         runtrol_provider::StoreSpec {
+            live: None,
             location: Vec::new(),
             format: None,
             list: listing,

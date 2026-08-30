@@ -709,12 +709,63 @@ pub struct StoreSpec {
     /// cline 3.0.55: `cline history delete --session-id <id>`.
     #[serde(default)]
     pub delete: Vec<Box<str>>,
+    /// How to tell, from that store alone, which conversations a live process has open.
+    ///
+    /// Absent means this CLI publishes no such evidence and the driver reports no live conversation rather
+    /// than guessing at one.
+    #[serde(default)]
+    pub live: Option<LiveSessionSpec>,
+}
+
+/// Where a CLI leaves proof that one of its conversations is open right now.
+///
+/// A CLI that keeps a directory per conversation and holds a file inside it while that conversation is open
+/// says two things for free: which conversations are live, and which process has each one. Both are what binds
+/// a conversation to the terminal it is running in, and neither costs a word of its transcript.
+///
+/// Measured on grok 1.0.13 (2026-08-30): resuming one conversation left `events.jsonl` inside that
+/// conversation's own directory held by the running process, and the operating system named that process.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct LiveSessionSpec {
+    /// Directories under the operator's home that hold the conversation directories, `/` separated.
+    #[serde(default)]
+    pub root: Vec<Box<str>>,
+    /// Whether the conversation directories sit one level further down, under a directory that names the
+    /// workspace the conversation belongs to.
+    #[serde(default)]
+    pub grouped_by_workspace: bool,
+    /// The file inside one conversation's directory that a live process holds open.
+    #[serde(default)]
+    pub held: Box<str>,
+}
+
+impl LiveSessionSpec {
+    /// Refuse anything that could reach outside the operator's home or name something other than a file.
+    fn validate(&self) -> Result<(), ManifestError> {
+        SecretPaths::validate_under_home(&self.root)?;
+        if self.root.is_empty() {
+            return Err(ManifestError::Empty {
+                field: "store.live.root",
+            });
+        }
+        if self.held.is_empty() {
+            return Err(ManifestError::Empty {
+                field: "store.live.held",
+            });
+        }
+        SecretPaths::validate_under_home(std::slice::from_ref(&self.held))?;
+        Ok(())
+    }
 }
 
 impl StoreSpec {
     /// Refuse anything a shell or an argument parser could read as something else.
     fn validate(&self) -> Result<(), ManifestError> {
         SecretPaths::validate_under_home(&self.location)?;
+        if let Some(live) = &self.live {
+            live.validate()?;
+        }
         if let Some(format) = &self.format {
             refuse_unless_token("store.format", format)?;
         }

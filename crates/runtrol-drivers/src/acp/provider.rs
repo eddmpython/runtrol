@@ -170,6 +170,36 @@ impl Provider for AcpProvider {
         }
     }
 
+    /// Which conversations a live process of this agent has open, from the store the agent keeps itself.
+    ///
+    /// Answers with nothing unless this agent's manifest declares where that evidence is (`store.live`). An
+    /// agent that declares none is not guessed about: its conversations are listed as stored, which is what
+    /// they are as far as anything here can prove.
+    async fn native_process_activity(
+        &self,
+    ) -> Result<runtrol_provider::NativeProcessActivity, ProviderError> {
+        let Some(spec) = self.sessions.live.clone() else {
+            return Ok(crate::acp::live::nothing());
+        };
+        let Ok(home) = crate::operator::operator_home(&mut |name| std::env::var_os(name)) else {
+            return Ok(crate::acp::live::nothing());
+        };
+        // Walking a store and asking the filesystem who holds a file are both blocking work, kept off the
+        // reactor so a slow disk cannot stall every other provider's answer.
+        let answered = tokio::task::spawn_blocking(move || {
+            crate::acp::live::activity(&home, &spec, runtrol_childproc::holder_of)
+        })
+        .await;
+        match answered {
+            Ok(activity) => Ok(activity),
+            Err(join) => Err(ProviderError::Protocol {
+                provider: self.id,
+                doing: "reading which conversations this agent has open",
+                detail: join.to_string(),
+            }),
+        }
+    }
+
     async fn delete_native_session(
         &self,
         deletion: NativeSessionDeletion,

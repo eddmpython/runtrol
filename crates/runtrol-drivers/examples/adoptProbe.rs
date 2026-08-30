@@ -104,6 +104,7 @@ fn provider_of(
             contained_by,
             runtrol_provider::ModelAliases::default(),
             runtrol_provider::StoreSpec {
+                live: None,
                 location: Vec::new(),
                 format: None,
                 list: Vec::new(),

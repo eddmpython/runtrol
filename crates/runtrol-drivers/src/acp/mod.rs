@@ -11,6 +11,7 @@ mod account;
 mod agent;
 mod catalogue;
 mod history;
+mod live;
 mod map;
 mod provider;
 mod scratch;

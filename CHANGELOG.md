@@ -10,6 +10,15 @@ and refactoring that no user can observe do not belong here.
 
 ## [Unreleased]
 
+### Fixed
+
+- A Grok conversation that is already open is no longer offered as if it were closed. Grok publishes no list of
+  what it has running, so every conversation looked stored and clicking one could have started a second process
+  on the same conversation. Grok keeps a directory per conversation and holds a file inside it while that
+  conversation is open, which the Runtime now reads: an open conversation is shown as open and bound to the
+  process that has it. A coding service joins this by declaring where that evidence is, so nothing in the
+  Runtime knows any service by name.
+
 ## [0.1.39] - 2026-08-30
 
 ### Fixed
