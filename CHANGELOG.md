@@ -10,6 +10,8 @@ and refactoring that no user can observe do not belong here.
 
 ## [Unreleased]
 
+## [0.1.39] - 2026-08-30
+
 ### Fixed
 
 - Conversations you start in a terminal now appear in the sidebar without waiting for a window to ask for them.
