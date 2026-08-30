@@ -392,13 +392,17 @@ async fn attach(
     ))
 }
 
-/// Two live views of one terminal see the same session: input typed on one arrives on both, and a fresh
-/// look afterwards reads one identical screen.
+/// Two live views of one terminal see the same session: input typed through a writer arrives on both, and
+/// a fresh look afterwards reads one identical screen.
 ///
-/// This is the product's central promise measured over the public wire (goal 1.1, first slice): viewer A and
-/// viewer B attach on connections that share nothing, B takes the control lease and types a nonce, both live
-/// streams carry the echo, and two fresh attaches then read byte-identical screens. Byte equality of the
-/// final screens is the parity fact; the nonce on both live streams is the input-through fact.
+/// This is the product's central promise measured over the public wire (goal 1.1): viewer A and viewer B
+/// attach on connections that share nothing and only read; a third connection W takes the control lease and
+/// types one Enter (passing a startup dialog such as claude's folder-trust question, measured 2026-08-30)
+/// followed by a nonce, as a single write, because the PTY consumes input in order and needs no pause
+/// between the two. Both live streams then carry the rendered nonce, and two fresh attaches read
+/// byte-identical screens. The viewers are drained with timeouts and then discarded: cancelling this
+/// client's `next()` mid-frame tears its connection (measured 2026-08-30, "connection ended" on the next
+/// command), so a drained connection is never written through again.
 async fn parity(
     home: &Path,
     identity_file: &Path,
@@ -407,14 +411,13 @@ async fn parity(
     submit_line: bool,
 ) -> Result<String, String> {
     let stored = read_stored(identity_file)?;
-    let generation = generation(home, digest)?;
     let terminal_id = terminal
         .parse::<RuntimeTerminalId>()
         .map_err(|error| format!("terminal id: {error}"))?;
-    let mut client_a = RuntimeClient::connect_to(generation.clone(), options_with(&stored))
+    let mut client_a = RuntimeClient::connect_to(generation(home, digest)?, options_with(&stored))
         .await
         .map_err(|error| format!("connect viewer A: {error}"))?;
-    let mut client_b = RuntimeClient::connect_to(generation.clone(), options_with(&stored))
+    let mut client_b = RuntimeClient::connect_to(generation(home, digest)?, options_with(&stored))
         .await
         .map_err(|error| format!("connect viewer B: {error}"))?;
     let mut terminals_a = client_a.terminals();
@@ -431,50 +434,119 @@ async fn parity(
         })
         .await
         .map_err(|error| format!("attach viewer B: {error}"))?;
-    let lease = view_b
-        .acquire_control(&TerminalAcquireControlParams {
-            request_id: MutationRequestId::now(),
-            terminal_id: terminal_id.clone(),
-            expected_terminal_generation: view_b.opened().terminal.terminal_generation,
-        })
-        .await
-        .map_err(|error| format!("acquire the control lease on B: {error}"))?;
     let nonce = format!(
         "parity-{}-{}",
         std::process::id(),
         Instant::now().elapsed().as_nanos()
     );
-    let typed = if submit_line {
-        format!("{nonce}\r\n")
-    } else {
-        nonce.clone()
-    };
-    view_b
-        .write(&TerminalWriteParams {
-            request_id: MutationRequestId::now(),
-            terminal_id: terminal_id.clone(),
-            lease_id: lease.lease_id.clone(),
-            lease_generation: lease.lease_generation,
-            bytes_base64: encode_base64(typed.as_bytes()),
-        })
-        .await
-        .map_err(|error| format!("write through viewer B: {error}"))?;
+    // Give a slow interface a moment to reach its input surface before the writer types. Nothing is read
+    // here: the wait is blind on purpose, so no viewer connection is put at risk before the measurement.
+    tokio::time::sleep(Duration::from_secs(8)).await;
+    type_through_a_writer(
+        &stored,
+        home,
+        digest,
+        terminal_id.clone(),
+        &nonce,
+        submit_line,
+    )
+    .await?;
     let first_byte = Instant::now();
-    let (echoed_first, waited_first_ms) =
-        drain_until(&mut view_a, nonce.as_bytes(), first_byte).await;
-    let (echoed_second, waited_second_ms) =
-        drain_until(&mut view_b, nonce.as_bytes(), first_byte).await;
+    let drained_a = drain_until(&mut view_a, nonce.as_bytes(), first_byte).await;
+    let drained_b = drain_until(&mut view_b, nonce.as_bytes(), first_byte).await;
+    if let Some(code) = drained_a.exited.or(drained_b.exited) {
+        return Err(format!(
+            "the terminal process exited (code {code}) during the journey; last screen bytes: {:?}",
+            drained_a.tail
+        ));
+    }
+    let (echoed_first, waited_first_ms) = (drained_a.seen, drained_a.waited_ms);
+    let (echoed_second, waited_second_ms) = (drained_b.seen, drained_b.waited_ms);
     // Let the echo land in the shared screen model before the fresh looks read it.
     tokio::time::sleep(Duration::from_millis(400)).await;
     let fresh_a = fresh_screen(&stored, home, digest, terminal_id.clone()).await?;
     let fresh_b = fresh_screen(&stored, home, digest, terminal_id).await?;
     let equal = fresh_a == fresh_b;
     let nonce_on_screen = contains(&fresh_a, nonce.as_bytes());
+    let tail: String = fresh_a
+        .iter()
+        .rev()
+        .take(160)
+        .rev()
+        .map(|byte| {
+            if byte.is_ascii_graphic() || *byte == b' ' {
+                char::from(*byte)
+            } else {
+                '.'
+            }
+        })
+        .collect();
     Ok(format!(
-        r#"{{"parity":{equal},"screenBytes":{},"nonceOnBothStreams":{},"nonceOnScreen":{nonce_on_screen},"firstEchoMsA":{waited_first_ms},"firstEchoMsB":{waited_second_ms}}}"#,
+        r#"{{"parity":{equal},"screenBytes":{},"nonceOnBothStreams":{},"nonceOnScreen":{nonce_on_screen},"firstEchoMsA":{waited_first_ms},"firstEchoMsB":{waited_second_ms},"screenTail":{tail:?}}}"#,
         fresh_a.len(),
         echoed_first && echoed_second,
     ))
+}
+
+/// Take the control lease on a connection of its own and type the nonce into the one session.
+///
+/// A connection of its own because a viewer being drained must never also be the writer: cancelling this
+/// client's `next()` mid-frame tears its connection (measured 2026-08-30, "connection ended" on the next
+/// command), and a writer whose connection is gone cannot write.
+async fn type_through_a_writer(
+    stored: &Stored,
+    home: &Path,
+    digest: &str,
+    terminal_id: RuntimeTerminalId,
+    nonce: &str,
+    submit_line: bool,
+) -> Result<(), String> {
+    let mut client = RuntimeClient::connect_to(generation(home, digest)?, options_with(stored))
+        .await
+        .map_err(|error| format!("connect the writer: {error}"))?;
+    let mut terminals = client.terminals();
+    let mut view = terminals
+        .attach(&TerminalAttachParams {
+            terminal_id: terminal_id.clone(),
+        })
+        .await
+        .map_err(|error| format!("attach the writer: {error}"))?;
+    let lease = view
+        .acquire_control(&TerminalAcquireControlParams {
+            request_id: MutationRequestId::now(),
+            terminal_id: terminal_id.clone(),
+            expected_terminal_generation: view.opened().terminal.terminal_generation,
+        })
+        .await
+        .map_err(|error| format!("acquire the control lease: {error}"))?;
+    // Pass a startup dialog first (claude draws its folder-trust pointer on "No, exit"; one step down reaches
+    // the trusting answer, measured 2026-08-30), then give the interface a moment to reach its input line: a
+    // nonce typed inside the dialog-to-input transition was consumed and never rendered.
+    write_bytes(&mut view, &lease, terminal_id.clone(), b"\x1b[B\r").await?;
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    let mut typed = nonce.to_owned();
+    if submit_line {
+        typed.push_str("\r\n");
+    }
+    write_bytes(&mut view, &lease, terminal_id, typed.as_bytes()).await
+}
+
+/// One exact write under a held lease.
+async fn write_bytes(
+    view: &mut runtrol_runtime_client::TerminalView<'_>,
+    lease: &runtrol_runtime_client::protocol::TerminalControlLease,
+    terminal_id: RuntimeTerminalId,
+    bytes: &[u8],
+) -> Result<(), String> {
+    view.write(&TerminalWriteParams {
+        request_id: MutationRequestId::now(),
+        terminal_id,
+        lease_id: lease.lease_id.clone(),
+        lease_generation: lease.lease_generation,
+        bytes_base64: encode_base64(bytes),
+    })
+    .await
+    .map_err(|error| format!("write through the writer: {error}"))
 }
 
 /// Read one fresh attach's initial screen on a connection that did not exist before.
@@ -496,34 +568,58 @@ async fn fresh_screen(
     Ok(view.initial_screen().to_vec())
 }
 
-/// Drain one view's live output until the needle appears or the view goes quiet, and say when it arrived.
+/// What draining one live view saw: whether the needle arrived and when, whether the process exited, and
+/// the last bytes drawn, kept so a journey that dies mid-way can say what was on screen.
+struct Drained {
+    seen: bool,
+    waited_ms: u128,
+    exited: Option<i32>,
+    tail: String,
+}
+
+/// Drain one view's live output until the needle appears, the process exits, or the view goes quiet.
 async fn drain_until(
     view: &mut runtrol_runtime_client::TerminalView<'_>,
     needle: &[u8],
     since: Instant,
-) -> (bool, u128) {
+) -> Drained {
     let mut gathered: Vec<u8> = view.initial_screen().to_vec();
-    if contains(&gathered, needle) {
-        return (true, 0);
-    }
+    let mut exited = None;
+    let mut seen = contains(&gathered, needle);
     let deadline = Instant::now() + Duration::from_secs(5);
-    while Instant::now() < deadline {
+    while !seen && exited.is_none() && Instant::now() < deadline {
         let next = tokio::time::timeout(Duration::from_millis(600), view.next()).await;
         match next {
-            Ok(Ok(notification)) => {
-                if let runtrol_runtime_client::TerminalNotification::Output { bytes, .. } =
-                    notification
-                {
-                    gathered.extend_from_slice(&bytes);
-                    if contains(&gathered, needle) {
-                        return (true, since.elapsed().as_millis());
-                    }
-                }
+            Ok(Ok(runtrol_runtime_client::TerminalNotification::Output { bytes, .. })) => {
+                gathered.extend_from_slice(&bytes);
+                seen = contains(&gathered, needle);
             }
+            Ok(Ok(runtrol_runtime_client::TerminalNotification::Exited { exit_code, .. })) => {
+                exited = Some(exit_code);
+            }
+            Ok(Ok(_)) => {}
             Ok(Err(_)) | Err(_) => break,
         }
     }
-    (false, since.elapsed().as_millis())
+    let tail = gathered
+        .iter()
+        .rev()
+        .take(220)
+        .rev()
+        .map(|byte| {
+            if byte.is_ascii_graphic() || *byte == b' ' {
+                char::from(*byte)
+            } else {
+                '.'
+            }
+        })
+        .collect();
+    Drained {
+        seen,
+        waited_ms: since.elapsed().as_millis(),
+        exited,
+        tail,
+    }
 }
 
 fn contains(haystack: &[u8], needle: &[u8]) -> bool {
