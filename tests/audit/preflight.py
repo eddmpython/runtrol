@@ -235,6 +235,14 @@ GATES: dict[str, tuple[str, list[str]]] = {
         "실제 VS Code 활성화, 뷰, 갱신 p95, RSS ratchet",
         [*PY, f"{HOOKS}/vscodeHostPerformance.py"],
     ),
+    "vscodeMultiWindowTerminalSelftest": (
+        "두 VS Code 창의 단일 TUI 미러링 게이트 자체 검증",
+        [*PY, f"{HOOKS}/vscodeMultiWindowTerminal.py", "--selftest"],
+    ),
+    "vscodeMultiWindowTerminal": (
+        "동시에 열린 두 VS Code 창의 동일 provider TUI, 출력 fan-out, 입력 승계, 정확한 종료",
+        [*PY, f"{HOOKS}/vscodeMultiWindowTerminal.py"],
+    ),
     "vscodeRealProviderJourneySelftest": (
         "VS Code 실물 provider 전체 여정 게이트 자체 검증",
         [*PY, f"{HOOKS}/vscodeRealProviderJourney.py", "--selftest"],
@@ -481,6 +489,8 @@ SUITES: dict[str, tuple[str, ...]] = {
         "runtimeDocumentation",
         "vscodeHostPerformanceSelftest",
         "vscodeHostPerformance",
+        "vscodeMultiWindowTerminalSelftest",
+        "vscodeMultiWindowTerminal",
         "vscodeRealProviderJourneySelftest",
         "vscodeRealProviderJourney",
         "phoneDrivesPcSmokeSelftest",
@@ -509,6 +519,8 @@ SUITES: dict[str, tuple[str, ...]] = {
         "vscodePackage",
         "vscodeHostPerformanceSelftest",
         "vscodeHostPerformance",
+        "vscodeMultiWindowTerminalSelftest",
+        "vscodeMultiWindowTerminal",
         "vscodeRealProviderJourneySelftest",
         "vscodeRealProviderJourney",
         "vscodeUpgradeRollbackSelftest",
@@ -535,6 +547,7 @@ CARGO_GATES = frozenset(
         "clippyCrossCfg",
         "cargoBuild",
         "vscodeHostPerformance",
+        "vscodeMultiWindowTerminal",
         "vscodeRealProviderJourney",
         "vscodeUpgradeRollback",
         "cargoTest",
@@ -583,6 +596,7 @@ def skipReasonFor(name: str) -> str | None:
         "vscodeExtension",
         "runtimeClientSdk",
         "vscodeHostPerformance",
+        "vscodeMultiWindowTerminal",
         "vscodeRealProviderJourney",
         "vscodeUpgradeRollback",
     } and shutil.which("npm") is None:
@@ -591,6 +605,7 @@ def skipReasonFor(name: str) -> str | None:
         "vscodeExtension",
         "runtimeClientSdk",
         "vscodeHostPerformance",
+        "vscodeMultiWindowTerminal",
         "vscodeRealProviderJourney",
         "vscodeUpgradeRollback",
     } and shutil.which("node") is None:

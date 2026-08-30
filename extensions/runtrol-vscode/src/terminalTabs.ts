@@ -2,6 +2,7 @@ import {
   PUBLIC_LIMITS,
   newMutationRequestId,
   type TerminalControlLease,
+  type TerminalDescriptor,
   type TerminalView,
 } from "@runtrol/runtime-client";
 import * as vscode from "vscode";
@@ -198,6 +199,59 @@ export class TerminalTabs implements vscode.Disposable {
     return [...this.started.values()];
   }
 
+  /// Test-only observation of the real editor-terminal path. The production extension never calls these
+  /// methods: the installed-host journey uses them to assert identity and byte delivery without reading or
+  /// retaining a conversation transcript.
+  async waitForJourneyTerminal(
+    target: { providerId: string; workspace: string } | { runtimeGeneration: string; terminalId: string },
+    deadlineMs: number,
+  ): Promise<TerminalDescriptor> {
+    const deadline = Date.now() + deadlineMs;
+    for (;;) {
+      const found = this.journeyHost(target)?.[1].descriptor() ?? null;
+      if (found) return found;
+      if (Date.now() >= deadline) {
+        throw new Error(`the VS Code terminal did not connect within ${deadlineMs} ms`);
+      }
+      await new Promise<void>((resolve) => setTimeout(resolve, 20));
+    }
+  }
+
+  waitForJourneyOutput(
+    runtimeGeneration: string,
+    terminalId: string,
+    text: string,
+    deadlineMs: number,
+  ): Promise<void> {
+    const found = this.journeyHost({ runtimeGeneration, terminalId });
+    if (!found) throw new Error(`terminal ${terminalId} is not open in this VS Code window`);
+    return found[1].waitForOutput(text, deadlineMs);
+  }
+
+  writeJourneyInput(runtimeGeneration: string, terminalId: string, text: string): void {
+    const found = this.journeyHost({ runtimeGeneration, terminalId });
+    if (!found) throw new Error(`terminal ${terminalId} is not open in this VS Code window`);
+    // Use VS Code's public Terminal API. This enters RuntimeTerminal.handleInput exactly as keyboard input does.
+    found[0].sendText(text, true);
+  }
+
+  private journeyHost(
+    target: { providerId: string; workspace: string } | { runtimeGeneration: string; terminalId: string },
+  ): [vscode.Terminal, RuntimeTerminal] | null {
+    for (const [terminal, host] of this.hosts) {
+      const descriptor = host.descriptor();
+      if (!descriptor) continue;
+      if (
+        "terminalId" in target
+          ? descriptor.runtimeGeneration === target.runtimeGeneration && descriptor.terminalId === target.terminalId
+          : descriptor.providerId === target.providerId && descriptor.workspace === target.workspace
+      ) {
+        return [terminal, host];
+      }
+    }
+    return null;
+  }
+
   /// Move tabs opened from an identity-pending hosted row onto the provider's stable conversation key.
   ///
   /// The terminal index is published before the provider store has a title. When that title arrives the row changes
@@ -350,6 +404,37 @@ class RuntimeTerminal implements vscode.Pseudoterminal {
   /// Change the VS Code tab name without focusing it or replacing this view.
   setName(name: string): void {
     if (!this.closed) this.nameEmitter.fire(name);
+  }
+
+  descriptor(): TerminalDescriptor | null {
+    return this.view?.opened.terminal ?? null;
+  }
+
+  waitForOutput(text: string, deadlineMs: number): Promise<void> {
+    if (!text) return Promise.reject(new Error("the terminal output marker is empty"));
+    return new Promise<void>((resolve, reject) => {
+      let tail = "";
+      let timer: NodeJS.Timeout | undefined;
+      const finish = (error?: Error): void => {
+        if (timer) clearTimeout(timer);
+        subscription.dispose();
+        if (error) reject(error);
+        else resolve();
+      };
+      const subscription = this.onDidWrite((chunk) => {
+        const candidate = tail + chunk;
+        if (candidate.includes(text)) {
+          finish();
+          return;
+        }
+        // Only the boundary needed to match a split marker is retained. This is a test latch, not a transcript.
+        tail = candidate.slice(-Math.max(0, text.length - 1));
+      });
+      timer = setTimeout(
+        () => finish(new Error(`terminal output did not contain ${JSON.stringify(text)} within ${deadlineMs} ms`)),
+        deadlineMs,
+      );
+    });
   }
 
   handleInput(data: string): void {

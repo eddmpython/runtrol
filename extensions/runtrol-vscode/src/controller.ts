@@ -1335,7 +1335,7 @@ export class Controller implements vscode.Disposable {
   async close(value?: ConversationItem | SessionLine): Promise<void> {
     const row = value instanceof ConversationItem ? value.conversation : null;
     if (row?.presence.kind === "hosted") {
-      await this.stopHosted(row, row.presence.terminal);
+      await this.stopHosted(row);
       return;
     }
     const session = this.sessionOf(value);
@@ -1359,7 +1359,7 @@ export class Controller implements vscode.Disposable {
   /// some Runtime generation owns. Every conversation kept alive across an update is one of these, and until
   /// now its Stop went looking for a supervised session and failed (measured 2026-08-29). The process ends in
   /// the generation that runs it, which is also what lets that generation finish draining.
-  private async stopHosted(row: Conversation, hosted: TerminalDescriptor): Promise<void> {
+  private async stopHosted(row: Conversation): Promise<void> {
     const choice = await vscode.window.showWarningMessage(
       `Stop ${row.title}?`,
       {
@@ -1369,7 +1369,16 @@ export class Controller implements vscode.Disposable {
       "Stop",
     );
     if (choice !== "Stop") return;
-    await this.runtime.stopTerminal(hosted);
+    await this.stopHostedResolved(row);
+  }
+
+  /// Stop an already resolved hosted row without opening the confirmation UI. The installed-host journey has
+  /// already made that decision before reaching this boundary.
+  async stopHostedResolved(row: Conversation): Promise<void> {
+    if (row.presence.kind !== "hosted") {
+      throw new Error(`${row.title} is not a Runtime-hosted terminal`);
+    }
+    await this.runtime.stopTerminal(row.presence.terminal);
   }
 
   async closeResolvedSession(

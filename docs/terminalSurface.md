@@ -99,6 +99,13 @@ Each view has its own renewable lease generation. One window renewing, expiring,
 not invalidate another window. Authorized writes from all live views are serialized through the one PTY writer, so
 every viewer observes one input order and one resulting output stream.
 
+`vscodeMultiWindowTerminal` is the direct product proof. It runs two simultaneous real VS Code Extension Hosts with
+separate profiles, opens the provider TUI through the first editor terminal tab, and attaches the second tab to the
+same Runtime generation, terminal ID, terminal generation, and provider PID. Both tabs receive the first tab's input.
+After the first window exits, the exact provider PID generation remains alive and the second tab sends and receives
+the next input before stopping that provider. The fixture uses a create-new PID marker, so a second owner fails closed
+instead of letting a duplicate process satisfy the journey.
+
 Fresh open needs `session.start`; native resume needs `session.resume`; listing and viewing need
 `session.output.read`; write and lifecycle mutations need the corresponding input or stop scope plus an unexpired
 control lease. Canonical root checks and provider capabilities are the same boundaries used by structured sessions.

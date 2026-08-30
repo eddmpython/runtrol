@@ -890,6 +890,7 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
       ? journeyApi(
         controller,
         state,
+        terminals,
         afterReady,
         context.extensionMode,
         (sessionId) => sidebar.revealSession(sessionId),

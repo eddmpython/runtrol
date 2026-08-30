@@ -11,6 +11,7 @@ use serde_json::{Value, json};
 
 const NATIVE_SESSION: &str = "fixture-session";
 const UNIQUE_SESSIONS_ENV: &str = "RUNTROL_ACP_FIXTURE_UNIQUE_SESSIONS";
+const TUI_PID_PATH_ENV: &str = "RUNTROL_ACP_FIXTURE_TUI_PID_PATH";
 
 /// Provider-owned session metadata used only when a gate asks for persistence.
 ///
@@ -290,6 +291,17 @@ fn write_marker(path: &Path, marker: &SessionMarker) -> Result<(), ()> {
 /// The fixture as a terminal program: something on the screen at once, then an echo of every line until
 /// the terminal closes. Nothing here is read for meaning, which is the point of a hosted terminal.
 fn terminal() -> Result<(), ()> {
+    if let Some(path) = std::env::var_os(TUI_PID_PATH_ENV) {
+        // `create_new` makes the file an ownership assertion, not merely diagnostics: a second TUI process in
+        // the same isolated journey fails before it can masquerade as another presentation of one terminal.
+        let mut marker = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+            .map_err(|_| ())?;
+        writeln!(marker, "{}", std::process::id()).map_err(|_| ())?;
+        marker.flush().map_err(|_| ())?;
+    }
     let mut output = std::io::stdout().lock();
     writeln!(output, "acp-fixture terminal ready").map_err(|_| ())?;
     output.flush().map_err(|_| ())?;

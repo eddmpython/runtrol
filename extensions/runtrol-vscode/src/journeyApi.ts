@@ -4,7 +4,16 @@ import { Controller } from "./controller";
 import type { IsolatedWorkspaceLine } from "./protocol";
 import type { ProviderLine, SessionLine } from "./runtimeTypes";
 import { RuntimeState } from "./state";
+import type { TerminalTabs } from "./terminalTabs";
 import { workspaceCollisions } from "./workspaceCollision";
+
+export type JourneyTerminal = {
+  runtimeGeneration: string;
+  terminalId: string;
+  terminalGeneration: number;
+  providerId: string;
+  workspace: string;
+};
 
 export type JourneyApi = {
   providers(): readonly ProviderLine[];
@@ -94,11 +103,23 @@ export type JourneyApi = {
   refreshChats(): Promise<void>;
   /// Wait until one session reports a lifecycle, or fail at the deadline.
   waitForLifecycle(session: string, lifecycle: SessionLine["lifecycle"], deadlineMs: number): Promise<void>;
+  /// Installed-host proof of the actual editor terminal path. These methods are absent from release bundles.
+  terminalStart(providerId: string, workspace: string, deadlineMs: number): Promise<JourneyTerminal>;
+  terminalAttach(runtimeGeneration: string, terminalId: string, deadlineMs: number): Promise<JourneyTerminal>;
+  terminalWaitForOutput(
+    runtimeGeneration: string,
+    terminalId: string,
+    text: string,
+    deadlineMs: number,
+  ): Promise<void>;
+  terminalWrite(runtimeGeneration: string, terminalId: string, text: string): void;
+  terminalStop(runtimeGeneration: string, terminalId: string, deadlineMs: number): Promise<void>;
 };
 
 export function journeyApi(
   controller: Controller,
   state: RuntimeState,
+  terminals: TerminalTabs,
   afterReady: <T>(action: () => Promise<T>) => Promise<T>,
   extensionMode: vscode.ExtensionMode,
   revealRow: (sessionId: string) => Promise<void> = async () => {},
@@ -329,7 +350,54 @@ export function journeyApi(
         resolve();
       });
     })),
+    terminalStart: (providerId, workspace, deadlineMs) => afterReady(async () => {
+      await controller.startSessionWith(providerId, workspace);
+      return terminals.waitForJourneyTerminal({ providerId, workspace }, deadlineMs);
+    }),
+    terminalAttach: (runtimeGeneration, terminalId, deadlineMs) => afterReady(async () => {
+      const row = await waitForHostedConversation(state, runtimeGeneration, terminalId, deadlineMs);
+      await controller.select(row);
+      return terminals.waitForJourneyTerminal({ runtimeGeneration, terminalId }, deadlineMs);
+    }),
+    terminalWaitForOutput: (runtimeGeneration, terminalId, text, deadlineMs) =>
+      terminals.waitForJourneyOutput(runtimeGeneration, terminalId, text, deadlineMs),
+    terminalWrite: (runtimeGeneration, terminalId, text) =>
+      terminals.writeJourneyInput(runtimeGeneration, terminalId, text),
+    terminalStop: (runtimeGeneration, terminalId, deadlineMs) => afterReady(async () => {
+      const row = await waitForHostedConversation(state, runtimeGeneration, terminalId, deadlineMs);
+      await controller.stopHostedResolved(row);
+    }),
   };
+}
+
+function waitForHostedConversation(
+  state: RuntimeState,
+  runtimeGeneration: string,
+  terminalId: string,
+  deadlineMs: number,
+): Promise<RuntimeState["conversations"][number]> {
+  return new Promise((resolve, reject) => {
+    const find = (): RuntimeState["conversations"][number] | undefined => state.conversations.find(
+      (candidate) => candidate.hostedTerminal?.runtimeGeneration === runtimeGeneration
+        && candidate.hostedTerminal.terminalId === terminalId,
+    );
+    const ready = find();
+    if (ready) {
+      resolve(ready);
+      return;
+    }
+    const timer = setTimeout(() => {
+      subscription.dispose();
+      reject(new Error(`terminal ${terminalId} did not enter this VS Code window within ${deadlineMs} ms`));
+    }, deadlineMs);
+    const subscription = state.onDidChange(() => {
+      const found = find();
+      if (!found) return;
+      clearTimeout(timer);
+      subscription.dispose();
+      resolve(found);
+    });
+  });
 }
 
 function within<T>(work: Promise<T>, milliseconds: number): Promise<T> {

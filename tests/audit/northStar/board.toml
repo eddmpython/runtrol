@@ -35,6 +35,7 @@ additives = []
 name = { ko = "하나의 세션 목록", en = "One session list", zh = "统一的会话列表", ja = "一つのセッション一覧" }
 gate = [
     { name = "vscodeRealProviderJourney", kind = "smoke" },
+    { name = "vscodeMultiWindowTerminal", kind = "smoke" },
     { name = "sessionLifecycleSmoke", kind = "operator" },
 ]
 

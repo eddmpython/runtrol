@@ -382,6 +382,12 @@ jobs:
         run: python -X utf8 tests/audit/vscodeHostPerformance.py --selftest
       - name: 실제 VS Code 활성화, 뷰, 갱신 p95, RSS ratchet
         run: python -X utf8 tests/audit/vscodeHostPerformance.py
+      - name: 두 VS Code 창의 단일 TUI 미러링 게이트 자체 검증
+        run: python -X utf8 tests/audit/vscodeMultiWindowTerminal.py --selftest
+      - name: 동시에 열린 두 VS Code 창이 동일 provider TUI 를 이어 쓴다
+        env:
+          TMPDIR: ${{ matrix.os == 'macos-latest' && '/tmp' || runner.temp }}
+        run: python -X utf8 tests/audit/vscodeMultiWindowTerminal.py
       - name: VS Code 확장 갱신과 롤백 게이트 자체 검증
         run: python -X utf8 tests/audit/vscodeUpgradeRollback.py --selftest
       - name: 활성 세션을 보존하는 VSIX 갱신과 롤백
