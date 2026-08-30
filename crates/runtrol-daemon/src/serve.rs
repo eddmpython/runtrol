@@ -245,6 +245,57 @@ async fn prewarm_providers(composed: Arc<Composed>, discovering: Arc<DiscoveryGa
     runtrol_childproc::footprint::release_unused_memory();
 }
 
+/// How often this Runtime looks for provider sessions on its own.
+///
+/// Discovery used to happen only inside a window's activity question: the only callers of a provider's process
+/// roster were one request handler and one open guard (measured 2026-08-30). A machine with no window open
+/// therefore found nothing at all, and a window that had just opened watched its own list fill in. On this
+/// clock the Runtime binds and mirrors a session started anywhere before anybody asks, so the first window to
+/// open finds the work already done. It also costs less than what it replaces: one sweep for the machine
+/// instead of one question per window four times a second.
+const NATIVE_SWEEP: Duration = Duration::from_millis(500);
+
+/// How many sweeps pass before the executable search path is walked again for newly installed services.
+///
+/// Installing a coding service is rare and the walk is the expensive part of asking, so it is asked twice a
+/// minute rather than twice a second. A service installed in between is still found by every request that can
+/// see it.
+const SWEEPS_BETWEEN_INSTALL_CHECKS: u32 = 60;
+
+/// Find, bind and mirror provider sessions with no window involved.
+async fn watch_native_sessions(composed: Arc<Composed>, discovering: Arc<DiscoveryGates>) {
+    let mut sweep = tokio::time::interval(NATIVE_SWEEP);
+    sweep.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut providers = Vec::new();
+    let mut since_install_check = SWEEPS_BETWEEN_INSTALL_CHECKS;
+    loop {
+        sweep.tick().await;
+        // A draining generation is on its way out and opens nothing new; its successor is doing this now.
+        if composed.draining.load(std::sync::atomic::Ordering::Acquire) {
+            continue;
+        }
+        if since_install_check >= SWEEPS_BETWEEN_INSTALL_CHECKS {
+            providers = providers_to_prewarm(&composed.registry, |manifest| {
+                runtrol_core::locate(manifest).is_ok()
+            });
+            since_install_check = 0;
+        }
+        since_install_check += 1;
+        for provider in &providers {
+            // A provider that cannot be prepared or will not answer leaves the last answer standing. Nothing
+            // here is reported: this sweep has no request waiting on it, and every failure it could meet is
+            // one a real request meets again and reports to the person who asked.
+            if let Ok(Ok(activity)) =
+                crate::runtime_serve::observe_native_activity(&composed, &discovering, *provider)
+                    .await
+            {
+                crate::runtime_serve::reconcile_native_activity(&composed, *provider, &activity)
+                    .await;
+            }
+        }
+    }
+}
+
 /// Select only services with an executable on this machine for startup preparation.
 ///
 /// The registry also carries installable catalogue entries so the sidebar can offer them. A known driver does not
@@ -990,6 +1041,12 @@ async fn serve_surfaces(
     };
     let (upgrading, mut upgrades) = mpsc::channel::<NoiseUpgrade>(PHONE_UPGRADE_QUEUE);
     background.push(connections.spawn(prewarm_providers(
+        Arc::clone(&composed),
+        Arc::clone(&discovering),
+    )));
+    // The Runtime's own eyes. Without this, a conversation opened in a terminal is invisible until some window
+    // asks, and the mirror a person expects to click is built only after they look.
+    background.push(connections.spawn(watch_native_sessions(
         Arc::clone(&composed),
         Arc::clone(&discovering),
     )));

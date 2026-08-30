@@ -12,6 +12,12 @@ and refactoring that no user can observe do not belong here.
 
 ### Fixed
 
+- Conversations you start in a terminal now appear in the sidebar without waiting for a window to ask for them.
+  The Runtime looked for coding sessions only while answering a window, so a machine with no Runtrol window open
+  found none at all, and a window that had just opened watched its own list fill in. The Runtime now looks on its
+  own clock, so a session started anywhere is already bound and ready to click by the time you look, and the
+  machine does one search instead of one per window several times a second.
+
 - A Codex conversation you are working in no longer reads as running somewhere else. Codex keeps one lock file
   per open conversation, and the Runtime could see that a conversation was open but never which process had it,
   so a terminal the Runtime was itself hosting stayed unattached to the conversation you opened inside it and its

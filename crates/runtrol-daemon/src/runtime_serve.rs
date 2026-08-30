@@ -2377,6 +2377,74 @@ fn refuse_supervised(
 /// and can type into it, and the row becomes a hosted one that a click attaches to instead of resuming a copy.
 /// A piped or SDK child has no screen to join, so only an interactive process is mirrored. Failure to mirror
 /// one process leaves it observed-external, the honest fallback, and never fails the activity answer.
+/// Ask one provider what it has open, behind its own lane, its freshness cache and one bounded wait.
+///
+/// `Err(())` is a provider that could not be prepared or would not answer; the outer `Err` is the wait running
+/// out. Both leave the last answer standing rather than replacing it with an empty one.
+pub(crate) async fn observe_native_activity(
+    composed: &Arc<Composed>,
+    discovering: &crate::serve::DiscoveryGates,
+    provider: runtrol_provider::ProviderId,
+) -> Result<Result<runtrol_provider::NativeProcessActivity, ()>, tokio::time::error::Elapsed> {
+    tokio::time::timeout(
+        Duration::from_millis(crate::serve::MODEL_PREPARATION_BUDGET_MS),
+        async {
+            let _lane = discovering.lane(provider).await.lock_owned().await;
+            if let Some(activity) = discovering.cached_native_activity(provider).await {
+                return Ok(activity);
+            }
+            let prepared = crate::provider_prepare::prepared_driver(composed, provider).await;
+            let prepared = prepared.map_err(|_| ())?;
+            let activity = prepared
+                .driver
+                .native_process_activity()
+                .await
+                .map_err(|_| ())?;
+            let turn_ended = discovering
+                .remember_native_activity(provider, activity.clone())
+                .await;
+            if turn_ended {
+                composed.account_probe_wake.provider(provider).await;
+            }
+            Ok(activity)
+        },
+    )
+    .await
+}
+
+/// Act on what a provider says it has open: bind each conversation to the process holding it, and mirror the
+/// sessions this Runtime did not start.
+///
+/// A fresh provider terminal starts before the provider mints its native identity. Its own cheap process
+/// roster is the provider-neutral, content-free proof that binds that identity back to the exact PTY.
+/// Publishing the table change makes every window replace the project placeholder with the provider title
+/// without opening a second process or parsing the screen.
+pub(crate) async fn reconcile_native_activity(
+    composed: &Arc<Composed>,
+    provider: runtrol_provider::ProviderId,
+    activity: &runtrol_provider::NativeProcessActivity,
+) {
+    {
+        let mut terminals = composed.terminals.lock().await;
+        for process in &activity.processes {
+            // One process whose new conversation is already claimed elsewhere (another live terminal, a
+            // structured session) must not turn the whole provider's activity answer into an error: that
+            // froze every icon of the service on the last successful round (measured 2026-08-29). The
+            // conflict is not lost: the same process is offered again next round and stays refused until the
+            // other claim ends, and its own row keeps whatever identity it had.
+            if let Err(conflict) = terminals.bind_native_process(
+                &composed.native_claims,
+                provider,
+                process.pid,
+                process.native.as_str(),
+            ) {
+                report_binding_conflict(provider, process.pid, conflict);
+            }
+        }
+    }
+    mirror_external_sessions(composed, provider, &activity.processes).await;
+}
+
 async fn mirror_external_sessions(
     composed: &Arc<Composed>,
     provider: runtrol_provider::ProviderId,
@@ -2431,56 +2499,10 @@ async fn native_activity(
             "the selected provider identity is invalid",
         );
     };
-    let walked = tokio::time::timeout(
-        Duration::from_millis(crate::serve::MODEL_PREPARATION_BUDGET_MS),
-        async {
-            let _lane = discovering.lane(provider).await.lock_owned().await;
-            if let Some(activity) = discovering.cached_native_activity(provider).await {
-                return Ok(activity);
-            }
-            let prepared = crate::provider_prepare::prepared_driver(composed, provider).await;
-            let prepared = prepared.map_err(|_| ())?;
-            let activity = prepared
-                .driver
-                .native_process_activity()
-                .await
-                .map_err(|_| ())?;
-            let turn_ended = discovering
-                .remember_native_activity(provider, activity.clone())
-                .await;
-            if turn_ended {
-                composed.account_probe_wake.provider(provider).await;
-            }
-            Ok(activity)
-        },
-    )
-    .await;
+    let walked = observe_native_activity(composed, discovering, provider).await;
     match walked {
         Ok(Ok(activity)) => {
-            // A fresh provider terminal starts before the provider mints its native identity. Its own cheap
-            // process roster is the provider-neutral, content-free proof that binds that identity back to the
-            // exact PTY. Publishing the table change makes every window replace the project placeholder with the
-            // provider title without opening a second process or parsing the screen.
-            {
-                let mut terminals = composed.terminals.lock().await;
-                for process in &activity.processes {
-                    // One process whose new conversation is already claimed elsewhere (another live
-                    // terminal, a structured session) must not turn the whole provider's activity answer
-                    // into an error: that froze every icon of the service on the last successful round
-                    // (measured 2026-08-29). The conflict is not lost: the same process is offered again
-                    // next round and stays refused until the other claim ends, and its own row keeps
-                    // whatever identity it had.
-                    if let Err(conflict) = terminals.bind_native_process(
-                        &composed.native_claims,
-                        provider,
-                        process.pid,
-                        process.native.as_str(),
-                    ) {
-                        report_binding_conflict(provider, process.pid, conflict);
-                    }
-                }
-            }
-            mirror_external_sessions(composed, provider, &activity.processes).await;
+            reconcile_native_activity(composed, provider, &activity).await;
             Answer::success(
                 id,
                 &runtrol_runtime_protocol::NativeActivity {
