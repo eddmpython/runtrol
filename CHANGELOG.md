@@ -10,6 +10,8 @@ and refactoring that no user can observe do not belong here.
 
 ## [Unreleased]
 
+## [0.1.40] - 2026-08-30
+
 ### Fixed
 
 - A stored conversation in a project that has a terminal open again opens instead of failing. A Runtime
