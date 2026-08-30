@@ -331,7 +331,8 @@ export async function terminateExactProcesses(marker, executable) {
 }
 
 // Ownership proof for a tree we spawned ourselves. The caller holds the root PID, so every
-// descendant of it is ours by construction and no name matching is involved.
+// descendant of its exact process generation is ours by construction and no name matching is involved. A stale
+// parent PID from an older Windows process cannot make an older system process part of this tree.
 export function ownedTreeIdentities(rootPid) {
   const rows = processRows();
   const pids = descendantPids(rows, rootPid);
@@ -395,6 +396,11 @@ function survivingIdentities(identities) {
     const row = current.get(identity.pid);
     return row
       && row.command === identity.command
-      && normalizedExecutable(row.executable) === normalizedExecutable(identity.executable);
+      && normalizedExecutable(row.executable) === normalizedExecutable(identity.executable)
+      && (
+        !Number.isFinite(row.startedAt)
+        || !Number.isFinite(identity.startedAt)
+        || row.startedAt === identity.startedAt
+      );
   });
 }

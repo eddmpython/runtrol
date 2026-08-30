@@ -11,7 +11,7 @@ import {
   ownedTreeIdentities,
   terminateCapturedIdentities,
 } from "./isolated-vscode.mjs";
-import { WINDOWS_PROCESS_ROWS_MAX_BUFFER_BYTES } from "./process-identity.mjs";
+import { descendantPids, WINDOWS_PROCESS_ROWS_MAX_BUFFER_BYTES } from "./process-identity.mjs";
 
 const extensionRoot = fileURLToPath(new URL("../", import.meta.url));
 const repositoryRoot = fileURLToPath(new URL("../../../", import.meta.url));
@@ -21,6 +21,7 @@ await mkdir(out, { recursive: true });
 verifyExtensionTestArguments();
 verifyConvergentSignalErrors();
 verifyProcessIdentityBuffer();
+verifyProcessGenerationBoundary();
 await verifyOwnedProcessTreeCleanup();
 
 // Every test beside the code it tests, discovered rather than listed.
@@ -150,6 +151,23 @@ function verifyProcessIdentityBuffer() {
     16 * 1024 * 1024,
     "a busy Windows host has bounded headroom for the complete identity snapshot",
   );
+}
+
+function verifyProcessGenerationBoundary() {
+  const rows = [
+    { pid: 10, ppid: 1, startedAt: 20_000 },
+    { pid: 20, ppid: 10, startedAt: 20_100 },
+    { pid: 30, ppid: 20, startedAt: 20_200 },
+    // Its parent PID happens to equal the new root PID, but this process predates that root generation.
+    { pid: 40, ppid: 10, startedAt: 1_000 },
+    { pid: 50, ppid: 40, startedAt: 20_300 },
+  ];
+  assert.deepEqual(
+    [...descendantPids(rows, 10)].sort((left, right) => left - right),
+    [20, 30],
+    "a stale parent PID cannot turn an older process tree into owned cleanup work",
+  );
+  assert.deepEqual([...descendantPids(rows, 99)], [], "an absent root grants no process ownership");
 }
 
 async function waitForProcessExit(pids, milliseconds) {
