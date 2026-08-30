@@ -5,6 +5,7 @@ import { PUBLIC_LIMITS, type NativeActivity, type PublicInputBlock } from "@runt
 import type { TerminalIndexSnapshot } from "@runtrol/runtime-client";
 import * as vscode from "vscode";
 
+import { BoundedDedupe } from "./boundedDedupe";
 import type { TerminalTabs } from "./terminalTabs";
 import { CoreClient } from "./core/client";
 import { readGitBranch } from "./gitBranch";
@@ -68,6 +69,8 @@ import {
 } from "./workspaceCollision";
 
 const NATIVE_ADOPTION_REFRESH_MS = 4 * 60_000;
+/// Warning notices are one-shot hints, not a history store. Each owner keeps only its recent identities.
+const WARNING_DEDUPE_CAPACITY = 64;
 /// Existing conversations are discovered as soon as the surface is idle enough to ask.
 ///
 /// Short on purpose. This delay only exists to let a foreground action finish first, never to stagger discovery
@@ -93,7 +96,8 @@ export class Controller implements vscode.Disposable {
   private selectionTail: Promise<void> = Promise.resolve();
   private selectionPersistenceTail: Promise<void> = Promise.resolve();
   private disposed = false;
-  private readonly seenWarnings = new Set<string>();
+  private readonly reportedRuntimeWarnings = new BoundedDedupe<string>(WARNING_DEDUPE_CAPACITY);
+  private readonly reportedIsolatedWorkspaces = new BoundedDedupe<string>(WARNING_DEDUPE_CAPACITY);
   private readonly verifyingProviders = new Set<string>();
   private readonly nativeDiscoveries = new Map<string, NativeDiscovery>();
   private readonly capabilityDiscoveries = new Map<string, Promise<void>>();
@@ -277,9 +281,7 @@ export class Controller implements vscode.Disposable {
     const current = changed ? await this.isolatedWorkspaces.list() : listed;
     for (const workspace of current) {
       if (workspace.state !== "preservedDirty") continue;
-      const warning = `isolated:${workspace.workspace_id}`;
-      if (this.seenWarnings.has(warning)) continue;
-      this.seenWarnings.add(warning);
+      if (!this.reportedIsolatedWorkspaces.remember(workspace.workspace_id)) continue;
       void vscode.window.showWarningMessage(
         "Runtrol kept an isolated workspace because it contains changes.",
         { modal: false, detail: workspace.workspace },
@@ -1624,8 +1626,7 @@ export class Controller implements vscode.Disposable {
     void currentSelected;
     void previousSelected;
     for (const warning of warnings) {
-      if (!this.seenWarnings.has(warning)) {
-        this.seenWarnings.add(warning);
+      if (this.reportedRuntimeWarnings.remember(warning)) {
         this.say(warning, "warning");
       }
     }
