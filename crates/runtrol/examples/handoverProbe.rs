@@ -120,7 +120,19 @@ fn main() -> ExitCode {
                 stop(Path::new(home), Path::new(identity), digest, terminal).await
             }
             ["parity", home, identity, digest, terminal] => {
-                parity(Path::new(home), Path::new(identity), digest, terminal).await
+                parity(Path::new(home), Path::new(identity), digest, terminal, true).await
+            }
+            // Raw parity types the nonce without a carriage return: on a real coding CLI the bytes render
+            // in its input line without submitting a prompt, so the journey costs no model turn.
+            ["parity-raw", home, identity, digest, terminal] => {
+                parity(
+                    Path::new(home),
+                    Path::new(identity),
+                    digest,
+                    terminal,
+                    false,
+                )
+                .await
             }
             _ => Err("usage: handoverProbe enroll|open|attach|stop|parity ...".to_owned()),
         }
@@ -392,6 +404,7 @@ async fn parity(
     identity_file: &Path,
     digest: &str,
     terminal: &str,
+    submit_line: bool,
 ) -> Result<String, String> {
     let stored = read_stored(identity_file)?;
     let generation = generation(home, digest)?;
@@ -431,10 +444,14 @@ async fn parity(
         std::process::id(),
         Instant::now().elapsed().as_nanos()
     );
-    let typed = format!(
-        "{nonce}
+    let typed = if submit_line {
+        format!(
+            "{nonce}
 "
-    );
+        )
+    } else {
+        nonce.clone()
+    };
     view_b
         .write(&TerminalWriteParams {
             request_id: MutationRequestId::now(),
