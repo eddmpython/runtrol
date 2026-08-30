@@ -224,9 +224,15 @@ mod tests {
         }
     }
 
+    // The held-file check is only exercised where a process can take an exclusive share on an open file, which
+    // is the Windows test below; on other targets these seed a test that is not compiled, so they are gated with
+    // it rather than left as dead code under `-D warnings`.
+    #[cfg(windows)]
     const OPEN: &str = "01a03d97-af4f-7272-ae66-9033b75f6645";
+    #[cfg(windows)]
     const CLOSED: &str = "01a03d98-f0aa-7b33-8f15-0f5623114d5f";
 
+    #[cfg(windows)]
     fn conversation(home: &Path, group: Option<&str>, id: &str) -> PathBuf {
         let mut path = home.join("store");
         if let Some(group) = group {
