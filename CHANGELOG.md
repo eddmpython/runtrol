@@ -10,6 +10,8 @@ and refactoring that no user can observe do not belong here.
 
 ## [Unreleased]
 
+## [0.1.41] - 2026-08-30
+
 ### Changed
 
 - Live provider conversations now use a measured capture ladder: the existing Runtime PTY first, a lazily allocated
