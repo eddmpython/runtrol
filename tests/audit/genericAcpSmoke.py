@@ -240,9 +240,13 @@ def stopDaemon(daemon: subprocess.Popen[str]) -> None:
         return
     try:
         daemon.terminate()
-    except OSError:
-        if daemon.poll() is None:
-            raise
+    except OSError as error:
+        # Windows can reject TerminateProcess after the exact child has entered kernel teardown but before
+        # Popen.poll observes its exit. A bounded wait distinguishes that convergent race from a live child.
+        try:
+            daemon.wait(timeout=2.0)
+        except subprocess.TimeoutExpired:
+            raise error
         return
     try:
         daemon.wait(timeout=2.0)

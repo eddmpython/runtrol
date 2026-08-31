@@ -454,7 +454,7 @@ def stopMarkedProcesses(marker: Path) -> bool:
     for identity in owned:
         try:
             os.kill(identity.pid, signal.SIGTERM)
-        except (ProcessLookupError, PermissionError):
+        except OSError:
             # ok: Windows can deny a signal while a process exits; the next exact-generation scan decides cleanup.
             continue
     survivors = aliveIdentities(owned)
@@ -503,7 +503,7 @@ def stopExactIdentities(identities: set[ProcessIdentity]) -> set[ProcessIdentity
     for identity in survivors:
         try:
             os.kill(identity.pid, signal.SIGTERM)
-        except (ProcessLookupError, PermissionError):
+        except OSError:
             # ok: a racing exit can reject the signal; the next exact-generation scan still has to prove it gone.
             continue
     survivors = waitIdentitiesGone(survivors)

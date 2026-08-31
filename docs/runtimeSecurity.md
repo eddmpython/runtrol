@@ -26,6 +26,7 @@ actions. The installed `runtrol` command provides this surface independently; St
 | Native session pointer | Provider ID, opaque native ID, workspace identity, and bounded metadata in Runtime |
 | Integration private key | Consumer secure storage only |
 | Integration public key and grant | Runtime integrity-protected metadata with generations |
+| Runtime machine identity | Per-user OS protection. On macOS the login Keychain ACL follows the same OS-user boundary as the owner-only local endpoint, so a content-named Runtime update can restore the identity without a hidden approval dialog |
 | Locator and install record | Owner-readable operational bootstrap metadata |
 | Audit record | Bounded method, scope, target, generation, result class, time, and request identity without content |
 

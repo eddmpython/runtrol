@@ -883,7 +883,16 @@ def stopProcess(child: subprocess.Popen[str] | None) -> None:
     """Stop one watcher without leaving a pipe reader behind."""
     if child is None or child.poll() is not None:
         return
-    child.terminate()
+    try:
+        child.terminate()
+    except OSError as error:
+        # Windows can reject TerminateProcess while this exact child is already entering kernel teardown.
+        # A bounded wait proves convergence instead of turning that race into a product failure.
+        try:
+            child.wait(timeout=2.0)
+        except subprocess.TimeoutExpired:
+            raise error
+        return
     try:
         child.wait(timeout=2.0)
     except subprocess.TimeoutExpired:
