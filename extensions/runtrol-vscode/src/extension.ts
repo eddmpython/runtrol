@@ -755,7 +755,7 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
       return lifecycle;
     },
     get initializationStage() {
-      return MEASURED_HOST ? initializationStage : undefined;
+      return MEASURED_HOST || RUNTROL_INCLUDE_TEST_JOURNEY ? initializationStage : undefined;
     },
     refresh: () => afterReady(() => controller.refresh()),
     measureSessionManagement: MEASURED_HOST

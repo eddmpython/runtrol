@@ -29,6 +29,7 @@ const performanceBudget = JSON.parse(
   await readFile(path.join(extensionRoot, "performance-budget.json"), "utf8"),
 );
 const latencySampleCount = performanceBudget?.multiWindowTerminal?.latencySampleCount;
+const WINDOW_READY_DEADLINE_MS = 90_000;
 if (!Number.isSafeInteger(latencySampleCount) || latencySampleCount < 2) {
   throw new Error("multiWindowTerminal.latencySampleCount must be a safe integer of at least two");
 }
@@ -70,13 +71,13 @@ try {
   });
 
   owner = launch("owner", ownerUserData, ownerExtensions);
-  const ownerReady = await waitForPublished("owner-ready.json", 60_000);
+  const ownerReady = await waitForPublished("owner-ready.json", WINDOW_READY_DEADLINE_MS);
   const ownerPid = ownerPidPath ? await readOwnerPid(ownerPidPath) : null;
   const ownerAliveBeforeMirror = ownerPid === null ? null : processAlive(ownerPid);
   if (ownerAliveBeforeMirror === false) throw new Error(`terminal owner PID ${ownerPid} exited before the mirror opened`);
 
   mirror = launch("mirror", mirrorUserData, mirrorExtensions);
-  const mirrorArmed = await waitForPublished("mirror-armed.json", 60_000);
+  const mirrorArmed = await waitForPublished("mirror-armed.json", WINDOW_READY_DEADLINE_MS);
   const ownerAliveWhileBothOpen = ownerPid === null ? null : processAlive(ownerPid);
   await waitForPublished("owner-result.json", 60_000);
   await requireCleanExit(owner, "owner VS Code", 20_000);

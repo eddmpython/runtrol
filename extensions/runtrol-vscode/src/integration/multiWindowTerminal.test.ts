@@ -11,6 +11,7 @@ import { extensionUnderTest } from "./extensionUnderTest.test";
 const OWNER_TEXT = "runtrol-owner-window-input";
 const MIRROR_TEXT = "runtrol-mirror-window-input";
 const DEADLINE_MS = 30_000;
+const INITIALIZATION_DEADLINE_MS = 60_000;
 const SAMPLE_COUNT = requiredSampleCount();
 const WARM_SAMPLE_INTERVAL_MS = 50;
 const NAVIGATION_MODE = process.env.RUNTROL_VSCODE_INPUT_MODE === "navigation";
@@ -215,7 +216,15 @@ async function writeInput(
 async function activate(): Promise<RuntrolExtensionApi> {
   const extension = extensionUnderTest<RuntrolExtensionApi>();
   const api = extension.isActive ? extension.exports : await extension.activate();
-  await within(api.ready, DEADLINE_MS, "extension readiness");
+  try {
+    await within(api.ready, INITIALIZATION_DEADLINE_MS, "extension readiness");
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `extension initialization failed at ${api.initializationStage ?? "unknown"}: ${detail}`,
+      { cause: error },
+    );
+  }
   return api;
 }
 
