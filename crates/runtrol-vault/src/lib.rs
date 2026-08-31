@@ -101,7 +101,7 @@ impl ProtectedSecret {
     fn create(path: &AbsPath) -> Result<Self, VaultError> {
         let mut secret = Self([0; SECRET_BYTES]);
         getrandom::fill(&mut secret.0).map_err(|_| VaultError::RandomUnavailable)?;
-        let protected = platform::protect(path, &secret.0)?;
+        let protected = platform::protect(path, &mut secret.0)?;
         let encoded = encode(&protected);
         persist_new(path, &encoded)?;
         Ok(secret)

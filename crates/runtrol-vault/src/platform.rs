@@ -16,7 +16,7 @@ mod current {
 
     const ENTROPY: &[u8] = b"runtrol/machine-identity/1";
 
-    pub(super) fn protect(_: &AbsPath, plaintext: &[u8]) -> Result<Vec<u8>, VaultError> {
+    pub(super) fn protect(_: &AbsPath, plaintext: &mut [u8]) -> Result<Vec<u8>, VaultError> {
         apply(
             "protecting the machine identity",
             plaintext,
@@ -196,6 +196,7 @@ mod current {
     use keyring::Entry;
     use runtrol_provider::AbsPath;
     use sha2::{Digest as _, Sha256};
+    use zeroize::Zeroizing;
 
     use super::VaultError;
 
@@ -206,6 +207,7 @@ mod current {
     const GENERIC_PASSWORD_ITEM: u32 = u32::from_be_bytes(*b"genp");
     const ACCOUNT_ATTRIBUTE: u32 = u32::from_be_bytes(*b"acct");
     const SERVICE_ATTRIBUTE: u32 = u32::from_be_bytes(*b"svce");
+    const ERR_SEC_DUPLICATE_ITEM: i32 = -25_299;
 
     #[repr(C)]
     struct KeychainAttribute {
@@ -250,7 +252,7 @@ mod current {
         }
     }
 
-    pub(super) fn protect(path: &AbsPath, plaintext: &[u8]) -> Result<Vec<u8>, VaultError> {
+    pub(super) fn protect(path: &AbsPath, plaintext: &mut [u8]) -> Result<Vec<u8>, VaultError> {
         let account = account_for(path);
         create_user_scoped_item(&account, plaintext)?;
         Ok(account.into_bytes())
@@ -295,7 +297,7 @@ mod current {
         unsafe_code,
         reason = "macOS exposes per-item Keychain ACL construction only through Security.framework C functions; every pointer is bounded by its source slice and every created reference has a local owner"
     )]
-    fn create_user_scoped_item(account: &str, plaintext: &[u8]) -> Result<(), VaultError> {
+    fn create_user_scoped_item(account: &str, plaintext: &mut [u8]) -> Result<(), VaultError> {
         let account_length = u32::try_from(account.len()).map_err(|_| VaultError::Platform {
             doing: "creating the native machine identity entry",
             detail: "the Keychain account identifier is too long".to_owned(),
@@ -395,7 +397,7 @@ mod current {
             count: 2,
             attributes: attributes.as_mut_ptr(),
         };
-        status(
+        let create_status =
             // SAFETY: every attribute and data pointer refers to a live slice for the call, with checked u32 lengths.
             // `plaintext` is live and read-only. A null keychain chooses the current user's default keychain, the
             // access object remains live, and no item reference is requested.
@@ -409,9 +411,30 @@ mod current {
                     access.as_ptr().cast_mut(),
                     ptr::null_mut(),
                 )
-            },
-            "storing the native machine identity",
-        )
+            };
+        if create_status == ERR_SEC_DUPLICATE_ITEM {
+            return recover_existing(account, plaintext);
+        }
+        status(create_status, "storing the native machine identity")
+    }
+
+    fn recover_existing(account: &str, plaintext: &mut [u8]) -> Result<(), VaultError> {
+        let existing = Zeroizing::new(
+            entry(
+                account,
+                "opening the existing native machine identity entry",
+            )?
+            .get_secret()
+            .map_err(|error| platform("reading the existing native machine identity", error))?,
+        );
+        if existing.len() != plaintext.len() {
+            return Err(VaultError::platform_detail(
+                "recovering the existing native machine identity",
+                "the native credential has an unexpected length",
+            ));
+        }
+        plaintext.copy_from_slice(&existing);
+        Ok(())
     }
 
     fn account_for(path: &AbsPath) -> String {
@@ -504,7 +527,7 @@ mod current {
     const SERVICE: &str = "runtrol.machine-identity";
     const ACCOUNT_DOMAIN: &[u8] = b"runtrol/native-vault-account/1";
 
-    pub(super) fn protect(path: &AbsPath, plaintext: &[u8]) -> Result<Vec<u8>, VaultError> {
+    pub(super) fn protect(path: &AbsPath, plaintext: &mut [u8]) -> Result<Vec<u8>, VaultError> {
         let account = account_for(path);
         let entry = entry(&account, "opening the native machine identity entry")?;
         entry
@@ -592,7 +615,7 @@ mod current {
     }
 }
 
-pub(crate) fn protect(path: &AbsPath, plaintext: &[u8]) -> Result<Vec<u8>, VaultError> {
+pub(crate) fn protect(path: &AbsPath, plaintext: &mut [u8]) -> Result<Vec<u8>, VaultError> {
     current::protect(path, plaintext)
 }
 
