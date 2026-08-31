@@ -189,15 +189,34 @@ def waitForStatus(core: Path, environment: dict[str, str], wanted, what: str) ->
     """Poll the generation list until `wanted` says it is right."""
     deadline = time.monotonic() + SETTLE_S
     last: list[dict[str, Any]] = []
+    lastError = ""
     while time.monotonic() < deadline:
         try:
             last = statusOf(core, environment)
-        except (Failed, json.JSONDecodeError):
+            lastError = ""
+        except (Failed, json.JSONDecodeError) as error:
             last = []
+            lastError = str(error)
         if wanted(last):
             return last
         time.sleep(POLL_S)
-    raise Failed(f"waited {SETTLE_S:.0f}s for {what}; last status: {last}")
+    detail = f"; last error: {lastError}" if lastError else ""
+    raise Failed(f"waited {SETTLE_S:.0f}s for {what}; last status: {last}{detail}")
+
+
+def handoverDiagnostics(home: Path, first: subprocess.Popen[str], second: subprocess.Popen[str]) -> str:
+    """Bounded process, boot trace, and locator evidence for a generation that did not publish."""
+    locator = home / "runtime.locator.json"
+    try:
+        locatorText = locator.read_text(encoding="utf-8", errors="replace")[:4096]
+    except OSError as error:
+        locatorText = f"<unreadable: {error}>"
+    firstTrace = acp.readDiagnostics(first).strip()[-2000:] or "(nothing)"
+    secondTrace = acp.readDiagnostics(second).strip()[-2000:] or "(nothing)"
+    return (
+        f"generation A exit={first.poll()}, generation B exit={second.poll()}, "
+        f"locator={locatorText!r}, generation A trace={firstTrace!r}, generation B trace={secondTrace!r}"
+    )
 
 
 def digestOf(generations: list[dict[str, Any]], *, draining: bool | None = None) -> str | None:
@@ -244,6 +263,7 @@ def exercise(coreA: Path | None, coreB: Path | None) -> dict[str, Any]:
         home.mkdir()
         manifest(home, fixture)
         environment = acp.environment(home, fixture)
+        environment["RUNTROL_CLOSE_TRACE"] = "1"
         identity = root / "probe-identity.json"
         first = acp.startDaemon(a, environment, home)
         second: subprocess.Popen[str] | None = None
@@ -258,13 +278,16 @@ def exercise(coreA: Path | None, coreB: Path | None) -> dict[str, Any]:
             owned.update(descendantIdentities(first.pid))
 
             second = acp.startDaemon(b, environment, home)
-            after = waitForStatus(
-                b,
-                environment,
-                lambda gens: len(gens) >= 2 and digestOf(gens, draining=False) not in (None, generationA)
-                and any(g.get("digest") == generationA and g.get("draining") for g in gens),
-                "generation B current and generation A draining",
-            )
+            try:
+                after = waitForStatus(
+                    b,
+                    environment,
+                    lambda gens: len(gens) >= 2 and digestOf(gens, draining=False) not in (None, generationA)
+                    and any(g.get("digest") == generationA and g.get("draining") for g in gens),
+                    "generation B current and generation A draining",
+                )
+            except Failed as error:
+                raise Failed(f"{error}; {handoverDiagnostics(home, first, second)}") from error
             evidence["generationB"] = digestOf(after, draining=False)
             evidence["aDrainingAfterB"] = any(g.get("digest") == generationA and g.get("draining") for g in after)
 
