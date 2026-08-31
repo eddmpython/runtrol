@@ -7,9 +7,9 @@ import { build } from "esbuild";
 import { extensionIdentifier, extensionRoot } from "./extension-manifest.mjs";
 import {
   isolatedExtensionTestArguments,
+  isolatedHostEnvironment,
   isolatedProfileSettings,
   terminateExactProcesses,
-  withoutHostIdentity,
 } from "./isolated-vscode.mjs";
 
 const core = requiredEnvironment("RUNTROL_TEST_CORE");
@@ -33,7 +33,9 @@ const WINDOW_READY_DEADLINE_MS = 90_000;
 if (!Number.isSafeInteger(latencySampleCount) || latencySampleCount < 2) {
   throw new Error("multiWindowTerminal.latencySampleCount must be a safe integer of at least two");
 }
-const testEnvironment = withoutHostIdentity();
+// The daemon home is already explicit in the inherited environment. Isolate only the VS Code host state here so
+// both windows share the same macOS keychain preferences without moving either one onto a different Runtime.
+const testEnvironment = isolatedHostEnvironment(workRoot);
 let owner = null;
 let mirror = null;
 

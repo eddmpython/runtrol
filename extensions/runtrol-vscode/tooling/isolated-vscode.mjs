@@ -92,22 +92,27 @@ for (const name of Object.keys(process.env)) {
   if (namesTheOuterHost(name)) delete process.env[name];
 }
 
-export function isolatedRuntimeState(root, baseEnvironment = process.env) {
+export function isolatedHostEnvironment(root, baseEnvironment = process.env) {
   const environment = withoutHostIdentity(baseEnvironment);
   const canonicalRoot = realpathSync.native(root);
-  let home;
   if (process.platform === "win32") {
     environment.LOCALAPPDATA = canonicalRoot;
-    home = path.join(canonicalRoot, "runtrol");
   } else if (process.platform === "darwin") {
     environment.HOME = canonicalRoot;
     environment.CFFIXED_USER_HOME = canonicalRoot;
     configureMacOSKeychain(canonicalRoot, environment, baseEnvironment);
-    home = path.join(canonicalRoot, "Library", "Application Support", "runtrol");
   } else {
     environment.XDG_STATE_HOME = canonicalRoot;
-    home = path.join(canonicalRoot, "runtrol");
   }
+  return environment;
+}
+
+export function isolatedRuntimeState(root, baseEnvironment = process.env) {
+  const environment = isolatedHostEnvironment(root, baseEnvironment);
+  const canonicalRoot = realpathSync.native(root);
+  const home = process.platform === "darwin"
+    ? path.join(canonicalRoot, "Library", "Application Support", "runtrol")
+    : path.join(canonicalRoot, "runtrol");
   environment.RUNTROL_HOME = home;
   return { environment, home };
 }

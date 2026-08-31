@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
+import { realpathSync } from "node:fs";
 import { mkdir, readdir, rm } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
@@ -8,6 +9,7 @@ import { build } from "esbuild";
 import {
   isConvergentSignalError,
   isolatedExtensionTestArguments,
+  isolatedHostEnvironment,
   ownedTreeIdentities,
   terminateCapturedIdentities,
 } from "./isolated-vscode.mjs";
@@ -19,6 +21,7 @@ const out = path.join(extensionRoot, ".test-dist");
 await rm(out, { recursive: true, force: true });
 await mkdir(out, { recursive: true });
 verifyExtensionTestArguments();
+verifyIsolatedHostEnvironment();
 verifyConvergentSignalErrors();
 verifyProcessIdentityBuffer();
 verifyProcessGenerationBoundary();
@@ -207,4 +210,30 @@ function verifyExtensionTestArguments() {
   assert.equal(arguments_.includes("--extensions-dir=/profile/extensions"), true);
   assert.equal(arguments_.includes("--extensionTestsPath=/extension/tests.cjs"), true);
   assert.equal(arguments_.includes("--extensionDevelopmentPath=/extension"), true);
+}
+
+function verifyIsolatedHostEnvironment() {
+  const baseEnvironment = {
+    ...process.env,
+    ELECTRON_RUN_AS_NODE: "1",
+    RUNTROL_HOME: "/explicit-daemon-home",
+    VSCODE_PID: "123",
+  };
+  // Unit tests prove environment construction without changing the runner's configured keychain. The real
+  // multi-window gate exercises the configured keychain path on macOS.
+  delete baseEnvironment.RUNTROL_TEST_MACOS_KEYCHAIN;
+  delete baseEnvironment.RUNTROL_TEST_MACOS_KEYCHAIN_PASSWORD;
+  const environment = isolatedHostEnvironment(out, baseEnvironment);
+  const canonicalRoot = realpathSync.native(out);
+  assert.equal(environment.ELECTRON_RUN_AS_NODE, undefined);
+  assert.equal(environment.VSCODE_PID, undefined);
+  assert.equal(environment.RUNTROL_HOME, "/explicit-daemon-home");
+  if (process.platform === "win32") {
+    assert.equal(environment.LOCALAPPDATA, canonicalRoot);
+  } else if (process.platform === "darwin") {
+    assert.equal(environment.HOME, canonicalRoot);
+    assert.equal(environment.CFFIXED_USER_HOME, canonicalRoot);
+  } else {
+    assert.equal(environment.XDG_STATE_HOME, canonicalRoot);
+  }
 }
