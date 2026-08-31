@@ -559,6 +559,7 @@ def selftest() -> int:
         ),
         "core/client.ts": "commandConnection commandTail",
         "runtimeClient.ts": (
+            'this.reportInitialization("identity+core") this.reportInitialization("locator") '
             "RuntimeLocator.system( RUNTIME_LOCATOR_SETTLE_MS isAbsolute(runtimeExecutable) withRuntimeLocator "
             "providerSnapshot sessionSnapshot async cool( watchSessions "
             "watchSessionIndexWithReconnect"
