@@ -97,10 +97,10 @@ export type SidebarAssets = UsageStripAssets;
 /// the page's body (absent in the eye harness, which therefore shows the dark pair).
 const HUE_STYLE = HUES
   .map((hue) => {
-    const rule = `.row .bar.${hue.band} { background: ${hue.dark}; }`;
+    const rule = `.project-row .bar.${hue.band}, .conv.working .bar.${hue.band} { background: ${hue.dark}; }`;
     if (hue.light === hue.dark) return rule;
     return `${rule}
-body[data-vscode-theme-kind="vscode-light"] .row .bar.${hue.band}, body[data-vscode-theme-kind="vscode-high-contrast-light"] .row .bar.${hue.band} { background: ${hue.light}; }`;
+body[data-vscode-theme-kind="vscode-light"] .project-row .bar.${hue.band}, body[data-vscode-theme-kind="vscode-light"] .conv.working .bar.${hue.band}, body[data-vscode-theme-kind="vscode-high-contrast-light"] .project-row .bar.${hue.band}, body[data-vscode-theme-kind="vscode-high-contrast-light"] .conv.working .bar.${hue.band} { background: ${hue.light}; }`;
   })
   .join("\n");
 
@@ -186,19 +186,25 @@ ${usageChipsMarkup(model.usage, assets)}
 function changesMarkup(changes: GitChanges | null): string {
   if (!hasChanges(changes)) return "";
   const parts = [
-    changes.added > 0 ? `<span class="add">+${changes.added}</span>` : "",
-    changes.removed > 0 ? `<span class="del">-${changes.removed}</span>` : "",
-    changes.untracked > 0 ? `<span class="new">?${changes.untracked}</span>` : "",
-    changes.ahead > 0 ? `<span class="ahead">↑${changes.ahead}</span>` : "",
+    changes.added > 0 ? `<span class="add">+${countText(changes.added)}</span>` : "",
+    changes.removed > 0 ? `<span class="del">-${countText(changes.removed)}</span>` : "",
+    changes.untracked > 0 ? `<span class="new">?${countText(changes.untracked)}</span>` : "",
+    changes.ahead > 0 ? `<span class="ahead">↑${countText(changes.ahead)}</span>` : "",
   ].join("");
   const said = [
     changes.added > 0 || changes.removed > 0
-      ? `${changes.added} lines added, ${changes.removed} removed, not committed`
+      ? `${countText(changes.added)} lines added, ${countText(changes.removed)} removed, not committed`
       : "",
-    changes.untracked > 0 ? `${changes.untracked} new ${changes.untracked === 1 ? "file" : "files"} not in git` : "",
-    changes.ahead > 0 ? `${changes.ahead} ${changes.ahead === 1 ? "commit" : "commits"} not pushed` : "",
+    changes.untracked > 0 ? `${countText(changes.untracked)} new ${changes.untracked === 1 ? "file" : "files"} not in git` : "",
+    changes.ahead > 0 ? `${countText(changes.ahead)} ${changes.ahead === 1 ? "commit" : "commits"} not pushed` : "",
   ].filter((line) => line !== "").join("; ");
   return `<span class="badge changes" title="${escapeHtml(said)}">${parts}</span>`;
+}
+
+/// Locale-stable grouping for compact source-control counts. The sidebar must not change shape with the host
+/// locale, and every supported host understands ASCII comma-grouping.
+export function countText(value: number): string {
+  return Math.max(0, Math.trunc(value)).toLocaleString("en-US");
 }
 
 function projectHtml(project: SidebarProjectRow, assets: SidebarAssets): string {
@@ -251,6 +257,13 @@ function moreHtml(project: SidebarProjectRow): string {
 function conversationHtml(row: SidebarConversationRow, assets: SidebarAssets): string {
   const iconUri = assets.iconUris.get(row.icon) ?? "";
   const state = conversationStateHtml(row);
+  const signal = row.signIn || row.activity === "needsYou"
+    ? " needs-you"
+    : row.activity === "attention"
+      ? " attention"
+      : row.activity === "working"
+        ? " working"
+        : "";
   const actions = [
     row.activity === "needsYou" ? action("runtrol.allowFromRow", "Allow", "check") + action("runtrol.declineFromRow", "Decline", "circle-slash") : "",
     row.signIn ? action("runtrol.signInFromRow", "Sign in", "key") : "",
@@ -264,16 +277,30 @@ function conversationHtml(row: SidebarConversationRow, assets: SidebarAssets): s
   // Everything else the tooltip used to repeat (service, activity, model) is already on the row, and a
   // tooltip floating beside the hover actions reads as clutter (operator, 2026-08-27).
   // Running is a state of the whole row, said once on the row: the icon turns and the band flows from it.
-  return `<div class="row conv${row.canOpen ? "" : " blocked"}${row.pinned ? " pinned" : ""}${row.activity === "working" ? " working" : ""}" role="button" tabindex="0" data-kind="conversation" data-key="${escapeHtml(row.key)}"${row.blocked ? ` title="${escapeHtml(row.blocked)}"` : ""}>
+  const visibleTitle = conversationTitle(row.title);
+  const tooltip = row.blocked ?? (visibleTitle === row.title ? null : row.title);
+  return `<div class="row conv${row.canOpen ? "" : " blocked"}${row.pinned ? " pinned" : ""}${state ? " stateful" : ""}${signal}" role="button" tabindex="0" data-kind="conversation" data-key="${escapeHtml(row.key)}"${tooltip ? ` title="${escapeHtml(tooltip)}"` : ""}>
 <span class="bar${row.hue ? ` ${row.hue}` : ""}"></span>
 <span class="glyph-slot"><img class="glyph" src="${escapeHtml(iconUri)}" alt="${escapeHtml(row.serviceName)}" draggable="false"></span>
-<span class="title">${escapeHtml(row.title)}</span>
+<span class="title">${escapeHtml(visibleTitle)}</span>
 ${state}
 <span class="tail">
 <span class="actions">${actions}</span>
 ${row.memory ? `<span class="memory" title="Memory the provider process holds now">${escapeHtml(row.memory)}</span>` : ""}
 </span>
 </div>`;
+}
+
+const CONVERSATION_TITLE_LIMIT = 48;
+
+/// Provider titles remain the stored identity. Only the one-line sidebar projection is bounded, by Unicode
+/// characters rather than UTF-16 units, so a provider that uses the first prompt as its title cannot consume the
+/// whole row and a non-BMP character is never cut in half.
+export function conversationTitle(title: string): string {
+  const normalized = title.trim().replace(/\s+/gu, " ");
+  const characters = Array.from(normalized);
+  if (characters.length <= CONVERSATION_TITLE_LIMIT) return normalized;
+  return `${characters.slice(0, CONVERSATION_TITLE_LIMIT - 1).join("").trimEnd()}…`;
 }
 
 function action(command: string, label: string, codicon: string): string {
@@ -322,7 +349,7 @@ function firstRunHtml(): string {
 // icon font, and an <img> would not follow the theme colour. Each is the codicon outline in a 16-unit box.
 const STYLE = `
 :root { color-scheme: light dark; }
-/* The one colour that says a conversation is running, named once for the mark around its icon.
+/* The fallback colour that says a projectless conversation is running.
 
    Not the editor's progress colour, which is the obvious choice and is not a state colour. What it paints is
    up to whichever theme is on: measured 2026-08-28, the dark theme this build of the editor falls back to
@@ -404,34 +431,28 @@ button { font: inherit; color: inherit; }
 .badge.changes .ahead { opacity: 0.7; font-weight: 400; }
 .badge.tools { background: transparent; border: 1px solid var(--vscode-widget-border); font-weight: 400; opacity: 0.8; }
 .conv .glyph-slot { position: relative; flex: none; display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; }
-.conv .glyph { flex: none; width: 14px; height: 14px; }
-/* A turn is running, so the service's own icon turns. Slowly, because the row is a list entry and not a
-   progress bar (operator, 2026-08-28: the icon must move).
-
-   The arc around it is what makes that legible. Measured on the operator's window: this service's icon is a
-   star with rotational symmetry, so a photograph of it turning is identical to a photograph of it at rest,
-   and a person glancing at the list sees nothing. The arc is off-centre by construction, so it reads as
-   motion while it turns and as a coloured ring when it stands still. It is drawn outside the icon's box, so
-   a running row and an idle row put their names in the same place. */
+.conv .glyph { flex: none; width: 14px; height: 14px; filter: grayscale(1); opacity: 0.64; }
 /* The icon alone turns (operator, 2026-08-29: no ring, just the icon). Fast enough that a symmetric mark
    still reads as moving, and a full turn is a plain transform the compositor can run without a repaint. */
-.conv.working .glyph { animation: spin 1.1s linear infinite; will-change: transform; }
+.conv.working .glyph { animation: spin 1.1s linear infinite; will-change: transform; filter: none; opacity: 1; }
 @keyframes spin { to { transform: rotate(360deg); } }
-/* The project band of a running row moves too: a light runs down it, once per turn of the icon, so the row
-   reads as working from its edge and not only from a 14 px icon (operator, 2026-08-30: not just the icon,
-   the colour bar as well). The light is a pseudo-element the compositor slides with a transform; nothing is
-   repainted per frame and the band itself keeps its colour, so an idle row and a running row still name the
-   same project. What a working row costs is one small compositor layer for the light, the same as the
-   turning icon already costs. */
+/* Idle rows keep the bar's alignment slot but paint nothing. A working row uses its project colour, or the
+   running fallback when it has no project. Needs-you and error rows use static semantic colours, so urgency
+   cannot be mistaken for progress. */
 .row .bar { position: relative; overflow: hidden; }
+.conv:not(.working):not(.needs-you):not(.attention) .bar { background: transparent; }
+.conv.working .bar { background: var(--runtrol-running); }
+.conv.needs-you .bar { background: var(--vscode-editorWarning-foreground, #cca700); }
+.conv.attention .bar { background: var(--vscode-errorForeground, #f85149); }
+/* A compositor-only light runs down the working band in step with the icon. */
 .conv.working .bar::after { content: ""; position: absolute; left: 0; right: 0; top: 0; height: 100%; background: linear-gradient(to bottom, transparent, rgba(255, 255, 255, 0.75), transparent); animation: flow 1.1s linear infinite; will-change: transform; }
 @keyframes flow { from { transform: translateY(-100%); } to { transform: translateY(100%); } }
 /* One line, and the tail fades out rather than ending in dots: the reader sees there is more without a
    glyph spending width to say so, and two-line rows made the list hard to scan (operator, 2026-08-28). */
 .conv .title { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; line-height: 1.4; -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 20px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 20px), transparent); }
 .conv.pinned .title::before { content: ""; display: inline-block; width: 9px; height: 9px; margin-right: 4px; background: currentColor; opacity: 0.55; -webkit-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M10 1l5 5-3 1-2 2 1 4-3 1-2-4-4 4-1-1 4-4-4-2 1-3 4 1 2-2z'/></svg>") center / contain no-repeat; mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M10 1l5 5-3 1-2 2 1 4-3 1-2-4-4 4-1-1 4-4-4-2 1-3 4 1 2-2z'/></svg>") center / contain no-repeat; }
-/* Running needs no second mark: the moving ring already says it. Only states that change what the person can
-   do spend width, and they say their meaning instead of asking the person to memorize coloured dots. */
+/* Working needs no word: the moving icon and band say it. Only states that change what the person can do spend
+   width, and they say their meaning instead of asking the person to memorize coloured dots. */
 .conv-state { flex: none; max-width: 72px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; line-height: 15px; padding: 0 5px; border-radius: 8px; }
 .conv-state.attention { color: var(--vscode-notificationsWarningIcon-foreground, #cca700); background: color-mix(in srgb, currentColor 14%, transparent); }
 .conv-state.error { color: var(--vscode-errorForeground, #f85149); background: color-mix(in srgb, currentColor 14%, transparent); }
@@ -458,6 +479,11 @@ button { font: inherit; color: inherit; }
 .actions { position: absolute; right: 3px; top: 1px; bottom: 1px; display: inline-flex; align-items: center; gap: 1px; padding-left: 8px; visibility: hidden; background: var(--vscode-list-hoverBackground); }
 .row:hover .actions, .row:focus-within .actions { visibility: visible; }
 .row:hover .memory, .row:focus-within .memory { visibility: hidden; }
+/* A blocked row must keep saying Elsewhere or Unavailable while its actions appear. The action strip used to
+   cover that state at the exact moment a person clicked, so the following notification seemed to contradict
+   the row. Give the word a fixed hover slot and place the actions immediately before it. */
+.conv.stateful:hover .conv-state, .conv.stateful:focus-within .conv-state { position: absolute; right: 4px; z-index: 2; box-sizing: border-box; width: 82px; text-align: center; }
+.conv.stateful:hover .actions, .conv.stateful:focus-within .actions { right: 90px; }
 .act { border: 0; background: transparent; padding: 2px; border-radius: 3px; cursor: pointer; opacity: 0.75; line-height: 0; }
 .act:hover, .act:focus-visible { background: var(--vscode-toolbar-hoverBackground); opacity: 1; outline: none; }
 .project[draggable="true"] .project-row { cursor: grab; }

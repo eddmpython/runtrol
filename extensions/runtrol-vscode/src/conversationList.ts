@@ -12,7 +12,9 @@ import { NO_ACTIVITY, type SessionActivity } from "./sessionActivity";
 /// its click raises are both this sentence. Written twice it drifts, and then the panel says one thing where
 /// the reader hovers and another where they click.
 const RUNNING_ELSEWHERE =
-  "This conversation is running in a terminal Runtrol did not start, so it cannot be opened here.";
+  "This conversation is already running, but its live terminal is not available in this window.";
+const PROCESS_STATUS_UNAVAILABLE =
+  "Runtrol could not confirm whether this conversation is still running, so it will not open a second owner.";
 
 /// What a conversation is doing, said the way a person would say it.
 ///
@@ -41,8 +43,11 @@ export type Presence =
   | { readonly kind: "supervised"; readonly session: SessionLine }
   /// Runtrol started it a moment ago and the service has not described it yet.
   | { readonly kind: "starting" }
-  /// A provider process is alive in a terminal Runtrol did not start: visible, and not reachable.
-  | { readonly kind: "external" }
+  /// A provider process is proven alive outside the terminal table. `openable` means its exact process also
+  /// published a safe route that the first viewer can attach lazily.
+  | { readonly kind: "external"; readonly openable: boolean }
+  /// The last live owner could not be rechecked. It is not called live, but duplicate ownership stays denied.
+  | { readonly kind: "unconfirmed" }
   /// No live process. The service stores it, and `openable` says whether the service can reopen it.
   | { readonly kind: "stored"; readonly openable: boolean };
 
@@ -60,7 +65,14 @@ function facts(presence: Presence): {
     case "starting":
       return { live: true, canOpen: true, canStop: false, blocked: null };
     case "external":
-      return { live: true, canOpen: false, canStop: false, blocked: RUNNING_ELSEWHERE };
+      return {
+        live: true,
+        canOpen: presence.openable,
+        canStop: false,
+        blocked: presence.openable ? null : RUNNING_ELSEWHERE,
+      };
+    case "unconfirmed":
+      return { live: false, canOpen: false, canStop: false, blocked: PROCESS_STATUS_UNAVAILABLE };
     case "stored":
       return {
         live: false,
@@ -150,6 +162,9 @@ export type StartedConversation = {
   readonly title: string;
   /// When runtrol opened it, which is how the row it becomes is recognised.
   readonly startedAtMs: number;
+  /// The exact Runtime terminal this placeholder opened, once the public open response arrives.
+  readonly runtimeGeneration?: string;
+  readonly terminalId?: string;
 };
 
 /// Every conversation on this machine, in the order to show them.
@@ -167,16 +182,21 @@ export function conversations(
   pinnedKeys: ReadonlySet<string> = new Set(),
   renamedTitles: ReadonlyMap<string, string> = new Map(),
   started: readonly StartedConversation[] = [],
-  /// The conversations whose service is writing to its screen right now.
-  streaming: ReadonlySet<string> = new Set(),
-  /// Conversations with a model answering that Runtrol does not host. `streaming` cannot see these because
-  /// their bytes never pass through us; the Runtime names them by asking each service what its own running
-  /// processes are doing.
+  /// Reserved positional input from the former screen-byte activity heuristic. Screen output is not model
+  /// activity: an idle TUI may repaint its cursor, menus and prompts indefinitely.
+  _screenOutput: ReadonlySet<string> = new Set(),
+  /// Conversations with a model answering, hosted or external. Runtime names these from the provider's
+  /// structural turn state rather than by interpreting terminal output.
   activeNative: ReadonlySet<string> = new Set(),
   /// Conversations owned by a provider process outside the daemon's PTY registry.
   observedNative: ReadonlySet<string> = new Set(),
   /// Daemon-owned provider terminals, pushed at process birth and exit.
   terminals: readonly TerminalDescriptor[] = [],
+  /// Provider owners whose last live proof could not be refreshed. They block duplicate resume without reading
+  /// as live or Elsewhere until one successful roster round resolves them.
+  unconfirmedNative: ReadonlySet<string> = new Set(),
+  /// Live provider owners whose exact process publishes a safe terminal route.
+  attachableNative: ReadonlySet<string> = new Set(),
 ): Conversation[] {
   const nativeByKey = new Map<string, NativeChatLine>();
   for (const chat of nativeChats) {
@@ -204,6 +224,7 @@ export function conversations(
       ? nativeProcessKey(session.providerId, session.nativeSessionId)
       : null;
     const observed = externalKey !== null && observedNative.has(externalKey) && hosted === null;
+    const unconfirmed = externalKey !== null && unconfirmedNative.has(externalKey) && hosted === null;
     if (hosted) claimedTerminals.add(terminalKey(hosted));
     claimed.add(key);
     rows.push(supervised(
@@ -218,9 +239,11 @@ export function conversations(
       pinnedKeys.has(key) || (legacyKey !== null && pinnedKeys.has(legacyKey)),
       renamedTitles.get(key) ?? (legacyKey === null ? undefined : renamedTitles.get(legacyKey)),
       legacyKey,
-      streaming.has(key) || (externalKey !== null && activeNative.has(externalKey)),
+      externalKey !== null && activeNative.has(externalKey),
       hosted,
       observed,
+      externalKey !== null && attachableNative.has(externalKey),
+      unconfirmed,
     ));
   }
   for (const [key, chat] of nativeByKey) {
@@ -239,6 +262,8 @@ export function conversations(
       activeNative.has(nativeProcessKey(chat.providerId, chat.nativeSessionId)),
       hosted,
       observedNative.has(nativeProcessKey(chat.providerId, chat.nativeSessionId)) && hosted === null,
+      attachableNative.has(nativeProcessKey(chat.providerId, chat.nativeSessionId)) && hosted === null,
+      unconfirmedNative.has(nativeProcessKey(chat.providerId, chat.nativeSessionId)) && hosted === null,
     ));
   }
   // A provider process is visible immediately, even before its own store publishes a conversation identity and
@@ -585,9 +610,11 @@ function supervised(
   pinned: boolean,
   name: string | undefined,
   legacyKey: string | null,
-  streaming: boolean,
+  providerWorking: boolean,
   hosted: TerminalDescriptor | null,
   observedExternal: boolean,
+  attachableExternal: boolean,
+  unconfirmedOwner: boolean,
 ): Conversation {
   const homeWorkspace = isolatedWorkspaceHomes.get(workspaceIdentity(session.workspace)) ?? session.workspace;
   const projectless = isProjectless(homeWorkspace, projectlessRoot);
@@ -595,7 +622,9 @@ function supervised(
   const presence: Presence = hosted
     ? { kind: "hosted", terminal: hosted }
     : observedExternal
-      ? { kind: "external" }
+      ? { kind: "external", openable: attachableExternal }
+      : unconfirmedOwner
+        ? { kind: "unconfirmed" }
       : session.hot
         ? { kind: "supervised", session }
         : { kind: "stored", openable: true };
@@ -613,7 +642,7 @@ function supervised(
     folder: projectless ? "" : workspaceName(homeWorkspace),
     projectless,
     updatedAtMs: instant(native?.updatedAt),
-    activity: streaming ? "working" : activityOf(session),
+    activity: providerWorking ? "working" : activityOf(session),
     tool: activity.tool,
     signInNeeded: activity.signInNeeded,
     presence,
@@ -637,13 +666,17 @@ function providerOwned(
   working: boolean,
   hosted: TerminalDescriptor | null,
   observedExternal: boolean,
+  attachableExternal: boolean,
+  unconfirmedOwner: boolean,
 ): Conversation {
   const resumable = chat.resume === "available" && Boolean(chat.adoptionToken);
   const projectless = isProjectless(chat.cwd, projectlessRoot);
   const presence: Presence = hosted
     ? { kind: "hosted", terminal: hosted }
     : observedExternal
-      ? { kind: "external" }
+      ? { kind: "external", openable: attachableExternal }
+      : unconfirmedOwner
+        ? { kind: "unconfirmed" }
       : { kind: "stored", openable: resumable };
   return {
     key,
@@ -674,11 +707,9 @@ function providerOwned(
 
 /// What a row says it is doing.
 ///
-/// `Busy` is the Runtime's word for a turn Runtrol itself started, and Runtrol starts none: every conversation
-/// here is the service's own terminal interface with a person typing into it. So the lifecycle never said
-/// running and the row never turned (operator, 2026-08-28: the icon does not move while a session works).
-/// What we can see without reading a word of the conversation is that the service is writing to its screen
-/// right now, which is what a person means by "it is working"; `streaming` carries exactly that.
+/// Managed-session lifecycle is used only when that provider session owns it. Provider-owned TUI conversations
+/// take their working state from `activeNative` above. Terminal bytes are deliberately absent: an open, paused
+/// TUI still paints, and `live` must never be confused with a model turn (operator, 2026-08-31).
 function activityOf(session: SessionLine): ConversationActivity {
   if (session.lifecycle === "failed" || session.looksStuck) return "attention";
   // Waiting outranks running, because a turn that stopped for a person is the one fact worth interrupting them
@@ -690,13 +721,13 @@ function activityOf(session: SessionLine): ConversationActivity {
   return "saved";
 }
 
-/// Whether this conversation is being answered in a terminal Runtrol did not start.
+/// Whether this conversation has a proven live provider owner but no currently reachable terminal route.
 ///
 /// The panel can see the service's own running processes, and a terminal it did not create has no attach
 /// channel a public operating system call can take over. So the row says the conversation is alive and refuses
 /// to open it, which is the truth rather than a tab that would fight the terminal already driving it.
 export function runningElsewhere(row: Conversation): boolean {
-  return row.presence.kind === "external";
+  return row.presence.kind === "external" && !row.presence.openable;
 }
 
 /// Whether this conversation has stopped and cannot continue until the reader does something.
@@ -832,9 +863,9 @@ const SERVICE_CLOCK_SLACK_MS = 60_000;
 /// even though the sidebar was already showing the real one (operator, 2026-08-28: the name the service gives
 /// has to reach the tab). One answer, read by both.
 ///
-/// The match is the one a person would make: same service, same folder, and the service touched it at or after
-/// the moment the tab opened. A minute of slack, because the service stamps its store from its own clock and
-/// this conversation must not be missed over a second of drift.
+/// The match is exact: the provider-owned row must carry the same Runtime generation and terminal id the fresh
+/// tab opened. Provider, folder and timestamp are not identities. A different recent conversation in the same
+/// repository can satisfy all three and used to rename a new Codex tab after an unrelated old chat.
 export function namedPlaceholders(
   rows: readonly Conversation[],
   started: readonly StartedConversation[],
@@ -848,9 +879,16 @@ export function namedPlaceholders(
   const named = new Map<string, string>();
   for (const pending of started) {
     const row = spokenFor.get(startedSlot(pending.providerId, pending.workspace));
-    // No row at all is not a match, however old the placeholder is: that is exactly the gap it stands in.
     if (row === undefined) continue;
-    if ((row.updatedAtMs ?? 0) < pending.startedAtMs - SERVICE_CLOCK_SLACK_MS) continue;
+    const terminal = row.hostedTerminal;
+    if (
+      terminal === null
+      || terminal === undefined
+      || pending.runtimeGeneration === undefined
+      || pending.terminalId === undefined
+      || terminal.runtimeGeneration !== pending.runtimeGeneration
+      || terminal.terminalId !== pending.terminalId
+    ) continue;
     named.set(pending.id, row.key);
   }
   return named;
@@ -946,6 +984,10 @@ function terminalKey(terminal: TerminalDescriptor): string {
 }
 
 function startedCoversTerminal(pending: StartedConversation, terminal: TerminalDescriptor): boolean {
+  if (pending.runtimeGeneration !== undefined && pending.terminalId !== undefined) {
+    return terminal.runtimeGeneration === pending.runtimeGeneration
+      && terminal.terminalId === pending.terminalId;
+  }
   return pending.providerId === terminal.providerId
     && workspaceIdentity(pending.workspace) === workspaceIdentity(terminal.workspace)
     && terminal.openedAtMs >= pending.startedAtMs - SERVICE_CLOCK_SLACK_MS;

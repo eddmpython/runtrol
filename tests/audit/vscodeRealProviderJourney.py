@@ -466,7 +466,7 @@ def stopMarkedProcesses(marker: Path) -> bool:
     for identity in survivors:
         try:
             os.kill(identity.pid, force_signal)
-        except (ProcessLookupError, PermissionError):
+        except OSError:
             # ok: a racing exit can reject the signal; the next exact-generation scan still has to prove it gone.
             continue
     deadline = time.monotonic() + 5.0
@@ -511,7 +511,7 @@ def stopExactIdentities(identities: set[ProcessIdentity]) -> set[ProcessIdentity
     for identity in survivors:
         try:
             os.kill(identity.pid, force_signal)
-        except (ProcessLookupError, PermissionError):
+        except OSError:
             # ok: the signal race is settled only by the exact-generation scan below.
             continue
     return waitIdentitiesGone(survivors)

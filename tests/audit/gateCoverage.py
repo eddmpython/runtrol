@@ -51,6 +51,8 @@ NOT_A_GATE: dict[str, str] = {
     "source rather than run on its own, and its selftest runs inside theirs",
     "loopbackClaudeModel.py": "one loopback model endpoint the journey gates run against. imported "
     "by the gates that need a real CLI to answer without a network, never run on its own",
+    "vscodePerformanceBudget.py": "the typed performance-budget loader imported by the host, multi-window, and "
+    "real-provider gates. those executable gates validate its exact schema when they load it",
 }
 
 # Preflight gates that intentionally have no counterpart step in the workflow.

@@ -6,7 +6,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use base64ct::{Base64, Encoding as _};
+use runtrol_runtime_protocol::AppScope;
 use tokio::sync::{mpsc, watch};
+
+use crate::runtime_native_sessions::NativeCursorCodec;
 
 use super::*;
 
@@ -448,12 +451,17 @@ async fn public_runtime_keeps_one_owner_behind_an_official_attachment() {
         let runtime_asking = runtime_asking.clone();
         async move {
             let mut connections = tokio::task::JoinSet::new();
+            let (audit, audit_writer) = crate::runtime_audit::journal(Arc::clone(&composed));
+            connections.spawn(async move {
+                audit_writer.await.expect("audit writer remained healthy");
+            });
             for _ in 0..5 {
                 let connection = listener.accept().await.expect("accept a public client");
                 connections.spawn(serve_connection(
                     connection,
                     instance.to_owned(),
                     Arc::clone(&composed),
+                    audit.clone(),
                     Arc::clone(&discovering),
                     Arc::clone(&native_cursors),
                     provider_publishing.clone(),
@@ -463,6 +471,7 @@ async fn public_runtime_keeps_one_owner_behind_an_official_attachment() {
                     runtime_returning.clone(),
                 ));
             }
+            drop(audit);
             while let Some(joined) = connections.join_next().await {
                 joined.expect("the public connection task");
             }
@@ -508,31 +517,32 @@ async fn public_runtime_keeps_one_owner_behind_an_official_attachment() {
             Err(error) => panic!("the integration public key must decode: {error}"),
         };
     let integration = runtrol_store::IntegrationKey::from_bytes([9; 16]);
+    let approved_row = runtrol_store::IntegrationRow {
+        public_key,
+        client_instance_id: "official-fixture-instance".into(),
+        label: "official attach fixture".into(),
+        manifest_digest: [4; 32],
+        scopes: scopes
+            .iter()
+            .map(|scope| Box::<str>::from(scope.as_str()))
+            .collect(),
+        roots: vec![runtrol_store::IntegrationRootRow {
+            path: workspace.as_str().into(),
+            identity: workspace_identity,
+        }],
+        key_generation: 1,
+        grant_generation: 1,
+        approved_at: runtrol_provider::WallMs::now(),
+        revoked_at: None,
+    };
     composed
         .store
-        .approve_enrollment(
-            pending,
-            integration,
-            &runtrol_store::IntegrationRow {
-                public_key,
-                client_instance_id: "official-fixture-instance".into(),
-                label: "official attach fixture".into(),
-                manifest_digest: [4; 32],
-                scopes: scopes
-                    .iter()
-                    .map(|scope| Box::<str>::from(scope.as_str()))
-                    .collect(),
-                roots: vec![runtrol_store::IntegrationRootRow {
-                    path: workspace.as_str().into(),
-                    identity: workspace_identity,
-                }],
-                key_generation: 1,
-                grant_generation: 1,
-                approved_at: runtrol_provider::WallMs::now(),
-                revoked_at: None,
-            },
-        )
+        .approve_enrollment(pending, integration, &approved_row)
         .expect("approve the exact fixture enrollment");
+    composed
+        .integration_authority
+        .publish_committed(integration, approved_row)
+        .expect("publish the committed fixture enrollment");
     let decision = enrolling
         .integrations()
         .watch(receipt.pending_id)

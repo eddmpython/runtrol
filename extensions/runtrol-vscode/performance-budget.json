@@ -1,10 +1,24 @@
 {
-  "activationMs": 1800,
-  "openViewMs": 1000,
-  "refreshP95Ms": 50,
-  "rssGrowthBytes": 67108864,
-  "coldResumeMs": 3500,
-  "sessionSwitchP95Ms": 175,
-  "reloadRestoreMs": 2500,
-  "followArrivalMs": 15000
+  "host": {
+    "activationMs": 1800,
+    "openViewMs": 1000,
+    "refreshP95Ms": 50,
+    "rssGrowthBytes": 67108864,
+    "coldResumeMs": 3500,
+    "sessionSwitchP95Ms": 175,
+    "reloadRestoreMs": 2500,
+    "followArrivalMs": 15000
+  },
+  "hostLoad": {
+    "managedSessionCount": 30,
+    "hotSessionCount": 8
+  },
+  "multiWindowTerminal": {
+    "firstUseDeliveryMs": 500,
+    "warmDeliveryP95Ms": 50,
+    "latencySampleCount": 21
+  },
+  "realProviderTerminal": {
+    "runtimeClientDeliveryMs": 250
+  }
 }

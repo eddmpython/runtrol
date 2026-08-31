@@ -24,6 +24,7 @@ pub mod dispatch;
 mod generation_authority;
 pub mod generations;
 mod integration_admin;
+mod integration_authority;
 mod isolated_workspace;
 mod native_claims;
 mod native_deletions;

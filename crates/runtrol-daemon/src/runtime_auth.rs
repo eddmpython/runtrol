@@ -32,7 +32,7 @@ pub(crate) struct ClientContext {
     pub(crate) capabilities: ClientCapabilities,
 }
 
-/// One verified current grant. The durable row remains the authority and is checked before every operation.
+/// One verified current grant. The commit-coupled authority projection is checked before every operation.
 #[derive(Clone)]
 pub(crate) struct AuthorizedIntegration {
     pub(crate) key: IntegrationKey,
@@ -86,16 +86,19 @@ pub(crate) fn challenge(instance_id: &str) -> Result<ServerChallenge, Authorizat
 
 /// Verify an approved integration signature and return its current authority.
 pub(crate) fn authenticate(
-    store: &Store,
+    authority: &crate::integration_authority::IntegrationAuthority,
     context: &ClientContext,
     authentication: &IntegrationAuthentication,
 ) -> Result<AuthorizedIntegration, AuthorizationFailure> {
     ensure_challenge_fresh(&context.challenge)?;
     let key = integration_key(&authentication.integration_id)?;
-    let Some(row) = store
-        .get_integration(key)
-        .map_err(|_| AuthorizationFailure::internal())?
-    else {
+    let Some(row) = authority.row(key) else {
+        if authority.was_revoked(key) {
+            return Err(AuthorizationFailure {
+                kind: RuntimeErrorKind::IntegrationRevoked,
+                message: "the integration grant was revoked",
+            });
+        }
         return Err(AuthorizationFailure::unauthenticated(
             "the integration is not enrolled",
         ));
@@ -139,27 +142,11 @@ pub(crate) fn authenticate_against_row(
     })
 }
 
-/// Re-read and verify the current grant generation before an authorized method acts.
-pub(crate) fn refresh(
-    store: &Store,
-    current: &AuthorizedIntegration,
-) -> Result<AuthorizedIntegration, AuthorizationFailure> {
-    let Some(row) = store
-        .get_integration(current.key)
-        .map_err(|_| AuthorizationFailure::internal())?
-    else {
-        return Err(AuthorizationFailure::unauthenticated(
-            "the integration grant no longer exists",
-        ));
-    };
-    refresh_against_row(current, &row)
-}
-
 /// Revalidate an existing connection against one exact authoritative row.
 pub(crate) fn refresh_against_row(
-    current: &AuthorizedIntegration,
+    current: &mut AuthorizedIntegration,
     row: &IntegrationRow,
-) -> Result<AuthorizedIntegration, AuthorizationFailure> {
+) -> Result<(), AuthorizationFailure> {
     if row.revoked_at.is_some() {
         return Err(AuthorizationFailure {
             kind: RuntimeErrorKind::IntegrationRevoked,
@@ -171,8 +158,8 @@ pub(crate) fn refresh_against_row(
             "the integration key changed; reconnect and authenticate again",
         ));
     }
-    let next = grant(current.grant.integration_id.clone(), row)?;
     if row.grant_generation != current.grant.grant_generation {
+        let next = grant(current.grant.integration_id.clone(), row)?;
         // A newer generation that only ADDED authority continues in place. The caller proved its identity
         // against this same key generation, the store row stays the authority for every request either way,
         // and this widening is something the same integration asked for a moment ago: forcing a reconnect
@@ -184,21 +171,19 @@ pub(crate) fn refresh_against_row(
                 "the integration grant changed; reconnect and authenticate again",
             ));
         }
+        current.grant = next;
+        current.roots.clone_from(&row.roots);
     }
-    Ok(AuthorizedIntegration {
-        key: current.key,
-        grant: next,
-        roots: row.roots.clone(),
-    })
+    Ok(())
 }
 
 /// Whether a newer grant is a pure widening the live connection may continue across.
 ///
-/// Strictly newer, and everything already held still held: any removed scope, any removed root, and any
-/// older generation answers false, which keeps shrink and rollback on the reconnect-and-reauthenticate
-/// path where they belong.
+/// Exactly one generation newer, and everything already held still held: any removed scope, any removed root,
+/// rollback, or skipped generation answers false. A skipped generation may conceal a coalesced shrink followed
+/// by a widening, so only the adjacent transition can prove that authority never disappeared.
 fn widening_continues(current: &IntegrationGrant, next: &IntegrationGrant) -> bool {
-    next.grant_generation > current.grant_generation
+    current.grant_generation.checked_add(1) == Some(next.grant_generation)
         && current
             .scopes
             .iter()
@@ -669,6 +654,16 @@ mod tests {
         assert!(
             !widening_continues(&current, &rolled_back),
             "an older generation is never a widening, whatever it contains"
+        );
+
+        let skipped = grant_with(
+            3,
+            vec![AppScope::SessionList, AppScope::SessionStart],
+            vec!["C:/alpha".to_owned(), "C:/beta".to_owned()],
+        );
+        assert!(
+            !widening_continues(&current, &skipped),
+            "a coalesced generation may conceal a shrink and must reauthenticate"
         );
     }
 

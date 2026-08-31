@@ -219,8 +219,16 @@ function panelHtml(chip: UsageChip, index: number): string {
 ${chip.position ? `<p class="position${chip.reached ? " reached" : ""}">${escapeHtml(chip.position)}</p>` : ""}
 ${bars}
 ${chip.age ? `<p class="age">${escapeHtml(chip.age)}</p>` : ""}
-${signInButton(chip)}${signOutButton(chip)}
+${troubleshootButton(chip)}${signInButton(chip)}${signOutButton(chip)}
 </section>`;
+}
+
+/// An unavailable service keeps its cause in the detail panel and puts the route to the provider's own repair
+/// surfaces beside it. This is deliberately not an external hardcoded URL: providers declare the current doctor,
+/// install, update, and sign-in routes that the host presents after this press.
+function troubleshootButton(chip: UsageChip): string {
+  if (chip.state !== "unavailable") return "";
+  return `<button class="action" type="button" data-action="fix" data-provider="${escapeHtml(chip.providerId)}">Troubleshoot</button>`;
 }
 
 /// The Update button at the right end of the service's line, only when the Core confirmed a newer release it

@@ -24,6 +24,7 @@ export type MoreAction = {
 export const MORE_ACTIONS: readonly MoreAction[] = [
   { command: "runtrol.openNextWaiting", label: "Open the next conversation waiting for you" },
   { command: "runtrol.switchSession", label: "Switch conversation..." },
+  { command: "runtrol.arrangeConversationGrid", label: "Arrange open conversations in a grid" },
   { command: "runtrol.refresh", label: "Look again" },
   { command: "runtrol.setUpServices", label: "Set up coding services" },
   { command: "runtrol.checkProviderUpdates", label: "Check for service updates" },

@@ -20,6 +20,13 @@ import {
 } from "./isolated-vscode.mjs";
 
 const repositoryRoot = fileURLToPath(new URL("../../../", import.meta.url));
+const performanceBudget = JSON.parse(
+  await readFile(path.join(extensionRoot, "performance-budget.json"), "utf8"),
+);
+const managedSessionCount = performanceBudget?.hostLoad?.managedSessionCount;
+if (!Number.isSafeInteger(managedSessionCount) || managedSessionCount <= 0) {
+  throw new Error("performance-budget.json must define a positive managed-session release load");
+}
 const core = process.env.RUNTROL_TEST_CORE
   ? path.resolve(process.env.RUNTROL_TEST_CORE)
   : path.join(repositoryRoot, "target", "debug", process.platform === "win32" ? "runtrol.exe" : "runtrol");
@@ -88,7 +95,7 @@ const followTarget = path.join(followRoot, "beta");
 const followWorkspaceFile = path.join(temporary, "follow.code-workspace");
 const workspaceRoot = path.join(temporary, "workspaces");
 const workspaces = Array.from(
-  { length: 30 },
+  { length: managedSessionCount },
   (_unused, index) => path.join(workspaceRoot, `workspace-${index + 1}`),
 );
 const providers = path.join(runtrolHome, "providers");
@@ -99,7 +106,7 @@ coreEnvironment.RUNTROL_ACP_FIXTURE_UNIQUE_SESSIONS = "1";
 // only reader of that stderr: a close that exceeds the CLI timeout is then diagnosed from the last step named
 // instead of from the two words ETIMEDOUT carries.
 coreEnvironment.RUNTROL_CLOSE_TRACE = "1";
-// The performance contract measures the declared fixture and its 30 sessions. Inheriting the operator's PATH
+// The performance contract measures the declared fixture at the catalogued release load. Inheriting the operator's PATH
 // also discovers and probes every installed coding CLI while the clock runs, so an account probe or a cold CLI
 // filesystem walk becomes a random refresh result. The exact fixture directory is the complete provider surface
 // for this isolated home; Code, Core, and the fixture itself are already launched by absolute path.

@@ -105,11 +105,19 @@ export type RuntimeSessionAction = {
 export class StudioRuntimeClient implements vscode.Disposable {
   private readonly connector = new RuntimeConnector();
   private command: RuntimeClient | null = null;
+  /// The 250 ms process-roster clock must never queue in front of operator commands.
+  ///
+  /// A provider can take tens of milliseconds to validate its structural activity surface on Windows. Sharing
+  /// `commandTail` made a manual refresh, input or stop wait behind that observation even though neither operation
+  /// depends on it. One persistent authenticated connection and one narrow queue preserve ordering inside the
+  /// activity lane without adding a connection per tick or delaying the command lane.
+  private activity: RuntimeClient | null = null;
   private options: ClientOptions | null = null;
   private stored: StoredIntegration | null = null;
   private locator: Promise<ValidatedLocator> | null = null;
   private firstInspection: Promise<ValidatedLocator | null> | null = null;
   private commandTail: Promise<void> = Promise.resolve();
+  private activityTail: Promise<void> = Promise.resolve();
   private controlPersistence: Promise<void> = Promise.resolve();
   private readonly controls = new Map<string, ControlLease>();
   private providerSnapshot: ProviderList | null = null;
@@ -314,7 +322,7 @@ export class StudioRuntimeClient implements vscode.Disposable {
   /// answers from its small process roster, and Studio asks it on the dedicated fast activity clock rather than
   /// walking the stored conversation catalogue or sharing the memory sampling clock.
   async nativeActivity(providerId: string): Promise<NativeActivity> {
-    return this.read((runtime) => runtime.providers().nativeActivity(providerId));
+    return this.activityRead((runtime) => runtime.providers().nativeActivity(providerId));
   }
 
   async models(providerId: string): Promise<RuntimeModelCatalog> {
@@ -935,8 +943,6 @@ export class StudioRuntimeClient implements vscode.Disposable {
       await followTerminalIndex(runtime, generation.digest, fleet, publish, signal);
     } finally {
       runtime.close();
-      fleet.delete(generation.digest);
-      publish();
     }
   }
 
@@ -1025,6 +1031,7 @@ export class StudioRuntimeClient implements vscode.Disposable {
 
   async reset(): Promise<void> {
     this.invalidateInventory();
+    this.closeActivity();
     await this.serial(async () => {
       this.command?.close();
       this.command = null;
@@ -1040,6 +1047,7 @@ export class StudioRuntimeClient implements vscode.Disposable {
   }
 
   dispose(): void {
+    this.closeActivity();
     this.command?.close();
     this.command = null;
     this.controls.clear();
@@ -1057,6 +1065,25 @@ export class StudioRuntimeClient implements vscode.Disposable {
         throw error;
       }
     });
+  }
+
+  private activityRead<T>(operation: (runtime: RuntimeClient) => Promise<T>): Promise<T> {
+    const action = async (): Promise<T> => {
+      const runtime = await this.activityClient();
+      try {
+        return await operation(runtime);
+      } catch (error) {
+        runtime.close();
+        if (this.activity === runtime) this.activity = null;
+        throw error;
+      }
+    };
+    const result = this.activityTail.then(action);
+    this.activityTail = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
   }
 
   private mutate<T>(operation: (runtime: RuntimeClient) => Promise<T>): Promise<T> {
@@ -1131,6 +1158,19 @@ export class StudioRuntimeClient implements vscode.Disposable {
     return this.command;
   }
 
+  private async activityClient(): Promise<RuntimeClient> {
+    if (this.activity) return this.activity;
+    this.activity = await this.withRuntimeLocator(
+      (locator) => this.connector.connectWithRetry(locator, this.requireOptions()),
+    );
+    return this.activity;
+  }
+
+  private closeActivity(): void {
+    this.activity?.close();
+    this.activity = null;
+  }
+
   private async rememberControl(control: ControlLease): Promise<void> {
     this.controls.set(control.sessionId, control);
     await this.persistControls();
@@ -1187,6 +1227,7 @@ export class StudioRuntimeClient implements vscode.Disposable {
         ...options,
         credentials: new IntegrationCredentials(credentials.identity, current),
       };
+      this.closeActivity();
     }
     return runtime;
   }
@@ -1275,6 +1316,7 @@ export class StudioRuntimeClient implements vscode.Disposable {
   }
 
   private async replaceIntegration(): Promise<void> {
+    this.closeActivity();
     this.command?.close();
     this.command = null;
     this.controls.clear();
@@ -1390,8 +1432,8 @@ type TerminalStreamEnd = "integrationRevoked" | "authorityChanged" | "runtimeUna
 /// Returns why it ended rather than throwing on it, because most reasons are recoverable and only the caller
 /// knows what to do about them: the grant generation moving (`authorityChanged`) or the Runtime going away
 /// (`runtimeUnavailable`) mean reconnect for the anchor and stop-following for a draining peer, and neither is
-/// a fault to show a person. Only a transport error throws. The generation's fleet entry is not removed here:
-/// whether its absence is the Core going away or one draining generation finishing is the caller's to say.
+/// a fault to show a person. Only a transport error throws. The generation's fleet entry is removed when this
+/// exact stream ends, because a disconnected stream cannot keep proving that its last descriptors are alive.
 async function followTerminalIndex(
   runtime: RuntimeClient,
   generation: string,
@@ -1423,6 +1465,11 @@ async function followTerminalIndex(
   } finally {
     signal.removeEventListener("abort", close);
     subscription?.close();
+    // A descriptor is proof only while this exact generation's stream is live. Keeping the last snapshot
+    // across authorityChanged or runtimeUnavailable made an exited provider process look openable until a
+    // later connection happened to replace it.
+    fleet.delete(generation);
+    publish();
   }
 }
 

@@ -55,6 +55,12 @@ pub struct NativeActivity {
     /// Native identities owned by a still-running provider process, in no particular order.
     #[serde(default)]
     pub live: Vec<String>,
+    /// Live native identities whose exact process publishes a safe terminal attachment route.
+    ///
+    /// Older Runtime generations omit this field. Absence therefore means no proven route, never that a
+    /// client should guess one from the provider or operating system.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachable: Vec<String>,
     /// Native identities answering now, in no particular order.
     pub active: Vec<String>,
 }

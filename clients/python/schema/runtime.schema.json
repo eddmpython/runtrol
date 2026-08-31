@@ -1133,6 +1133,13 @@
           },
           "type": "array"
         },
+        "attachable": {
+          "description": "Live native identities whose exact process publishes a safe terminal attachment route.\n\nOlder Runtime generations omit this field. Absence therefore means no proven route, never that a\nclient should guess one from the provider or operating system.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "live": {
           "default": [],
           "description": "Native identities owned by a still-running provider process, in no particular order.",

@@ -6,12 +6,15 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 use runtrol_core::{BinFacts, ProbeCache, SessionManager, locate};
-use runtrol_provider::{AbsPath, NativeSessionId, ProviderId as CoreProviderId};
+use runtrol_provider::{
+    AbsPath, NativeSessionId, ProviderId as CoreProviderId, SessionId, TerminalId,
+};
 use runtrol_runtime_protocol::{
     InstallationObservation, InstallationState, ManagedSessionList, ProviderDescriptor,
     ProviderHelp, ProviderId, ProviderList, RuntimeSessionId, SessionDescriptor,
 };
 use runtrol_security::ProjectRootIdentity;
+use runtrol_store::IntegrationRootRow;
 
 use crate::Composed;
 use crate::runtime_auth::AuthorizedIntegration;
@@ -133,6 +136,9 @@ impl ProviderInventoryCache {
     fn invalidate(&mut self) {
         self.revision = self.revision.wrapping_add(1).max(1);
         self.current = None;
+        // The in-flight scan belongs to the previous revision. Detach it now so the authoritative account
+        // write can immediately start a replacement; its eventual completion cannot clear the new revision.
+        self.background_revision = None;
     }
 }
 
@@ -550,37 +556,199 @@ fn installation(
     (observation, resolved)
 }
 
-/// What a provider process holds in memory right now, or `None` when the operating system will not say.
+type ResidentSamples = std::collections::HashMap<ResidentKey, ResidentSample>;
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct ResidentKey {
+    pid: u32,
+    owner: ResidentOwner,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum ResidentOwner {
+    Session(SessionId, u64),
+    Terminal(TerminalId, u64),
+}
+
+struct ResidentSample {
+    taken: Instant,
+    bytes: Option<u64>,
+    refreshing: bool,
+    refresh_generation: u64,
+    notify_sessions: bool,
+    terminal_notifiers: Vec<tokio::sync::watch::Sender<u64>>,
+}
+
+static RESIDENT_SAMPLES: std::sync::LazyLock<tokio::sync::Mutex<ResidentSamples>> =
+    std::sync::LazyLock::new(|| tokio::sync::Mutex::new(ResidentSamples::new()));
+static RESIDENT_SESSION_CHANGES: std::sync::LazyLock<tokio::sync::watch::Sender<u64>> =
+    std::sync::LazyLock::new(|| {
+        let (changes, _initial) = tokio::sync::watch::channel(0);
+        changes
+    });
+const RESIDENT_SAMPLE_FRESH_FOR: Duration = Duration::from_secs(2);
+const RESIDENT_SAMPLE_DEADLINE: Duration = Duration::from_secs(1);
+const MAX_RESIDENT_SAMPLES: usize = 32;
+const MAX_RESIDENT_TERMINAL_NOTIFIERS: usize = 8;
+
+/// Return the latest provider-process memory sample and refresh it outside the async executor when stale.
 ///
 /// Absence is the honest answer, not a failure to report: the process may have ended between the listing and
 /// the question, or the platform may refuse the question for a process this daemon may not open. Either way
 /// a surface draws no number, never a zero.
 ///
-/// Sampled at most once every two seconds per process. A listing asks for every live process at once, the
-/// surfaces list on a short clock, and on Windows each sample opens a process handle: paying that on every
-/// listing lifted the measured refresh p95 from 50 ms to 65 to 146 ms (2026-08-28). A figure a couple of
-/// seconds old is still the figure a person reads.
-pub(crate) fn resident_bytes_now(pid: u32) -> Option<u64> {
-    type ResidentSamples = std::collections::HashMap<u32, (std::time::Instant, Option<u64>)>;
-    static SAMPLES: std::sync::LazyLock<tokio::sync::Mutex<ResidentSamples>> =
-        std::sync::LazyLock::new(|| tokio::sync::Mutex::new(ResidentSamples::new()));
-    const FRESH_FOR: std::time::Duration = std::time::Duration::from_secs(2);
+/// A listing never opens a process handle. The first read returns the last bounded sample or `None` and
+/// schedules one blocking-pool refresh. A figure a couple of seconds old is still the figure a person reads.
+pub(crate) fn resident_bytes_for_session(
+    pid: u32,
+    session: SessionId,
+    generation: u64,
+) -> Option<u64> {
+    resident_bytes_cached(
+        ResidentKey {
+            pid,
+            owner: ResidentOwner::Session(session, generation),
+        },
+        None,
+        true,
+    )
+}
 
-    let now = std::time::Instant::now();
-    // Never waits: a contended cache is simply bypassed with a direct sample, so this stays a plain
-    // synchronous call on the runtime thread without blocking it.
-    let Ok(mut samples) = SAMPLES.try_lock() else {
-        return sample_resident_bytes(pid);
+/// Session catalogue publication wake for a completed background process-memory sample.
+pub(crate) fn resident_session_changes() -> tokio::sync::watch::Receiver<u64> {
+    RESIDENT_SESSION_CHANGES.subscribe()
+}
+
+/// Terminal memory sampling also rings the index when a background value changes.
+pub(crate) fn resident_bytes_for_terminal(
+    pid: u32,
+    terminal: TerminalId,
+    generation: u64,
+    changed: &tokio::sync::watch::Sender<u64>,
+) -> Option<u64> {
+    resident_bytes_cached(
+        ResidentKey {
+            pid,
+            owner: ResidentOwner::Terminal(terminal, generation),
+        },
+        Some(changed),
+        false,
+    )
+}
+
+fn resident_bytes_cached(
+    key: ResidentKey,
+    changed: Option<&tokio::sync::watch::Sender<u64>>,
+    notify_sessions: bool,
+) -> Option<u64> {
+    let now = Instant::now();
+    let Ok(mut samples) = RESIDENT_SAMPLES.try_lock() else {
+        notify_resident_retry(changed, notify_sessions);
+        return None;
     };
-    if let Some((taken, bytes)) = samples.get(&pid)
-        && now.duration_since(*taken) < FRESH_FOR
-    {
-        return *bytes;
+    if let Some(sample) = samples.get_mut(&key) {
+        if sample.refreshing && now.duration_since(sample.taken) < RESIDENT_SAMPLE_DEADLINE {
+            sample.notify_sessions |= notify_sessions;
+            remember_terminal_notifier(&mut sample.terminal_notifiers, changed);
+            return sample.bytes;
+        }
+        if now.duration_since(sample.taken) < RESIDENT_SAMPLE_FRESH_FOR {
+            return sample.bytes;
+        }
     }
-    let bytes = sample_resident_bytes(pid);
-    samples.retain(|_, (taken, _)| now.duration_since(*taken) < FRESH_FOR);
-    samples.insert(pid, (now, bytes));
-    bytes
+    samples.retain(|sample_key, sample| {
+        *sample_key == key
+            || sample.refreshing
+            || now.duration_since(sample.taken) < RESIDENT_SAMPLE_FRESH_FOR
+    });
+    let previous = samples.get(&key).and_then(|sample| sample.bytes);
+    if !samples.contains_key(&key) && samples.len() >= MAX_RESIDENT_SAMPLES {
+        return previous;
+    }
+    let Ok(handle) = tokio::runtime::Handle::try_current() else {
+        return previous;
+    };
+    let refresh_generation = samples
+        .get(&key)
+        .map_or(1, |sample| sample.refresh_generation.wrapping_add(1).max(1));
+    let mut terminal_notifiers = Vec::new();
+    remember_terminal_notifier(&mut terminal_notifiers, changed);
+    samples.insert(
+        key,
+        ResidentSample {
+            taken: now,
+            bytes: previous,
+            refreshing: true,
+            refresh_generation,
+            notify_sessions,
+            terminal_notifiers,
+        },
+    );
+    drop(samples);
+    drop(handle.spawn(async move {
+        let observation = tokio::task::spawn_blocking(move || sample_resident_bytes(key.pid)).await;
+        let now = Instant::now();
+        let mut samples = RESIDENT_SAMPLES.lock().await;
+        let Some(sample) = samples.get_mut(&key) else {
+            return;
+        };
+        if sample.refresh_generation != refresh_generation {
+            return;
+        }
+        let Ok(bytes) = observation else {
+            sample.taken = now;
+            sample.refreshing = false;
+            sample.notify_sessions = false;
+            sample.terminal_notifiers.clear();
+            return;
+        };
+        let value_changed = sample.bytes != bytes;
+        let notify_sessions = std::mem::replace(&mut sample.notify_sessions, false);
+        let terminal_notifiers = std::mem::take(&mut sample.terminal_notifiers);
+        sample.taken = now;
+        sample.bytes = bytes;
+        sample.refreshing = false;
+        samples.retain(|sample_key, sample| {
+            *sample_key == key
+                || sample.refreshing
+                || now.duration_since(sample.taken) < RESIDENT_SAMPLE_FRESH_FOR
+        });
+        drop(samples);
+        if value_changed {
+            if notify_sessions {
+                RESIDENT_SESSION_CHANGES
+                    .send_modify(|revision| *revision = revision.wrapping_add(1));
+            }
+            for changed in terminal_notifiers {
+                changed.send_modify(|revision| *revision = revision.wrapping_add(1));
+            }
+        }
+    }));
+    previous
+}
+
+fn notify_resident_retry(changed: Option<&tokio::sync::watch::Sender<u64>>, notify_sessions: bool) {
+    if notify_sessions {
+        RESIDENT_SESSION_CHANGES.send_modify(|revision| *revision = revision.wrapping_add(1));
+    }
+    if let Some(changed) = changed {
+        changed.send_modify(|revision| *revision = revision.wrapping_add(1));
+    }
+}
+
+fn remember_terminal_notifier(
+    notifiers: &mut Vec<tokio::sync::watch::Sender<u64>>,
+    changed: Option<&tokio::sync::watch::Sender<u64>>,
+) {
+    let Some(changed) = changed else {
+        return;
+    };
+    if notifiers.iter().any(|known| known.same_channel(changed))
+        || notifiers.len() >= MAX_RESIDENT_TERMINAL_NOTIFIERS
+    {
+        return;
+    }
+    notifiers.push(changed.clone());
 }
 
 #[expect(
@@ -621,7 +789,9 @@ pub(crate) fn sessions(
                     waiting_on: session.waiting.map(public_waiting),
                     session_generation: session.generation,
                     label: session.label.map(Into::into),
-                    memory_bytes: session.pid.and_then(resident_bytes_now),
+                    memory_bytes: session.pid.and_then(|pid| {
+                        resident_bytes_for_session(pid, session.session, session.generation)
+                    }),
                 },
                 workspace: session.workspace,
             })
@@ -874,19 +1044,28 @@ pub(crate) fn authorized_workspace(
 fn approved_roots(
     authority: &AuthorizedIntegration,
 ) -> Result<Vec<AuthorizedRoot>, RuntimeInventoryFailure> {
-    let mut roots = Vec::with_capacity(authority.roots.len());
-    for root in &authority.roots {
+    approved_root_rows(&authority.roots)
+}
+
+/// Revalidate exact stored roots without requiring a connection-owned authority value.
+pub(crate) fn approved_root_rows(
+    approved_rows: &[IntegrationRootRow],
+) -> Result<Vec<AuthorizedRoot>, RuntimeInventoryFailure> {
+    let mut roots = Vec::with_capacity(approved_rows.len());
+    for root in approved_rows {
         let approved =
             AbsPath::new(&root.path).map_err(|_| RuntimeInventoryFailure::RootAuthorityChanged)?;
-        let current = AbsPath::canonicalize(&root.path)
+        // Approval stores the canonical path and kernel identity atomically. Re-canonicalizing that same trusted
+        // path on every keystroke performs an avoidable filesystem traversal and stalls Windows terminals under
+        // ordinary metadata jitter. Reading through the exact stored path still follows a replacement link or
+        // junction to its new object, whose kernel identity cannot match the approved directory.
+        let identity = ProjectRootIdentity::read(&approved)
             .map_err(|_| RuntimeInventoryFailure::RootAuthorityChanged)?;
-        let identity = ProjectRootIdentity::read(&current)
-            .map_err(|_| RuntimeInventoryFailure::RootAuthorityChanged)?;
-        if current != approved || identity.to_bytes() != root.identity {
+        if identity.to_bytes() != root.identity {
             return Err(RuntimeInventoryFailure::RootAuthorityChanged);
         }
         roots.push(AuthorizedRoot {
-            path: current,
+            path: approved,
             identity: root.identity,
         });
     }
@@ -911,15 +1090,18 @@ mod tests {
             "a second list read coalesces behind the same scan"
         );
         cache.invalidate();
+        let second = cache
+            .begin_background_refresh()
+            .expect("an invalidation can replace an obsolete in-flight scan immediately");
+        assert_ne!(second, first);
         assert!(
             !cache.finish_background_refresh(first),
             "a probe write makes the older filesystem answer stale"
         );
-        assert_ne!(
-            cache
-                .begin_background_refresh()
-                .expect("the invalidated cache may scan again"),
-            first
+        assert_eq!(
+            cache.background_revision,
+            Some(second),
+            "the obsolete completion cannot clear the replacement scan"
         );
     }
 

@@ -425,6 +425,7 @@ mod tests {
                 successor_digest: "successor".into(),
                 authorities: Vec::new(),
                 claims: Vec::new(),
+                audit_ack: None,
             },
             Request::GenerationAuthorityUpdate {
                 successor_digest: "successor".into(),

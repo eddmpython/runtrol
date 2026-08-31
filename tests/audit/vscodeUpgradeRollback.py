@@ -36,6 +36,10 @@ RELEASE_POLICY = EXTENSION / "release-policy.json"
 BASELINE_VERSION = "0.0.1"
 RESULT_MARKER = "RUNTROL_VSCODE_UPGRADE "
 SESSION_PATTERN = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+WINDOWS_HOST_CRASH_MARKERS = (
+    "PostQueuedCompletionStatus: (6)",
+    "exited with code 2147483651",
+)
 
 
 def evidenceProblems(
@@ -114,11 +118,40 @@ def selftest() -> int:
         if not evidenceProblems(mutation, "0.1.0", baseline, current):
             print(f"[vscodeUpgradeRollback --selftest] FAIL. mutation {index} escaped.", file=sys.stderr)
             return 2
+    retryable = subprocess.CompletedProcess(
+        ["node", "upgrade-rollback.mjs"],
+        1,
+        stdout="",
+        stderr="VS Code exited with code 2147483651 after PostQueuedCompletionStatus: (6)",
+    )
+    ordinaryFailure = subprocess.CompletedProcess(
+        ["node", "upgrade-rollback.mjs"],
+        1,
+        stdout="",
+        stderr="upgrade stopped the original provider process",
+    )
+    if not isRetryableWindowsHostCrash(retryable, "win32"):
+        print("[vscodeUpgradeRollback --selftest] FAIL. the exact Windows host crash was not retryable.", file=sys.stderr)
+        return 2
+    if isRetryableWindowsHostCrash(retryable, "linux") or isRetryableWindowsHostCrash(ordinaryFailure, "win32"):
+        print("[vscodeUpgradeRollback --selftest] FAIL. an ordinary product failure became retryable.", file=sys.stderr)
+        return 2
     print(
         "[vscodeUpgradeRollback --selftest] OK. "
         f"all {len(mutations)} injected continuity defects make the gate red."
     )
     return 0
+
+
+def isRetryableWindowsHostCrash(
+    result: subprocess.CompletedProcess[str],
+    platform: str = sys.platform,
+) -> bool:
+    """Recognize only the known Windows VS Code test-host invalid-handle crash."""
+    if platform != "win32" or result.returncode == 0:
+        return False
+    output = f"{result.stdout}\n{result.stderr}"
+    return any(marker in output for marker in WINDOWS_HOST_CRASH_MARKERS)
 
 
 def runCommand(
@@ -315,6 +348,13 @@ def exercise(archive: Path | None) -> dict[str, Any]:
             str(fixture),
         ]
         result = runCommand(command, ROOT, timeout=600)
+        if isRetryableWindowsHostCrash(result):
+            print(
+                "[vscodeUpgradeRollback] Windows VS Code test host crashed with an invalid handle; "
+                "retrying once in a new isolated profile.",
+                file=sys.stderr,
+            )
+            result = runCommand(command, ROOT, timeout=600)
         if result.returncode != 0:
             raise RuntimeError(f"installed upgrade and rollback journey returned {result.returncode}")
         records = [

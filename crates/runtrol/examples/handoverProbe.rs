@@ -150,6 +150,9 @@ fn main() -> ExitCode {
                 )
                 .await
             }
+            ["parity-navigation", home, identity, digest, terminal] => {
+                parity_navigation(Path::new(home), Path::new(identity), digest, terminal).await
+            }
             _ => Err(
                 "usage: handoverProbe enroll|open|open-native|find-native|attach|stop|parity ..."
                     .to_owned(),
@@ -648,6 +651,21 @@ async fn parity(
         },
     )
     .await
+}
+
+/// Measure two viewers and writer handoff without placing text in a provider-owned startup surface.
+async fn parity_navigation(
+    home: &Path,
+    identity_file: &Path,
+    digest: &str,
+    terminal: &str,
+) -> Result<String, String> {
+    let stored = read_stored(identity_file)?;
+    let terminal_id = terminal
+        .parse::<RuntimeTerminalId>()
+        .map_err(|error| format!("terminal id: {error}"))?;
+    tokio::time::sleep(Duration::from_secs(8)).await;
+    navigation_parity(&stored, home, digest, terminal_id).await
 }
 
 fn submitted_parity_result(

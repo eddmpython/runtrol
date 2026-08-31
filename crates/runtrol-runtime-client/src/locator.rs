@@ -8,14 +8,14 @@
 use std::path::{Path, PathBuf};
 
 use runtrol_runtime_protocol::{
-    RUNTIME_LOCATOR_SCHEMA, RuntimeEndpointKind, RuntimeGeneration, RuntimeLocatorRecord,
+    MAX_RUNTIME_GENERATIONS, RUNTIME_LOCATOR_SCHEMA, RuntimeEndpointKind, RuntimeGeneration,
+    RuntimeLocatorRecord,
 };
 
 const LOCATOR_FILE: &str = "runtime.locator.json";
 const RUNTIME_FOLDER: &str = "runtrol";
 const MAX_LOCATOR_BYTES: u64 = 16 * 1024;
 const MAX_ENDPOINT_BYTES: usize = 1024;
-const MAX_GENERATIONS: usize = 16;
 /// The schema Runtimes published before generations (Marketplace 0.1.20 to 0.1.22) wrote.
 const LEGACY_LOCATOR_SCHEMA: u32 = 1;
 /// The digest a pre-generation Runtime never named. All zeros, so it matches no build's preference.
@@ -297,9 +297,9 @@ fn validate_record(record: &RuntimeLocatorRecord, locator_path: &Path) -> Result
             "Runtime instance identity is empty or oversized".to_owned(),
         ));
     }
-    if record.generations.len() > MAX_GENERATIONS {
+    if record.generations.len() > MAX_RUNTIME_GENERATIONS {
         return Err(LocatorError::Malformed(format!(
-            "the Runtime locator lists {} generations and the limit is {MAX_GENERATIONS}",
+            "the Runtime locator lists {} generations and the limit is {MAX_RUNTIME_GENERATIONS}",
             record.generations.len()
         )));
     }
@@ -787,6 +787,29 @@ mod tests {
             super::decode_record(bytes),
             Err(super::LocatorError::Malformed(_))
         ));
+    }
+
+    #[test]
+    fn a_locator_over_the_live_generation_ceiling_fails_closed() {
+        let generation = RuntimeGeneration {
+            digest: "a".repeat(64),
+            endpoint_kind: RuntimeEndpointKind::UnixSocket,
+            endpoint: "/tmp/runtrol-runtime.sock".to_owned(),
+            control_endpoint: "/tmp/runtrol-control.sock".to_owned(),
+            runtime_version: "0.1.1".to_owned(),
+            process_id: 1,
+            started_at_ms: 1,
+            live_sessions: 0,
+            draining: true,
+        };
+        let record = RuntimeLocatorRecord {
+            schema: RUNTIME_LOCATOR_SCHEMA,
+            instance_id: "rtm_11111111111111111111111111111111".to_owned(),
+            generations: vec![generation; MAX_RUNTIME_GENERATIONS + 1],
+        };
+        let error = validate_record(&record, Path::new("/runtime.locator.json"))
+            .expect_err("too many generations are unsafe");
+        assert!(error.to_string().contains("limit is 16"));
     }
 
     use super::*;

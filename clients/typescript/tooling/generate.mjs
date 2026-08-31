@@ -118,6 +118,17 @@ function compactValidationNode(node) {
           && !Object.hasOwn(node, "required")
           && !Object.hasOwn(node, "additionalProperties");
       })
+      .filter(([key, value]) => {
+        // The executable format check already owns these exact numeric bounds. Keeping the same limit a
+        // second time as minimum or maximum spends activation memory without rejecting one more value.
+        if (key === "minimum" && value === 0 && String(node.format).startsWith("uint")) return false;
+        if (key === "minimum" && value === -0x8000_0000 && node.format === "int32") return false;
+        if (key === "maximum" && value === 0xff && node.format === "uint8") return false;
+        if (key === "maximum" && value === 0xffff && node.format === "uint16") return false;
+        if (key === "maximum" && value === 0xffff_ffff && node.format === "uint32") return false;
+        if (key === "maximum" && value === 0x7fff_ffff && node.format === "int32") return false;
+        return true;
+      })
       .map(([key, value]) => {
         if (key === "properties") {
           return [

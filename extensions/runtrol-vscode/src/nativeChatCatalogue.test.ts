@@ -3,7 +3,11 @@ import test from "node:test";
 
 import type { NativeSessionCatalogue } from "@runtrol/runtime-client";
 
-import { collectNativeChats, type NativeCatalogueReader } from "./nativeChatCatalogue";
+import {
+  collectNativeChats,
+  nativeCatalogueAfterFailure,
+  type NativeCatalogueReader,
+} from "./nativeChatCatalogue";
 
 test("official native chats paginate across every approved root and deduplicate identity", async () => {
   const calls: string[] = [];
@@ -73,6 +77,36 @@ test("discovery failures remain an honest visible catalogue state", async () => 
   assert.equal(result.coverage, null);
   assert.deepEqual(result.chats, []);
   assert.match(result.warning ?? "", /provider command unavailable/u);
+});
+
+test("a failed refresh keeps the last good conversations and marks them partial", () => {
+  const previous = {
+    providerId: "provider",
+    coverage: { kind: "complete" as const, source: "officialCli" as const },
+    chats: [{ ...native("kept"), providerId: "provider" }],
+    loadedAtMs: 41,
+    warning: null,
+  };
+
+  const failed = nativeCatalogueAfterFailure(previous, "provider", new Error("temporary probe failure"), () => 99);
+
+  assert.deepEqual(failed.chats, previous.chats, "a failed observation cannot erase provider-owned history");
+  assert.equal(failed.loadedAtMs, 41, "the retained rows keep the time they were actually observed");
+  assert.deepEqual(failed.coverage, {
+    kind: "partial",
+    source: "officialCli",
+    why: "Existing chat discovery failed: temporary probe failure",
+  });
+  assert.equal(failed.warning, "Existing chat discovery failed: temporary probe failure");
+});
+
+test("a first discovery failure has no invented history but remains visible", () => {
+  const failed = nativeCatalogueAfterFailure(null, "provider", "provider unavailable", () => 99);
+
+  assert.deepEqual(failed.chats, []);
+  assert.equal(failed.coverage, null);
+  assert.equal(failed.loadedAtMs, 99);
+  assert.equal(failed.warning, "Existing chat discovery failed: provider unavailable");
 });
 
 test("a foreground action cancels discovery without publishing a false provider failure", async () => {

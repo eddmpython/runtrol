@@ -79,6 +79,14 @@ MAY_MUTATE_PREFIXES = {
     "crates/runtrol-store/src/": "the database crate owns runtrol's session pointer store",
 }
 
+# Rust permits a large test module to live in its own source file. These exact files are reached only
+# through a `#[cfg(test)]` module declaration in their parent; keeping the list exact prevents an
+# ordinary production module under a generically named directory from escaping the capability scan.
+TEST_ONLY_SOURCE = {
+    "crates/runtrol-daemon/src/runtime_serve/tests/dispatch.rs",
+    "crates/runtrol-daemon/src/runtime_serve/tests/official_attach.rs",
+}
+
 MUTATION = [
     re.compile(
         r"\b(?:(?:std|tokio)::)?fs::(?:write|rename|copy|remove_file|remove_dir(?:_all)?|"
@@ -99,7 +107,7 @@ def allowed(relative: str) -> bool:
 
 def mutationsIn(text: str, relative: str) -> list[str]:
     """Unreviewed mutation calls in one Rust source string."""
-    if allowed(relative):
+    if relative in TEST_ONLY_SOURCE or allowed(relative):
         return []
 
     lines = text.splitlines()
@@ -131,6 +139,8 @@ def selftest() -> int:
     registry = "crates/runtrol-childproc/src/contain/registry.rs"
     tracked = "crates/runtrol-childproc/src/contain/tracked.rs"
     adjacent = "crates/runtrol-childproc/src/contain/bootstrap.rs"
+    testModule = "crates/runtrol-daemon/src/runtime_serve/tests/dispatch.rs"
+    adjacentTestDirectory = "crates/runtrol-daemon/src/other/tests/dispatch.rs"
     fixtures = [
         ("direct write", example, 'fn change() { std::fs::write("settings", b"x"); }', 1),
         ("aliased write", example, 'fn change() { fs::rename("a", "b"); }', 1),
@@ -144,6 +154,13 @@ def selftest() -> int:
         ),
         ("reviewed guard registry", registry, 'fn change() { std::fs::write("guard", b"x"); }', 0),
         ("reviewed guard handoff", tracked, 'fn change() { std::fs::write("plan", b"x"); }', 0),
+        ("exact test-only source", testModule, 'fn fixture() { std::fs::write("home", b"x"); }', 0),
+        (
+            "unlisted file in a tests directory",
+            adjacentTestDirectory,
+            'fn change() { std::fs::write("settings", b"x"); }',
+            1,
+        ),
         (
             "unreviewed adjacent containment file",
             adjacent,

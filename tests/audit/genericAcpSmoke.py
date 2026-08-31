@@ -49,14 +49,36 @@ def verifyWatch(text: str) -> None:
 
 
 def selftest() -> None:
-    """Prove the gate rejects a stream with content but no completion."""
+    """Prove completion and active Cargo target selection both fail closed."""
     broken = '{"event":"agentMessageChunk","text":"fixture reply"}'
     try:
         verifyWatch(broken)
     except Failed:
-        print("[genericAcpSmoke:selftest] OK. a missing provider completion is red.")
-        return
-    raise Failed("selftest defect: a stream with no completion passed")
+        # ok: rejection is this mutation proof's expected result. The `else` below fails if no rejection occurs.
+        pass
+    else:
+        raise Failed("selftest defect: a stream with no completion passed")
+
+    environmentKey = "CARGO_TARGET_DIR"
+    previous = os.environ.get(environmentKey)
+    try:
+        os.environ.pop(environmentKey, None)
+        if cargoTargetDir() != ROOT / "target":
+            raise Failed("selftest defect: the default Cargo target directory drifted")
+        relative = Path("contract-target")
+        os.environ[environmentKey] = str(relative)
+        if cargoTargetDir() != ROOT / relative:
+            raise Failed("selftest defect: a relative Cargo target directory was ignored")
+        absolute = ROOT.parent / "contract-absolute-target"
+        os.environ[environmentKey] = str(absolute)
+        if cargoTargetDir() != absolute:
+            raise Failed("selftest defect: an absolute Cargo target directory was ignored")
+    finally:
+        if previous is None:
+            os.environ.pop(environmentKey, None)
+        else:
+            os.environ[environmentKey] = previous
+    print("[genericAcpSmoke:selftest] OK. completion and Cargo output selection fail closed.")
 
 
 def build() -> tuple[Path, Path]:
@@ -77,11 +99,12 @@ def build() -> tuple[Path, Path]:
             detail = (built.stderr or built.stdout or "cargo build failed without output").strip()
             raise Failed(detail)
     suffix = ".exe" if sys.platform == "win32" else ""
-    runtrol = ROOT / "target" / "debug" / f"runtrol{suffix}"
-    fixture = ROOT / "target" / "debug" / "examples" / f"acpFixture{suffix}"
+    target = cargoTargetDir()
+    runtrol = target / "debug" / f"runtrol{suffix}"
+    fixture = target / "debug" / "examples" / f"acpFixture{suffix}"
     for binary in (runtrol, fixture):
         if not binary.is_file():
-            raise Failed(f"cargo succeeded but {binary.relative_to(ROOT)} is missing")
+            raise Failed(f"cargo succeeded but {binary} is missing")
     return runtrol, fixture
 
 
@@ -99,10 +122,19 @@ def buildNativeProbe() -> Path:
         detail = (built.stderr or built.stdout or "native catalogue probe build failed").strip()
         raise Failed(detail)
     suffix = ".exe" if sys.platform == "win32" else ""
-    probe = ROOT / "target" / "debug" / "examples" / f"nativeCatalogueProbe{suffix}"
+    probe = cargoTargetDir() / "debug" / "examples" / f"nativeCatalogueProbe{suffix}"
     if not probe.is_file():
-        raise Failed(f"cargo succeeded but {probe.relative_to(ROOT)} is missing")
+        raise Failed(f"cargo succeeded but {probe} is missing")
     return probe
+
+
+def cargoTargetDir() -> Path:
+    """Resolve Cargo's active output directory exactly as the build subprocess does."""
+    configured = os.environ.get("CARGO_TARGET_DIR")
+    if not configured:
+        return ROOT / "target"
+    target = Path(configured)
+    return target if target.is_absolute() else ROOT / target
 
 
 def manifest(home: Path, fixture: Path) -> None:
@@ -206,7 +238,12 @@ def stopDaemon(daemon: subprocess.Popen[str]) -> None:
     """Stop exactly the daemon this gate started, on every platform."""
     if daemon.poll() is not None:
         return
-    daemon.terminate()
+    try:
+        daemon.terminate()
+    except OSError:
+        if daemon.poll() is None:
+            raise
+        return
     try:
         daemon.wait(timeout=2.0)
     except subprocess.TimeoutExpired:

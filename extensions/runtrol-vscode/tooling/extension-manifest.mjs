@@ -10,7 +10,11 @@ export const extensionReleasePolicy = Object.freeze(
 );
 const releaseVersion = validateReleaseVersion(extensionReleasePolicy.version, extensionReleasePolicy);
 export const packageManifest = Object.freeze(
-  { ...sourceManifest, version: extensionReleasePolicy.version },
+  {
+    ...sourceManifest,
+    version: extensionReleasePolicy.version,
+    contributes: releaseContributions(sourceManifest.contributes, extensionReleasePolicy.version),
+  },
 );
 export const extensionReleaseTag = `${extensionReleasePolicy.tagPrefix}${extensionReleasePolicy.version}`;
 export const previousExtensionVersion = [
@@ -29,6 +33,38 @@ if (sourceManifest.version !== "0.0.0") {
 
 export const extensionIdentifier = `${packageManifest.publisher}.${packageManifest.name}`;
 export const extensionInstallPrefix = `${extensionIdentifier}-`;
+
+/// Put the derived release version in the one host-rendered sidebar header.
+///
+/// A WebviewView description is not rendered when VS Code merges the sole view into its container header, and
+/// assigning the view title makes VS Code insert a colon. The packaged container title is the supported surface
+/// that produces `Runtrol 0.1.42` exactly. The checked-in manifest remains the version-neutral development SSOT.
+function releaseContributions(contributes, version) {
+  const containers = contributes?.viewsContainers;
+  const activitybar = containers?.activitybar;
+  if (!Array.isArray(activitybar)) return contributes;
+  const title = `Runtrol ${version}`;
+  const runtrolViews = contributes?.views?.runtrol;
+  return {
+    ...contributes,
+    viewsContainers: {
+      ...containers,
+      activitybar: activitybar.map((container) => (
+        container?.id === "runtrol"
+          ? { ...container, title }
+          : container
+      )),
+    },
+    views: Array.isArray(runtrolViews)
+      ? {
+          ...contributes.views,
+          runtrol: runtrolViews.map((view) => (
+            view?.id === "runtrol.sidebar" ? { ...view, name: title } : view
+          )),
+        }
+      : contributes.views,
+  };
+}
 
 function manifestToken(value) {
   return typeof value === "string" && /^[a-z0-9][a-z0-9-]*$/u.test(value);

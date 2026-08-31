@@ -42,10 +42,10 @@ conversations outside every project, and one usage chip per installed provider (
 seven-day percentage). Row actions appear on hover; the rare actions sit behind the vertical dots at the top of the
 page; the title bar keeps the two starting actions.
 
-Each usage row makes the actual seven-day window the single primary line when the provider publishes one. Hover and
-the keyboard-accessible vertical-menu action disclose every provider-reported window, plan, reset, report age, and
-limit condition. No percentage is inferred. Provider additions appear through Runtime inventory without a Studio or
-Core edit.
+Each usage chip makes the actual seven-day window its primary gauge when the provider publishes one. Hover and the
+keyboard-accessible detail action disclose every provider-reported window, plan, reset, report age, and limit
+condition. No percentage is inferred. Provider additions appear through Runtime inventory without a Studio or Core
+edit.
 
 Usage is push-first and activity-driven. A structured provider account event reaches every subscribed window without
 a Studio polling round. For a provider that exposes only an explicit account read, Runtime asks that provider after
@@ -61,9 +61,11 @@ integration API.
 
 ## Interaction contract
 
-- Fifteen sessions are the daily-use baseline and 30 sessions are the release load.
-- At most eight logical sessions may own a hot provider process.
-- Exactly one selected session owns the foreground subscription and full renderer.
+- The release-load fixture and its expected hot-process cardinality come from the Studio
+  [`performance-budget.json`](../extensions/runtrol-vscode/performance-budget.json). Runtime's executable hot-process
+  admission cap remains in [`session::tier`](../crates/runtrol-core/src/session/tier.rs).
+- Every open terminal tab owns one bounded viewer. The exact Runtime generation owns the central renderer, provider
+  process, screen model, and output ring.
 - Search and ordering use operational metadata, never conversation content.
 - A working conversation changes its declared provider icon to a spinning state without adding repeated labels.
 - A conversation title keeps normal contrast. Only actionable or unavailable states spend row width, and they use
@@ -75,9 +77,10 @@ integration API.
 
 ## Distribution contract
 
-Studio is published as six native Marketplace packages for Windows, macOS, and Linux on x64 and ARM64. Each package
-contains the matching Runtime binary. Standalone Runtime releases and SDK artifacts are separate public integration
-products and do not depend on installing Studio.
+Studio is published for the complete native target catalogue in
+[`release-targets.json`](../extensions/runtrol-vscode/release-targets.json). Each package contains the matching Runtime
+binary. Standalone Runtime releases and SDK artifacts are separate public integration products and do not depend on
+installing Studio.
 
 The GitHub Pages site uses English as its static default. Korean, Chinese, and Japanese are optional client-side
 translations. A download action is enabled only for an artifact that the release workflow produced and verified.

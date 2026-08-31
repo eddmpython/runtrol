@@ -13,8 +13,9 @@
 //! from an ever-growing buffer.
 
 use std::io::{Read, Write};
-use std::sync::Arc;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::{Arc, mpsc as blocking_mpsc};
 
 use runtrol_provider::WallMs;
 use std::time::Duration;
@@ -22,7 +23,7 @@ use std::time::Duration;
 use bytes::Bytes;
 use runtrol_childproc::{MirrorChild, Program, PtyChild, PtySize, PtySpawn, SpawnError};
 use runtrol_provider::AbsPath;
-use tokio::sync::{Mutex, broadcast, mpsc, watch};
+use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore, broadcast, mpsc, oneshot, watch};
 
 pub mod mouse;
 pub mod xterm;
@@ -33,6 +34,20 @@ pub mod xterm;
 const RING_CHUNKS: usize = 128;
 /// The largest single read from the terminal, and so the largest chunk in the ring.
 const CHUNK_BYTES: usize = 4096;
+/// Pending writes retained between the async host and the blocking terminal handle.
+const WRITE_QUEUE: usize = 1;
+/// One operation may touch the terminal while one more waits in exact arrival order. A third caller is
+/// refused before it can become another retained payload. The output host has one separate, structurally
+/// bounded query-answer waiter so a terminal protocol answer never competes for public admission.
+const TERMINAL_OPERATION_ADMISSIONS: usize = 2;
+/// The public terminal input ceiling, applied here too so the central writer queue has a byte bound.
+const MAX_WRITE_BYTES: usize = 64 * 1024;
+/// A terminal that does not acknowledge one input write is no longer a usable shared terminal. Closing it
+/// after this deadline bounds both latency and the lifetime of the blocking writer's byte ownership.
+const TERMINAL_WRITE_DEADLINE: Duration = Duration::from_secs(2);
+/// Reader and writer loops use shallow fixed frames. Two stacks at this size reserve less than the former
+/// platform-default reader stack while keeping blocking terminal handles off the async executor.
+const TERMINAL_IO_STACK_BYTES: usize = 256 * 1024;
 /// How often the exit of the hosted CLI is checked.
 const EXIT_POLL: Duration = Duration::from_millis(100);
 /// How long after the exit the terminal is kept so its last frame can drain (measured on Windows: the
@@ -55,13 +70,16 @@ const MAX_CELLS: u32 = 25_000;
 /// fits must reduce another bound instead of silently raising this one.
 pub const MAX_SHARED_TERMINAL_STATE_BYTES: usize = 3 * 1024 * 1024;
 
-/// A viewer's size, made safe: never zero in either direction (the screen model panics on an empty
-/// screen) and never larger than [`MAX_COLS`] by [`MAX_ROWS`].
+/// A viewer's size, made safe: at least two cells in either direction and never larger than
+/// [`MAX_COLS`] by [`MAX_ROWS`].
+///
+/// `vt100` 0.16.2 has separate one-column wide-character and one-row wrapping panic paths. The hosted
+/// terminal cannot expose those dependency states while the upstream fixes remain unreleased.
 #[must_use]
 pub fn bounded_size(size: PtySize) -> PtySize {
     let cols = size.cols.clamp(2, MAX_COLS);
-    let rows = size.rows.clamp(1, MAX_ROWS);
-    let rows = rows.min(u16::try_from(MAX_CELLS / u32::from(cols)).unwrap_or(1));
+    let rows = size.rows.clamp(2, MAX_ROWS);
+    let rows = rows.min(u16::try_from(MAX_CELLS / u32::from(cols)).unwrap_or(2));
     PtySize { cols, rows }
 }
 
@@ -91,6 +109,9 @@ pub enum TerminalError {
     /// Writing into the terminal failed: the child has gone.
     #[error("the terminal no longer accepts input: {0}")]
     Input(std::io::Error),
+    /// Both bounded per-terminal operation slots are occupied.
+    #[error("the terminal operation lane is full")]
+    Busy,
     /// The runtime this was called from has no task executor.
     #[error("a terminal needs a runtime to watch its child: {0}")]
     Runtime(String),
@@ -177,10 +198,14 @@ impl Child {
 
 struct Shared {
     child: Child,
-    /// The screen model, the mouse translator's carry, and the query carry: one lock because every input
-    /// and output byte touches the same picture.
+    /// The screen model and output-side carries share one lock because every output byte touches them.
     state: Mutex<State>,
-    writer: Mutex<Box<dyn Write + Send>>,
+    /// Input framing is independent from output rendering. Touch input briefly reads the screen too.
+    input: Mutex<mouse::InputCarry>,
+    /// One current terminal operation plus one ordered waiter. Output query answers use the same order lock
+    /// but have one separate producer, so public callers cannot crowd them out or create unbounded waiters.
+    operations: OperationGate,
+    writer: blocking_mpsc::SyncSender<WriteRequest>,
     output: broadcast::Sender<Bytes>,
     exited: watch::Sender<Option<i32>>,
     finished: AtomicBool,
@@ -196,6 +221,52 @@ struct Shared {
     wrote_at: AtomicU64,
     /// Current shared PTY geometry packed as columns in the high half and rows in the low half.
     geometry: AtomicU32,
+}
+
+struct WriteRequest {
+    bytes: Bytes,
+    answered: oneshot::Sender<std::io::Result<()>>,
+}
+
+struct OperationGate {
+    slots: Arc<Semaphore>,
+    order: Mutex<()>,
+}
+
+struct OperationAdmission<'a> {
+    _slot: OwnedSemaphorePermit,
+    _ordered: tokio::sync::MutexGuard<'a, ()>,
+}
+
+/// One bounded, ordered operation on an exact terminal.
+///
+/// Holding this value isolates a slow terminal from every other terminal while keeping input, resize, and
+/// stop ordered for this one process. Only the terminal host constructs it.
+pub struct TerminalOperation<'a> {
+    shared: &'a Shared,
+    _admission: OperationAdmission<'a>,
+}
+
+impl Default for OperationGate {
+    fn default() -> Self {
+        Self {
+            slots: Arc::new(Semaphore::new(TERMINAL_OPERATION_ADMISSIONS)),
+            order: Mutex::new(()),
+        }
+    }
+}
+
+impl OperationGate {
+    async fn admit(&self) -> Result<OperationAdmission<'_>, TerminalError> {
+        let slot = Arc::clone(&self.slots)
+            .try_acquire_owned()
+            .map_err(|_| TerminalError::Busy)?;
+        let ordered = self.order.lock().await;
+        Ok(OperationAdmission {
+            _slot: slot,
+            _ordered: ordered,
+        })
+    }
 }
 
 impl std::fmt::Debug for Shared {
@@ -223,7 +294,6 @@ pub enum ViewerKind {
 struct State {
     screen: vt100::Parser,
     queries: xterm::QueryCarry,
-    mouse: mouse::InputCarry,
     /// The CLI's mouse-mode switches are taken out of its output here, before the model or a viewer sees it.
     strip: mouse::OutputCarry,
 }
@@ -283,7 +353,7 @@ impl Terminal {
         let handle = tokio::runtime::Handle::try_current()
             .map_err(|error| TerminalError::Runtime(error.to_string()))?;
         let reader = child.reader()?;
-        let writer = child.writer()?;
+        let writer = terminal_writer(child.writer()?)?;
         let (output, _) = broadcast::channel(RING_CHUNKS);
         let (exited, _) = watch::channel(None);
         let shared = Arc::new(Shared {
@@ -291,10 +361,11 @@ impl Terminal {
             state: Mutex::new(State {
                 screen: vt100::Parser::new(size.rows, size.cols, 0),
                 queries: xterm::QueryCarry::default(),
-                mouse: mouse::InputCarry::default(),
                 strip: mouse::OutputCarry::default(),
             }),
-            writer: Mutex::new(writer),
+            input: Mutex::new(mouse::InputCarry::default()),
+            operations: OperationGate::default(),
+            writer,
             output,
             exited,
             finished: AtomicBool::new(false),
@@ -304,6 +375,7 @@ impl Terminal {
         let (chunks, mut incoming) = mpsc::channel::<Bytes>(RING_CHUNKS);
         std::thread::Builder::new()
             .name("runtrol-terminal-read".to_owned())
+            .stack_size(TERMINAL_IO_STACK_BYTES)
             .spawn(move || read_terminal(reader, &chunks))
             .map_err(|error| TerminalError::Runtime(error.to_string()))?;
         let host = Arc::clone(&shared);
@@ -328,8 +400,9 @@ impl Terminal {
     /// Mouse reporting is switched on toward a touch viewer only. A terminal emulator has its own mouse,
     /// and reporting to it took its drag selection away and turned clicks into keys (2026-08-29).
     pub async fn attach(&self, viewer: ViewerKind) -> Attachment {
-        let state = self.shared.state.lock().await;
-        let mut snapshot = state.screen.screen().state_formatted();
+        let mut state = self.shared.state.lock().await;
+        let size = unpack_size(self.shared.geometry.load(Ordering::Acquire));
+        let mut snapshot = screen_snapshot_or_reset(&mut state.screen, size);
         if viewer == ViewerKind::Touch {
             snapshot.extend_from_slice(mouse::VIEWER_MOUSE_ON);
         }
@@ -348,15 +421,7 @@ impl Terminal {
     ///
     /// [`TerminalError::Input`] when the terminal no longer accepts input.
     pub async fn input(&self, bytes: &[u8], viewer: ViewerKind) -> Result<(), TerminalError> {
-        let forwarded = {
-            let mut state = self.shared.state.lock().await;
-            let State { screen, mouse, .. } = &mut *state;
-            mouse.translate(bytes, screen.screen(), viewer)
-        };
-        if forwarded.is_empty() {
-            return Ok(());
-        }
-        self.write(&forwarded).await
+        self.operation().await?.input(bytes, viewer).await
     }
 
     /// The viewer changed size. The CLI redraws for the new one.
@@ -365,19 +430,22 @@ impl Terminal {
     ///
     /// [`TerminalError::Spawn`] when the platform refuses the size.
     pub async fn resize(&self, size: PtySize) -> Result<(), TerminalError> {
-        let size = bounded_size(size);
-        self.shared.child.resize(size)?;
-        self.shared
-            .state
-            .lock()
-            .await
-            .screen
-            .screen_mut()
-            .set_size(size.rows, size.cols);
-        self.shared
-            .geometry
-            .store(pack_size(size), Ordering::Release);
-        Ok(())
+        self.operation().await?.resize(size).await
+    }
+
+    /// Reserve this terminal's bounded operation lane.
+    ///
+    /// Runtime mutations use the guard across their short authority reservation and the exact PTY action, so
+    /// they never keep daemon-wide authority state locked during input, resize, or a provider stop.
+    ///
+    /// # Errors
+    ///
+    /// [`TerminalError::Busy`] when this terminal already has one current operation and one bounded waiter.
+    pub async fn operation(&self) -> Result<TerminalOperation<'_>, TerminalError> {
+        Ok(TerminalOperation {
+            shared: &self.shared,
+            _admission: self.shared.operations.admit().await?,
+        })
     }
 
     /// Current shared PTY geometry.
@@ -437,14 +505,71 @@ impl Terminal {
     pub fn viewer_count(&self) -> usize {
         self.shared.output.receiver_count()
     }
+}
 
-    async fn write(&self, bytes: &[u8]) -> Result<(), TerminalError> {
-        let mut writer = self.shared.writer.lock().await;
-        writer
-            .write_all(bytes)
-            .and_then(|()| writer.flush())
+impl TerminalOperation<'_> {
+    /// Forward one input frame while this terminal's bounded operation lane is held.
+    ///
+    /// # Errors
+    ///
+    /// [`TerminalError::Input`] when the terminal rejects or does not acknowledge the input by its deadline.
+    pub async fn input(&mut self, bytes: &[u8], viewer: ViewerKind) -> Result<(), TerminalError> {
+        let forwarded = {
+            let mut input = self.shared.input.lock().await;
+            match viewer {
+                ViewerKind::Terminal => input.translate_terminal(bytes),
+                ViewerKind::Touch => {
+                    let state = self.shared.state.lock().await;
+                    input.translate(bytes, state.screen.screen(), viewer)
+                }
+            }
+        };
+        if forwarded.is_empty() {
+            return Ok(());
+        }
+        self.shared
+            .write_ordered(Bytes::from(forwarded))
+            .await
             .map_err(TerminalError::Input)
     }
+
+    /// Resize this exact terminal while its bounded operation lane is held.
+    ///
+    /// # Errors
+    ///
+    /// [`TerminalError::Spawn`] when the platform refuses the new geometry.
+    pub async fn resize(&mut self, size: PtySize) -> Result<(), TerminalError> {
+        let size = bounded_size(size);
+        self.shared.child.resize(size)?;
+        rebuild_screen_for_resize(&mut self.shared.state.lock().await.screen, size);
+        self.shared
+            .geometry
+            .store(pack_size(size), Ordering::Release);
+        Ok(())
+    }
+}
+
+fn terminal_writer(
+    mut writer: Box<dyn Write + Send>,
+) -> Result<blocking_mpsc::SyncSender<WriteRequest>, TerminalError> {
+    let (outbound, incoming) = blocking_mpsc::sync_channel::<WriteRequest>(WRITE_QUEUE);
+    std::thread::Builder::new()
+        .name("runtrol-terminal-write".to_owned())
+        .stack_size(TERMINAL_IO_STACK_BYTES)
+        .spawn(move || {
+            while let Ok(request) = incoming.recv() {
+                let outcome = writer
+                    .write_all(&request.bytes)
+                    .and_then(|()| writer.flush());
+                let failed = outcome.is_err();
+                drop(request.answered.send(outcome));
+                if failed {
+                    break;
+                }
+            }
+        })
+        .map_err(|error| TerminalError::Runtime(error.to_string()))?;
+    Ok(outbound)
 }
 
 const fn pack_size(size: PtySize) -> u32 {
@@ -462,7 +587,114 @@ fn unpack_size(packed: u32) -> PtySize {
     }
 }
 
+fn new_screen(size: PtySize) -> vt100::Parser {
+    vt100::Parser::new(size.rows, size.cols, 0)
+}
+
+/// Rebuild instead of mutating rows through `Screen::set_size`.
+///
+/// `vt100` 0.16.2 leaves a dangling wide cell when a resize truncates its continuation. Replaying the
+/// bounded formatted screen into a fresh parser preserves the visible state without ever creating that
+/// invalid row. Resize is a cold path, so the bounded snapshot allocation does not tax output throughput.
+fn rebuild_screen_for_resize(screen: &mut vt100::Parser, size: PtySize) {
+    let mut replacement = new_screen(size);
+    let restored = catch_unwind(AssertUnwindSafe(|| {
+        let snapshot = screen.screen().state_formatted();
+        replacement.process(&snapshot);
+    }));
+    if restored.is_err() {
+        report_screen_reset("resize");
+        replacement = new_screen(size);
+    }
+    *screen = replacement;
+}
+
+fn process_screen_or_reset(screen: &mut vt100::Parser, size: PtySize, bytes: &[u8]) {
+    mutate_screen_or_reset(screen, size, "output", |screen| {
+        screen.process(bytes);
+    });
+}
+
+fn mutate_screen_or_reset(
+    screen: &mut vt100::Parser,
+    size: PtySize,
+    operation: &str,
+    mutate: impl FnOnce(&mut vt100::Parser),
+) -> bool {
+    if catch_unwind(AssertUnwindSafe(|| mutate(screen))).is_ok() {
+        true
+    } else {
+        report_screen_reset(operation);
+        *screen = new_screen(size);
+        false
+    }
+}
+
+fn screen_snapshot_or_reset(screen: &mut vt100::Parser, size: PtySize) -> Vec<u8> {
+    if let Ok(snapshot) = catch_unwind(AssertUnwindSafe(|| screen.screen().state_formatted())) {
+        snapshot
+    } else {
+        report_screen_reset("snapshot");
+        *screen = new_screen(size);
+        screen.screen().state_formatted()
+    }
+}
+
+#[expect(
+    clippy::print_stderr,
+    reason = "a contained screen-model panic has no caller or log sink; stderr is the daemon's operational failure channel"
+)]
+fn report_screen_reset(operation: &str) {
+    eprintln!(
+        "runtrol: terminal screen model panicked during {operation}; the bounded screen was reset while the CLI and byte relay stayed live"
+    );
+}
+
 impl Shared {
+    async fn write_ordered(&self, bytes: Bytes) -> std::io::Result<()> {
+        if bytes.len() > MAX_WRITE_BYTES {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "terminal input exceeds the central writer byte limit",
+            ));
+        }
+        if self.finished.load(Ordering::Acquire) {
+            return Err(terminal_writer_closed());
+        }
+        let (answered, answer) = oneshot::channel();
+        self.writer
+            .try_send(WriteRequest { bytes, answered })
+            .map_err(|_| terminal_writer_closed())?;
+        match await_writer_answer(answer, TERMINAL_WRITE_DEADLINE).await {
+            Err(error) if error.kind() == std::io::ErrorKind::TimedOut => {
+                Err(self.close_stalled_writer())
+            }
+            outcome => outcome,
+        }
+    }
+
+    async fn write_query_answer(&self, bytes: Bytes) -> std::io::Result<()> {
+        // Output has exactly one host task, so this is one bounded internal waiter rather than another public
+        // slot. It shares ordering with viewer operations and cannot multiply with the number of viewers.
+        let _ordered = self.operations.order.lock().await;
+        self.write_ordered(bytes).await
+    }
+
+    fn close_stalled_writer(&self) -> std::io::Error {
+        let killed = self.child.kill();
+        self.finish();
+        let message = match killed {
+            Ok(()) => {
+                "terminal input exceeded its writer deadline; the stalled terminal was closed"
+                    .to_owned()
+            }
+            Err(error) => format!(
+                "terminal input exceeded its writer deadline; closing the stalled terminal failed: {error}"
+            ),
+        };
+        std::io::Error::new(std::io::ErrorKind::TimedOut, message)
+    }
+
     /// One chunk the CLI wrote: into the screen, answered if it asked anything, and out to every viewer.
     async fn take_output(&self, chunk: Bytes) {
         let answers = {
@@ -470,7 +702,8 @@ impl Shared {
             // The mouse is a touch-screen concept here (`mouse`): a CLI switching a terminal's mouse on
             // never reaches the model or a viewer.
             let chunk = Bytes::from(state.strip.strip(&chunk));
-            state.screen.process(&chunk);
+            let size = unpack_size(self.geometry.load(Ordering::Acquire));
+            process_screen_or_reset(&mut state.screen, size, &chunk);
             let cursor = state.screen.screen().cursor_position();
             let answers = state.queries.answers(&chunk, cursor);
             self.wrote_at
@@ -482,10 +715,9 @@ impl Shared {
             answers
         };
         if !answers.is_empty() {
-            let mut writer = self.writer.lock().await;
             // A failed answer means the child is gone; its exit is reported by the watcher, which is the
             // one place that state belongs. ok: nothing downstream waits on this write.
-            drop(writer.write_all(&answers).and_then(|()| writer.flush()));
+            drop(self.write_query_answer(Bytes::from(answers)).await);
         }
     }
 
@@ -520,6 +752,27 @@ impl Shared {
             self.child.finish();
         }
     }
+}
+
+async fn await_writer_answer(
+    answer: oneshot::Receiver<std::io::Result<()>>,
+    deadline: Duration,
+) -> std::io::Result<()> {
+    match tokio::time::timeout(deadline, answer).await {
+        Ok(Ok(outcome)) => outcome,
+        Ok(Err(_closed)) => Err(terminal_writer_closed()),
+        Err(_elapsed) => Err(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "terminal writer did not acknowledge input before its deadline",
+        )),
+    }
+}
+
+fn terminal_writer_closed() -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::BrokenPipe,
+        "the terminal writer stopped before acknowledging input",
+    )
 }
 
 /// The reader thread: block on the terminal, hand each chunk to the host task, stop at end of stream.
@@ -563,7 +816,7 @@ mod tests {
     fn sizes_are_bounded_before_they_reach_the_screen_model() {
         assert_eq!(
             bounded_size(PtySize { cols: 0, rows: 0 }),
-            PtySize { cols: 2, rows: 1 }
+            PtySize { cols: 2, rows: 2 }
         );
         assert_eq!(
             bounded_size(PtySize {
@@ -602,6 +855,59 @@ mod tests {
         );
     }
 
+    /// Regression for doy/vt100-rust#28 and the observed `row.rs:89 len=85 index=85` crash.
+    ///
+    /// The upstream minimal sequence is `Parser::new(2, 4)`, a wide character, `set_size(2, 1)`, then
+    /// `CSI K`. The product path clamps the unsafe one-column request and rebuilds rather than calling the
+    /// dependency's corrupting resize operation.
+    #[test]
+    fn a_resize_through_a_wide_character_cannot_leave_a_dangling_cell() {
+        let initial = PtySize { cols: 4, rows: 2 };
+        let mut screen = new_screen(initial);
+        process_screen_or_reset(&mut screen, initial, "你".as_bytes());
+
+        let resized = bounded_size(PtySize { cols: 1, rows: 2 });
+        rebuild_screen_for_resize(&mut screen, resized);
+        process_screen_or_reset(&mut screen, resized, b"\x1b[K");
+
+        assert_eq!(screen.screen().size(), (resized.rows, resized.cols));
+    }
+
+    #[test]
+    fn the_upstream_wide_character_resize_panic_is_contained() {
+        let initial = PtySize { cols: 4, rows: 2 };
+        let safe = bounded_size(PtySize { cols: 1, rows: 2 });
+        let mut screen = new_screen(initial);
+        screen.process("你".as_bytes());
+
+        let completed = mutate_screen_or_reset(&mut screen, safe, "test resize", |screen| {
+            screen.screen_mut().set_size(2, 1);
+            screen.process(b"\x1b[K");
+        });
+        if completed {
+            // Once upstream ships the fix, restore the same product invariant without coupling this test to
+            // whether the dependency still panics internally.
+            rebuild_screen_for_resize(&mut screen, safe);
+        }
+
+        assert_eq!(screen.screen().size(), (safe.rows, safe.cols));
+    }
+
+    #[test]
+    fn an_observed_wide_character_resize_boundary_stays_live() {
+        let initial = PtySize { cols: 86, rows: 2 };
+        let mut screen = new_screen(initial);
+        let mut line = vec![b'x'; 84];
+        line.extend_from_slice("你".as_bytes());
+        process_screen_or_reset(&mut screen, initial, &line);
+
+        let resized = PtySize { cols: 85, rows: 2 };
+        rebuild_screen_for_resize(&mut screen, resized);
+        process_screen_or_reset(&mut screen, resized, b"\x1b[K");
+
+        assert_eq!(screen.screen().size(), (resized.rows, resized.cols));
+    }
+
     #[test]
     fn shared_terminal_state_has_a_hard_memory_budget() {
         const SCREEN_GRIDS: usize = 2;
@@ -620,13 +926,60 @@ mod tests {
             usize::from(MAX_ROWS) * std::mem::size_of::<Vec<vt100::Cell>>() * SCREEN_GRIDS;
         let chunk_payloads = RING_CHUNKS * CHUNK_BYTES * CHUNK_QUEUES;
         let chunk_slots = RING_CHUNKS * std::mem::size_of::<Bytes>() * CHUNK_QUEUES;
+        // One active payload, one admitted public waiter, and the single output host's query answer may coexist.
+        // The sync queue owns the active payload rather than another copy, so only its slot metadata is added.
+        let writer_payloads = (TERMINAL_OPERATION_ADMISSIONS + 1) * MAX_WRITE_BYTES;
+        let writer_state = writer_payloads + WRITE_QUEUE * std::mem::size_of::<WriteRequest>();
         let fixed_state = std::mem::size_of::<State>() + CHUNK_BYTES;
         let structural_maximum =
-            screen_cells + screen_rows + chunk_payloads + chunk_slots + fixed_state;
+            screen_cells + screen_rows + chunk_payloads + chunk_slots + writer_state + fixed_state;
         assert!(
             structural_maximum <= MAX_SHARED_TERMINAL_STATE_BYTES,
             "central terminal state needs {structural_maximum} bytes, over the {MAX_SHARED_TERMINAL_STATE_BYTES} byte contract"
         );
+    }
+
+    #[tokio::test]
+    async fn a_stalled_terminal_has_one_waiter_and_does_not_block_another_terminal() {
+        let stalled = OperationGate::default();
+        let independent = OperationGate::default();
+        let held = stalled
+            .admit()
+            .await
+            .expect("the first operation is admitted");
+        let mut waiting = Box::pin(stalled.admit());
+        assert!(
+            tokio::time::timeout(Duration::from_millis(10), &mut waiting)
+                .await
+                .is_err(),
+            "the one bounded waiter remains ordered behind the stalled operation"
+        );
+        assert!(
+            matches!(stalled.admit().await, Err(TerminalError::Busy)),
+            "a third operation is refused instead of becoming another retained waiter"
+        );
+
+        let other = tokio::time::timeout(Duration::from_millis(50), independent.admit())
+            .await
+            .expect("another terminal is not behind the stalled one")
+            .expect("the other terminal has its own admission");
+        drop(other);
+        drop(held);
+        drop(
+            tokio::time::timeout(Duration::from_millis(50), waiting)
+                .await
+                .expect("the bounded waiter advances after release")
+                .expect("the waiter retained its admission"),
+        );
+    }
+
+    #[tokio::test]
+    async fn a_missing_writer_acknowledgement_has_a_finite_deadline() {
+        let (_answering, answer) = oneshot::channel::<std::io::Result<()>>();
+        let error = await_writer_answer(answer, Duration::from_millis(10))
+            .await
+            .expect_err("an unacknowledged writer must time out");
+        assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
     }
 
     #[test]

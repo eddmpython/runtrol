@@ -82,6 +82,7 @@
     "onCommand:runtrol.reviewRuntimeRequests",
     "onCommand:runtrol.openNextWaiting",
     "onCommand:runtrol.switchSession",
+    "onCommand:runtrol.arrangeConversationGrid",
     "onCommand:runtrol.startSession",
     "onCommand:runtrol.selectSession",
     "onCommand:runtrol.openConversation",
@@ -283,6 +284,18 @@
         "category": "Runtrol"
       },
       {
+        "command": "runtrol.deleteProjectConversations",
+        "title": "Delete All Conversations in Project...",
+        "icon": "$(trash)",
+        "category": "Runtrol"
+      },
+      {
+        "command": "runtrol.arrangeConversationGrid",
+        "title": "Arrange Open Conversations in a Grid",
+        "icon": "$(layout)",
+        "category": "Runtrol"
+      },
+      {
         "command": "runtrol.createProject",
         "title": "Add Project",
         "icon": "$(folder-library)",
@@ -443,6 +456,10 @@
         },
         {
           "command": "runtrol.newConversationInProject",
+          "when": "false"
+        },
+        {
+          "command": "runtrol.deleteProjectConversations",
           "when": "false"
         },
         {

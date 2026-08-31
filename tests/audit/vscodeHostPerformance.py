@@ -2,7 +2,7 @@
 
 The measurement launches an isolated profile on the exact tested VS Code version, the production extension bundle,
 and a tracked Core daemon. At least three isolated trials measure ready activation, opening the contributed view,
-session refresh p95, Extension Host RSS growth, 30 managed external ACP sessions with at most eight hot, a real
+session refresh p95, Extension Host RSS growth, the catalogued managed-session load and hot cardinality, a real
 cold-session resume, selected-session switching, and exact selection restoration after VS Code
 restarts in another workspace. A green result stops at three. A red timing result may use up to three additional
 isolated trials, without changing a threshold, so one continuously noisy allocation does not decide the release.
@@ -85,23 +85,16 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from vscodePerformanceBudget import hostFields, loadPerformanceBudget
+
 ROOT = Path(__file__).resolve().parents[2]
 EXTENSION = ROOT / "extensions" / "runtrol-vscode"
-BUDGET_PATH = EXTENSION / "performance-budget.json"
 HOST_TEST_PATH = EXTENSION / "src" / "integration" / "extensionHost.test.ts"
 MARKER = "RUNTROL_VSCODE_HOST "
-FIELDS = (
-    "activationMs",
-    "openViewMs",
-    "refreshP95Ms",
-    "rssGrowthBytes",
-    "coldResumeMs",
-    "sessionSwitchP95Ms",
-    "reloadRestoreMs",
-    "followArrivalMs",
-)
-EXPECTED_HOT_SESSIONS = 8
-EXPECTED_MANAGED_SESSIONS = 30
+FIELDS = hostFields
+hostLoad = loadPerformanceBudget()["hostLoad"]
+EXPECTED_HOT_SESSIONS = hostLoad["hotSessionCount"]
+EXPECTED_MANAGED_SESSIONS = hostLoad["managedSessionCount"]
 MIN_MEASUREMENT_TRIALS = 3
 MAX_MEASUREMENT_TRIALS = 6
 INITIALIZATION_TIMEOUT_DECLARATION = "const EXTENSION_INITIALIZATION_HANG_TIMEOUT_MS = 15_000;"
@@ -112,16 +105,7 @@ SESSION_TIMEOUT_USE = "SESSION_MANAGEMENT_HANG_TIMEOUT_MS,"
 
 def loadBudget() -> dict[str, float]:
     """Read and validate the shared ratchet."""
-    raw = json.loads(BUDGET_PATH.read_text(encoding="utf-8"))
-    if set(raw) != set(FIELDS):
-        raise ValueError(f"{BUDGET_PATH.relative_to(ROOT)} must contain exactly {', '.join(FIELDS)}")
-    budget: dict[str, float] = {}
-    for name in FIELDS:
-        value = raw[name]
-        if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
-            raise ValueError(f"budget {name} must be a positive number")
-        budget[name] = float(value)
-    return budget
+    return loadPerformanceBudget()["host"]
 
 
 def problems(metrics: dict[str, Any], budget: dict[str, float]) -> list[str]:

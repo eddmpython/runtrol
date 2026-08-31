@@ -252,12 +252,15 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             'aria-label="Projects"',
             'aria-label="Conversations"',
             'aria-label="Usage"',
-            # A project's colour reaches its heading and every conversation under it, as a class the page's
-            # own stylesheet paints: the CSP allows styles only from the nonced block, so a colour written onto
-            # the element is dropped (2026-08-28).
+            # Project colour always identifies the heading and paints a conversation band only while that
+            # conversation works. Idle bands are empty, while needs-you and error bands use semantic colours.
+            # The CSP allows styles only from the nonced block, so a colour written onto the element is dropped.
             'class="bar${project.hue',
             'class="bar${row.hue',
-            ".row .bar.${hue.band}",
+            ".project-row .bar.${hue.band}, .conv.working .bar.${hue.band}",
+            ".conv:not(.working):not(.needs-you):not(.attention) .bar { background: transparent; }",
+            ".conv.needs-you .bar { background: var(--vscode-editorWarning-foreground",
+            ".conv.attention .bar { background: var(--vscode-errorForeground",
             # Row actions appear on hover, and deletion only where the provider reports it.
             ".row:hover .actions",
             'row.canDelete ? action("runtrol.deleteConversation"',
@@ -502,7 +505,11 @@ def selftest() -> int:
         "sidebarPage.ts": (
             "<!DOCTYPE html> "
             'aria-label="Projects" aria-label="Conversations" aria-label="Usage" '
-            'class="bar${project.hue class="bar${row.hue .row .bar.${hue.band} '
+            'class="bar${project.hue class="bar${row.hue '
+            '.project-row .bar.${hue.band}, .conv.working .bar.${hue.band} '
+            '.conv:not(.working):not(.needs-you):not(.attention) .bar { background: transparent; } '
+            '.conv.needs-you .bar { background: var(--vscode-editorWarning-foreground '
+            '.conv.attention .bar { background: var(--vscode-errorForeground '
             '.row:hover .actions row.canDelete ? action("runtrol.deleteConversation" '
             "white-space: nowrap mask-image: linear-gradient(to right "
             '.conv.working .glyph { animation: spin '

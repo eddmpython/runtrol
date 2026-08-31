@@ -15,7 +15,7 @@
 /// times over (2026-08-28 to 2026-08-30: use our symbol, as it is). A cell is not only a character, though.
 /// The half blocks `▀` `▄` `█` split it into an upper and a lower pixel, each in its own colour, so a block of
 /// them is a raster with cells for pixels, and a raster can be the mark. The pixels come from the brand's own
-/// renderer: `assets/brand/render.py` draws the hinted 32 px geometry (the favicon's, whose stroke, gap and
+/// renderer: `assets/brand/render.py` draws the hinted 16 px geometry (the favicon's, whose stroke, gap and
 /// radius land on whole cells) as `symbol-cells.json`, and this module paints that grid and nothing else. No
 /// geometry lives here.
 ///

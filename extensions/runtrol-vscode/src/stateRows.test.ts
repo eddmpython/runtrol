@@ -73,6 +73,24 @@ test("a complete catalogue says nothing, because there is nothing to qualify", (
   assert.equal(reasons, null);
 });
 
+test("a catalogue request failure is visible even before coverage is known", () => {
+  const failed: NativeChatCatalogue = {
+    providerId: "codex",
+    coverage: null,
+    chats: [],
+    loadedAtMs: 0,
+    warning: "Existing chat discovery failed: Runtime reconnecting",
+  };
+  assert.equal(
+    incompleteDiscovery([failed], [provider("codex", "Codex")]),
+    "Codex: Existing chat discovery failed: Runtime reconnecting",
+  );
+  assert.equal(
+    discoveryNotice([failed], [provider("codex", "Codex")]),
+    "History: unavailable for Codex.",
+  );
+});
+
 test("a Runtime generation the terminal watch could not follow is named beside the services' reasons", () => {
   const reasons = incompleteDiscovery(
     [catalogue("claude", { kind: "complete", source: "officialCli" })],

@@ -106,6 +106,25 @@ pub enum StoreError {
         why: &'static str,
     },
 
+    /// Active Runtime integration authority exceeds its fixed admission budget.
+    #[error(
+        "Runtime integration authority uses {active_rows} active rows and {active_bytes} bytes; the limits are {max_rows} rows and {max_bytes} bytes"
+    )]
+    IntegrationAuthorityCapacity {
+        /// Number of active integrations found or proposed.
+        active_rows: usize,
+        /// Canonical encoded bytes found or proposed.
+        active_bytes: usize,
+        /// Fixed active integration ceiling.
+        max_rows: usize,
+        /// Fixed canonical byte ceiling.
+        max_bytes: usize,
+    },
+
+    /// A newly minted integration identity is already active or permanently retired.
+    #[error("the Runtime integration identity is already active or permanently retired")]
+    IntegrationIdentityUnavailable,
+
     /// The storage engine failed while runtrol was doing something specific.
     ///
     /// `doing` is required. An engine error without the operation that produced it tells the operator that
@@ -135,6 +154,7 @@ impl StoreError {
                 | Self::SchemaTooOld { .. }
                 | Self::DeviceCodec { .. }
                 | Self::IntegrationCodec { .. }
+                | Self::IntegrationAuthorityCapacity { .. }
         )
     }
 }

@@ -34,6 +34,39 @@ approval text, provider raw output, credentials, environment values, signatures,
 Idempotency stores a keyed authenticator instead of a raw content hash so low-entropy input cannot be guessed from
 durable state.
 
+## Public audit boundary
+
+Ordinary public control-plane requests reserve one bounded admission and pass through one bounded FIFO batch writer.
+The writer acknowledges an `Attempted` row before dispatch and an `Allowed` or `Denied` row before returning the
+answer. One server-minted UUIDv7 correlation joins those two rows even when equal methods complete out of order.
+The admission state machine allows exactly one attempted row and one terminal row. While that generation owns redb,
+each acknowledgement means the corresponding batch append completed. A full admission lane, closed writer, failed
+append, or failed acknowledgement returns `auditUnavailable` rather than running without the required record. Normal
+generation retirement closes admission, waits for every active pair and the writer, then waits for the relay receipt.
+
+Terminal attachment changes the connection into a bounded data plane. The public open or attach admission is audited,
+but provider output notifications and view-bound input, resize, and lease frames are not appended to redb per frame or
+per keystroke. They remain transient and are constrained by the authenticated view, current grant and root proof,
+terminal generation, control lease, and transport bounds. This avoids turning conversation bytes into either an audit
+payload or a synchronous storage operation.
+
+A draining generation has released redb to its successor, so acknowledged control-plane rows enter an oldest-first
+bounded in-memory relay under a process-unique UUIDv7 epoch and consecutive sequence. The successor commits rows,
+bounded overflow marker, and its receipt watermark in one redb transaction. Only a later poll carries that receipt
+back. Until then the old generation repeats the same batch and remains in the locator, so response loss, append
+failure, successor crash, and a fast second upgrade do not lose or duplicate a row. Queue overflow is represented by
+one stable content-free denial marker and a contiguous lost-through watermark. A receipt is bound to the executable
+generation that produced it. It remains durable for as long as that generation appears in a successfully read current
+locator, regardless of age or later activity, and is removed only after a later current locator proves that generation
+absent. A restarted process of the same executable generation replaces its prior process epoch. The locator's fixed
+generation ceiling therefore bounds the receipt table without an age-based eviction window. A damaged receipt or a
+failed relay commit terminates the successor service rather than silently advancing authority without its audit rows.
+
+This exactly-once contract begins when both generations implement receipt ACKs. A predecessor already running an older
+destructive relay cannot be repaired retrospectively; its old-to-new handoff remains the explicit compatibility
+exception. Authority relay state is periodic rather than durable, but missing or stale authority fails closed and
+cannot widen the old generation's frozen grant ceiling.
+
 ## Authorization
 
 Enrollment proves possession of an Ed25519 key and creates a bounded pending request. A third-party integration is

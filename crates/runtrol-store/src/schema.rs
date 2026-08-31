@@ -44,6 +44,9 @@ const T_ENROLLMENT_KEY: &str = "runtrol::EnrollmentKey@1";
 /// Type name for [`IntegrationAuditKey`], version included.
 const T_INTEGRATION_AUDIT_KEY: &str = "runtrol::IntegrationAuditKey@1";
 
+/// Type name for [`IntegrationAuditReceiptKey`], version included.
+const T_INTEGRATION_AUDIT_RECEIPT_KEY: &str = "runtrol::IntegrationAuditReceiptKey@1";
+
 /// Type name for [`IntegrationMutationKey`], version included.
 const T_INTEGRATION_MUTATION_KEY: &str = "runtrol::IntegrationMutationKey@1";
 
@@ -71,6 +74,14 @@ pub const DEVICES: TableDefinition<'static, DeviceKey, &[u8]> = TableDefinition:
 pub const INTEGRATIONS: TableDefinition<'static, IntegrationKey, &[u8]> =
     TableDefinition::new("integrations");
 
+/// Compact, bounded revocation tombstones for public Runtime integrations.
+pub const INTEGRATION_TOMBSTONES: TableDefinition<'static, IntegrationKey, &[u8]> =
+    TableDefinition::new("integration_tombstones");
+
+/// Singleton active-authority usage and permanent bounded revocation guard.
+pub const INTEGRATION_AUTHORITY_STATE: TableDefinition<'static, &str, &[u8]> =
+    TableDefinition::new("integration_authority_state");
+
 /// Bounded pending enrollment decisions, including their terminal approval or denial result.
 pub const ENROLLMENTS: TableDefinition<'static, EnrollmentKey, &[u8]> =
     TableDefinition::new("enrollments");
@@ -78,6 +89,10 @@ pub const ENROLLMENTS: TableDefinition<'static, EnrollmentKey, &[u8]> =
 /// Bounded operational authorization metadata. It cannot contain conversation or provider payload bytes.
 pub const INTEGRATION_AUDIT: TableDefinition<'static, IntegrationAuditKey, &[u8]> =
     TableDefinition::new("integration_audit");
+
+/// Durable contiguous receipt and source generation for each draining generation's audit relay epoch.
+pub const INTEGRATION_AUDIT_RECEIPTS: TableDefinition<'static, IntegrationAuditReceiptKey, &[u8]> =
+    TableDefinition::new("integration_audit_receipts");
 
 /// Bounded durable mutation intents. Rows contain keyed authenticators, never caller input.
 pub const INTEGRATION_MUTATIONS: TableDefinition<'static, IntegrationMutationKey, &[u8]> =
@@ -318,7 +333,12 @@ fixed_key!(
 fixed_key!(
     IntegrationAuditKey,
     T_INTEGRATION_AUDIT_KEY,
-    "A time-ordered bounded public Runtime authorization audit key."
+    "An append-ordered bounded public Runtime authorization audit key."
+);
+fixed_key!(
+    IntegrationAuditReceiptKey,
+    T_INTEGRATION_AUDIT_RECEIPT_KEY,
+    "A draining generation's process-unique audit relay epoch."
 );
 
 /// One integration and one caller-minted UUIDv7 mutation identity.
@@ -402,6 +422,7 @@ mod tests {
         assert!(T_INTEGRATION_KEY.ends_with(&suffix));
         assert!(T_ENROLLMENT_KEY.ends_with(&suffix));
         assert!(T_INTEGRATION_AUDIT_KEY.ends_with(&suffix));
+        assert!(T_INTEGRATION_AUDIT_RECEIPT_KEY.ends_with(&suffix));
         assert!(T_INTEGRATION_MUTATION_KEY.ends_with(&suffix));
     }
 

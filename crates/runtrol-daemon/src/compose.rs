@@ -299,6 +299,8 @@ pub struct Composed {
     pub(crate) isolated_workspaces: Mutex<crate::isolated_workspace::IsolatedWorkspaceController>,
     /// Local-only pending approval challenges for public Runtime integrations.
     pub(crate) integration_admin: crate::integration_admin::IntegrationAdmin,
+    /// Commit-coupled integration grants read by public Runtime hot paths without a database transaction.
+    pub(crate) integration_authority: crate::integration_authority::IntegrationAuthority,
     /// Successor-owned grant relay used only after this generation releases the durable store.
     pub(crate) generation_authority: crate::generation_authority::GenerationAuthorityRelay,
     /// Authorization rows written after the store was released, kept for the successor's next poll.
@@ -354,6 +356,8 @@ pub struct Composed {
     pub(crate) terminals: tokio::sync::Mutex<crate::terminal_surface::Terminals>,
     /// Public terminal leases and bounded mutation outcomes over the same Core-owned terminal table.
     pub(crate) runtime_terminals: crate::runtime_terminal::TerminalRuntimeAdapter,
+    /// Bounds filesystem identity checks moved off latency-sensitive terminal relay tasks.
+    pub(crate) terminal_root_checks: Arc<tokio::sync::Semaphore>,
     /// How many terminals are open, readable without the table's lock: a draining generation stays alive
     /// while one is, exactly as it does for a running turn.
     pub(crate) open_terminals: std::sync::atomic::AtomicUsize,
@@ -420,6 +424,8 @@ impl Composed {
         };
 
         let store = Store::open(home.paths().database())?;
+        let integration_authority =
+            crate::integration_authority::IntegrationAuthority::restore(&store)?;
         // One guard directory per generation. The registry holds an exclusive flock on its directory for the
         // daemon's whole life, so two generations sharing one directory meant the second could never establish
         // containment: it waited ten seconds on the first's lock and failed, and on macOS and Linux an upgrade
@@ -445,6 +451,7 @@ impl Composed {
             store: Arc::new(store),
             isolated_workspaces: Mutex::new(isolated_workspaces),
             integration_admin: crate::integration_admin::IntegrationAdmin::default(),
+            integration_authority,
             generation_authority: crate::generation_authority::GenerationAuthorityRelay::default(),
             audit_relay: crate::audit_relay::AuditRelay::default(),
             native_claims: Arc::new(crate::native_claims::NativeLiveClaimRegistry::default()),
@@ -460,6 +467,9 @@ impl Composed {
             account_probe_wake: crate::account_probe::AccountProbeWake::default(),
             terminals: tokio::sync::Mutex::new(crate::terminal_surface::Terminals::default()),
             runtime_terminals: crate::runtime_terminal::TerminalRuntimeAdapter::default(),
+            terminal_root_checks: Arc::new(tokio::sync::Semaphore::new(
+                crate::runtime_terminal::ROOT_CHECK_SLOTS,
+            )),
             open_terminals: std::sync::atomic::AtomicUsize::new(0),
             terminal_closed: tokio::sync::Notify::new(),
             provider_inventory: Mutex::new(
@@ -495,6 +505,8 @@ impl Composed {
         let home = RuntrolHome::open_at(home)?;
         let registry = load(&home, builtin);
         let store = Store::open(home.paths().database())?;
+        let integration_authority =
+            crate::integration_authority::IntegrationAuthority::restore(&store)?;
         let isolated_workspaces = crate::isolated_workspace::IsolatedWorkspaceController::open(
             home.paths().isolated_workspaces().clone(),
         )
@@ -507,6 +519,7 @@ impl Composed {
             store: Arc::new(store),
             isolated_workspaces: Mutex::new(isolated_workspaces),
             integration_admin: crate::integration_admin::IntegrationAdmin::default(),
+            integration_authority,
             generation_authority: crate::generation_authority::GenerationAuthorityRelay::default(),
             audit_relay: crate::audit_relay::AuditRelay::default(),
             native_claims: Arc::new(crate::native_claims::NativeLiveClaimRegistry::default()),
@@ -522,6 +535,9 @@ impl Composed {
             account_probe_wake: crate::account_probe::AccountProbeWake::default(),
             terminals: tokio::sync::Mutex::new(crate::terminal_surface::Terminals::default()),
             runtime_terminals: crate::runtime_terminal::TerminalRuntimeAdapter::default(),
+            terminal_root_checks: Arc::new(tokio::sync::Semaphore::new(
+                crate::runtime_terminal::ROOT_CHECK_SLOTS,
+            )),
             open_terminals: std::sync::atomic::AtomicUsize::new(0),
             terminal_closed: tokio::sync::Notify::new(),
             provider_inventory: Mutex::new(

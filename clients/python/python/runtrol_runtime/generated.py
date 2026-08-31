@@ -6,7 +6,7 @@ from typing import ForwardRef, Literal, NotRequired, Required, TypeAlias, TypedD
 
 JsonValue: TypeAlias = None | bool | int | float | str | list["JsonValue"] | dict[str, "JsonValue"]
 JsonObject: TypeAlias = dict[str, JsonValue]
-SCHEMA_SHA256 = '8f1585c6abadd86507daad375bba961452f475d231e1ad3e7ad98dc55682e84e'
+SCHEMA_SHA256 = 'd044143f8c84ed7b176e090771d13ad021250c540f291c82815e2caed5c037e1'
 
 AcquireControlParams = TypedDict('AcquireControlParams', {
     'expectedLifecycle': Required[ForwardRef('LifecycleState')],
@@ -175,6 +175,7 @@ ManagedSessionList = TypedDict('ManagedSessionList', {
 MutationRequestId: TypeAlias = str
 NativeActivity = TypedDict('NativeActivity', {
     'active': Required[list[str]],
+    'attachable': NotRequired[list[str]],
     'live': NotRequired[list[str]],
     'providerId': Required[ForwardRef('ProviderId')],
 })

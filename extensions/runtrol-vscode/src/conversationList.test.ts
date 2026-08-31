@@ -84,10 +84,9 @@ function nativeChat(overrides: Partial<NativeChatLine> & Pick<NativeChatLine, "n
   } as NativeChatLine;
 }
 
-test("a conversation whose service is writing right now reads as working", () => {
-  // The Runtime's lifecycle only calls a session running when Runtrol started the turn, and Runtrol starts
-  // none: every conversation is the service's own terminal with a person typing into it. Bytes arriving is
-  // what tells the sidebar to turn the icon (operator, 2026-08-28).
+test("an open TUI repaint stays idle until the provider proves a model turn", () => {
+  // An idle or paused TUI writes prompts, menus and cursor updates. Those bytes keep the terminal live and
+  // openable but must never turn the sidebar icon (operator, 2026-08-31).
   const idle = conversations(
     [session({ sessionId: "s1", hot: true, lifecycle: "hotIdle", nativeSessionId: "n1", providerId: "claude" })],
     [],
@@ -102,7 +101,7 @@ test("a conversation whose service is writing right now reads as working", () =>
   );
   assert.equal(idle[0]?.activity, "ready");
   const key = idle[0]?.key ?? "";
-  const busy = conversations(
+  const repainting = conversations(
     [session({ sessionId: "s1", hot: true, lifecycle: "hotIdle", nativeSessionId: "n1", providerId: "claude" })],
     [],
     [],
@@ -115,13 +114,26 @@ test("a conversation whose service is writing right now reads as working", () =>
     [],
     new Set([key]),
   );
-  assert.equal(busy[0]?.activity, "working");
+  assert.equal(repainting[0]?.activity, "ready", "screen output alone is not model activity");
+  const working = conversations(
+    [session({ sessionId: "s1", hot: true, lifecycle: "hotIdle", nativeSessionId: "n1", providerId: "claude" })],
+    [],
+    [],
+    null,
+    null,
+    new Map(),
+    new Map(),
+    new Set(),
+    new Map(),
+    [],
+    new Set(),
+    new Set([nativeProcessKey("claude", "n1")]),
+  );
+  assert.equal(working[0]?.activity, "working", "the provider's open turn animates the row");
 });
 
-test("a conversation Runtrol does not host reads as working while its service writes it", () => {
-  // The row above needs bytes to pass through Runtrol, which only happens for a conversation it hosts. A
-  // person who runs the CLI in their own terminal still expects the panel to show that conversation working,
-  // and on the operator's machine that is most of them (measured 2026-08-28: a live session read as idle).
+test("a conversation Runtrol does not host follows the provider's structural turn state", () => {
+  // The same provider-owned turn signal covers external and hosted terminals without reading either screen.
   const idle = conversations([], PROVIDERS, [nativeChat({ nativeSessionId: "n9" })], null);
   assert.equal(idle[0]?.activity, "saved");
   const busy = conversations(
@@ -157,7 +169,7 @@ test("a conversation Runtrol does not host reads as working while its service wr
   assert.equal(other[0]?.activity, "saved");
 });
 
-test("an externally running provider conversation is live but never auto-resumed", () => {
+test("an externally running provider conversation without a route is live but never resumed", () => {
   const key = nativeProcessKey("codex", "n9");
   const [row] = conversations(
     [],
@@ -179,9 +191,37 @@ test("an externally running provider conversation is live but never auto-resumed
   assert.equal(row?.canOpen, false, "clicking must not create a duplicate resume process");
   // The sentence is what the row's tooltip says and what the click repeats, so it is written for a person:
   // where the conversation is, and why this panel will not open it.
-  assert.match(row?.blocked ?? "", /running in a terminal Runtrol did not start/u);
+  assert.match(row?.blocked ?? "", /already running, but its live terminal is not available/u);
   // The click path asks this rather than reading the sentence, so the words and the behaviour cannot drift.
   assert.equal(row ? runningElsewhere(row) : false, true);
+});
+
+test("an externally running terminal with a proven route opens without a second owner", () => {
+  const key = nativeProcessKey("claude", "n9");
+  const [row] = conversations(
+    [],
+    PROVIDERS,
+    [nativeChat({ providerId: "claude", nativeSessionId: "n9", title: "Attach here" })],
+    null,
+    null,
+    new Map(),
+    new Map(),
+    new Set(),
+    new Map(),
+    [],
+    new Set(),
+    new Set(),
+    new Set([key]),
+    [],
+    new Set(),
+    new Set([key]),
+  );
+
+  assert.equal(row?.presence.kind, "external");
+  assert.equal(row?.live, true);
+  assert.equal(row?.canOpen, true, "the click must ask Runtime to attach the exact live owner");
+  assert.equal(row?.blocked, null);
+  assert.equal(row ? runningElsewhere(row) : true, false);
 });
 
 test("only a conversation running outside Runtrol answers to running elsewhere", () => {
@@ -196,6 +236,33 @@ test("only a conversation running outside Runtrol answers to running elsewhere",
   assert.equal(saved?.live, false);
   assert.equal(saved?.canOpen, false, "a service that cannot resume still shows the conversation");
   assert.equal(saved ? runningElsewhere(saved) : true, false);
+});
+
+test("a failed live roster check revokes Elsewhere without allowing a duplicate owner", () => {
+  const key = nativeProcessKey("codex", "n9");
+  const [row] = conversations(
+    [],
+    PROVIDERS,
+    [nativeChat({ nativeSessionId: "n9", title: "Owner status unavailable" })],
+    null,
+    null,
+    new Map(),
+    new Map(),
+    new Set(),
+    new Map(),
+    [],
+    new Set(),
+    new Set(),
+    new Set(),
+    [],
+    new Set([key]),
+  );
+
+  assert.equal(row?.presence.kind, "unconfirmed");
+  assert.equal(row?.live, false, "an unavailable roster is not current proof of a live process");
+  assert.equal(row?.canOpen, false, "uncertainty must not start a second process owner");
+  assert.equal(row ? runningElsewhere(row) : true, false, "only current live proof earns Elsewhere");
+  assert.match(row?.blocked ?? "", /could not confirm whether this conversation is still running/u);
 });
 
 test("a daemon-owned terminal is the exact attach target and keeps the provider title", () => {
@@ -1387,7 +1454,27 @@ test("a conversation runtrol just started stands in the list until its service n
     { providerId: "grok", displayName: "Grok", icon: "grok", installation: { state: "usable" } },
   ] as unknown as ProviderLine[];
   const root = "C:/storage/no-project";
-  const started = [{ id: "grok:1", providerId: "grok", workspace: root, title: "New Grok conversation", startedAtMs: 1_700_000_000_000 }];
+  const started = [{
+    id: "grok:1",
+    providerId: "grok",
+    workspace: root,
+    title: "New Grok conversation",
+    startedAtMs: 1_700_000_000_000,
+    runtimeGeneration: "generation-1",
+    terminalId: "terminal-1",
+  }];
+  const terminal = {
+    terminalId: "terminal-1",
+    runtimeGeneration: "generation-1",
+    providerId: "grok",
+    workspace: root,
+    nativeSessionId: "01a0",
+    processState: "running",
+    openedAtMs: 1_700_000_000_010,
+    terminalGeneration: 1,
+    geometry: { columns: 120, rows: 40 },
+    memoryBytes: null,
+  } as TerminalDescriptor;
 
   // The service has written nothing down yet, which is the whole gap this closes: the person pressed new, a
   // terminal opened, and the list would otherwise still say there are no conversations.
@@ -1421,6 +1508,10 @@ test("a conversation runtrol just started stands in the list until its service n
     new Set(),
     new Map(),
     started,
+    new Set(),
+    new Set(),
+    new Set(),
+    [terminal],
   );
   assert.deepEqual(named.map((row) => row.title), ["Simple greeting request"]);
 
@@ -1428,6 +1519,9 @@ test("a conversation runtrol just started stands in the list until its service n
   // the placeholder reads this to move onto the real conversation, so that the name the service gave reaches
   // the tab and a second click does not open a second tab on it.
   assert.deepEqual([...namedPlaceholders(named, started)], [["grok:1", named[0]!.key]]);
+  // A recent conversation from the same provider and folder is still unrelated without this exact terminal.
+  const unrelated = named.map((row) => ({ ...row, hostedTerminal: null }));
+  assert.deepEqual([...namedPlaceholders(unrelated, started)], []);
   // Nothing to hand over while the service has written nothing: the placeholder stands.
   assert.deepEqual([...namedPlaceholders(fresh.filter((row) => false), started)], []);
   // Another folder's conversation is not this one, however recent it is.

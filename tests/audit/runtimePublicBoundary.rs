@@ -150,8 +150,9 @@ fn public_method_table_has_no_private_control_vocabulary_or_provider_enum() {
 
 #[test]
 fn public_daemon_dispatch_cannot_deserialize_private_control_requests() {
-    let source = std::fs::read_to_string(root().join("crates/runtrol-daemon/src/runtime_serve.rs"))
-        .unwrap_or_else(|error| panic!("cannot read public Runtime dispatcher: {error}"));
+    let source =
+        std::fs::read_to_string(root().join("crates/runtrol-daemon/src/runtime_serve/mod.rs"))
+            .unwrap_or_else(|error| panic!("cannot read public Runtime dispatcher: {error}"));
     for forbidden in ["runtrol_ipc::wire", "crate::dispatch", "SessionManager"] {
         assert!(
             !source.contains(forbidden),

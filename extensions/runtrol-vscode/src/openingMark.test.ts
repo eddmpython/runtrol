@@ -8,15 +8,15 @@ const CORAL_LIT = "38;2;250;178;178";
 
 test("the mark is the brand's raster: two coral arms and two ink arms around an empty centre", () => {
   const pixels = markPixels();
-  assert.equal(pixels.length, 32);
-  assert.ok(pixels.every((row) => row.length === 32), "the grid is square");
+  assert.equal(pixels.length, 16);
+  assert.ok(pixels.every((row) => row.length === 16), "the grid is square");
   const at = (x: number, y: number) => pixels[y]?.[x] ?? null;
-  // The vertical bars leave the top edge four wide (the hinted stroke): coral in columns 10..13, ink in 18..21.
-  assert.deepEqual([at(9, 0), at(10, 0), at(13, 0), at(14, 0)], [null, "accent", "accent", null]);
-  assert.deepEqual([at(17, 0), at(18, 0), at(21, 0), at(22, 0)], [null, "ink", "ink", null]);
-  // The centre gap is four wide in both directions, so the arms never touch.
-  for (let gap = 14; gap <= 17; gap += 1) {
-    for (let along = 0; along < 32; along += 1) {
+  // The vertical bars leave the top edge two wide: coral in columns 5..6, ink in 9..10.
+  assert.deepEqual([at(4, 0), at(5, 0), at(6, 0), at(7, 0)], [null, "accent", "accent", null]);
+  assert.deepEqual([at(8, 0), at(9, 0), at(10, 0), at(11, 0)], [null, "ink", "ink", null]);
+  // The centre gap is two wide in both directions, so the arms never touch.
+  for (let gap = 7; gap <= 8; gap += 1) {
+    for (let along = 0; along < 16; along += 1) {
       assert.equal(at(along, gap), null, `row ${gap} column ${along} is empty`);
       assert.equal(at(gap, along), null, `column ${gap} row ${along} is empty`);
     }
@@ -24,9 +24,9 @@ test("the mark is the brand's raster: two coral arms and two ink arms around an 
   // A quarter turn carries each arm onto the next one and swaps the colours: the mark's rotational symmetry,
   // which is what makes it ours rather than four unrelated strokes.
   const swapped = (pixel: ReturnType<typeof at>) => (pixel === "accent" ? "ink" : pixel === "ink" ? "accent" : null);
-  for (let y = 0; y < 32; y += 1) {
-    for (let x = 0; x < 32; x += 1) {
-      assert.equal(at(31 - y, x), swapped(at(x, y)), `(${x}, ${y}) turned a quarter`);
+  for (let y = 0; y < 16; y += 1) {
+    for (let x = 0; x < 16; x += 1) {
+      assert.equal(at(15 - y, x), swapped(at(x, y)), `(${x}, ${y}) turned a quarter`);
     }
   }
 });
@@ -41,47 +41,48 @@ test("the block is half-block cells in the two colours, and its ink is the termi
 });
 
 test("a coral light sweeps the mark left to right, rests, and repeats", () => {
-  // Block row 5 holds pixel rows 10 and 11, where the horizontal bars run out to both edges: cells 0..12 are
-  // coral, 19..31 ink, and the light crossing them is visible in every position.
-  const row = (at: number) => paintedRow(paintMark(at, 120, 40), 13 + 5, 45);
-  const litColumns = (at: number) => row(at).flatMap((cell, x) => (cell.style.includes(CORAL_LIT) ? [x] : []));
-  const touched = (at: number) => row(at).some((cell) => cell.style.includes("38;2;250;178;178") || cell.style.includes("38;2;248;140;140"));
+  // Block row 2 holds pixel rows 4 and 5, where the horizontal bars run out to both edges.
+  const row = (at: number) => paintedRow(paintMark(at, 120, 40), 17 + 2, 53);
+  const litColumns = (at: number) => row(at).flatMap((cell, x) => (
+    cell.glyph !== " " && cell.style.includes(CORAL_LIT) ? [x] : []
+  ));
+  const touched = (at: number) => row(at).some((cell) => cell.glyph !== " " && (
+    cell.style.includes("38;2;250;178;178") || cell.style.includes("38;2;248;140;140")
+  ));
   // The light starts outside the block and the mark stands unlit for a few frames before it enters.
   assert.deepEqual([0, 1, 2, 3].map(touched), [false, false, false, false], "the rest before a pass");
   assert.deepEqual(litColumns(4), [0], "the core reaches the first column");
   assert.deepEqual(litColumns(6), [2, 3, 4]);
   assert.deepEqual(litColumns(7), [4, 5, 6], "and moves to the right by two cells a frame");
-  assert.equal(touched(21), true, "the edge is still on the last column as the light leaves");
-  assert.deepEqual([22, 23, 24].map(touched), [false, false, false], "the rest after a pass");
-  assert.deepEqual(litColumns(6 + 25), litColumns(6), "the pass repeats");
+  assert.equal(touched(13), true, "the edge is still on the last column as the light leaves");
+  assert.deepEqual([14, 15, 16].map(touched), [false, false, false], "the rest after a pass");
+  assert.deepEqual(litColumns(6 + 17), litColumns(6), "the pass repeats");
   // The light has a softer edge one cell wide, and beyond it the arms stand in their own colours: nothing dimmed.
   const cells = row(6);
   assert.equal(cells[5]?.style, "0;38;2;248;140;140", "the edge of the light");
-  assert.equal(cells[6]?.style, `0;${CORAL}`, "then coral at full strength");
-  assert.equal(cells[12]?.style, `0;${CORAL}`, "all the way along the arm");
-  assert.equal(cells[19]?.style, "0;39", "the ink arm is the default foreground at full strength");
-  assert.equal(cells[15]?.glyph, " ", "the centre gap is a plain space");
+  assert.equal(cells[0]?.style, `0;${CORAL}`, "the rest of the arm stays coral at full strength");
+  assert.equal(cells[10]?.style, "0;39", "the ink arm is the default foreground at full strength");
+  assert.equal(cells[7]?.glyph, " ", "the centre gap is a plain space");
 });
 
 test("a frame is painted in the middle of the pane, whatever its size", () => {
   const wide = paintMark(0, 120, 40);
   // Clear first: the pane may have been resized, and half of an old block left behind reads as a defect.
   assert.ok(wide.startsWith("\x1b[2J"));
-  // A 120x40 pane puts the sixteen-row block on rows 13..28 and its 32 columns at 45..76: twelve rows above
-  // and below, forty-four columns either side.
-  assert.ok(wide.includes("\x1b[13;45H"), wide.slice(0, 60));
-  assert.ok(wide.includes("\x1b[28;45H"), "the block's last row");
-  assert.equal(wide.match(/\x1b\[\d+;\d+H/gu)?.length, 16, "sixteen rows painted");
-  assert.equal(paintedRow(wide, 13, 45).length, 32, "thirty-two cells each");
+  // A 120x40 pane puts the eight-row block on rows 17..24 and its 16 columns at 53..68.
+  assert.ok(wide.includes("\x1b[17;53H"), wide.slice(0, 60));
+  assert.ok(wide.includes("\x1b[24;53H"), "the block's last row");
+  assert.equal(wide.match(/\x1b\[\d+;\d+H/gu)?.length, 8, "eight rows painted");
+  assert.equal(paintedRow(wide, 17, 53).length, 16, "sixteen cells each");
   // A pane too small for the block gets the part that fits, from the block's top left, and never a wrap: an
   // escape with a zero or negative position, or a row longer than the pane, would scroll or overlap.
   const tiny = paintMark(0, 2, 1);
   assert.ok(tiny.startsWith("\x1b[2J\x1b[1;1H"));
   assert.equal(tiny.match(/\x1b\[\d+;\d+H/gu)?.length, 1, "one row fits");
   assert.equal(paintedRow(tiny, 1, 1).length, 2, "two cells fit");
-  const narrow = paintMark(0, 20, 10);
-  assert.equal(narrow.match(/\x1b\[\d+;\d+H/gu)?.length, 10);
-  for (let screenRow = 1; screenRow <= 10; screenRow += 1) assert.equal(paintedRow(narrow, screenRow, 1).length, 20);
+  const narrow = paintMark(0, 10, 4);
+  assert.equal(narrow.match(/\x1b\[\d+;\d+H/gu)?.length, 4);
+  for (let screenRow = 1; screenRow <= 4; screenRow += 1) assert.equal(paintedRow(narrow, screenRow, 1).length, 10);
   assert.equal(paintMark(0, 0, 0), "\x1b[2J", "a pane with no cells is only cleared");
   assert.ok(!/\x1b\[0;\d+H/u.test(narrow), "no row zero");
   assert.ok(!narrow.includes("-"), "no negative position");

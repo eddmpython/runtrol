@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use base64ct::{Base64, Encoding as _};
-use runtrol_core::terminal::{Attachment, ViewerKind};
+use runtrol_core::terminal::{Attachment, TerminalError, ViewerKind};
 use runtrol_provider::{
     AbsPath, NativeTerminalAccess, NativeTerminalTarget, ProviderId as CoreProviderId, TerminalId,
     WallMs,
@@ -22,17 +22,25 @@ use runtrol_runtime_protocol::{
     TerminalIndexSnapshot, TerminalOpenParams, TerminalOpenTarget, TerminalProcessState,
     TerminalResizeParams, TerminalStopParams, TerminalViewOpened, TerminalWriteParams,
 };
+#[cfg(windows)]
+use runtrol_security::{ProjectRootGuard, ProjectRootIdentity};
 use runtrol_store::IntegrationKey;
+#[cfg(any(test, not(windows)))]
+use runtrol_store::IntegrationRow;
 use sha2::{Digest as _, Sha256};
 use tokio::sync::Mutex;
 
 use crate::Composed;
 use crate::runtime_auth::AuthorizedIntegration;
+#[cfg(any(test, not(windows)))]
+use crate::runtime_inventory::approved_root_rows;
 use crate::runtime_inventory::{AuthorizedRoot, RuntimeSessionCatalogue, authorized_roots};
 use crate::runtime_native_sessions::NativeCursorCodec;
 use crate::terminal_surface::HostedTerminal;
 
 const LEASE_LIFETIME_MS: u64 = runtrol_runtime_protocol::CONTROL_LEASE_LIFETIME_MS;
+/// Filesystem identity checks may block in the operating system, so they get a small separate global lane.
+pub(crate) const ROOT_CHECK_SLOTS: usize = 2;
 
 /// Public terminal state that is deliberately separate from the PTY host.
 pub(crate) struct TerminalRuntimeAdapter {
@@ -106,6 +114,9 @@ struct StoredMutation {
 enum MutationOutcome {
     Opened(TerminalId),
     Lease(TerminalControlLease),
+    /// The exact write, resize, or stop has been admitted and may already have reached the provider. Keeping
+    /// this record across cancellation or an unknown I/O outcome prevents a retry from performing it twice.
+    PendingDone,
     Done,
 }
 
@@ -115,6 +126,48 @@ pub(crate) struct TerminalView {
     pub(crate) attachment: Attachment,
     pub(crate) hosted: HostedTerminal,
     pub(crate) authority: AuthorizedIntegration,
+    #[cfg(windows)]
+    pinned_root: PinnedTerminalRoot,
+    root_grant_generation: u64,
+    last_root_proof: tokio::time::Instant,
+}
+
+#[cfg(windows)]
+#[derive(Debug)]
+struct PinnedTerminalRoot {
+    guard: Arc<tokio::sync::Mutex<ProjectRootGuard>>,
+}
+
+impl TerminalView {
+    /// Rebind a changed grant, or require the blocking lane's recent successful root proof.
+    pub(crate) fn refresh_root_authority(&mut self) -> Result<(), TerminalRuntimeFailure> {
+        if self.root_grant_generation == self.authority.grant.grant_generation {
+            return if self.last_root_proof.elapsed() <= std::time::Duration::from_secs(1) {
+                Ok(())
+            } else {
+                Err(root_authority_failure())
+            };
+        }
+        #[cfg(windows)]
+        {
+            self.pinned_root = pin_visible_root(&self.authority, &self.hosted)?;
+        }
+        #[cfg(not(windows))]
+        ensure_visible(&self.hosted, &self.authority)?;
+        self.root_grant_generation = self.authority.grant.grant_generation;
+        self.last_root_proof = tokio::time::Instant::now();
+        Ok(())
+    }
+
+    /// Record a successful check whose authority stamp still matches this view.
+    pub(crate) fn remember_root_proof(&mut self) {
+        self.last_root_proof = tokio::time::Instant::now();
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn pinned_root_guard(&self) -> Arc<tokio::sync::Mutex<ProjectRootGuard>> {
+        Arc::clone(&self.pinned_root.guard)
+    }
 }
 
 /// Safe stable failure before the Runtime server places it in a JSON-RPC envelope.
@@ -138,6 +191,28 @@ impl TerminalRuntimeFailure {
     }
 }
 
+const fn mutation_in_progress() -> TerminalRuntimeFailure {
+    TerminalRuntimeFailure::new(
+        RuntimeErrorKind::OutcomeUnknown,
+        "the exact terminal mutation is still in progress or its outcome is unknown; it must not be performed twice",
+    )
+}
+
+fn terminal_lane_failure(error: &TerminalError) -> TerminalRuntimeFailure {
+    match error {
+        TerminalError::Busy => TerminalRuntimeFailure::new(
+            RuntimeErrorKind::ResourceExhausted,
+            "the bounded operation lane for this terminal is full",
+        ),
+        TerminalError::Spawn(_) | TerminalError::Input(_) | TerminalError::Runtime(_) => {
+            TerminalRuntimeFailure::new(
+                RuntimeErrorKind::OutcomeUnknown,
+                "the terminal operation could not enter its ordered lane",
+            )
+        }
+    }
+}
+
 impl TerminalRuntimeAdapter {
     /// Root-filtered live terminal index from this exact Runtime generation.
     pub(crate) async fn list(
@@ -145,20 +220,57 @@ impl TerminalRuntimeAdapter {
         composed: &Composed,
         authority: &AuthorizedIntegration,
     ) -> Result<TerminalIndexSnapshot, TerminalRuntimeFailure> {
-        let roots = current_roots(authority)?;
+        let roots = self.validated_roots(composed, authority).await?;
+        self.list_validated(composed, &roots).await
+    }
+
+    /// Revalidate filesystem authority on the bounded blocking lane used by terminal views.
+    pub(crate) async fn validated_roots(
+        &self,
+        composed: &Composed,
+        authority: &AuthorizedIntegration,
+    ) -> Result<Vec<AuthorizedRoot>, TerminalRuntimeFailure> {
+        let permits = composed.terminal_root_checks.clone();
+        let authority = authority.clone();
+        let checked = tokio::time::timeout(std::time::Duration::from_millis(400), async {
+            let permit = permits.acquire_owned().await.map_err(drop)?;
+            tokio::task::spawn_blocking(move || {
+                let _permit = permit;
+                current_roots(&authority)
+            })
+            .await
+            .map_err(drop)
+        })
+        .await;
+        match checked {
+            Ok(Ok(Ok(roots))) => Ok(roots),
+            Ok(Ok(Err(failure))) => Err(failure),
+            Ok(Err(())) | Err(_) => Err(root_authority_failure()),
+        }
+    }
+
+    /// Build a terminal index from roots already proven on the blocking lane.
+    pub(crate) async fn list_validated(
+        &self,
+        composed: &Composed,
+        roots: &[AuthorizedRoot],
+    ) -> Result<TerminalIndexSnapshot, TerminalRuntimeFailure> {
         let generation = runtime_generation()?;
-        let hosted = composed.terminals.lock().await.hosted_all();
+        let (hosted, changes) = {
+            let terminals = composed.terminals.lock().await;
+            (terminals.hosted_all(), terminals.change_sender())
+        };
         let mut terminals = Vec::new();
         let mut omitted = 0_usize;
         for terminal in hosted {
-            if !visible_in(&terminal, &roots) {
+            if !visible_in(&terminal, roots) {
                 continue;
             }
             if terminals.len() >= usize::from(MAX_TERMINAL_INDEX_ITEMS) {
                 omitted = omitted.saturating_add(1);
                 continue;
             }
-            terminals.push(descriptor(&terminal, generation)?);
+            terminals.push(descriptor(&terminal, generation, &changes)?);
         }
         let warnings = if omitted == 0 {
             Vec::new()
@@ -176,6 +288,24 @@ impl TerminalRuntimeAdapter {
     /// Structural terminal table changes. Callers re-run [`Self::list`] after every change.
     pub(crate) async fn changes(&self, composed: &Composed) -> tokio::sync::watch::Receiver<u64> {
         composed.terminals.lock().await.changes()
+    }
+
+    /// Keep resource figures current without rebuilding the public terminal index on a quiet authority tick.
+    pub(crate) async fn refresh_memory(&self, composed: &Composed) {
+        let (hosted, changes) = {
+            let terminals = composed.terminals.lock().await;
+            (terminals.hosted_all(), terminals.change_sender())
+        };
+        for terminal in hosted {
+            if !terminal.stopping {
+                let _resident_bytes = crate::runtime_inventory::resident_bytes_for_terminal(
+                    terminal.terminal.pid(),
+                    terminal.id,
+                    terminal.generation,
+                    &changes,
+                );
+            }
+        }
     }
 
     /// Open or join one terminal and create a connection-bound view.
@@ -262,7 +392,7 @@ impl TerminalRuntimeAdapter {
         let mut holder_known = false;
         // A provider-owned live peer is attached lazily after the adoption proof is revalidated. Keeping only
         // this structural decision here means an unviewed session allocates no TUI renderer or screen model.
-        let mut official_attach_target: Option<NativeTerminalTarget> = None;
+        let mut live_route: Option<LiveTerminalRoute> = None;
         let native = match &params.target {
             TerminalOpenTarget::Fresh => None,
             TerminalOpenTarget::Native {
@@ -308,12 +438,12 @@ impl TerminalRuntimeAdapter {
                     };
                     if let Some(activity) = answered.as_ref() {
                         if resume_would_fork(&activity.live, native_session_id.as_str()) {
-                            official_attach_target = official_attach_target_for(
+                            live_route = live_terminal_route_for(
                                 activity,
                                 native_session_id.as_str(),
                                 &workspace,
                             );
-                            if official_attach_target.is_none() {
+                            if live_route.is_none() {
                                 return Err(TerminalRuntimeFailure::new(
                                     RuntimeErrorKind::NativeConversationBusy,
                                     "the conversation is open in the coding service's own window, and that process publishes no safe live terminal attachment",
@@ -357,47 +487,70 @@ impl TerminalRuntimeAdapter {
                 Some(native_session_id.as_str())
             }
         };
-        let program = prepared.terminal_program.ok_or_else(|| {
-            TerminalRuntimeFailure::new(
-                RuntimeErrorKind::ProviderUnavailable,
-                "the selected provider has no exact prepared terminal program",
-            )
-        })?;
-        let opened = if let Some(attach_target) = official_attach_target {
-            crate::terminal_surface::open_official_attach(
-                composed,
-                provider,
-                native.ok_or_else(|| {
-                    TerminalRuntimeFailure::new(
-                        RuntimeErrorKind::InvalidRequest,
-                        "an official attachment requires one native conversation",
-                    )
-                })?,
-                &attach_target,
-                workspace,
-                params.geometry.columns,
-                params.geometry.rows,
-                program,
-                ViewerKind::Terminal,
-            )
-            .await
-        } else {
-            crate::terminal_surface::open_hosted(
-                composed,
-                provider,
-                native,
-                workspace,
-                params.geometry.columns,
-                params.geometry.rows,
-                Some(program),
-                // The public surface is an editor's terminal, which has its own mouse.
-                ViewerKind::Terminal,
-                // The service was asked above which conversations its live processes hold, and this one was not
-                // among them (`resume_would_fork`). A terminal in this folder that nobody has named is therefore
-                // provably some other conversation, and must not hold this one back.
-                holder_known,
-            )
-            .await
+        let exact_program = || {
+            prepared.terminal_program.clone().ok_or_else(|| {
+                TerminalRuntimeFailure::new(
+                    RuntimeErrorKind::ProviderUnavailable,
+                    "the selected provider has no exact prepared terminal program",
+                )
+            })
+        };
+        let opened = match live_route {
+            Some(LiveTerminalRoute::Console { pid }) => {
+                crate::terminal_surface::open_console_mirror(
+                    composed,
+                    provider,
+                    native.ok_or_else(|| {
+                        TerminalRuntimeFailure::new(
+                            RuntimeErrorKind::InvalidRequest,
+                            "a console attachment requires one native conversation",
+                        )
+                    })?,
+                    pid,
+                    workspace,
+                    params.geometry.columns,
+                    params.geometry.rows,
+                    ViewerKind::Terminal,
+                )
+                .await
+            }
+            Some(LiveTerminalRoute::Official(attach_target)) => {
+                crate::terminal_surface::open_official_attach(
+                    composed,
+                    provider,
+                    native.ok_or_else(|| {
+                        TerminalRuntimeFailure::new(
+                            RuntimeErrorKind::InvalidRequest,
+                            "an official attachment requires one native conversation",
+                        )
+                    })?,
+                    &attach_target,
+                    workspace,
+                    params.geometry.columns,
+                    params.geometry.rows,
+                    exact_program()?,
+                    ViewerKind::Terminal,
+                )
+                .await
+            }
+            None => {
+                crate::terminal_surface::open_hosted(
+                    composed,
+                    provider,
+                    native,
+                    workspace,
+                    params.geometry.columns,
+                    params.geometry.rows,
+                    Some(exact_program()?),
+                    // The public surface is an editor's terminal, which has its own mouse.
+                    ViewerKind::Terminal,
+                    // The service was asked above which conversations its live processes hold, and this one was not
+                    // among them (`resume_would_fork`). A terminal in this folder that nobody has named is therefore
+                    // provably some other conversation, and must not hold this one back.
+                    holder_known,
+                )
+                .await
+            }
         };
         let (terminal_id, _terminal, attachment) = opened
         .map_err(|error| {
@@ -465,17 +618,6 @@ impl TerminalRuntimeAdapter {
             .await
     }
 
-    /// Revalidate one live view after a grant generation, root, or terminal table change.
-    pub(crate) async fn validate_view(
-        &self,
-        composed: &Composed,
-        authority: &AuthorizedIntegration,
-        terminal_id: TerminalId,
-    ) -> Result<(), TerminalRuntimeFailure> {
-        drop(visible_terminal(composed, authority, terminal_id).await?);
-        Ok(())
-    }
-
     async fn attach_hosted(
         &self,
         composed: &Arc<Composed>,
@@ -483,7 +625,7 @@ impl TerminalRuntimeAdapter {
         terminal_id: TerminalId,
         initial_control: bool,
     ) -> Result<TerminalView, TerminalRuntimeFailure> {
-        let (hosted, attachment) =
+        let (_hosted, attachment) =
             crate::terminal_surface::attach_current(composed, terminal_id, ViewerKind::Terminal)
                 .await
                 .map_err(|_| {
@@ -492,7 +634,6 @@ impl TerminalRuntimeAdapter {
                         "the terminal ended in its recorded Runtime generation",
                     )
                 })?;
-        ensure_visible(&hosted, &authority)?;
         self.finish_view(
             composed,
             authority,
@@ -517,17 +658,19 @@ impl TerminalRuntimeAdapter {
                 "the bounded terminal screen snapshot exceeds the public limit",
             ));
         }
-        let hosted = composed
-            .terminals
-            .lock()
-            .await
-            .hosted(terminal_id)
-            .ok_or_else(|| {
+        let (hosted, changes) = {
+            let terminals = composed.terminals.lock().await;
+            let hosted = terminals.hosted(terminal_id).ok_or_else(|| {
                 TerminalRuntimeFailure::new(
                     RuntimeErrorKind::TerminalGone,
                     "the terminal ended in its recorded Runtime generation",
                 )
             })?;
+            (hosted, terminals.change_sender())
+        };
+        #[cfg(windows)]
+        let pinned_root = pin_visible_root(&authority, &hosted)?;
+        #[cfg(not(windows))]
         ensure_visible(&hosted, &authority)?;
         let control_lease = if initial_control
             && authority
@@ -540,7 +683,7 @@ impl TerminalRuntimeAdapter {
             None
         };
         let opened = TerminalViewOpened {
-            terminal: descriptor(&hosted, runtime_generation()?)?,
+            terminal: descriptor(&hosted, runtime_generation()?, &changes)?,
             view_id: RuntimeTerminalViewId::now(),
             screen_base64: Base64::encode_string(&attachment.snapshot),
             control_lease,
@@ -549,6 +692,10 @@ impl TerminalRuntimeAdapter {
             opened,
             attachment,
             hosted,
+            #[cfg(windows)]
+            pinned_root,
+            root_grant_generation: authority.grant.grant_generation,
+            last_root_proof: tokio::time::Instant::now(),
             authority,
         })
     }
@@ -591,12 +738,12 @@ impl TerminalRuntimeAdapter {
         if let Some(outcome) = self.prior(&key, fingerprint).await? {
             return match outcome {
                 MutationOutcome::Lease(lease) => Ok(lease),
-                MutationOutcome::Opened(_) | MutationOutcome::Done => {
-                    Err(TerminalRuntimeFailure::new(
-                        RuntimeErrorKind::IdempotencyConflict,
-                        "the mutation identity belongs to another terminal operation",
-                    ))
-                }
+                MutationOutcome::Opened(_)
+                | MutationOutcome::PendingDone
+                | MutationOutcome::Done => Err(TerminalRuntimeFailure::new(
+                    RuntimeErrorKind::IdempotencyConflict,
+                    "the mutation identity belongs to another terminal operation",
+                )),
             };
         }
         let mut state = self.state.lock().await;
@@ -635,12 +782,12 @@ impl TerminalRuntimeAdapter {
         if let Some(outcome) = self.prior(&key, fingerprint).await? {
             return match outcome {
                 MutationOutcome::Lease(lease) => Ok(lease),
-                MutationOutcome::Opened(_) | MutationOutcome::Done => {
-                    Err(TerminalRuntimeFailure::new(
-                        RuntimeErrorKind::IdempotencyConflict,
-                        "the mutation identity belongs to another terminal operation",
-                    ))
-                }
+                MutationOutcome::Opened(_)
+                | MutationOutcome::PendingDone
+                | MutationOutcome::Done => Err(TerminalRuntimeFailure::new(
+                    RuntimeErrorKind::IdempotencyConflict,
+                    "the mutation identity belongs to another terminal operation",
+                )),
             };
         }
         validate_mutation_time(&params.request_id)?;
@@ -688,7 +835,8 @@ impl TerminalRuntimeAdapter {
         Ok(())
     }
 
-    /// Write exact bytes once. The state lock spans the PTY write so a concurrent duplicate cannot pass twice.
+    /// Write exact bytes once. A bounded pending record prevents a concurrent or cancelled duplicate while
+    /// the daemon-wide authority lock is released before the per-terminal PTY operation.
     pub(crate) async fn write(
         &self,
         composed: &Composed,
@@ -697,6 +845,39 @@ impl TerminalRuntimeAdapter {
     ) -> Result<(), TerminalRuntimeFailure> {
         let terminal_id = private_terminal_id(&params.terminal_id)?;
         let hosted = visible_terminal(composed, authority, terminal_id).await?;
+        self.write_hosted(authority, params, hosted).await
+    }
+
+    /// Write through an admitted dedicated view whose Windows root handles remain pinned for its lifetime.
+    pub(crate) async fn write_view(
+        &self,
+        composed: &Composed,
+        view: &TerminalView,
+        params: &TerminalWriteParams,
+    ) -> Result<(), TerminalRuntimeFailure> {
+        let terminal_id = private_terminal_id(&params.terminal_id)?;
+        let hosted = visible_terminal_in_view(composed, view, terminal_id).await?;
+        self.write_hosted(&view.authority, params, hosted).await
+    }
+
+    async fn write_hosted(
+        &self,
+        authority: &AuthorizedIntegration,
+        params: &TerminalWriteParams,
+        hosted: HostedTerminal,
+    ) -> Result<(), TerminalRuntimeFailure> {
+        let terminal_id = hosted.id;
+        validate_mutation_time(&params.request_id)?;
+        let key = mutation_key(authority.key, &params.request_id)?;
+        let fingerprint = fingerprint(params)?;
+        if self.prior_done(&key, fingerprint).await? {
+            return Ok(());
+        }
+        let mut operation = hosted
+            .terminal
+            .operation()
+            .await
+            .map_err(|error| terminal_lane_failure(&error))?;
         let bytes = Base64::decode_vec(&params.bytes_base64).map_err(|_| {
             TerminalRuntimeFailure::invalid("terminal input bytes are not valid base64")
         })?;
@@ -706,9 +887,6 @@ impl TerminalRuntimeAdapter {
                 "terminal input exceeds the public byte limit",
             ));
         }
-        validate_mutation_time(&params.request_id)?;
-        let key = mutation_key(authority.key, &params.request_id)?;
-        let fingerprint = fingerprint(params)?;
         let now = WallMs::now().as_millis();
         let mut state = self.state.lock().await;
         if prior_done_from_state(&mut state, &key, fingerprint, now)? {
@@ -723,8 +901,9 @@ impl TerminalRuntimeAdapter {
             params.lease_generation,
             now,
         )?;
-        hosted
-            .terminal
+        remember_pending_done(&mut state, key.clone(), fingerprint, now);
+        drop(state);
+        operation
             .input(&bytes, ViewerKind::Terminal)
             .await
             .map_err(|_| {
@@ -733,8 +912,7 @@ impl TerminalRuntimeAdapter {
                     "the terminal input outcome is unknown and must not be retried automatically",
                 )
             })?;
-        remember_done(&mut state, key, fingerprint, now);
-        Ok(())
+        self.finish_done(&key, fingerprint).await
     }
 
     /// Resize the shared PTY once under the current lease.
@@ -750,6 +928,14 @@ impl TerminalRuntimeAdapter {
         let hosted = visible_terminal(composed, authority, terminal_id).await?;
         let key = mutation_key(authority.key, &params.request_id)?;
         let fingerprint = fingerprint(params)?;
+        if self.prior_done(&key, fingerprint).await? {
+            return Ok(());
+        }
+        let mut operation = hosted
+            .terminal
+            .operation()
+            .await
+            .map_err(|error| terminal_lane_failure(&error))?;
         let now = WallMs::now().as_millis();
         let mut state = self.state.lock().await;
         if prior_done_from_state(&mut state, &key, fingerprint, now)? {
@@ -764,8 +950,9 @@ impl TerminalRuntimeAdapter {
             params.lease_generation,
             now,
         )?;
-        hosted
-            .terminal
+        remember_pending_done(&mut state, key.clone(), fingerprint, now);
+        drop(state);
+        operation
             .resize(runtrol_childproc::PtySize {
                 cols: params.geometry.columns,
                 rows: params.geometry.rows,
@@ -777,8 +964,7 @@ impl TerminalRuntimeAdapter {
                     "the terminal resize outcome is unknown",
                 )
             })?;
-        remember_done(&mut state, key, fingerprint, now);
-        drop(state);
+        self.finish_done(&key, fingerprint).await?;
         composed.terminals.lock().await.publish_geometry_change();
         Ok(())
     }
@@ -795,6 +981,14 @@ impl TerminalRuntimeAdapter {
         let hosted = visible_terminal(composed, authority, terminal_id).await?;
         let key = mutation_key(authority.key, &params.request_id)?;
         let fingerprint = fingerprint(params)?;
+        if self.prior_done(&key, fingerprint).await? {
+            return Ok(());
+        }
+        let _operation = hosted
+            .terminal
+            .operation()
+            .await
+            .map_err(|error| terminal_lane_failure(&error))?;
         let now = WallMs::now().as_millis();
         let mut state = self.state.lock().await;
         if prior_done_from_state(&mut state, &key, fingerprint, now)? {
@@ -809,6 +1003,8 @@ impl TerminalRuntimeAdapter {
             params.lease_generation,
             now,
         )?;
+        remember_pending_done(&mut state, key.clone(), fingerprint, now);
+        drop(state);
         crate::terminal_surface::stop_hosted(&hosted)
             .await
             .map_err(|_| {
@@ -817,7 +1013,8 @@ impl TerminalRuntimeAdapter {
                     "the terminal stop outcome is unknown",
                 )
             })?;
-        remember_done(&mut state, key, fingerprint, now);
+        let mut state = self.state.lock().await;
+        finish_done_from_state(&mut state, &key, fingerprint, WallMs::now().as_millis())?;
         state
             .leases
             .retain(|(leased_terminal, _), _| *leased_terminal != terminal_id);
@@ -918,6 +1115,7 @@ impl TerminalRuntimeAdapter {
         match self.prior(key, fingerprint).await? {
             None => Ok(false),
             Some(MutationOutcome::Done) => Ok(true),
+            Some(MutationOutcome::PendingDone) => Err(mutation_in_progress()),
             Some(MutationOutcome::Lease(_) | MutationOutcome::Opened(_)) => {
                 Err(TerminalRuntimeFailure::new(
                     RuntimeErrorKind::IdempotencyConflict,
@@ -925,6 +1123,15 @@ impl TerminalRuntimeAdapter {
                 ))
             }
         }
+    }
+
+    async fn finish_done(
+        &self,
+        key: &MutationKey,
+        fingerprint: [u8; 32],
+    ) -> Result<(), TerminalRuntimeFailure> {
+        let mut state = self.state.lock().await;
+        finish_done_from_state(&mut state, key, fingerprint, WallMs::now().as_millis())
     }
 
     async fn remember(
@@ -966,24 +1173,40 @@ fn resume_would_fork(held: &[runtrol_provider::NativeSessionId], native: &str) -
     held.iter().any(|owned| owned.as_str() == native)
 }
 
-/// Select the provider's exact official attachment target for one native conversation and workspace.
+/// The provider-neutral route to one exact live terminal owner.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum LiveTerminalRoute {
+    /// Join the operating-system console of the exact process the provider roster bound.
+    Console { pid: u32 },
+    /// Launch the provider's official TUI attachment command with its opaque target.
+    Official(NativeTerminalTarget),
+}
+
+/// Select the provider's exact terminal route for one native conversation and workspace.
 ///
-/// The target is deliberately not inferred from the durable native identity. Some providers publish a shorter
-/// live-job identity for attachment, and confusing the two either fails closed or starts the wrong renderer.
-fn official_attach_target_for(
+/// The route is deliberately not inferred from the durable native identity. Some providers publish a shorter
+/// live-job identity for attachment, while a console route must preserve the exact process binding. Confusing
+/// any of these either fails closed or starts the wrong renderer.
+fn live_terminal_route_for(
     activity: &runtrol_provider::NativeProcessActivity,
     native: &str,
     workspace: &AbsPath,
-) -> Option<NativeTerminalTarget> {
+) -> Option<LiveTerminalRoute> {
     activity.processes.iter().find_map(|process| {
-        let NativeTerminalAccess::Official { target } = &process.terminal_access else {
-            return None;
-        };
-        (process.native.as_str() == native
-            && process.cwd.as_deref().is_some_and(|folder| {
+        if process.native.as_str() != native
+            || !process.cwd.as_deref().is_some_and(|folder| {
                 AbsPath::new(folder).is_ok_and(|reported| reported == *workspace)
-            }))
-        .then(|| target.clone())
+            })
+        {
+            return None;
+        }
+        match &process.terminal_access {
+            NativeTerminalAccess::Unavailable => None,
+            NativeTerminalAccess::Console => Some(LiveTerminalRoute::Console { pid: process.pid }),
+            NativeTerminalAccess::Official { target } => {
+                Some(LiveTerminalRoute::Official(target.clone()))
+            }
+        }
     })
 }
 
@@ -1002,7 +1225,7 @@ fn report_open_refusal(detail: &str) {
 
 fn validate_geometry(geometry: TerminalGeometry) -> Result<(), TerminalRuntimeFailure> {
     if !(2..=MAX_TERMINAL_COLUMNS).contains(&geometry.columns)
-        || !(1..=MAX_TERMINAL_ROWS).contains(&geometry.rows)
+        || !(2..=MAX_TERMINAL_ROWS).contains(&geometry.rows)
     {
         return Err(TerminalRuntimeFailure::invalid(
             "terminal geometry is outside the advertised bounds",
@@ -1031,12 +1254,14 @@ fn validate_mutation_time(request: &MutationRequestId) -> Result<(), TerminalRun
 fn current_roots(
     authority: &AuthorizedIntegration,
 ) -> Result<Vec<AuthorizedRoot>, TerminalRuntimeFailure> {
-    authorized_roots(authority).map_err(|_| {
-        TerminalRuntimeFailure::new(
-            RuntimeErrorKind::RootDenied,
-            "an approved terminal root no longer has local authority",
-        )
-    })
+    authorized_roots(authority).map_err(|_| root_authority_failure())
+}
+
+const fn root_authority_failure() -> TerminalRuntimeFailure {
+    TerminalRuntimeFailure::new(
+        RuntimeErrorKind::RootDenied,
+        "an approved terminal root no longer has local authority",
+    )
 }
 
 fn ensure_visible(
@@ -1060,6 +1285,61 @@ fn visible_in(hosted: &HostedTerminal, roots: &[AuthorizedRoot]) -> bool {
         .any(|root| hosted.workspace.is_under(&root.path))
 }
 
+#[cfg(windows)]
+fn pin_visible_root(
+    authority: &AuthorizedIntegration,
+    hosted: &HostedTerminal,
+) -> Result<PinnedTerminalRoot, TerminalRuntimeFailure> {
+    let row = authority
+        .roots
+        .iter()
+        .find(|row| AbsPath::new(&row.path).is_ok_and(|path| hosted.workspace.is_under(&path)))
+        .ok_or_else(|| {
+            TerminalRuntimeFailure::new(
+                RuntimeErrorKind::RootDenied,
+                "the terminal is outside the integration's approved roots",
+            )
+        })?;
+    let path = AbsPath::new(&row.path).map_err(|_| {
+        TerminalRuntimeFailure::new(
+            RuntimeErrorKind::RootDenied,
+            "an approved terminal root no longer has local authority",
+        )
+    })?;
+    let guard = ProjectRootGuard::acquire(&path, ProjectRootIdentity::from_bytes(row.identity))
+        .map_err(|_| {
+            TerminalRuntimeFailure::new(
+                RuntimeErrorKind::RootDenied,
+                "an approved terminal root no longer has local authority",
+            )
+        })?;
+    Ok(PinnedTerminalRoot {
+        guard: Arc::new(tokio::sync::Mutex::new(guard)),
+    })
+}
+
+/// Revalidate a quiet terminal's output boundary away from its latency-sensitive relay task.
+#[cfg(any(test, not(windows)))]
+pub(crate) fn validate_workspace_roots(
+    row: &IntegrationRow,
+    workspace: &AbsPath,
+) -> Result<(), TerminalRuntimeFailure> {
+    let roots = approved_root_rows(&row.roots).map_err(|_| {
+        TerminalRuntimeFailure::new(
+            RuntimeErrorKind::RootDenied,
+            "an approved terminal root no longer has local authority",
+        )
+    })?;
+    if roots.iter().any(|root| workspace.is_under(&root.path)) {
+        Ok(())
+    } else {
+        Err(TerminalRuntimeFailure::new(
+            RuntimeErrorKind::RootDenied,
+            "the terminal is outside the integration's approved roots",
+        ))
+    }
+}
+
 async fn visible_terminal(
     composed: &Composed,
     authority: &AuthorizedIntegration,
@@ -1080,9 +1360,38 @@ async fn visible_terminal(
     Ok(hosted)
 }
 
+async fn visible_terminal_in_view(
+    composed: &Composed,
+    view: &TerminalView,
+    terminal_id: TerminalId,
+) -> Result<HostedTerminal, TerminalRuntimeFailure> {
+    if terminal_id != view.hosted.id {
+        return Err(TerminalRuntimeFailure::new(
+            RuntimeErrorKind::TerminalNotFound,
+            "the terminal view is not bound to this terminal",
+        ));
+    }
+    let hosted = composed
+        .terminals
+        .lock()
+        .await
+        .hosted(terminal_id)
+        .filter(|hosted| hosted.generation == view.hosted.generation)
+        .ok_or_else(|| {
+            TerminalRuntimeFailure::new(
+                RuntimeErrorKind::TerminalGone,
+                "the terminal ended in its recorded Runtime generation",
+            )
+        })?;
+    #[cfg(not(windows))]
+    ensure_visible(&hosted, &view.authority)?;
+    Ok(hosted)
+}
+
 fn descriptor(
     hosted: &HostedTerminal,
     runtime_generation: &str,
+    changes: &tokio::sync::watch::Sender<u64>,
 ) -> Result<TerminalDescriptor, TerminalRuntimeFailure> {
     let size = hosted.terminal.size();
     Ok(TerminalDescriptor {
@@ -1110,7 +1419,12 @@ fn descriptor(
         memory_bytes: if hosted.stopping {
             None
         } else {
-            crate::runtime_inventory::resident_bytes_now(hosted.terminal.pid())
+            crate::runtime_inventory::resident_bytes_for_terminal(
+                hosted.terminal.pid(),
+                hosted.id,
+                hosted.generation,
+                changes,
+            )
         },
     })
 }
@@ -1180,12 +1494,60 @@ fn prior_done_from_state(
     match prior_from_state(state, key, fingerprint, now)? {
         None => Ok(false),
         Some(MutationOutcome::Done) => Ok(true),
+        Some(MutationOutcome::PendingDone) => Err(mutation_in_progress()),
         Some(MutationOutcome::Lease(_) | MutationOutcome::Opened(_)) => {
             Err(TerminalRuntimeFailure::new(
                 RuntimeErrorKind::IdempotencyConflict,
                 "the mutation identity belongs to another terminal operation",
             ))
         }
+    }
+}
+
+fn remember_pending_done(
+    state: &mut TerminalAuthorityState,
+    key: MutationKey,
+    fingerprint: [u8; 32],
+    now: u64,
+) {
+    state.mutations.insert(
+        key,
+        StoredMutation {
+            fingerprint,
+            recorded_at_ms: now,
+            outcome: MutationOutcome::PendingDone,
+        },
+    );
+}
+
+fn finish_done_from_state(
+    state: &mut TerminalAuthorityState,
+    key: &MutationKey,
+    fingerprint: [u8; 32],
+    now: u64,
+) -> Result<(), TerminalRuntimeFailure> {
+    let Some(stored) = state.mutations.get_mut(key) else {
+        return Err(TerminalRuntimeFailure::new(
+            RuntimeErrorKind::OutcomeUnknown,
+            "the terminal mutation completed without its bounded idempotency reservation",
+        ));
+    };
+    if stored.fingerprint != fingerprint {
+        return Err(TerminalRuntimeFailure::new(
+            RuntimeErrorKind::IdempotencyConflict,
+            "the terminal mutation identity was reused with different parameters",
+        ));
+    }
+    match &stored.outcome {
+        MutationOutcome::PendingDone | MutationOutcome::Done => {
+            stored.outcome = MutationOutcome::Done;
+            stored.recorded_at_ms = now;
+            Ok(())
+        }
+        MutationOutcome::Lease(_) | MutationOutcome::Opened(_) => Err(TerminalRuntimeFailure::new(
+            RuntimeErrorKind::IdempotencyConflict,
+            "the mutation identity belongs to another terminal operation",
+        )),
     }
 }
 
@@ -1371,6 +1733,13 @@ mod tests {
         assert!(
             validate_geometry(TerminalGeometry {
                 columns: 80,
+                rows: 1,
+            })
+            .is_err()
+        );
+        assert!(
+            validate_geometry(TerminalGeometry {
+                columns: 80,
                 rows: 24,
             })
             .is_ok()
@@ -1391,6 +1760,42 @@ mod tests {
             &grant,
             &[AppScope::SessionStart, AppScope::SessionOutputRead]
         ));
+    }
+
+    #[test]
+    fn quiet_output_root_check_rejects_a_replaced_directory() {
+        let base =
+            std::env::temp_dir().join(format!("runtrol-terminal-root-check-{}", TerminalId::now()));
+        let project_path = base.join("project");
+        std::fs::create_dir_all(&project_path).expect("create project root");
+        let project = AbsPath::canonicalize(project_path.to_str().expect("UTF-8 path"))
+            .expect("canonical project root");
+        let identity = runtrol_security::ProjectRootIdentity::read(&project)
+            .expect("read project root identity");
+        let row = IntegrationRow {
+            public_key: [7; 32],
+            client_instance_id: "client".into(),
+            label: "Client".into(),
+            manifest_digest: [8; 32],
+            scopes: vec!["session.output.read".into()],
+            roots: vec![runtrol_store::IntegrationRootRow {
+                path: project.as_str().into(),
+                identity: identity.to_bytes(),
+            }],
+            key_generation: 1,
+            grant_generation: 1,
+            approved_at: WallMs::from_millis(1),
+            revoked_at: None,
+        };
+
+        validate_workspace_roots(&row, &project).expect("the approved directory is visible");
+        std::fs::rename(&project_path, base.join("retired")).expect("retire approved root");
+        std::fs::create_dir(&project_path).expect("replace root at the same path");
+        assert!(
+            validate_workspace_roots(&row, &project).is_err(),
+            "the replacement must not inherit output authority"
+        );
+        std::fs::remove_dir_all(&base).expect("clean root fixture");
     }
 
     #[test]
@@ -1419,6 +1824,61 @@ mod tests {
     }
 
     #[test]
+    fn an_in_flight_terminal_mutation_is_bounded_and_cannot_execute_twice() {
+        let key = MutationKey {
+            integration: [3; 16],
+            request: [4; 16],
+        };
+        let fingerprint = [5; 32];
+        let mut state = TerminalAuthorityState::default();
+        remember_pending_done(&mut state, key.clone(), fingerprint, 10);
+
+        let pending = prior_done_from_state(&mut state, &key, fingerprint, 11)
+            .expect_err("a duplicate cannot pass an in-flight reservation");
+        assert_eq!(pending.kind, RuntimeErrorKind::OutcomeUnknown);
+        assert_eq!(
+            state.mutations.len(),
+            1,
+            "pending work owns one bounded row"
+        );
+
+        finish_done_from_state(&mut state, &key, fingerprint, 12)
+            .expect("the original operation finalizes its own reservation");
+        assert!(
+            prior_done_from_state(&mut state, &key, fingerprint, 13)
+                .expect("the finished mutation is readable"),
+            "an exact retry replays success without touching the terminal"
+        );
+        assert!(
+            prior_done_from_state(&mut state, &key, [6; 32], 13).is_err(),
+            "the same identity cannot change parameters"
+        );
+    }
+
+    #[test]
+    fn pending_terminal_mutations_count_toward_the_hard_table_limit() {
+        let mut state = TerminalAuthorityState::default();
+        for index in 0..MAX_IDEMPOTENCY_RECORDS {
+            let mut request = [0; 16];
+            request[..2].copy_from_slice(&index.to_le_bytes());
+            remember_pending_done(
+                &mut state,
+                MutationKey {
+                    integration: [7; 16],
+                    request,
+                },
+                [8; 32],
+                1,
+            );
+        }
+        assert_eq!(state.mutations.len(), usize::from(MAX_IDEMPOTENCY_RECORDS));
+        assert!(
+            ensure_mutation_capacity(&state).is_err(),
+            "an in-flight row cannot live outside the same frozen table ceiling"
+        );
+    }
+
+    #[test]
     fn a_conversation_a_live_process_owns_is_not_resumed_into_a_second_process() {
         let held = vec![
             runtrol_provider::NativeSessionId::new("aaaaaaaa-0000-4000-8000-000000000001")
@@ -1439,40 +1899,70 @@ mod tests {
     }
 
     #[test]
-    fn official_attachment_requires_the_exact_native_identity_and_workspace() {
+    fn live_attachment_requires_the_exact_native_identity_workspace_and_route() {
         let current = std::env::current_dir().expect("the test process has a current directory");
         let workspace = AbsPath::canonicalize(&current.to_string_lossy())
             .expect("the current directory is canonical");
         let native = runtrol_provider::NativeSessionId::new("aaaaaaaa-0000-4000-8000-000000000001")
             .expect("a well-formed native identity parses");
+        let console_native =
+            runtrol_provider::NativeSessionId::new("aaaaaaaa-0000-4000-8000-000000000002")
+                .expect("a well-formed native identity parses");
+        let unavailable_native =
+            runtrol_provider::NativeSessionId::new("aaaaaaaa-0000-4000-8000-000000000003")
+                .expect("a well-formed native identity parses");
         let activity = runtrol_provider::NativeProcessActivity {
-            live: vec![native.clone()],
+            live: vec![
+                native.clone(),
+                console_native.clone(),
+                unavailable_native.clone(),
+            ],
             active: Vec::new(),
-            processes: vec![runtrol_provider::NativeProcessBinding {
-                pid: std::process::id(),
-                native,
-                cwd: Some(workspace.as_str().to_owned()),
-                terminal_access: NativeTerminalAccess::Official {
-                    target: runtrol_provider::NativeTerminalTarget::new("job-opaque-1")
-                        .expect("a valid opaque target"),
+            processes: vec![
+                runtrol_provider::NativeProcessBinding {
+                    pid: std::process::id(),
+                    native,
+                    cwd: Some(workspace.as_str().to_owned()),
+                    terminal_access: NativeTerminalAccess::Official {
+                        target: runtrol_provider::NativeTerminalTarget::new("job-opaque-1")
+                            .expect("a valid opaque target"),
+                    },
                 },
-            }],
+                runtrol_provider::NativeProcessBinding {
+                    pid: 44,
+                    native: console_native,
+                    cwd: Some(workspace.as_str().to_owned()),
+                    terminal_access: NativeTerminalAccess::Console,
+                },
+                runtrol_provider::NativeProcessBinding {
+                    pid: 45,
+                    native: unavailable_native,
+                    cwd: Some(workspace.as_str().to_owned()),
+                    terminal_access: NativeTerminalAccess::Unavailable,
+                },
+            ],
         };
 
-        assert_eq!(
-            official_attach_target_for(
+        assert!(matches!(
+            live_terminal_route_for(
                 &activity,
                 "aaaaaaaa-0000-4000-8000-000000000001",
                 &workspace,
-            )
-            .as_ref()
-            .map(NativeTerminalTarget::as_str),
-            Some("job-opaque-1")
-        );
-        assert!(
-            official_attach_target_for(
+            ),
+            Some(LiveTerminalRoute::Official(target)) if target.as_str() == "job-opaque-1"
+        ));
+        assert_eq!(
+            live_terminal_route_for(
                 &activity,
                 "aaaaaaaa-0000-4000-8000-000000000002",
+                &workspace,
+            ),
+            Some(LiveTerminalRoute::Console { pid: 44 })
+        );
+        assert!(
+            live_terminal_route_for(
+                &activity,
+                "aaaaaaaa-0000-4000-8000-000000000003",
                 &workspace,
             )
             .is_none()
@@ -1487,7 +1977,7 @@ mod tests {
         )
         .expect("the parent directory is canonical");
         assert!(
-            official_attach_target_for(
+            live_terminal_route_for(
                 &activity,
                 "aaaaaaaa-0000-4000-8000-000000000001",
                 &other_workspace,

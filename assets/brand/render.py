@@ -443,7 +443,7 @@ def main() -> None:
     write("icon-16.png", hinted[16])
     write("icon-32.png", hinted[32])
     write("favicon.ico", ico([(16, hinted[16]), (32, hinted[32]), (48, hinted[48])]))
-    write("symbol-cells.json", symbol_cells_json(mark_cells(HINTED, 32)))
+    write("symbol-cells.json", symbol_cells_json(mark_cells(HINTED, 16)))
 
     for size in (192, 512):
         write(f"icon-{size}.png", draw_tile(size, MARK, 0.64, 0.0).png())

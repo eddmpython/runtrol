@@ -404,12 +404,10 @@ impl IntegrationAdmin {
             .collect())
     }
 
-    pub(crate) fn integrations(composed: &Composed) -> Result<Vec<IntegrationLine>, AdminError> {
-        let rows = composed
-            .store
-            .list_integrations()
-            .map_err(|_| AdminError::state())?;
-        Ok(rows
+    pub(crate) fn integrations(composed: &Composed) -> Vec<IntegrationLine> {
+        composed
+            .integration_authority
+            .rows()
             .into_iter()
             .map(|(key, row)| IntegrationLine {
                 integration_id: integration_id(key).to_string().into(),
@@ -425,7 +423,7 @@ impl IntegrationAdmin {
                 grant_generation: row.grant_generation,
                 revoked: row.revoked_at.is_some(),
             })
-            .collect())
+            .collect()
     }
 
     pub(crate) async fn begin(
@@ -714,11 +712,15 @@ impl IntegrationAdmin {
             "attempted",
         )
         .map_err(|_| AdminError::state())?;
-        if composed
+        if let Some(revoked) = composed
             .store
             .revoke_integration(key, WallMs::now())
             .map_err(|_| AdminError::state())?
         {
+            composed
+                .integration_authority
+                .publish_revocation(key, revoked)
+                .map_err(|_| AdminError::state())?;
             crate::runtime_audit::local(
                 composed,
                 Some(key),
@@ -817,7 +819,12 @@ impl IntegrationAdmin {
             .change_integration_grant(key, expected_grant_generation, scopes.to_vec(), roots)
             .map_err(|_| AdminError::state())?
         {
-            IntegrationGrantChange::Changed(_) | IntegrationGrantChange::Unchanged(_) => {
+            IntegrationGrantChange::Changed(committed)
+            | IntegrationGrantChange::Unchanged(committed) => {
+                composed
+                    .integration_authority
+                    .publish_committed(key, committed)
+                    .map_err(|_| AdminError::state())?;
                 crate::runtime_audit::local(
                     composed,
                     Some(key),
@@ -913,36 +920,45 @@ fn commit_approval(
 ) -> Result<IntegrationId, AdminError> {
     for _ in 0..4 {
         let key = IntegrationKey::from_bytes(random_key()?);
-        if composed
-            .store
-            .get_integration(key)
-            .map_err(|_| AdminError::state())?
-            .is_none()
-        {
-            crate::runtime_audit::local(
-                composed,
-                Some(key),
-                Some(grant.key_generation),
-                method,
-                IntegrationAuditOutcome::Attempted,
-                "attempted",
-            )
-            .map_err(|_| AdminError::state())?;
-            composed
-                .store
-                .approve_enrollment(enrollment, key, grant)
+        crate::runtime_audit::local(
+            composed,
+            Some(key),
+            Some(grant.key_generation),
+            method,
+            IntegrationAuditOutcome::Attempted,
+            "attempted",
+        )
+        .map_err(|_| AdminError::state())?;
+        match composed.store.approve_enrollment(enrollment, key, grant) {
+            Ok(()) => {}
+            Err(runtrol_store::StoreError::IntegrationIdentityUnavailable) => {
+                crate::runtime_audit::local(
+                    composed,
+                    Some(key),
+                    Some(grant.key_generation),
+                    method,
+                    IntegrationAuditOutcome::Denied,
+                    "integrationIdentityUnavailable",
+                )
                 .map_err(|_| AdminError::state())?;
-            crate::runtime_audit::local(
-                composed,
-                Some(key),
-                Some(grant.key_generation),
-                method,
-                IntegrationAuditOutcome::Allowed,
-                "allowed",
-            )
-            .map_err(|_| AdminError::state())?;
-            return Ok(integration_id(key));
+                continue;
+            }
+            Err(_) => return Err(AdminError::state()),
         }
+        composed
+            .integration_authority
+            .publish_committed(key, grant.clone())
+            .map_err(|_| AdminError::state())?;
+        crate::runtime_audit::local(
+            composed,
+            Some(key),
+            Some(grant.key_generation),
+            method,
+            IntegrationAuditOutcome::Allowed,
+            "allowed",
+        )
+        .map_err(|_| AdminError::state())?;
+        return Ok(integration_id(key));
     }
     Err(AdminError::state())
 }

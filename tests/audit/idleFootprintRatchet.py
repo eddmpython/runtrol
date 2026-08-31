@@ -21,7 +21,6 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-BINARY = ROOT / "target" / "debug" / ("runtrol.exe" if sys.platform == "win32" else "runtrol")
 MEMORY_GATE = [
     "cargo",
     "test",
@@ -59,6 +58,21 @@ CPU_BUDGET_SECONDS = 0.100
 
 class Failed(Exception):
     """The idle footprint journey could not produce trustworthy evidence."""
+
+
+def cargoTargetDir() -> Path:
+    """Resolve Cargo's active output directory exactly as the build subprocess does."""
+    configured = os.environ.get("CARGO_TARGET_DIR")
+    if not configured:
+        return ROOT / "target"
+    target = Path(configured)
+    return target if target.is_absolute() else ROOT / target
+
+
+def productBinary() -> Path:
+    """The daemon produced by this gate's Cargo build."""
+    suffix = ".exe" if sys.platform == "win32" else ""
+    return cargoTargetDir() / "debug" / f"runtrol{suffix}"
 
 
 def problems(cpu_delta: float, elapsed: float) -> list[str]:
@@ -207,15 +221,16 @@ def stop(process: subprocess.Popen[bytes]) -> None:
 
 def measureCpu() -> tuple[float, float]:
     """Start one idle daemon and return its CPU delta and wall-clock sample length."""
-    if not BINARY.is_file():
-        raise Failed(f"product binary is missing: {BINARY}")
+    binary = productBinary()
+    if not binary.is_file():
+        raise Failed(f"product binary is missing: {binary}")
     with tempfile.TemporaryDirectory(prefix="runtrol-idle-ratchet-") as raw_home:
         home = Path(raw_home)
         environment = os.environ.copy()
         environment["RUNTROL_HOME"] = str(home)
         creation_flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
         daemon = subprocess.Popen(
-            [str(BINARY), "daemon"],
+            [str(binary), "daemon"],
             env=environment,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
@@ -282,7 +297,11 @@ def main(argv: list[str]) -> int:
         return 2
     found = problems(cpu_delta, elapsed)
     if found:
-        print("[idleFootprintRatchet] FAIL. idle CPU contract regressed.", file=sys.stderr)
+        print(
+            f"[idleFootprintRatchet] FAIL. idle CPU contract regressed: "
+            f"CPU {cpu_delta:.6f}s over {elapsed:.3f}s.",
+            file=sys.stderr,
+        )
         for problem in found:
             print(f"  - {problem}", file=sys.stderr)
         return 2

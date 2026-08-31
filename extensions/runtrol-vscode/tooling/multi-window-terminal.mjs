@@ -25,6 +25,13 @@ const ownerExtensions = path.join(workRoot, "owner-extensions");
 const mirrorExtensions = path.join(workRoot, "mirror-extensions");
 const ownerPidPath = process.env.RUNTROL_ACP_FIXTURE_TUI_PID_PATH || null;
 const inputMode = process.env.RUNTROL_VSCODE_INPUT_MODE || "text";
+const performanceBudget = JSON.parse(
+  await readFile(path.join(extensionRoot, "performance-budget.json"), "utf8"),
+);
+const latencySampleCount = performanceBudget?.multiWindowTerminal?.latencySampleCount;
+if (!Number.isSafeInteger(latencySampleCount) || latencySampleCount < 2) {
+  throw new Error("multiWindowTerminal.latencySampleCount must be a safe integer of at least two");
+}
 const testEnvironment = withoutHostIdentity();
 let owner = null;
 let mirror = null;
@@ -73,9 +80,9 @@ try {
   const ownerAliveWhileBothOpen = ownerPid === null ? null : processAlive(ownerPid);
   await waitForPublished("owner-result.json", 60_000);
   await requireCleanExit(owner, "owner VS Code", 20_000);
-  await terminateExactProcesses(ownerUserData, null);
   const ownerAliveAfterOwnerWindowClosed = ownerPid === null ? null : processAlive(ownerPid);
   await publish("owner-closed.json", { ownerPid });
+  await terminateExactProcesses(ownerUserData, null);
 
   const mirrorResult = await waitForPublished("mirror-result.json", 60_000);
   await requireCleanExit(mirror, "mirror VS Code", 20_000);
@@ -99,13 +106,21 @@ try {
     ownerAliveBeforeMirror,
     ownerAliveWhileBothOpen,
     ownerAliveAfterOwnerWindowClosed,
-    ownerSawOwnerInput: Number.isFinite(ownerResult.ownerInputMs),
-    mirrorSawOwnerInput: Number.isFinite(mirrorResult.mirrorSawOwnerMs),
-    mirrorWroteAfterOwnerWindowClosed: Number.isFinite(mirrorResult.mirrorInputAfterHandoffMs),
-    mirrorSawOwnInput: Number.isFinite(mirrorResult.mirrorInputAfterHandoffMs),
-    ownerInputMs: ownerResult.ownerInputMs,
-    mirrorSawOwnerMs: mirrorResult.mirrorSawOwnerMs,
-    mirrorInputAfterHandoffMs: mirrorResult.mirrorInputAfterHandoffMs,
+    ownerSawOwnerInput: Number.isFinite(ownerResult.ownerFirstInputMs),
+    mirrorSawOwnerInput: Number.isFinite(ownerResult.mirrorFirstFanoutMs),
+    mirrorWroteAfterOwnerWindowClosed: Number.isFinite(mirrorResult.handoffFirstInputMs),
+    mirrorSawOwnInput: Number.isFinite(mirrorResult.handoffFirstInputMs),
+    ownerFirstInputMs: ownerResult.ownerFirstInputMs,
+    ownerWarmInputP95Ms: ownerResult.ownerWarmInputP95Ms,
+    ownerInputSamplesMs: ownerResult.ownerInputSamplesMs,
+    ownerInputTimings: ownerResult.ownerInputTimings,
+    mirrorFirstFanoutMs: ownerResult.mirrorFirstFanoutMs,
+    mirrorWarmFanoutP95Ms: ownerResult.mirrorWarmFanoutP95Ms,
+    mirrorFanoutSamplesMs: ownerResult.mirrorFanoutSamplesMs,
+    handoffFirstInputMs: mirrorResult.handoffFirstInputMs,
+    handoffWarmInputP95Ms: mirrorResult.handoffWarmInputP95Ms,
+    handoffInputSamplesMs: mirrorResult.handoffInputSamplesMs,
+    handoffInputTimings: mirrorResult.handoffInputTimings,
     providerStopped,
     ownerVscode: ownerResult.vscode,
     mirrorVscode: mirrorResult.vscode,
@@ -144,6 +159,7 @@ function launch(role, userData, extensions) {
       RUNTROL_VSCODE_ROLE: role,
       RUNTROL_VSCODE_COORDINATION: coordination,
       RUNTROL_VSCODE_INPUT_MODE: inputMode,
+      RUNTROL_VSCODE_LATENCY_SAMPLE_COUNT: String(latencySampleCount),
     },
     stdio: "inherit",
     windowsHide: true,

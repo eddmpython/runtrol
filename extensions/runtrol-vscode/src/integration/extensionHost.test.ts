@@ -373,8 +373,13 @@ function managedSessionIds(): string[] {
   } catch {
     throw new Error("RUNTROL_VSCODE_MANAGED_SESSIONS is not JSON");
   }
-  if (!Array.isArray(value) || value.length !== 30 || !value.every((item) => typeof item === "string")) {
-    throw new Error("RUNTROL_VSCODE_MANAGED_SESSIONS must contain 30 session identifiers");
+  if (
+    !Array.isArray(value)
+    || value.length === 0
+    || !value.every((item) => typeof item === "string" && item.length > 0)
+    || new Set(value).size !== value.length
+  ) {
+    throw new Error("RUNTROL_VSCODE_MANAGED_SESSIONS must contain unique non-empty session identifiers");
   }
   return value;
 }

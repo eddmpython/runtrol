@@ -162,7 +162,7 @@ export interface ManagedSessionList { readonly sessions: ReadonlyArray<SessionDe
 export type MutationRequestId = string;
 
 /** The conversations of one provider owned by live processes and the subset answering right now. */
-export interface NativeActivity { readonly active: ReadonlyArray<string>; readonly live?: ReadonlyArray<string>; readonly providerId: ProviderId; }
+export interface NativeActivity { readonly active: ReadonlyArray<string>; readonly attachable?: ReadonlyArray<string>; readonly live?: ReadonlyArray<string>; readonly providerId: ProviderId; }
 
 /** Ask which of one provider's conversations have a model answering right now.
 

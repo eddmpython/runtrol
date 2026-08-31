@@ -17,8 +17,9 @@
 //! is released by the operating system when the process ends, so a stale file cannot claim a dead process.
 //!
 //! **A model is answering** while the conversation's own event log has a turn open: its last turn boundary is
-//! `task_started` rather than `task_complete`. Both finished conversations examined ended on `task_complete`;
-//! the one that was answering had `task_complete` at 07:20:36.672Z followed by `task_started` at
+//! `task_started` rather than `task_complete` or `turn_aborted`. A process and its writer lock remain alive at
+//! the CLI's paused prompt after an interruption, so the abort boundary is essential. The conversation that
+//! was answering during measurement had `task_complete` at 07:20:36.672Z followed by `task_started` at
 //! 07:20:36.804Z, and everything written since. This is a state, not a heartbeat, so it stays true through a
 //! long tool call that writes nothing for minutes. That is what a timestamp cannot do, and why the timestamp
 //! is not the signal. The other CLI was first read through timestamps and it failed both ways there too.
@@ -94,8 +95,14 @@ const MAX_FOLLOW_BYTES: u64 = 8 * 1024 * 1024;
 /// The event that opens a turn, in the CLI's own words.
 const TURN_OPENED: &[u8] = b"\"type\":\"task_started\"";
 
-/// The event that closes one.
+/// The event that closes a turn after a normal answer.
 const TURN_CLOSED: &[u8] = b"\"type\":\"task_complete\"";
+
+/// The event that closes a turn after the operator or host interrupts it.
+///
+/// Codex keeps the conversation process and writer lock alive after this record. Treating only
+/// [`TURN_CLOSED`] as a boundary therefore leaves an interrupted, idle conversation answering forever.
+const TURN_ABORTED: &[u8] = b"\"type\":\"turn_aborted\"";
 
 /// How long one answer about which conversations are held is reused.
 ///
@@ -438,7 +445,14 @@ fn answering(home: &Path, followed: &mut HashMap<Box<str>, Followed>, thread: &s
         }
         // Back over the straddle: the previous size may have landed inside a boundary token, and a token
         // that neither look sees is a turn that never starts or never ends until the next one.
-        let straddle = u64::try_from(TURN_OPENED.len().max(TURN_CLOSED.len()) - 1).unwrap_or(0);
+        let straddle = u64::try_from(
+            TURN_OPENED
+                .len()
+                .max(TURN_CLOSED.len())
+                .max(TURN_ABORTED.len())
+                - 1,
+        )
+        .unwrap_or(0);
         let from = known.read_to.saturating_sub(straddle);
         if let Some(state) = boundary_in_range(&known.log, from, size) {
             known.answering = state;
@@ -540,7 +554,14 @@ fn last_boundary(log: &Path) -> Option<(u64, bool)> {
     let floor = size.saturating_sub(MAX_BACKWARD_SCAN_BYTES);
     // A boundary written across a chunk edge belongs to neither chunk alone, so each chunk carries the first
     // bytes of the one after it.
-    let straddle = u64::try_from(TURN_OPENED.len().max(TURN_CLOSED.len()) - 1).unwrap_or(0);
+    let straddle = u64::try_from(
+        TURN_OPENED
+            .len()
+            .max(TURN_CLOSED.len())
+            .max(TURN_ABORTED.len())
+            - 1,
+    )
+    .unwrap_or(0);
     let mut end = size;
     while end > floor {
         let start = end.saturating_sub(SCAN_CHUNK_BYTES).max(floor);
@@ -587,7 +608,7 @@ fn read_range(file: &mut fs::File, from: u64, to: u64) -> Option<Vec<u8>> {
 /// Whether the last turn boundary in these bytes opens a turn, or `None` when they hold no boundary.
 fn last_open_turn(bytes: &[u8]) -> Option<bool> {
     let opened = last_index_of(bytes, TURN_OPENED);
-    let closed = last_index_of(bytes, TURN_CLOSED);
+    let closed = last_index_of(bytes, TURN_CLOSED).max(last_index_of(bytes, TURN_ABORTED));
     match (opened, closed) {
         (None, None) => None,
         (Some(_), None) => Some(true),
@@ -644,6 +665,12 @@ mod tests {
     fn closed(id: &str) -> String {
         format!(
             "{{\"timestamp\":\"t\",\"type\":\"event_msg\",\"payload\":{{\"type\":\"task_complete\",\"turn_id\":\"{id}\"}}}}\n"
+        )
+    }
+
+    fn aborted(id: &str) -> String {
+        format!(
+            "{{\"timestamp\":\"t\",\"type\":\"event_msg\",\"payload\":{{\"type\":\"turn_aborted\",\"turn_id\":\"{id}\"}}}}\n"
         )
     }
 
@@ -805,6 +832,46 @@ mod tests {
         );
     }
 
+    /// An interrupted turn closes the working state without releasing the live conversation.
+    ///
+    /// Codex emits `turn_aborted`, not `task_complete`, when a host interrupts a turn. The 0.1.41 roster
+    /// missed that boundary and left the sidebar glyph spinning until the whole CLI process exited.
+    #[cfg(windows)]
+    #[test]
+    fn a_turn_that_is_aborted_between_two_looks_stops_answering() {
+        let (_kept, root) = home(&[(OPEN_THREAD, opened("turn") + &chatter())]);
+        let _held = hold(&root, OPEN_THREAD);
+        let roster = CodexRoster::rooted(root.clone());
+        let first = roster.activity(codex()).expect("the home is readable");
+        assert_eq!(first.active.len(), 1, "the turn is open");
+
+        let log = root
+            .join(SESSIONS_DIRECTORY)
+            .join("2026")
+            .join("08")
+            .join("29")
+            .join(format!("rollout-2026-08-29T00-00-00-{OPEN_THREAD}.jsonl"));
+        let mut appended = OpenOptions::new()
+            .append(true)
+            .open(&log)
+            .expect("the log is appended to");
+        appended
+            .write_all(aborted("turn").as_bytes())
+            .expect("the turn is interrupted");
+        drop(appended);
+
+        let second = roster.activity(codex()).expect("the home is readable");
+        assert!(
+            second.active.is_empty(),
+            "the interrupted turn stops the answer"
+        );
+        assert_eq!(
+            second.live.len(),
+            1,
+            "the process still owns the conversation"
+        );
+    }
+
     /// What this reads on the machine it is run on, printed rather than asserted.
     ///
     /// Ignored by default because it depends on whether the person has the CLI open right now. It is how the
@@ -844,12 +911,17 @@ mod tests {
         assert_eq!(last_open_turn(chatter().as_bytes()), None);
         assert_eq!(last_open_turn(opened("a").as_bytes()), Some(true));
         assert_eq!(last_open_turn(closed("a").as_bytes()), Some(false));
+        assert_eq!(last_open_turn(aborted("a").as_bytes()), Some(false));
         assert_eq!(
             last_open_turn((closed("a") + &opened("b")).as_bytes()),
             Some(true)
         );
         assert_eq!(
             last_open_turn((opened("a") + &chatter() + &closed("a")).as_bytes()),
+            Some(false)
+        );
+        assert_eq!(
+            last_open_turn((closed("a") + &opened("b") + &aborted("b")).as_bytes()),
             Some(false)
         );
     }

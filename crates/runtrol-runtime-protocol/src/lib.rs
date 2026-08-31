@@ -47,7 +47,8 @@ pub use inventory::{
     WatchSessionIndexResult,
 };
 pub use locator::{
-    RUNTIME_LOCATOR_SCHEMA, RuntimeEndpointKind, RuntimeGeneration, RuntimeLocatorRecord,
+    MAX_RUNTIME_GENERATIONS, RUNTIME_LOCATOR_SCHEMA, RuntimeEndpointKind, RuntimeGeneration,
+    RuntimeLocatorRecord,
 };
 pub use method::RuntimeMethod;
 pub use models::{

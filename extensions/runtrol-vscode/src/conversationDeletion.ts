@@ -27,6 +27,12 @@ export function conversationDeletion(
   row: Conversation,
   capabilities: ProviderCapabilities | null,
 ): ConversationDeletion {
+  if (row.presence.kind === "unconfirmed") {
+    return {
+      kind: "unsupported",
+      why: `Runtrol must confirm that ${row.title} has stopped before deleting its provider-owned conversation.`,
+    };
+  }
   if (row.live) {
     return {
       kind: "unsupported",

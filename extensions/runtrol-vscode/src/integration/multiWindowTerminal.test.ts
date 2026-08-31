@@ -1,19 +1,33 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { performance } from "node:perf_hooks";
 
 import * as vscode from "vscode";
 
 import type { RuntrolExtensionApi } from "../extension";
 import type { JourneyTerminal } from "../journeyApi";
+import type { JourneyInputTiming } from "../terminalTabs";
 import { extensionUnderTest } from "./extensionUnderTest.test";
 
 const OWNER_TEXT = "runtrol-owner-window-input";
 const MIRROR_TEXT = "runtrol-mirror-window-input";
 const DEADLINE_MS = 30_000;
+const SAMPLE_COUNT = requiredSampleCount();
+const WARM_SAMPLE_INTERVAL_MS = 50;
 const NAVIGATION_MODE = process.env.RUNTROL_VSCODE_INPUT_MODE === "navigation";
 
 type Role = "owner" | "mirror";
+
+function requiredSampleCount(): number {
+  const raw = requiredEnvironment("RUNTROL_VSCODE_LATENCY_SAMPLE_COUNT");
+  if (!/^[1-9][0-9]*$/.test(raw)) {
+    throw new Error("RUNTROL_VSCODE_LATENCY_SAMPLE_COUNT must be a positive integer");
+  }
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < 2) {
+    throw new Error("RUNTROL_VSCODE_LATENCY_SAMPLE_COUNT must be a safe integer of at least two");
+  }
+  return value;
+}
 
 export async function run(): Promise<void> {
   const role = requiredRole();
@@ -45,25 +59,46 @@ async function ownerJourney(coordination: string): Promise<void> {
   }
   await publish(coordination, "owner-ready.json", terminal);
 
-  const ownerOutput = waitForInputOutput(journey, terminal, OWNER_TEXT);
-  await publish(coordination, "owner-armed.json", terminal);
   const mirror = await readPublished<JourneyTerminal>(coordination, "mirror-armed.json", DEADLINE_MS);
   requireSameTerminal(terminal, mirror);
 
-  const started = performance.now();
-  await writeInput(journey, terminal, NAVIGATION_MODE ? "\x1b[B" : OWNER_TEXT);
-  await ownerOutput;
-  const ownerInputMs = performance.now() - started;
-  await publish(coordination, "owner-observed.json", { ownerInputMs });
-  const mirrorObserved = await readPublished<{ mirrorSawOwnerMs: number }>(
+  const ownerSamples: number[] = [];
+  const sampleStarts: number[] = [];
+  const ownerInputTimings: JourneyInputTiming[] = [];
+  await readPublished(coordination, "mirror-samples-armed.json", DEADLINE_MS);
+  for (let index = 0; index < SAMPLE_COUNT; index += 1) {
+    const marker = `${OWNER_TEXT}-${index}`;
+    const ownerOutput = waitForInputOutput(journey, terminal, marker);
+    if (index > 0) await delay(WARM_SAMPLE_INTERVAL_MS);
+    // Start at the actual public or direct input call. Every mirror latch was armed before the loop, so no
+    // coordination filesystem work competes with the Runtime, PTY, or extension host during a sample.
+    const startedAtMs = Date.now();
+    sampleStarts.push(startedAtMs);
+    const inputTiming = await writeInput(
+      journey,
+      terminal,
+      NAVIGATION_MODE ? "\x1b[B" : marker,
+      index > 0,
+    );
+    if (inputTiming) ownerInputTimings.push(inputTiming);
+    const ownerObservedAtMs = await ownerOutput;
+    ownerSamples.push(Math.max(0, ownerObservedAtMs - startedAtMs));
+  }
+  const mirrorObserved = await readPublished<{ observations: number[] }>(
     coordination,
-    "mirror-observed-owner.json",
+    "mirror-samples-observed.json",
     DEADLINE_MS,
   );
+  const mirrorSamples = requireMirrorSamples(mirrorObserved.observations, sampleStarts);
   await publish(coordination, "owner-result.json", {
     terminal,
-    ownerInputMs,
-    mirrorSawOwnerMs: mirrorObserved.mirrorSawOwnerMs,
+    ownerInputSamplesMs: ownerSamples,
+    ownerFirstInputMs: ownerSamples[0],
+    ownerWarmInputP95Ms: p95(ownerSamples.slice(1)),
+    mirrorFanoutSamplesMs: mirrorSamples,
+    mirrorFirstFanoutMs: mirrorSamples[0],
+    mirrorWarmFanoutP95Ms: p95(mirrorSamples.slice(1)),
+    ownerInputTimings,
     vscode: vscode.version,
   });
 }
@@ -81,27 +116,55 @@ async function mirrorJourney(coordination: string): Promise<void> {
   );
   requireSameTerminal(owner, terminal);
 
-  const ownerOutputStarted = performance.now();
-  const ownerOutput = waitForInputOutput(journey, terminal, OWNER_TEXT);
-  const textMirrorOutput = NAVIGATION_MODE ? null : waitForInputOutput(journey, terminal, MIRROR_TEXT);
   await publish(coordination, "mirror-armed.json", terminal);
-  await ownerOutput;
-  const mirrorSawOwnerMs = performance.now() - ownerOutputStarted;
-  await publish(coordination, "mirror-observed-owner.json", { mirrorSawOwnerMs });
+
+  const observations = Array.from({ length: SAMPLE_COUNT }, (_, index) =>
+    waitForInputOutput(journey, terminal, `${OWNER_TEXT}-${index}`));
+  await publish(coordination, "mirror-samples-armed.json", { sampleCount: SAMPLE_COUNT });
+  await publish(coordination, "mirror-samples-observed.json", {
+    observations: await Promise.all(observations),
+  });
 
   await readPublished(coordination, "owner-closed.json", DEADLINE_MS);
-  const mirrorOutput = textMirrorOutput ?? waitForInputOutput(journey, terminal, MIRROR_TEXT);
-  const handoffStarted = performance.now();
-  await writeInput(journey, terminal, NAVIGATION_MODE ? "\x1b[A" : MIRROR_TEXT);
-  await mirrorOutput;
-  const mirrorInputAfterHandoffMs = performance.now() - handoffStarted;
+  const handoffSamples: number[] = [];
+  const handoffInputTimings: JourneyInputTiming[] = [];
+  for (let index = 0; index < SAMPLE_COUNT; index += 1) {
+    const marker = `${MIRROR_TEXT}-${index}`;
+    const output = waitForInputOutput(journey, terminal, marker);
+    if (index > 0) await delay(WARM_SAMPLE_INTERVAL_MS);
+    const started = Date.now();
+    const inputTiming = await writeInput(
+      journey,
+      terminal,
+      NAVIGATION_MODE ? "\x1b[A" : marker,
+      index > 0,
+    );
+    if (inputTiming) handoffInputTimings.push(inputTiming);
+    const observedAtMs = await output;
+    handoffSamples.push(Math.max(0, observedAtMs - started));
+  }
   await journey.terminalStop(terminal.runtimeGeneration, terminal.terminalId, DEADLINE_MS);
   await publish(coordination, "mirror-result.json", {
     terminal,
-    mirrorSawOwnerMs,
-    mirrorInputAfterHandoffMs,
+    handoffInputSamplesMs: handoffSamples,
+    handoffFirstInputMs: handoffSamples[0],
+    handoffWarmInputP95Ms: p95(handoffSamples.slice(1)),
+    handoffInputTimings,
     stopAccepted: true,
     vscode: vscode.version,
+  });
+}
+
+function requireMirrorSamples(observations: number[], starts: number[]): number[] {
+  if (!Array.isArray(observations) || observations.length !== SAMPLE_COUNT) {
+    throw new Error(`the mirror published ${observations?.length ?? "no"} observations, expected ${SAMPLE_COUNT}`);
+  }
+  return observations.map((observedAtMs, index) => {
+    const startedAtMs = starts[index];
+    if (!Number.isFinite(observedAtMs) || startedAtMs === undefined) {
+      throw new Error(`mirror sample ${index} has no finite timing`);
+    }
+    return Math.max(0, observedAtMs - startedAtMs);
   });
 }
 
@@ -109,7 +172,7 @@ function waitForInputOutput(
   journey: NonNullable<RuntrolExtensionApi["journey"]>,
   terminal: JourneyTerminal,
   text: string,
-): Promise<void> {
+): Promise<number> {
   return journey.terminalWaitForOutput(
     terminal.runtimeGeneration,
     terminal.terminalId,
@@ -133,12 +196,20 @@ async function writeInput(
   journey: NonNullable<RuntrolExtensionApi["journey"]>,
   terminal: JourneyTerminal,
   text: string,
-): Promise<void> {
+  direct = false,
+): Promise<JourneyInputTiming | null> {
+  if (direct) {
+    return journey.terminalWriteDirect(
+      terminal.runtimeGeneration,
+      terminal.terminalId,
+      NAVIGATION_MODE ? text : `${text}\r`,
+    );
+  }
   if (NAVIGATION_MODE) {
     await vscode.commands.executeCommand("workbench.action.terminal.sendSequence", { text });
-    return;
+    return null;
   }
-  journey.terminalWrite(terminal.runtimeGeneration, terminal.terminalId, text);
+  return journey.terminalWrite(terminal.runtimeGeneration, terminal.terminalId, text);
 }
 
 async function activate(): Promise<RuntrolExtensionApi> {
@@ -219,6 +290,15 @@ function within<T>(work: Promise<T>, milliseconds: number, label: string): Promi
 
 function delay(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function p95(samples: readonly number[]): number {
+  if (samples.length === 0) throw new Error("the latency sample set is empty");
+  const sorted = [...samples].sort((left, right) => left - right);
+  const index = Math.max(0, Math.ceil(sorted.length * 0.95) - 1);
+  const measured = sorted[index];
+  if (measured === undefined) throw new Error("the latency p95 sample is absent");
+  return measured;
 }
 
 function requiredRole(): Role {

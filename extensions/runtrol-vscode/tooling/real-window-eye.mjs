@@ -24,7 +24,7 @@ import { fileURLToPath } from "node:url";
 import { runTests } from "@vscode/test-electron";
 import { build } from "esbuild";
 
-import { extensionIdentifier, extensionRoot } from "./extension-manifest.mjs";
+import { extensionIdentifier, extensionRoot, packageManifest } from "./extension-manifest.mjs";
 import {
   acquireVSCode,
   isolatedLaunchArguments,
@@ -121,7 +121,11 @@ try {
   await mkdir(eyeFolder, { recursive: true });
   await mkdir(extensionUnderTestRoot, { recursive: true });
   await Promise.all([
-    cp(path.join(extensionRoot, "package.json"), path.join(extensionUnderTestRoot, "package.json")),
+    writeFile(
+      path.join(extensionUnderTestRoot, "package.json"),
+      `${JSON.stringify(packageManifest, null, 2)}\n`,
+      "utf8",
+    ),
     cp(path.join(extensionRoot, "dist"), path.join(extensionUnderTestRoot, "dist"), { recursive: true }),
     cp(path.join(extensionRoot, "resources"), path.join(extensionUnderTestRoot, "resources"), { recursive: true }),
   ]);
@@ -247,10 +251,11 @@ try {
     // host, so nothing inside the test runner survives to press the next key. A plain (non-test) isolated window
     // is opened on this repository, Ctrl+K Ctrl+Shift+P picks another project, the title changes, Ctrl+K Ctrl+B
     // brings it back, the title changes back; both photographed.
-    const back = eyeEntry === "realWindowEye"
+    const provesWindowSwitch = eyeEntry === "realWindowEye" && process.env.RUNTROL_EYE_DRAFT_ONLY !== "1";
+    const back = provesWindowSwitch
       ? await backProof(testEnvironment)
-      : { skipped: `focused ${eyeEntry} eye pass` };
-    if (eyeEntry === "realWindowEye" && (!back.switched || !back.returned)) {
+      : { skipped: process.env.RUNTROL_EYE_DRAFT_ONLY === "1" ? "draft-only eye pass" : `focused ${eyeEntry} eye pass` };
+    if (provesWindowSwitch && (!back.switched || !back.returned)) {
       throw new Error(`the project switch and keyboard back proof did not complete: ${JSON.stringify(back)}`);
     }
     process.stdout.write(`RUNTROL_EYE ${JSON.stringify({ ...result, back, outDir })}\n`);

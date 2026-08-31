@@ -547,6 +547,10 @@ async fn due_now(
 }
 
 /// Ask exactly these services and republish what changed.
+#[expect(
+    clippy::print_stderr,
+    reason = "a detached provider inventory rebuild has no request to answer; stderr is the daemon's operational failure channel"
+)]
 async fn ask_all(
     composed: &Arc<Composed>,
     providers: &watch::Sender<Arc<runtrol_runtime_protocol::ProviderList>>,
@@ -595,18 +599,35 @@ async fn ask_all(
             changed |= !same;
         }
     }
-    // Asking a service means preparing its driver and, for a protocol CLI, a short-lived subprocess; both
-    // are dropped by here, but the allocator keeps their pages as working set. Hand them back so a round on
-    // an otherwise idle daemon leaves the footprint where it found it (the idle memory budget is a contract).
-    runtrol_childproc::footprint::release_unused_memory();
+    // EmptyWorkingSet evicts the whole daemon, including the PTY hot path. It is useful only while idle;
+    // active terminals keep their resident pages so a background account round cannot tax keystrokes.
+    if composed
+        .open_terminals
+        .load(std::sync::atomic::Ordering::Acquire)
+        == 0
+    {
+        runtrol_childproc::footprint::release_unused_memory();
+    }
     if !changed {
         return unread;
     }
     // The provider descriptors carry the status and the usage list carries the probed windows; both
     // projections read the reports on their own, so publishing is asking each to look again.
     crate::runtime_inventory::invalidate_provider_inventory(composed).await;
-    let next = Arc::new(crate::runtime_inventory::providers(composed));
-    providers.send_replace(next);
+    match crate::runtime_inventory::providers_in_background(Arc::clone(composed)).await {
+        Ok(Some(next)) => {
+            let next = Arc::new(next);
+            providers.send_if_modified(|current| {
+                if current.as_ref() == next.as_ref() {
+                    return false;
+                }
+                *current = next;
+                true
+            });
+        }
+        Ok(None) => {}
+        Err(error) => eprintln!("{error}"),
+    }
     usage.send_modify(|current| {
         let merged = crate::runtime_inventory::merge_probed_usage(current.as_ref(), composed);
         *current = Arc::new(merged);

@@ -4,7 +4,7 @@ import { Controller } from "./controller";
 import type { IsolatedWorkspaceLine } from "./protocol";
 import type { ProviderLine, SessionLine } from "./runtimeTypes";
 import { RuntimeState } from "./state";
-import type { TerminalTabs } from "./terminalTabs";
+import type { JourneyInputTiming, TerminalTabs } from "./terminalTabs";
 import { workspaceCollisions } from "./workspaceCollision";
 
 export type JourneyTerminal = {
@@ -111,8 +111,9 @@ export type JourneyApi = {
     terminalId: string,
     text: string,
     deadlineMs: number,
-  ): Promise<void>;
-  terminalWrite(runtimeGeneration: string, terminalId: string, text: string): void;
+  ): Promise<number>;
+  terminalWrite(runtimeGeneration: string, terminalId: string, text: string): Promise<JourneyInputTiming>;
+  terminalWriteDirect(runtimeGeneration: string, terminalId: string, text: string): Promise<JourneyInputTiming>;
   terminalStop(runtimeGeneration: string, terminalId: string, deadlineMs: number): Promise<void>;
 };
 
@@ -363,10 +364,11 @@ export function journeyApi(
       terminals.waitForJourneyOutput(runtimeGeneration, terminalId, text, deadlineMs),
     terminalWrite: (runtimeGeneration, terminalId, text) =>
       terminals.writeJourneyInput(runtimeGeneration, terminalId, text),
-    terminalStop: (runtimeGeneration, terminalId, deadlineMs) => afterReady(async () => {
-      const row = await waitForHostedConversation(state, runtimeGeneration, terminalId, deadlineMs);
-      await controller.stopHostedResolved(row);
-    }),
+    terminalWriteDirect: (runtimeGeneration, terminalId, text) =>
+      terminals.writeDirectJourneyInput(runtimeGeneration, terminalId, text),
+    terminalStop: (runtimeGeneration, terminalId, _deadlineMs) => afterReady(
+      () => terminals.stopJourneyTerminal(runtimeGeneration, terminalId),
+    ),
   };
 }
 

@@ -13,6 +13,31 @@ export type NativeCatalogueReader = {
   listNativeSessions(params: ListNativeSessionsParams): Promise<NativeSessionCatalogue>;
 };
 
+/// Keep the last provider-owned conversation catalogue when one refresh fails.
+///
+/// A failed read says nothing about whether the provider deleted the conversations from its own store. Replacing a
+/// previously good catalogue with an empty failure made every remembered row disappear during a Runtime restart or
+/// a short provider probe failure. The old rows remain explicitly partial and the current failure is surfaced.
+export function nativeCatalogueAfterFailure(
+  previous: NativeChatCatalogue | null,
+  providerId: string,
+  error: unknown,
+  now: () => number = Date.now,
+): NativeChatCatalogue {
+  const warning = `Existing chat discovery failed: ${errorMessage(error)}`;
+  const previousCoverage = previous?.coverage ?? null;
+  const coverage = previousCoverage && previousCoverage.kind !== "unsupported"
+    ? { kind: "partial" as const, source: previousCoverage.source, why: warning }
+    : previousCoverage;
+  return {
+    providerId,
+    coverage,
+    chats: previous?.chats ?? [],
+    loadedAtMs: previous?.loadedAtMs ?? now(),
+    warning,
+  };
+}
+
 export async function collectNativeChats(
   reader: NativeCatalogueReader,
   providerId: string,

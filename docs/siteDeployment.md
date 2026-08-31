@@ -58,7 +58,7 @@ Main content, product status, install instructions, the Marketplace link, and th
 
 - English is the static default;
 - Korean, Chinese, and Japanese dictionaries exist;
-- the North Star and the 30-conversation gate are visible in static HTML;
+- the North Star and the release-load conversation gate are visible in static HTML;
 - the live Marketplace and phone app routes are statically available;
 - manual installation selects the matching native `.vsix` asset from the latest GitHub Release;
 - there is no hardcoded release version and no external style, font, or script;
@@ -115,7 +115,11 @@ The site is exactly what is on `main`. To undo a deploy, `git revert` the commit
 
 ## Release links
 
-The primary install location is the public [Visual Studio Marketplace listing](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio), available for all six supported Windows, macOS, and Linux architecture targets. The static English page exposes that link without JavaScript.
+The primary install location is the public
+[Visual Studio Marketplace listing](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio),
+available for the complete native catalogue in
+[`release-targets.json`](../extensions/runtrol-vscode/release-targets.json). The static English page exposes that link
+without JavaScript.
 
 The browser requests the latest `eddmpython/runtrol` GitHub Release and enables the manual button only when at least one `.vsix` asset exists. Platform and architecture hints select the matching native package. When the browser cannot identify a supported target, the button opens the tagged release so the user chooses explicitly. When the request fails, the page keeps the Marketplace path and says no manual VSIX is confirmed. The page never invents a version or links to an artifact that does not exist.
 

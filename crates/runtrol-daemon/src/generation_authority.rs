@@ -7,15 +7,17 @@
 use std::collections::BTreeMap;
 use std::sync::RwLock;
 
-use runtrol_ipc::{GenerationAuthorityLine, GenerationAuthorityRoot};
+use runtrol_ipc::GenerationAuthorityLine;
 use runtrol_provider::WallMs;
-use runtrol_store::{IntegrationKey, IntegrationRow, Store};
+use runtrol_store::{IntegrationKey, IntegrationRow};
+use tokio::sync::watch;
 
 const RELAY_STALE_AFTER_MS: u64 = 5_000;
 
 /// Private grant state for this generation.
 pub(crate) struct GenerationAuthorityRelay {
     state: RwLock<RelayState>,
+    revision: watch::Sender<u64>,
 }
 
 enum RelayState {
@@ -30,8 +32,10 @@ enum RelayState {
 
 impl Default for GenerationAuthorityRelay {
     fn default() -> Self {
+        let (revision, _) = watch::channel(0);
         Self {
             state: RwLock::new(RelayState::Primary),
+            revision,
         }
     }
 }
@@ -45,9 +49,8 @@ pub(crate) enum RelayFailure {
 
 impl GenerationAuthorityRelay {
     /// Freeze the exact pre-handoff authority ceiling before the store is released.
-    pub(crate) fn freeze(&self, store: &Store) {
-        let rows = store.list_integrations().unwrap_or_default();
-        let ceiling: BTreeMap<_, _> = rows.into_iter().collect();
+    pub(crate) fn freeze(&self, authority: &crate::integration_authority::IntegrationAuthority) {
+        let ceiling = authority.rows();
         let current = ceiling.clone();
         let Ok(mut state) = self.state.write() else {
             return;
@@ -56,8 +59,13 @@ impl GenerationAuthorityRelay {
             ceiling,
             current,
             successor_digest: None,
-            last_update_ms: None,
+            // The frozen ceiling is safe authority while the successor opens the released store and sends its
+            // first intersection. Starting unavailable here closed every live terminal during that handoff race.
+            last_update_ms: Some(WallMs::now().as_millis()),
         };
+        drop(state);
+        self.revision
+            .send_modify(|revision| *revision = revision.wrapping_add(1));
     }
 
     /// Intersect one complete successor snapshot with the frozen handoff ceiling.
@@ -76,34 +84,43 @@ impl GenerationAuthorityRelay {
         else {
             return Err(RelayFailure::Unavailable);
         };
-        match successor_digest {
-            Some(bound) if bound.as_ref() != successor => return Err(RelayFailure::Unavailable),
-            Some(_) => {}
-            None => *successor_digest = Some(successor.into()),
-        }
         let incoming: BTreeMap<IntegrationKey, &GenerationAuthorityLine> = authorities
             .iter()
             .map(|line| (IntegrationKey::from_bytes(line.integration_key), line))
             .collect();
-        current.clear();
+        if incoming.len() != authorities.len() {
+            return Err(RelayFailure::Unavailable);
+        }
+        let mut next = BTreeMap::new();
         for (key, frozen) in ceiling.iter() {
-            let mut intersected = frozen.clone();
+            let previous = current.get(key).unwrap_or(frozen);
+            if previous.revoked_at.is_some() {
+                next.insert(*key, previous.clone());
+                continue;
+            }
             let Some(update) = incoming.get(key) else {
-                intersected.revoked_at = Some(WallMs::now());
-                current.insert(*key, intersected);
+                let mut revoked = previous.clone();
+                revoked.revoked_at = Some(WallMs::now());
+                next.insert(*key, revoked);
                 continue;
             };
             let expected_id = crate::runtime_auth::integration_id(*key);
             if update.integration_id.as_ref() != expected_id.as_str()
                 || update.public_key != frozen.public_key
                 || update.key_generation != frozen.key_generation
-                || update.grant_generation < frozen.grant_generation
                 || update.revoked
             {
-                intersected.revoked_at = Some(WallMs::now());
-                current.insert(*key, intersected);
+                let mut revoked = previous.clone();
+                revoked.revoked_at = Some(WallMs::now());
+                next.insert(*key, revoked);
                 continue;
             }
+            if update.grant_generation < previous.grant_generation {
+                // A late snapshot from an older successor must not refresh the relay clock or replace newer
+                // authority after a second upgrade. The current successor will provide a monotonic snapshot.
+                return Err(RelayFailure::Unavailable);
+            }
+            let mut intersected = frozen.clone();
             intersected
                 .scopes
                 .retain(|scope| update.scopes.contains(scope));
@@ -114,9 +131,24 @@ impl GenerationAuthorityRelay {
             });
             intersected.grant_generation = update.grant_generation;
             intersected.revoked_at = None;
-            current.insert(*key, intersected);
+            if update.grant_generation == previous.grant_generation && intersected != *previous {
+                // One durable generation has one exact value. A peer presenting different authority under the
+                // same generation is stale or malformed and cannot become the relay successor.
+                return Err(RelayFailure::Unavailable);
+            }
+            next.insert(*key, intersected);
         }
+        let changed = *current != next;
+        *current = next;
+        // A long-lived terminal may outlive more than one daemon upgrade. The newest monotonic owner replaces
+        // the previous relay binding; late snapshots cannot roll the rows back because of the checks above.
+        *successor_digest = Some(successor.into());
         *last_update_ms = Some(WallMs::now().as_millis());
+        drop(state);
+        if changed {
+            self.revision
+                .send_modify(|revision| *revision = revision.wrapping_add(1));
+        }
         Ok(())
     }
 
@@ -140,35 +172,16 @@ impl GenerationAuthorityRelay {
         current.get(&key).cloned().ok_or(RelayFailure::Missing)
     }
 
-    /// Complete current primary-generation authority snapshot for each draining peer.
-    pub(crate) fn snapshot(store: &Store) -> Result<Vec<GenerationAuthorityLine>, RelayFailure> {
-        let rows = store.list_integrations().map_err(|_| RelayFailure::State)?;
-        Ok(rows
-            .into_iter()
-            .map(|(key, row)| GenerationAuthorityLine {
-                integration_key: key.to_bytes(),
-                integration_id: crate::runtime_auth::integration_id(key).as_str().into(),
-                public_key: row.public_key,
-                scopes: row.scopes,
-                roots: row
-                    .roots
-                    .into_iter()
-                    .map(|root| GenerationAuthorityRoot {
-                        path: root.path,
-                        identity: root.identity,
-                    })
-                    .collect(),
-                key_generation: row.key_generation,
-                grant_generation: row.grant_generation,
-                revoked: row.revoked_at.is_some(),
-            })
-            .collect())
+    /// Subscribe to authority changes relayed from the successor.
+    pub(crate) fn subscribe(&self) -> watch::Receiver<u64> {
+        self.revision.subscribe()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use runtrol_ipc::GenerationAuthorityRoot;
     use runtrol_store::IntegrationRootRow;
 
     fn row(scopes: &[&str], generation: u64) -> IntegrationRow {
@@ -192,6 +205,53 @@ mod tests {
         }
     }
 
+    fn relay(key: IntegrationKey, ceiling: IntegrationRow) -> GenerationAuthorityRelay {
+        GenerationAuthorityRelay {
+            state: RwLock::new(RelayState::Draining {
+                ceiling: BTreeMap::from([(key, ceiling.clone())]),
+                current: BTreeMap::from([(key, ceiling)]),
+                successor_digest: None,
+                last_update_ms: Some(WallMs::now().as_millis()),
+            }),
+            revision: watch::channel(0).0,
+        }
+    }
+
+    fn line(
+        key: IntegrationKey,
+        scopes: &[&str],
+        generation: u64,
+        revoked: bool,
+    ) -> GenerationAuthorityLine {
+        GenerationAuthorityLine {
+            integration_key: key.to_bytes(),
+            integration_id: crate::runtime_auth::integration_id(key).as_str().into(),
+            public_key: [7; 32],
+            scopes: scopes
+                .iter()
+                .map(|scope| Box::<str>::from(*scope))
+                .collect(),
+            roots: vec![GenerationAuthorityRoot {
+                path: "C:\\work".into(),
+                identity: [9; 24],
+            }],
+            key_generation: 1,
+            grant_generation: generation,
+            revoked,
+        }
+    }
+
+    fn bound_successor(relay: &GenerationAuthorityRelay) -> Option<Box<str>> {
+        let state = relay.state.read().expect("read relay state");
+        let RelayState::Draining {
+            successor_digest, ..
+        } = &*state
+        else {
+            panic!("test relay must be draining");
+        };
+        successor_digest.clone()
+    }
+
     #[test]
     fn an_update_can_shrink_but_cannot_widen_the_frozen_ceiling() {
         let key = IntegrationKey::from_bytes([1; 16]);
@@ -203,6 +263,7 @@ mod tests {
                 successor_digest: None,
                 last_update_ms: None,
             }),
+            revision: watch::channel(0).0,
         };
         relay
             .apply(
@@ -238,6 +299,7 @@ mod tests {
                 successor_digest: None,
                 last_update_ms: None,
             }),
+            revision: watch::channel(0).0,
         };
         relay
             .apply(
@@ -278,6 +340,7 @@ mod tests {
                 successor_digest: None,
                 last_update_ms: None,
             }),
+            revision: watch::channel(0).0,
         };
         relay
             .apply(
@@ -305,18 +368,92 @@ mod tests {
     }
 
     #[test]
-    fn the_first_successor_digest_is_bound_and_a_stale_relay_is_unavailable() {
+    fn a_long_lived_generation_rebinds_from_b_to_equivalent_c() {
         let key = IntegrationKey::from_bytes([5; 16]);
-        let ceiling = row(&["session.list"], 1);
-        let relay = GenerationAuthorityRelay {
-            state: RwLock::new(RelayState::Draining {
-                ceiling: BTreeMap::from([(key, ceiling.clone())]),
-                current: BTreeMap::from([(key, ceiling)]),
-                successor_digest: Some("bound".into()),
-                last_update_ms: Some(1),
-            }),
-        };
-        assert_eq!(relay.apply("other", &[]), Err(RelayFailure::Unavailable));
-        assert_eq!(relay.row(key), Err(RelayFailure::Unavailable));
+        let relay = relay(key, row(&["session.list"], 1));
+
+        relay
+            .apply("generation-b", &[line(key, &["session.list"], 1, false)])
+            .expect("B binds to draining A");
+        assert_eq!(bound_successor(&relay).as_deref(), Some("generation-b"));
+
+        relay
+            .apply("generation-c", &[line(key, &["session.list"], 1, false)])
+            .expect("equivalent C replaces B after the next upgrade");
+        assert_eq!(bound_successor(&relay).as_deref(), Some("generation-c"));
+        assert_eq!(relay.row(key).expect("C authority").grant_generation, 1);
+    }
+
+    #[test]
+    fn a_late_b_snapshot_cannot_roll_c_back_or_rebind_the_relay() {
+        let key = IntegrationKey::from_bytes([6; 16]);
+        let relay = relay(key, row(&["session.list"], 1));
+        relay
+            .apply("generation-b", &[line(key, &["session.list"], 1, false)])
+            .expect("B binds first");
+        relay
+            .apply("generation-c", &[line(key, &["session.list"], 2, false)])
+            .expect("C advances authority");
+
+        assert_eq!(
+            relay.apply("generation-b", &[line(key, &["session.list"], 1, false)]),
+            Err(RelayFailure::Unavailable)
+        );
+        assert_eq!(bound_successor(&relay).as_deref(), Some("generation-c"));
+        assert_eq!(
+            relay.row(key).expect("C remains current").grant_generation,
+            2
+        );
+    }
+
+    #[test]
+    fn one_generation_cannot_name_two_different_authorities() {
+        let key = IntegrationKey::from_bytes([7; 16]);
+        let relay = relay(key, row(&["session.list", "session.input.write"], 1));
+        relay
+            .apply("generation-b", &[line(key, &["session.list"], 2, false)])
+            .expect("B narrows the ceiling");
+
+        assert_eq!(
+            relay.apply(
+                "generation-c",
+                &[line(
+                    key,
+                    &["session.list", "session.input.write"],
+                    2,
+                    false,
+                )],
+            ),
+            Err(RelayFailure::Unavailable)
+        );
+        assert_eq!(bound_successor(&relay).as_deref(), Some("generation-b"));
+        assert_eq!(
+            relay.row(key).expect("B narrowing remains").scopes,
+            vec![Box::<str>::from("session.list")]
+        );
+    }
+
+    #[test]
+    fn relayed_revocation_cannot_be_resurrected_by_a_newer_successor() {
+        let key = IntegrationKey::from_bytes([8; 16]);
+        let relay = relay(key, row(&["session.list"], 1));
+        relay
+            .apply("generation-b", &[line(key, &["session.list"], 2, true)])
+            .expect("B revokes the frozen row");
+        assert!(
+            relay
+                .row(key)
+                .expect("revoked row remains structural")
+                .revoked_at
+                .is_some()
+        );
+
+        relay
+            .apply("generation-c", &[line(key, &["session.list"], 3, false)])
+            .expect("C may heartbeat but cannot revive authority");
+        let current = relay.row(key).expect("revocation remains structural");
+        assert!(current.revoked_at.is_some());
+        assert_eq!(current.grant_generation, 1);
+        assert_eq!(bound_successor(&relay).as_deref(), Some("generation-c"));
     }
 }

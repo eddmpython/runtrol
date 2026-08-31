@@ -29,7 +29,8 @@ use runtrol_ipc::transport::{Connection, TransportError};
 use runtrol_ipc::wire::{Request, Response};
 use runtrol_provider::AbsPath;
 use runtrol_runtime_protocol::{
-    RUNTIME_LOCATOR_SCHEMA, RuntimeEndpointKind, RuntimeGeneration, RuntimeLocatorRecord,
+    MAX_RUNTIME_GENERATIONS, RUNTIME_LOCATOR_SCHEMA, RuntimeEndpointKind, RuntimeGeneration,
+    RuntimeLocatorRecord,
 };
 use serde::{Deserialize, Serialize};
 
@@ -247,6 +248,13 @@ async fn drain_predecessors(paths: &Layout, own_digest: &str) {
 const PEER_ANSWER_WITHIN: Duration = Duration::from_millis(400);
 const GENERATION_RELAY_INTERVAL: Duration = Duration::from_secs(1);
 
+/// A floor under an operating-system notification that never arrives.
+///
+/// With no other generation there is nothing to relay, so reading the same atomic locator every second only
+/// spends the idle machine. Windows wakes this loop on the home directory change that an atomic locator replace
+/// produces. Other platforms, and a failed watcher, retain this slow correctness fallback.
+const IDLE_GENERATION_RECHECK_INTERVAL: Duration = Duration::from_secs(30);
+
 /// How many relay rounds a draining peer may fail to prove the handoff before it stops blocking native opens.
 ///
 /// The barrier exists so a successor never admits a native conversation it cannot check against a draining
@@ -258,71 +266,200 @@ const GENERATION_RELAY_INTERVAL: Duration = Duration::from_secs(1);
 /// conversation. A peer that proves itself later rejoins the import path and full protection resumes.
 const GENERATION_PROOF_PATIENCE: u32 = 8;
 
+#[derive(Default)]
+struct GenerationRelayProgress {
+    compatible: BTreeSet<String>,
+    misses: BTreeMap<String, u32>,
+    audit_receipts: BTreeMap<String, runtrol_ipc::GenerationAuditAck>,
+    retained_sources: BTreeSet<Box<str>>,
+}
+
 /// Keep every draining generation beneath this successor's current authority and import its live claims.
-pub(crate) async fn relay_generation_state(composed: Arc<Composed>, own_digest: String) {
-    let mut compatible = BTreeSet::<String>::new();
-    let mut misses = BTreeMap::<String, u32>::new();
+pub(crate) async fn relay_generation_state(
+    composed: Arc<Composed>,
+    own_digest: String,
+) -> Result<(), runtrol_store::StoreError> {
+    let mut progress = GenerationRelayProgress::default();
+    let locator = Arc::new(
+        composed
+            .home
+            .paths()
+            .runtime_locator()
+            .as_std_path()
+            .to_owned(),
+    );
+    let mut locator_changes = locator
+        .parent()
+        .and_then(runtrol_childproc::watch_directory);
     loop {
-        let peers = match read_locator(composed.home.paths().runtime_locator().as_std_path()) {
-            Ok(Located::Current(record)) => record
-                .generations
-                .into_iter()
-                .filter(|generation| generation.digest != own_digest && generation.draining)
-                .collect::<Vec<_>>(),
-            Ok(Located::Absent | Located::Legacy) | Err(_) => Vec::new(),
+        let reading = Arc::clone(&locator);
+        let located = tokio::task::spawn_blocking(move || read_locator(reading.as_path())).await;
+        let (peers, live_sources) = match located {
+            Ok(Ok(Located::Current(record))) => {
+                let live_sources = record
+                    .generations
+                    .iter()
+                    .filter(|generation| generation.digest != own_digest)
+                    .map(|generation| generation.digest.clone().into_boxed_str())
+                    .collect::<BTreeSet<_>>();
+                let peers = record
+                    .generations
+                    .into_iter()
+                    .filter(|generation| generation.digest != own_digest && generation.draining)
+                    .collect::<Vec<_>>();
+                (peers, Some(live_sources))
+            }
+            Ok(Ok(Located::Absent | Located::Legacy) | Err(_)) | Err(_) => (Vec::new(), None),
         };
+        if let Some(live_sources) = live_sources
+            && live_sources != progress.retained_sources
+        {
+            composed
+                .store
+                .retain_integration_audit_relay_receipts(&live_sources)?;
+            progress.retained_sources = live_sources;
+        }
         composed
             .native_claims
             .retain_remote(peers.iter().map(|generation| generation.digest.as_str()));
-        compatible.retain(|digest| peers.iter().any(|peer| peer.digest == *digest));
-        misses.retain(|digest, _| peers.iter().any(|peer| peer.digest == *digest));
-        if let Ok(authorities) =
-            crate::generation_authority::GenerationAuthorityRelay::snapshot(&composed.store)
-        {
-            let claims = composed.native_claims.snapshot_except(None);
-            for peer in &peers {
-                let request = Request::GenerationHandoff {
-                    successor_digest: own_digest.clone().into_boxed_str(),
-                    authorities: authorities.clone(),
-                    claims: claims.clone(),
-                };
-                let response = tokio::time::timeout(
-                    PEER_ANSWER_WITHIN,
-                    ask_for_answer(&peer.control_endpoint, &request),
-                )
-                .await;
-                if let Ok(Some(Response::GenerationHandoff {
-                    capabilities,
-                    claims,
-                    audit,
-                })) = response
-                {
-                    // The peer's authorization rows since its last answer. This store is the durable one now,
-                    // and a row it cannot take is the store failing, which this generation's own next audit
-                    // row refuses on its own; the peer's grants must not be stranded over it.
-                    drop(crate::audit_relay::persist(&composed.store, audit));
-                    if capabilities.public_terminal
-                        && capabilities.authority_relay
-                        && capabilities.native_live_claims
-                    {
-                        composed.native_claims.replace_remote(&peer.digest, claims);
-                        compatible.insert(peer.digest.clone());
-                        misses.remove(&peer.digest);
-                    } else {
-                        *misses.entry(peer.digest.clone()).or_insert(0) += 1;
-                    }
-                } else {
-                    *misses.entry(peer.digest.clone()).or_insert(0) += 1;
-                }
-            }
-        }
+        progress.retain_peers(&peers);
+        relay_peers(&composed, &own_digest, &peers, &mut progress).await?;
         composed.native_claims.replace_legacy_generations(
             peers
                 .iter()
-                .filter(|peer| still_blocking(&peer.digest, &compatible, &misses))
+                .filter(|peer| still_blocking(&peer.digest, &progress.compatible, &progress.misses))
                 .map(|peer| peer.digest.as_str()),
         );
+        wait_for_generation_change(&locator, &mut locator_changes, !peers.is_empty()).await;
+    }
+}
+
+/// Wait at relay cadence only while there is something to relay; otherwise wait on the locator's directory.
+async fn wait_for_generation_change(
+    locator: &Path,
+    changes: &mut Option<tokio::sync::mpsc::Receiver<()>>,
+    has_draining_peer: bool,
+) {
+    if has_draining_peer {
         tokio::time::sleep(GENERATION_RELAY_INTERVAL).await;
+        return;
+    }
+    if changes.is_none() {
+        *changes = locator
+            .parent()
+            .and_then(runtrol_childproc::watch_directory);
+    }
+    let Some(change) = changes.as_mut() else {
+        tokio::time::sleep(IDLE_GENERATION_RECHECK_INTERVAL).await;
+        return;
+    };
+    match tokio::time::timeout(IDLE_GENERATION_RECHECK_INTERVAL, change.recv()).await {
+        // ok: a notification or the bounded fallback both mean "read the complete locator again"; the loop
+        // immediately does that and no error state or generation fact is discarded.
+        Ok(Some(())) | Err(_) => {}
+        Ok(None) => *changes = None,
+    }
+}
+
+impl GenerationRelayProgress {
+    fn retain_peers(&mut self, peers: &[RuntimeGeneration]) {
+        let present = |digest: &String| peers.iter().any(|peer| peer.digest == *digest);
+        self.compatible.retain(present);
+        self.misses.retain(|digest, _| present(digest));
+        self.audit_receipts.retain(|digest, _| present(digest));
+    }
+
+    fn miss(&mut self, digest: &str) {
+        *self.misses.entry(digest.to_owned()).or_insert(0) += 1;
+    }
+}
+
+async fn relay_peers(
+    composed: &Composed,
+    own_digest: &str,
+    peers: &[RuntimeGeneration],
+    progress: &mut GenerationRelayProgress,
+) -> Result<(), runtrol_store::StoreError> {
+    if peers.is_empty() {
+        return Ok(());
+    }
+    let authorities = composed.integration_authority.generation_snapshot();
+    let claims = composed.native_claims.snapshot_except(None);
+    for peer in peers {
+        let request = Request::GenerationHandoff {
+            successor_digest: own_digest.to_owned().into_boxed_str(),
+            authorities: authorities.clone(),
+            claims: claims.clone(),
+            audit_ack: Some(
+                progress
+                    .audit_receipts
+                    .get(&peer.digest)
+                    .copied()
+                    .unwrap_or(runtrol_ipc::GenerationAuditAck {
+                        epoch: [0; 16],
+                        through: 0,
+                    }),
+            ),
+        };
+        let response = tokio::time::timeout(
+            PEER_ANSWER_WITHIN,
+            ask_for_answer(&peer.control_endpoint, &request),
+        )
+        .await;
+        let Ok(Some(Response::GenerationHandoff {
+            capabilities,
+            claims,
+            audit,
+            audit_batch,
+        })) = response
+        else {
+            progress.miss(&peer.digest);
+            continue;
+        };
+        if !persist_relay_audit(
+            composed,
+            peer,
+            capabilities.audit_relay,
+            audit,
+            audit_batch,
+            progress,
+        )? {
+            progress.miss(&peer.digest);
+            continue;
+        }
+        if capabilities.public_terminal
+            && capabilities.authority_relay
+            && capabilities.native_live_claims
+        {
+            composed.native_claims.replace_remote(&peer.digest, claims);
+            progress.compatible.insert(peer.digest.clone());
+            progress.misses.remove(&peer.digest);
+        } else {
+            progress.miss(&peer.digest);
+        }
+    }
+    Ok(())
+}
+
+fn persist_relay_audit(
+    composed: &Composed,
+    peer: &RuntimeGeneration,
+    capability: runtrol_ipc::GenerationAuditRelayCapability,
+    audit: Vec<runtrol_ipc::GenerationAuditLine>,
+    audit_batch: Option<Box<runtrol_ipc::GenerationAuditBatch>>,
+    progress: &mut GenerationRelayProgress,
+) -> Result<bool, runtrol_store::StoreError> {
+    match audit_batch {
+        Some(batch) if capability == runtrol_ipc::GenerationAuditRelayCapability::ReceiptAck => {
+            let receipt = crate::audit_relay::persist_batch(&composed.store, &peer.digest, *batch)?;
+            progress.audit_receipts.insert(peer.digest.clone(), receipt);
+            Ok(true)
+        }
+        Some(_) => Ok(false),
+        None => {
+            crate::audit_relay::persist(&composed.store, audit)?;
+            Ok(true)
+        }
     }
 }
 
@@ -537,6 +674,12 @@ impl PublishedGeneration {
             }
             kept.push(generation);
         }
+        if kept.len() >= MAX_RUNTIME_GENERATIONS {
+            return Err(RuntimeBootstrapError::Unsafe {
+                path: locator.display().to_string(),
+                why: "the live Runtime generation count reached its fixed ceiling",
+            });
+        }
         kept.push(published.clone());
         record.generations = kept;
         write_locator(&locator, &record)?;
@@ -672,7 +815,18 @@ pub(crate) fn read_locator(path: &Path) -> Result<Located, RuntimeBootstrapError
         }
     }
     match read_bounded::<RuntimeLocatorRecord>(path) {
-        Ok(record) if record.schema == RUNTIME_LOCATOR_SCHEMA => Ok(Located::Current(record)),
+        Ok(record)
+            if record.schema == RUNTIME_LOCATOR_SCHEMA
+                && record.generations.len() <= MAX_RUNTIME_GENERATIONS =>
+        {
+            Ok(Located::Current(record))
+        }
+        Ok(record) if record.schema == RUNTIME_LOCATOR_SCHEMA => {
+            Err(RuntimeBootstrapError::Unsafe {
+                path: path.display().to_string(),
+                why: "the live Runtime generation count exceeds its fixed ceiling",
+            })
+        }
         // Neither shape can be merged into; the next publish replaces it whole.
         Ok(_) | Err(RuntimeBootstrapError::Malformed { .. }) => Ok(Located::Legacy),
         Err(error) => Err(error),
@@ -688,6 +842,12 @@ fn current_record(path: &Path) -> Result<Option<RuntimeLocatorRecord>, RuntimeBo
 }
 
 fn write_locator(path: &Path, record: &RuntimeLocatorRecord) -> Result<(), RuntimeBootstrapError> {
+    if record.generations.len() > MAX_RUNTIME_GENERATIONS {
+        return Err(RuntimeBootstrapError::Unsafe {
+            path: path.display().to_string(),
+            why: "the live Runtime generation count exceeds its fixed ceiling",
+        });
+    }
     if record.generations.is_empty() {
         return match std::fs::remove_file(path) {
             Ok(()) => Ok(()),
@@ -1151,6 +1311,42 @@ mod tests {
                 .expect("readable")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn a_locator_over_the_generation_ceiling_is_neither_read_nor_written() {
+        let scratch = Scratch::make("generation-ceiling");
+        let layout = scratch.layout();
+        let generation = RuntimeGeneration {
+            digest: identity(0x44).digest().to_owned(),
+            endpoint_kind: endpoint_kind(),
+            endpoint: "public-live".to_owned(),
+            control_endpoint: "control-live".to_owned(),
+            runtime_version: "0.0.0".to_owned(),
+            process_id: 1,
+            started_at_ms: 1,
+            live_sessions: 0,
+            draining: true,
+        };
+        let record = RuntimeLocatorRecord {
+            schema: RUNTIME_LOCATOR_SCHEMA,
+            instance_id: INSTANCE.to_owned(),
+            generations: vec![generation; MAX_RUNTIME_GENERATIONS + 1],
+        };
+
+        assert!(matches!(
+            write_locator(layout.runtime_locator().as_std_path(), &record),
+            Err(RuntimeBootstrapError::Unsafe { .. })
+        ));
+        std::fs::write(
+            layout.runtime_locator().as_std_path(),
+            serde_json::to_vec(&record).expect("encode oversized locator"),
+        )
+        .expect("seed oversized locator");
+        assert!(matches!(
+            read_locator(layout.runtime_locator().as_std_path()),
+            Err(RuntimeBootstrapError::Unsafe { .. })
+        ));
     }
 
     #[test]

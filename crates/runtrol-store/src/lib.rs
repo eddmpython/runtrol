@@ -40,18 +40,21 @@ pub use devices::{DeviceRootRow, DeviceRow, ListedDevices};
 pub use error::StoreError;
 pub use integration_audit::{
     INTEGRATION_AUDIT_MAX_BYTES, INTEGRATION_AUDIT_MAX_ROW_BYTES, INTEGRATION_AUDIT_MAX_ROWS,
-    IntegrationAuditOutcome, IntegrationAuditRow,
+    INTEGRATION_AUDIT_RECEIPT_MAX_EPOCHS, IntegrationAuditOutcome, IntegrationAuditRelayBatch,
+    IntegrationAuditRelayEntry, IntegrationAuditRelayLoss, IntegrationAuditRow,
 };
 pub use integration_mutations::{
     INTEGRATION_MUTATION_MAX_ROWS, IntegrationMutationRow, IntegrationMutationState,
 };
 pub use integrations::{
-    EnrollmentRow, EnrollmentState, IntegrationGrantChange, IntegrationKeyRotation,
-    IntegrationRootRow, IntegrationRow,
+    EnrollmentRow, EnrollmentState, INTEGRATION_ACTIVE_MAX_ROWS, INTEGRATION_AUTHORITY_MAX_BYTES,
+    INTEGRATION_REVOKED_MAX_ROWS, IntegrationAuthorityParts, IntegrationAuthoritySnapshot,
+    IntegrationGrantChange, IntegrationKeyRotation, IntegrationRevocation,
+    IntegrationRevocationGuard, IntegrationRootRow, IntegrationRow, integration_authority_bytes,
 };
 pub use open::{CACHE_BYTES, Store};
 pub use schema::{
-    DeviceKey, EnrollmentKey, IntegrationAuditKey, IntegrationKey, IntegrationMutationKey,
-    SCHEMA_VERSION, SessionKey,
+    DeviceKey, EnrollmentKey, IntegrationAuditKey, IntegrationAuditReceiptKey, IntegrationKey,
+    IntegrationMutationKey, SCHEMA_VERSION, SessionKey,
 };
 pub use sessions::{Cursor, ListedSessions};

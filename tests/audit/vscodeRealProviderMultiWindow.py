@@ -32,7 +32,7 @@ import vscodeRealProviderJourney as process
 
 ROOT = Path(__file__).resolve().parents[2]
 TIMEOUT_S = 180.0
-MAX_HANDOFF_MS = 500.0
+MAX_HANDOFF_MS = fixtureWindow.PERFORMANCE_BUDGET["firstUseDeliveryMs"]
 
 
 class Failed(Exception):
@@ -226,9 +226,9 @@ def exerciseProvider(
             mirror_received_owner_input=result.get("mirrorSawOwnerInput") is True,
             mirror_wrote_after_owner_closed=result.get("mirrorWroteAfterOwnerWindowClosed") is True,
             mirror_received_handoff_input=result.get("mirrorSawOwnInput") is True,
-            owner_input_ms=float(result.get("ownerInputMs", -1.0)),
-            mirror_input_ms=float(result.get("mirrorSawOwnerMs", -1.0)),
-            handoff_input_ms=float(result.get("mirrorInputAfterHandoffMs", -1.0)),
+            owner_input_ms=float(result.get("ownerFirstInputMs", -1.0)),
+            mirror_input_ms=float(result.get("mirrorFirstFanoutMs", -1.0)),
+            handoff_input_ms=float(result.get("handoffFirstInputMs", -1.0)),
             provider_stopped=result.get("providerStopped") is True,
             both_vscode_hosts=bool(result.get("ownerVscode")) and bool(result.get("mirrorVscode")),
             cleanup_complete=False,

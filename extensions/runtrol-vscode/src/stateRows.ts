@@ -58,10 +58,13 @@ export function incompleteDiscovery(
   const reasons: string[] = [];
   for (const catalogue of catalogues) {
     const coverage = catalogue.coverage;
-    if (!coverage || coverage.kind === "complete") continue;
     const name = providers.find(
       (provider) => provider.providerId === catalogue.providerId,
     )?.displayName ?? catalogue.providerId;
+    if (!coverage || coverage.kind === "complete") {
+      if (catalogue.warning) reasons.push(`${name}: ${catalogue.warning}`);
+      continue;
+    }
     reasons.push(`${name}: ${coverage.why}`);
   }
   reasons.push(...terminalWarnings);
@@ -81,13 +84,14 @@ export function discoveryNotice(
   const unavailable: string[] = [];
   for (const catalogue of catalogues) {
     const coverage = catalogue.coverage;
-    if (!coverage || coverage.kind === "complete") continue;
     const name = providers.find(
       (provider) => provider.providerId === catalogue.providerId,
     )?.displayName ?? catalogue.providerId;
-    if (coverage.kind === "partial") {
+    if (!coverage) {
+      if (catalogue.warning) unavailable.push(name);
+    } else if (coverage.kind === "partial") {
       partial.push(name);
-    } else {
+    } else if (coverage.kind === "unsupported") {
       unavailable.push(name);
     }
   }

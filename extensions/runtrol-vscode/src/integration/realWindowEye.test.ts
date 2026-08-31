@@ -35,6 +35,11 @@ type JourneyApi = {
   deleteNativeListed(providerId: string, nativeSessionId: string): Promise<void>;
   refreshChats(): Promise<void>;
   waitForLifecycle(session: string, lifecycle: SessionLine["lifecycle"], deadlineMs: number): Promise<void>;
+  terminalStart(providerId: string, workspace: string, deadlineMs: number): Promise<{
+    runtimeGeneration: string;
+    terminalId: string;
+  }>;
+  terminalStop(runtimeGeneration: string, terminalId: string, deadlineMs: number): Promise<void>;
 };
 
 type ExtensionApi = {
@@ -84,6 +89,38 @@ async function eyePass(resultPath: string): Promise<void> {
     90_000,
     `the installed provider ${providerId} to verify`,
   );
+  const createdSessions = new Set<string>();
+
+  // The editor's own furniture out of the picture: the built-in chat sidebar the isolated profile opens, and
+  // the "extensions are disabled" toast the development host shows. Neither is this product.
+  await vscode.commands.executeCommand("workbench.action.closeAuxiliaryBar").then(undefined, () => undefined);
+  await vscode.commands.executeCommand("notifications.clearAll").then(undefined, () => undefined);
+
+  // The shortest truthful visual pass: open a fresh provider TUI for this folder, send no model turn, capture
+  // the real Studio header and terminal, then stop only that exact throwaway process. No provider transcript is
+  // created because no prompt is sent.
+  if (process.env.RUNTROL_EYE_DRAFT_ONLY === "1") {
+    currentStage = "draft";
+    const terminal = await within(
+      journey.terminalStart(providerId, folder, 60_000),
+      70_000,
+      "opening the current-folder provider terminal",
+    );
+    await delay(4_000);
+    await capture(resultPath, "draft", { ...terminal, providerId });
+    await within(
+      journey.terminalStop(terminal.runtimeGeneration, terminal.terminalId, 60_000),
+      70_000,
+      "closing the current-folder provider terminal",
+    );
+    await writeFile(
+      resultPath,
+      JSON.stringify({ stage: "complete", focused: "draft", providerId, vscode: vscode.version }),
+      "utf8",
+    );
+    return;
+  }
+
   await within(journey.refreshChats(), 90_000, `refreshing stored conversations for ${providerId}`);
   // The machine's stored conversations arrive one service at a time. A bounded wait for the first of them,
   // then a breath for the rest; a machine with none would still photograph honestly (empty headings are
@@ -96,12 +133,6 @@ async function eyePass(resultPath: string): Promise<void> {
     60_000,
     `a provider-owned cleanup surface for ${providerId}`,
   );
-  const createdSessions = new Set<string>();
-
-  // The editor's own furniture out of the picture: the built-in chat sidebar the isolated profile opens, and
-  // the "extensions are disabled" toast the development host shows. Neither is this product.
-  await vscode.commands.executeCommand("workbench.action.closeAuxiliaryBar").then(undefined, () => undefined);
-  await vscode.commands.executeCommand("notifications.clearAll").then(undefined, () => undefined);
 
   // Pose 1: the conversation surface itself. The first stored conversation opens as the service's own
   // terminal interface in an editor tab (the Core hosts the CLI on a pseudo terminal); the photograph is
@@ -219,8 +250,13 @@ async function deletionProof(
   const scratch = await mkdtemp(path.join(os.tmpdir(), "runtrol-eye-delete-"));
   try {
     const session = await within(journey.start(providerId, scratch), 60_000, "starting the throwaway conversation");
-    const native = journey.sessions().find((line) => line.sessionId === session)?.nativeSessionId ?? null;
-    if (!native) throw new Error("the throwaway conversation announced no native identity");
+    await waitFor(
+      () => Boolean(journey.sessions().find((line) => line.sessionId === session)?.nativeSessionId),
+      60_000,
+      "the throwaway conversation's provider identity",
+    );
+    const native = journey.sessions().find((line) => line.sessionId === session)?.nativeSessionId;
+    if (!native) throw new Error("the throwaway conversation announced no native identity after the wait");
     // One real turn, because the provider stores a thread only once something was said (measured on
     // Codex 0.148: a fresh thread with no turn has no rollout to list or delete). The turn writes a file,
     // so the service declares a change and the diff poses have something real to show.

@@ -33,7 +33,7 @@ import { abortableDelay } from "./abortableDelay";
 /// deleted. The Core sees an exit within a few hundred milliseconds; ten seconds covers a slow machine.
 const STOP_SETTLE_MS = 10_000;
 import type { Conversation } from "./conversationList";
-import { attentionCount, nativeProcessKey, nextNeedingYou, projects, runningElsewhere } from "./conversationList";
+import { attentionCount, nextNeedingYou, projects, runningElsewhere } from "./conversationList";
 import { conversationDeletion, deletionQuestion } from "./conversationDeletion";
 import { editorPanelFor } from "./editorPanels";
 import { archivalQuestion, conversationArchival } from "./conversationArchival";
@@ -55,6 +55,11 @@ import { sessionStateLabel } from "./runtimeProjection";
 import type { ModelOption } from "./sessionConfiguration";
 import { modelOptions, reasoningOptions, RECENT_SERVICE_KEY } from "./sessionConfiguration";
 import { nativeTitleRefreshProviders } from "./nativeTitleRefresh";
+import { nativeCatalogueAfterFailure } from "./nativeChatCatalogue";
+import {
+  projectNativeActivity,
+  type NativeActivityProjection,
+} from "./nativeActivityProjection";
 import {
   readStartDefaults,
   rememberStartDefault,
@@ -116,7 +121,9 @@ export class Controller implements vscode.Disposable {
   /// Native identity last seen for each pushed hosted terminal, used to refresh a catalogue only on discovery.
   private hostedTerminalIdentities = new Map<string, string | null>();
   private nativeActivityByProvider = new Map<string, ReadonlySet<string>>();
+  private nativeAttachableByProvider = new Map<string, ReadonlySet<string>>();
   private nativeActiveByProvider = new Map<string, ReadonlySet<string>>();
+  private nativeUnconfirmedByProvider = new Map<string, ReadonlySet<string>>();
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -594,10 +601,9 @@ export class Controller implements vscode.Disposable {
     // surface (`docs/terminalSurface.md`): no adoption, no structured session, no page of ours.
     if ("key" in target) {
       if (!target.canOpen) {
-        // A conversation answered in a terminal Runtrol did not start is the one refusal a person meets every
-        // day on a machine that runs its CLIs directly: measured 2026-08-28, eleven of this operator's coding
-        // processes had been alive since morning, which put half of two projects' conversations behind it. An
-        // error toast in protocol words leaves them nowhere, so the click offers the thing that does work.
+        // A live conversation without a currently proven terminal route is the one refusal a person meets every
+        // day on a machine that also runs CLIs directly or still has a legacy Runtime owner. An error toast in
+        // protocol words leaves them nowhere, so the click offers the thing that does work.
         if (runningElsewhere(target)) {
           await this.offerAnotherHere(target);
           afterApplied();
@@ -694,13 +700,14 @@ export class Controller implements vscode.Disposable {
       this.say("No coding service is installed and signed in yet. Add one from the Agent Usage view.", "warning");
       return;
     }
-    if (usable.length === 1 || options.interactive === false) {
+    if (options.interactive === false) {
       await this.startSessionWith(this.orderedServices(usable)[0]!.providerId, workspace);
       return;
     }
-    // More than one service, so the person chooses. The choice is offered where they pressed the button
-    // (`docs/vscodeSurface.md`): the list opens in the sidebar under that section, not at the top of the
-    // window. A picker at the top of the screen drags the eye off the thing they were looking at.
+    // An interactive start always names the available service, even when there is only one. Auto-opening the
+    // sole usable entry made a broken terminal launch look like an empty provider choice: the person pressed
+    // Add, saw no provider and no tab, and had no second action to identify which side failed. The choice is
+    // offered where they pressed the button (`docs/vscodeSurface.md`).
     this.chooseService?.(workspace);
   }
 
@@ -1562,6 +1569,7 @@ export class Controller implements vscode.Disposable {
         // The watch is how this window stays in touch. Losing it is losing the Core, and the tree says so
         // rather than letting an empty list be read as an empty machine.
         this.state.setCoreReach("unreachable");
+        this.revokeNativeActivityProofs();
         this.say(error instanceof Error ? error.message : String(error), "error");
       }
       await abortableDelay(retryMs, signal);
@@ -1582,6 +1590,7 @@ export class Controller implements vscode.Disposable {
         await this.pollNativeActivity(signal);
       } catch (error) {
         if (signal.aborted) return;
+        this.revokeNativeActivityProofs();
         void error;
       }
     }
@@ -1700,63 +1709,75 @@ export class Controller implements vscode.Disposable {
 
   /// Ask each usable service which provider-owned processes are live and which are answering.
   ///
-  /// The panel can see a turn running in a conversation it hosts, because those bytes pass through it. It
-  /// cannot see one in a conversation started outside the transparent broker. Runtime answers this from the
-  /// provider's bounded live-process roster and validates the recorded process identities with the operating
-  /// system. This dedicated 250 ms compatibility clock does not list stored conversations. Newly observed native
-  /// identities trigger one targeted catalogue refresh so the placeholder can acquire the provider's title.
+  /// Runtime answers both facts from the provider's bounded structural surfaces and validates recorded process
+  /// identities with the operating system. Terminal output is not evidence of an open model turn: an idle TUI
+  /// repaints prompts and cursors too. This dedicated 250 ms compatibility clock does not list stored
+  /// conversations. Newly observed native identities trigger one targeted catalogue refresh so the placeholder
+  /// can acquire the provider's title.
   private async pollNativeActivity(signal: AbortSignal): Promise<void> {
     const providers = this.state.providers.filter(isUsable);
     if (providers.length === 0) {
-      this.nativeActivityByProvider.clear();
-      this.nativeActiveByProvider.clear();
-      this.state.setNativeActivity(new Set());
-      this.state.setObservedNative(new Set());
+      this.clearNativeActivityState();
       return;
     }
     const answers = await Promise.all(providers.map(async (
       provider,
-    ): Promise<readonly [string, NativeActivity]> => {
-      // A transient provider or transport failure is not evidence that an original process exited. Keep that
-      // provider's last bounded observation while every provider that did answer advances independently.
+    ): Promise<readonly [string, NativeActivity | null]> => {
+      // A failed read is no current process proof. The next 250 ms round can restore the row; until then the
+      // old identity becomes unconfirmed so it cannot claim `Elsewhere` or race a second resume process.
       try {
         return [provider.providerId, await this.runtime.nativeActivity(provider.providerId)];
       } catch (error) {
         if (signal.aborted) throw error;
-        return [provider.providerId, {
-          providerId: provider.providerId,
-          live: [...(this.nativeActivityByProvider.get(provider.providerId) ?? [])],
-          active: [...(this.nativeActiveByProvider.get(provider.providerId) ?? [])],
-        }];
+        return [provider.providerId, null];
       }
     }));
     if (signal.aborted || this.disposed) return;
-    const active = new Set<string>();
-    const live = new Set<string>();
-    const next = new Map<string, ReadonlySet<string>>();
-    const nextActive = new Map<string, ReadonlySet<string>>();
-    let discovered = false;
-    for (const [providerId, activity] of answers) {
-      const providerLive = new Set(activity.live ?? activity.active);
-      const providerActive = new Set(activity.active);
-      next.set(providerId, providerLive);
-      nextActive.set(providerId, providerActive);
-      let providerDiscovered = false;
-      for (const nativeId of providerLive) {
-        live.add(nativeProcessKey(providerId, nativeId));
-        if (!this.nativeActivityByProvider.get(providerId)?.has(nativeId)) providerDiscovered = true;
-      }
-      for (const nativeId of providerActive) active.add(nativeProcessKey(providerId, nativeId));
-      if (providerDiscovered) {
-        discovered = true;
-        this.deferNativeDiscovery(providerId, true);
-      }
-    }
-    this.nativeActivityByProvider = next;
-    this.nativeActiveByProvider = nextActive;
-    this.state.setNativeActivity(active);
-    this.state.setObservedNative(live);
-    if (discovered) this.scheduleNativeDiscoveries();
+    const projected = projectNativeActivity(
+      answers,
+      this.nativeActivityByProvider,
+      this.nativeUnconfirmedByProvider,
+    );
+    this.applyNativeActivityProjection(projected);
+    for (const providerId of projected.discoveredProviders) this.deferNativeDiscovery(providerId, true);
+    if (projected.discoveredProviders.size > 0) this.scheduleNativeDiscoveries();
+  }
+
+  private applyNativeActivityProjection(projected: NativeActivityProjection): void {
+    this.nativeActivityByProvider = new Map(projected.liveByProvider);
+    this.nativeAttachableByProvider = new Map(projected.attachableByProvider);
+    this.nativeActiveByProvider = new Map(projected.activeByProvider);
+    this.nativeUnconfirmedByProvider = new Map(projected.unconfirmedByProvider);
+    this.state.setNativeActivity(projected.active);
+    this.state.setObservedNative(projected.live);
+    this.state.setAttachableNative(projected.attachable);
+    this.state.setUnconfirmedNative(projected.unconfirmed);
+  }
+
+  /// Revoke the live badge when Runtime proof is unavailable, while retaining a deny-only owner guard.
+  private revokeNativeActivityProofs(): void {
+    const providerIds = new Set([
+      ...this.nativeActivityByProvider.keys(),
+      ...this.nativeUnconfirmedByProvider.keys(),
+    ]);
+    const projected = projectNativeActivity(
+      [...providerIds].map((providerId) => [providerId, null] as const),
+      this.nativeActivityByProvider,
+      this.nativeUnconfirmedByProvider,
+    );
+    this.applyNativeActivityProjection(projected);
+  }
+
+  /// Forget all observations only when there is authoritatively no usable provider to own them.
+  private clearNativeActivityState(): void {
+    this.nativeActivityByProvider.clear();
+    this.nativeAttachableByProvider.clear();
+    this.nativeActiveByProvider.clear();
+    this.nativeUnconfirmedByProvider.clear();
+    this.state.setNativeActivity(new Set());
+    this.state.setObservedNative(new Set());
+    this.state.setAttachableNative(new Set());
+    this.state.setUnconfirmedNative(new Set());
   }
 
   private loadNativeChats(providerId: string, force: boolean): Promise<void> {
@@ -1795,7 +1816,11 @@ export class Controller implements vscode.Disposable {
         && generation === this.nativeDiscoveryGeneration
         && this.providerUsable(providerId)
       ) {
-        this.state.setNativeCatalogue(nativeCatalogueFailure(providerId, error));
+        this.state.setNativeCatalogue(nativeCatalogueAfterFailure(
+          this.state.nativeCatalogue(providerId),
+          providerId,
+          error,
+        ));
       }
     }).finally(() => {
       if (this.nativeDiscoveries.get(providerId)?.pending === pending) {
@@ -2024,16 +2049,6 @@ function requireNative(conversation: Conversation): NativeChatLine {
     throw new Error(`${conversation.title} has nothing left to reopen`);
   }
   return native;
-}
-
-function nativeCatalogueFailure(providerId: string, error: unknown): NativeChatCatalogue {
-  return {
-    providerId,
-    coverage: null,
-    chats: [],
-    loadedAtMs: Date.now(),
-    warning: `Existing chat discovery failed: ${error instanceof Error ? error.message : String(error)}`,
-  };
 }
 
 function runtimeAction(session: SessionLine) {

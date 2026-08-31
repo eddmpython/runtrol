@@ -109,15 +109,18 @@ provider for every conversation it will name, which four of the five measured CL
 because their own listing treats the working directory as a filter rather than a required argument.
 Each returned row carries its own folder, so grouping stays a fact the provider reported.
 
-`providers/nativeActivity` returns the native identities owned by live processes and the subset whose model is
-answering now. It is separate from the catalogue because a panel asks it on a 250 ms compatibility clock and a
+`providers/nativeActivity` returns the native identities owned by live processes, the subset whose model is
+answering now, and the subset whose exact live terminal has a structurally proven attachment route. These are
+`live`, `active`, and `attachable`, respectively. It is separate from the catalogue because a panel asks it on a
+250 ms compatibility clock and a
 catalogue is not cheap. A listing reads every stored conversation's head; the activity request reads only the
 provider's bounded process roster. The measured driver validates both PID and kernel process-start identity, so a
 stale roster file cannot alias a reused PID. Runtime may use the same content-free binding internally to attach a
 provider-minted native identity to the exact daemon-owned PTY process or to select a measured live terminal route.
-That internal route is not added to the public activity payload. `terminals/open` remains the single public operation:
-for a live native target it joins the existing Runtime terminal or a structurally proven official attachment and never
-runs the provider's resume command; for a cold target it performs the explicit native resume.
+Only the route's availability appears in `attachable`; implementation details and process coordinates remain private.
+`terminals/open` remains the single public operation: for a live native target it joins the existing Runtime terminal
+or a structurally proven official attachment and never runs the provider's resume command; for a cold target it
+performs the explicit native resume.
 
 A folderless request is answered on the owner-only local endpoint, where a caller already holds
 machine-wide authority through the private administration wire, and where the managed session index

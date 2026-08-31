@@ -439,6 +439,10 @@ pub enum Request {
         authorities: Vec<GenerationAuthorityLine>,
         /// Current successor-owned native live claims.
         claims: Vec<GenerationLiveClaimLine>,
+        /// Durable receipt for the last exactly-once audit batch. A zero epoch advertises support before
+        /// the successor has seen this generation's epoch.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        audit_ack: Option<GenerationAuditAck>,
     },
 
     /// Refresh a previously established successor-owned authority and native-claim relay.
@@ -722,6 +726,9 @@ pub enum Response {
         /// store. Absent from a generation built before the relay, which recorded none after handover.
         #[serde(default)]
         audit: Vec<GenerationAuditLine>,
+        /// Replayable sequenced audit batch. Present only when the successor advertised durable ACK support.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        audit_batch: Option<Box<GenerationAuditBatch>>,
     },
 
     /// Every cross-consult direction, each with its current state.
@@ -743,6 +750,20 @@ pub struct GenerationHandoffCapabilities {
     pub authority_relay: bool,
     /// The generation can export and accept provider-native live claims.
     pub native_live_claims: bool,
+    /// Audit relay protocol implemented by this generation.
+    #[serde(default)]
+    pub audit_relay: GenerationAuditRelayCapability,
+}
+
+/// Audit durability protocol supported by one daemon generation.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum GenerationAuditRelayCapability {
+    /// Destructive compatibility relay used by generations predating durable receipts.
+    #[default]
+    Legacy,
+    /// Replayable epoch and sequence batches retired only by a durable successor ACK.
+    ReceiptAck,
 }
 
 /// One complete integration authority row carried only on the owner-only generation control pipe.
@@ -836,7 +857,7 @@ pub struct GenerationAuditLine {
     pub project: Option<Box<str>>,
     /// Opaque Runtime session identity.
     pub session: Option<Box<str>>,
-    /// UUIDv7 mutation identity.
+    /// UUIDv7 audit correlation identity.
     pub request_id: Option<Box<str>>,
     /// Structural decision.
     pub outcome: GenerationAuditOutcome,
@@ -852,8 +873,48 @@ pub enum GenerationAuditOutcome {
     Attempted,
     /// Authority checks and the operation succeeded.
     Allowed,
-    /// The operation was refused with the recorded machine reason.
+    /// The operation did not produce a confirmed success. The reason distinguishes refusal from an
+    /// indeterminate mutation outcome.
     Denied,
+}
+
+/// Durable successor receipt for one draining generation's audit epoch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub struct GenerationAuditAck {
+    /// Process-unique UUIDv7 epoch. All zeroes advertise ACK support before the first response.
+    pub epoch: [u8; 16],
+    /// Highest contiguously committed sequence in the successor store.
+    pub through: u64,
+}
+
+/// One repeatable audit snapshot retained until the successor acknowledges its durable receipt.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub struct GenerationAuditBatch {
+    /// Process-unique UUIDv7 epoch of the draining generation.
+    pub epoch: [u8; 16],
+    /// Stable marker for a bounded relay overflow, when one occurred after the acknowledged watermark.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loss: Option<GenerationAuditLoss>,
+    /// Unacknowledged rows, oldest sequence first.
+    pub entries: Vec<GenerationAuditEntry>,
+}
+
+/// One stable marker covering a contiguous sequence range evicted by the bounded relay.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub struct GenerationAuditLoss {
+    /// Highest sequence covered by this marker.
+    pub through: u64,
+    /// Content-free audit row explaining the bounded loss.
+    pub row: GenerationAuditLine,
+}
+
+/// One sequenced audit row in a replayable generation batch.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub struct GenerationAuditEntry {
+    /// Monotonic sequence within the generation epoch.
+    pub sequence: u64,
+    /// Content-free authorization row.
+    pub row: GenerationAuditLine,
 }
 
 /// One cross-consult direction, as a surface shows it.
@@ -1521,13 +1582,33 @@ mod tests {
                 public_terminal: true,
                 authority_relay: true,
                 native_live_claims: true,
+                audit_relay: GenerationAuditRelayCapability::ReceiptAck,
             },
             claims: Vec::new(),
             audit: vec![line.clone()],
+            audit_batch: Some(Box::new(GenerationAuditBatch {
+                epoch: [4; 16],
+                loss: None,
+                entries: vec![GenerationAuditEntry {
+                    sequence: 1,
+                    row: line.clone(),
+                }],
+            })),
         };
         let encoded = serde_json::to_string(&answer).expect("writable");
         match serde_json::from_str::<Response>(&encoded).expect("readable") {
-            Response::GenerationHandoff { audit, .. } => assert_eq!(audit, vec![line]),
+            Response::GenerationHandoff {
+                audit, audit_batch, ..
+            } => {
+                assert_eq!(audit, vec![line.clone()]);
+                assert_eq!(
+                    audit_batch.expect("sequenced batch").entries,
+                    vec![GenerationAuditEntry {
+                        sequence: 1,
+                        row: line,
+                    }]
+                );
+            }
             other => panic!("expected the handoff answer back, got {other:?}"),
         }
 
@@ -1535,7 +1616,19 @@ mod tests {
         // handover, and the successor must keep reading its claims rather than counting it as a miss.
         let older = r#"{"say":"generationHandoff","with":{"capabilities":{"public_terminal":true,"authority_relay":true,"native_live_claims":true},"claims":[]}}"#;
         match serde_json::from_str::<Response>(older).expect("an older answer still reads") {
-            Response::GenerationHandoff { audit, .. } => assert!(audit.is_empty()),
+            Response::GenerationHandoff {
+                capabilities,
+                audit,
+                audit_batch,
+                ..
+            } => {
+                assert_eq!(
+                    capabilities.audit_relay,
+                    GenerationAuditRelayCapability::Legacy
+                );
+                assert!(audit.is_empty());
+                assert!(audit_batch.is_none());
+            }
             other => panic!("expected the handoff answer, got {other:?}"),
         }
     }

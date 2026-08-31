@@ -301,10 +301,9 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
     const model = this.buildModel();
     this.model = model;
     this.updateBadge(view, model);
-    // The build's version sits in the title bar beside "Runtrol": a single view's title is merged into the
-    // container's as `Runtrol: v0.1.36` (operator, 2026-08-29: put it in the header, not under it).
-    const title = model.version ? `v${model.version}` : "";
-    if (view.title !== title) view.title = title;
+    // Keep the packaged container title as the one heading. Assigning a view title makes VS Code synthesize a
+    // colon, while the derived release manifest already names this container `Runtrol 0.1.42` exactly.
+    if (view.title !== undefined) view.title = undefined;
     const key = JSON.stringify(model);
     if (key === this.lastRendered) return;
     this.lastRendered = key;
@@ -447,7 +446,9 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
       pinned: row.pinned,
       signIn: row.signInNeeded,
       canDelete: canDelete(row, capabilities),
-      canArchive: row.native !== null && capabilities?.nativeSessionArchive?.availability === "available",
+      canArchive: row.presence.kind !== "unconfirmed"
+        && row.native !== null
+        && capabilities?.nativeSessionArchive?.availability === "available",
       memory: typeof memoryBytes === "number" ? formatMemory(memoryBytes) : null,
       tool: row.tool,
       workspace: row.workspace,

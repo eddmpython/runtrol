@@ -46,10 +46,31 @@ pub struct InputCarry {
     tail: Vec<u8>,
 }
 
+#[derive(Clone, Copy)]
+enum InputMode<'a> {
+    Terminal,
+    Touch(&'a Screen),
+}
+
 impl InputCarry {
+    /// Filter input from a terminal emulator without consulting the hosted screen.
+    ///
+    /// Terminal viewers never translate mouse coordinates, so keeping this path independent from the
+    /// screen parser prevents ordinary keystrokes from waiting behind output rendering.
+    pub fn translate_terminal(&mut self, input: &[u8]) -> Vec<u8> {
+        self.translate_inner(input, InputMode::Terminal)
+    }
+
     /// The bytes to forward to the CLI for this input: keys as typed, terminal answers dropped, and mouse
-    /// reports translated for a touch viewer or forwarded untouched for a terminal.
+    /// reports translated for a touch viewer or dropped for a terminal.
     pub fn translate(&mut self, input: &[u8], screen: &Screen, viewer: ViewerKind) -> Vec<u8> {
+        match viewer {
+            ViewerKind::Terminal => self.translate_inner(input, InputMode::Terminal),
+            ViewerKind::Touch => self.translate_inner(input, InputMode::Touch(screen)),
+        }
+    }
+
+    fn translate_inner(&mut self, input: &[u8], mode: InputMode<'_>) -> Vec<u8> {
         let mut window = std::mem::take(&mut self.tail);
         window.extend_from_slice(input);
         let mut out = Vec::with_capacity(window.len());
@@ -63,12 +84,12 @@ impl InputCarry {
             }
             match sequence_at(&window, at) {
                 Scan::Mouse(report, end) => {
-                    match viewer {
-                        ViewerKind::Touch => translate_mouse(report, screen, &mut out),
+                    match mode {
+                        InputMode::Touch(screen) => translate_mouse(report, screen, &mut out),
                         // A terminal viewer has no mouse toward the CLI at all: the CLI's own request to
                         // report was stripped from the stream, so a report that arrives anyway is the
                         // viewer's terminal acting on its own, and it goes nowhere.
-                        ViewerKind::Terminal => {}
+                        InputMode::Terminal => {}
                     }
                     at = end;
                 }

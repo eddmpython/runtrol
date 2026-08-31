@@ -146,6 +146,11 @@ impl Terminals {
         self.changes.subscribe()
     }
 
+    /// Publisher used by a background resource sample to invalidate terminal descriptors.
+    pub(crate) fn change_sender(&self) -> tokio::sync::watch::Sender<u64> {
+        self.changes.clone()
+    }
+
     /// The terminal already showing this known provider-native conversation.
     pub(crate) fn open_for(&self, provider: ProviderId, native: &str) -> Option<HostedTerminal> {
         let id = *self.by_conversation.get(&(provider, native.into()))?;
@@ -676,7 +681,7 @@ async fn open_with_arguments(
     Ok((terminal_id, terminal, attachment))
 }
 
-/// Open a mirror of a process the daemon did not start, and register it as a hosted terminal.
+/// Open a mirror of a process the daemon did not start, and attach the requesting viewer.
 ///
 /// This is the door for "a session started anywhere is still one session, streamed to every viewer": the
 /// process keeps running wherever it was started (another window, another app, an older Runtime generation
@@ -685,26 +690,34 @@ async fn open_with_arguments(
 ///
 /// It opens nothing new for the conversation. It does reserve the one terminal-surface claim while the mirror is
 /// live: that claim owns no transcript or conversation, but it prevents another Runtime generation from allocating a
-/// second renderer for the same external owner. A process the daemon already hosts, or already mirrors, is left alone.
-pub(crate) async fn open_mirror(
+/// second renderer for the same external owner. Observation alone never reaches this function. The first viewer
+/// allocates the helper, screen model and output ring, and later viewers attach to those same bounded objects.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one console attachment binds exact process, native identity, folder, geometry and viewer"
+)]
+pub(crate) async fn open_console_mirror(
     composed: &Arc<Composed>,
     provider: ProviderId,
     native: &str,
     pid: u32,
     cwd: AbsPath,
-) -> Result<(), TerminalOpenError> {
+    cols: u16,
+    rows: u16,
+    viewer: ViewerKind,
+) -> Result<(TerminalId, Terminal, Attachment), TerminalOpenError> {
     let helper = runtrol_childproc::console_mirror::helper_program()
         .map_err(|error| TerminalOpenError::Provider(error.to_string()))?;
-    {
-        let terminals = composed.terminals.lock().await;
-        if terminals.hosts_pid(pid) || terminals.open_for(provider, native).is_some() {
-            return Ok(());
+    if let Some(existing) = composed.terminals.lock().await.open_for(provider, native) {
+        if existing.workspace != cwd {
+            return Err(TerminalClaimError::WorkspaceConflict.into());
         }
+        let attachment = existing.terminal.attach(viewer).await;
+        return Ok((existing.id, existing.terminal, attachment));
     }
-    // A session another Runtime generation already hosts is already a conversation, not a new one: its terminal
-    // reaches this window through the fleet. The reservation also covers an external mirror already hosted by a peer,
-    // so two generations cannot allocate two helpers, rings, and screen models for one owner. Claims that identify an
-    // existing owner are an expected no-op for this background observer; state failures remain fail-closed.
+    // A session another Runtime generation already hosts is already a conversation, not a new one. Its terminal
+    // reaches this window through the fleet. The reservation also covers an external mirror already hosted by a
+    // peer, so two generations cannot allocate two helpers, rings, and screen models for one owner.
     let terminal_id = TerminalId::now();
     let reservation = match composed.native_claims.reserve_terminal(
         terminal_id,
@@ -712,21 +725,28 @@ pub(crate) async fn open_mirror(
         Some(native),
         cwd.as_str(),
         false,
-    ) {
-        Ok(TerminalClaimAdmission::Reserved(reservation)) => reservation,
-        Ok(TerminalClaimAdmission::Join(_))
-        | Err(
-            TerminalClaimError::StructuredBusy
-            | TerminalClaimError::TerminalAlreadyLive
-            | TerminalClaimError::WorkspaceConflict
-            | TerminalClaimError::LegacyGenerationBusy,
-        ) => return Ok(()),
-        Err(error @ TerminalClaimError::State) => return Err(error.into()),
+    )? {
+        TerminalClaimAdmission::Join(existing) => {
+            let (hosted, attachment) = attach_current(composed, existing, viewer)
+                .await
+                .map_err(TerminalOpenError::Provider)?;
+            return Ok((hosted.id, hosted.terminal, attachment));
+        }
+        TerminalClaimAdmission::Reserved(reservation) => reservation,
     };
     let (terminal, open) = {
         let mut terminals = composed.terminals.lock().await;
-        if terminals.hosts_pid(pid) || terminals.open_for(provider, native).is_some() {
-            return Ok(());
+        if let Some(existing) = terminals.open_for(provider, native) {
+            if existing.workspace != cwd {
+                return Err(TerminalClaimError::WorkspaceConflict.into());
+            }
+            let attachment = existing.terminal.attach(viewer).await;
+            return Ok((existing.id, existing.terminal, attachment));
+        }
+        if terminals.hosts_pid(pid) {
+            return Err(TerminalOpenError::Provider(
+                "the selected process is already hosted without this native binding".to_owned(),
+            ));
         }
         if terminals.len() >= MAX_HOSTED_TERMINALS {
             return Err(TerminalOpenError::NoRoom {
@@ -734,15 +754,8 @@ pub(crate) async fn open_mirror(
                 limit: MAX_HOSTED_TERMINALS,
             });
         }
-        let terminal = Terminal::mirror(
-            &helper,
-            pid,
-            runtrol_childproc::PtySize {
-                cols: 120,
-                rows: 40,
-            },
-        )
-        .map_err(|error| TerminalOpenError::Provider(error.to_string()))?;
+        let terminal = Terminal::mirror(&helper, pid, runtrol_childproc::PtySize { cols, rows })
+            .map_err(|error| TerminalOpenError::Provider(error.to_string()))?;
         terminals.insert_external(
             terminal_id,
             provider,
@@ -763,7 +776,8 @@ pub(crate) async fn open_mirror(
         return Err(error.into());
     }
     forget_on_exit(Arc::clone(composed), terminal_id, &terminal);
-    Ok(())
+    let attachment = terminal.attach(viewer).await;
+    Ok((terminal_id, terminal, attachment))
 }
 
 /// Open the provider's own TUI attachment client for a conversation another process already owns.

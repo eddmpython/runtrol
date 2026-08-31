@@ -13,6 +13,20 @@ import { tabName } from "./tabName";
 import { HIDE_CURSOR, hasVisibleText, MARK_FRAME_MS, paintMark, SHOW_CURSOR } from "./openingMark";
 import type { StudioRuntimeClient } from "./runtimeClient";
 
+const MAX_PENDING_INPUT_ACTIONS = 256;
+
+export type JourneyInputTiming = {
+  receivedAtMs: number;
+  dispatchedAtMs: number;
+  acknowledgedAtMs: number;
+};
+
+type InputMeasurement = {
+  receivedAtMs: number;
+  resolve(timing: JourneyInputTiming): void;
+  reject(error: unknown): void;
+};
+
 /// The conversation surface: the coding service's own terminal interface, hosted by the Core on a pseudo
 /// terminal it owns, shown here as an editor-area tab (`docs/terminalSurface.md`).
 ///
@@ -27,6 +41,9 @@ export class TerminalTabs implements vscode.Disposable {
   private readonly open = new Map<string, vscode.Terminal>();
   /// The extension PTY behind each tab, which owns the public name-change event for active and inactive tabs.
   private readonly hosts = new Map<vscode.Terminal, RuntimeTerminal>();
+  /// Exact public identities returned for open tabs, retained until that tab closes even if its watch drops.
+  private readonly journeyTargets = new Map<string, TerminalDescriptor>();
+  private readonly journeyTargetByTab = new Map<vscode.Terminal, string>();
   /// Conversations opened here that no service has described yet, by the tab showing each one.
   private readonly started = new Map<vscode.Terminal, StartedConversation>();
   private nextStarted = 0;
@@ -46,14 +63,15 @@ export class TerminalTabs implements vscode.Disposable {
     /// resume proof is signed by one Runtime generation; after an update the proof the row still holds is
     /// refused, and the honest answer is to look again rather than to tell the person to reload.
     private readonly refreshed: (conversationKey: string) => Promise<Conversation | null> = async () => null,
-    /// Told every time the service writes to a conversation's screen, which is how the sidebar knows the row
-    /// is working: the Runtime's lifecycle only reports turns Runtrol itself started, and it starts none.
-    private readonly serviceWrote: (conversationKey: string) => void = () => undefined,
+    /// Told every time the service writes to a conversation's screen, for output-adjacent bookkeeping such as
+    /// refreshing project changes. This is never model activity: an idle TUI also repaints prompts and cursors.
+    private readonly serviceOutput: (conversationKey: string) => void = () => undefined,
     /// The name this conversation carries now, or null when nothing in the list matches this tab. A tab opened
     /// before the service named the conversation is called after its folder, and the name arrives later.
     private readonly nameOf: (conversationKey: string) => string | null = () => null,
   ) {
     this.closing = vscode.window.onDidCloseTerminal((terminal) => {
+      this.forgetJourneyTerminal(terminal);
       for (const [key, open] of this.open) {
         if (open === terminal) this.open.delete(key);
       }
@@ -116,6 +134,17 @@ export class TerminalTabs implements vscode.Disposable {
     return pending ? `started:${encodeURIComponent(pending.id)}` : null;
   }
 
+  /// Stop routing future clicks to a terminal whose Runtime view has ended, while leaving its final screen in
+  /// the editor for diagnosis. A later click can then make a fresh connection instead of revealing a dead tab.
+  private retireDisconnected(terminal: vscode.Terminal): void {
+    for (const [key, open] of this.open) {
+      if (open === terminal) this.open.delete(key);
+    }
+    if (this.started.delete(terminal)) this.startedChanged();
+    this.named.delete(terminal);
+    this.hosts.delete(terminal);
+  }
+
   /// Show the conversation's terminal: the tab that already shows it, or a new one beside the active editor.
   show(conversation: Conversation, preserveFocus: boolean): vscode.Terminal {
     const existing = this.open.get(conversation.key)
@@ -130,14 +159,19 @@ export class TerminalTabs implements vscode.Disposable {
       return existing;
     }
     const key = conversation.key;
-    const pty = new RuntimeTerminal(this.runtime, targetOf(conversation), () => this.serviceWrote(key), async () => {
+    let terminal: vscode.Terminal | null = null;
+    const pty = new RuntimeTerminal(this.runtime, targetOf(conversation), () => this.serviceOutput(key), async () => {
       const again = await this.refreshed(conversation.key);
       return again ? targetOf(again) : null;
+    }, (descriptor) => {
+      if (terminal) this.rememberJourneyTerminal(terminal, descriptor);
+    }, () => {
+      if (terminal) this.retireDisconnected(terminal);
     });
     // The tab is named for the conversation and coloured for its project. The name answers "which conversation",
     // the colour answers "whose project", and the two together fit in the width a tab actually has.
     const colour = conversation.projectless ? null : tabColorId(conversation.homeWorkspace);
-    const terminal = vscode.window.createTerminal({
+    terminal = vscode.window.createTerminal({
       name: tabName(conversation.title),
       iconPath: tabIcon(colour, () => this.iconFor(conversation)),
       color: colour ? new vscode.ThemeColor(colour) : undefined,
@@ -159,15 +193,23 @@ export class TerminalTabs implements vscode.Disposable {
     // The same identity the row will carry, so the signal lands on the row a person is looking at.
     const startedId = `${providerId}:${this.nextStarted + 1}`;
     const startedKey = `started:${encodeURIComponent(startedId)}`;
+    let terminal: vscode.Terminal | null = null;
     const pty = new RuntimeTerminal(this.runtime, {
       provider: providerId,
       native: null,
       hosted: null,
       workspace,
       blocked: null,
-    }, () => this.serviceWrote(startedKey), async () => null);
+    }, () => this.serviceOutput(startedKey), async () => null, (descriptor) => {
+      if (terminal) {
+        this.rememberJourneyTerminal(terminal, descriptor);
+        this.bindStartedTerminal(terminal, descriptor);
+      }
+    }, () => {
+      if (terminal) this.retireDisconnected(terminal);
+    });
     const colour = projectless ? null : tabColorId(workspace);
-    const terminal = vscode.window.createTerminal({
+    terminal = vscode.window.createTerminal({
       name: tabName(name),
       iconPath: tabIcon(colour, () => this.iconForProvider(providerId)),
       color: colour ? new vscode.ThemeColor(colour) : undefined,
@@ -199,6 +241,35 @@ export class TerminalTabs implements vscode.Disposable {
     return [...this.started.values()];
   }
 
+  /// Bind a fresh placeholder to the public terminal identity Runtime actually opened.
+  private bindStartedTerminal(terminal: vscode.Terminal, descriptor: TerminalDescriptor): void {
+    const pending = this.started.get(terminal);
+    if (
+      !pending
+      || (pending.runtimeGeneration === descriptor.runtimeGeneration && pending.terminalId === descriptor.terminalId)
+    ) return;
+    this.started.set(terminal, {
+      ...pending,
+      runtimeGeneration: descriptor.runtimeGeneration,
+      terminalId: descriptor.terminalId,
+    });
+    this.startedChanged();
+  }
+
+  private rememberJourneyTerminal(terminal: vscode.Terminal, descriptor: TerminalDescriptor): void {
+    this.forgetJourneyTerminal(terminal);
+    const key = terminalIdentity(descriptor.runtimeGeneration, descriptor.terminalId);
+    this.journeyTargetByTab.set(terminal, key);
+    this.journeyTargets.set(key, descriptor);
+  }
+
+  private forgetJourneyTerminal(terminal: vscode.Terminal): void {
+    const key = this.journeyTargetByTab.get(terminal);
+    if (key === undefined) return;
+    this.journeyTargetByTab.delete(terminal);
+    this.journeyTargets.delete(key);
+  }
+
   /// Test-only observation of the real editor-terminal path. The production extension never calls these
   /// methods: the installed-host journey uses them to assert identity and byte delivery without reading or
   /// retaining a conversation transcript.
@@ -222,17 +293,35 @@ export class TerminalTabs implements vscode.Disposable {
     terminalId: string,
     text: string,
     deadlineMs: number,
-  ): Promise<void> {
+  ): Promise<number> {
     const found = this.journeyHost({ runtimeGeneration, terminalId });
     if (!found) throw new Error(`terminal ${terminalId} is not open in this VS Code window`);
     return found[1].waitForOutput(text, deadlineMs);
   }
 
-  writeJourneyInput(runtimeGeneration: string, terminalId: string, text: string): void {
+  writeJourneyInput(runtimeGeneration: string, terminalId: string, text: string): Promise<JourneyInputTiming> {
     const found = this.journeyHost({ runtimeGeneration, terminalId });
     if (!found) throw new Error(`terminal ${terminalId} is not open in this VS Code window`);
     // Use VS Code's public Terminal API. This enters RuntimeTerminal.handleInput exactly as keyboard input does.
+    const measured = found[1].measureNextInput();
     found[0].sendText(text, true);
+    return measured;
+  }
+
+  /// Test-only measurement after VS Code has delivered input to the Pseudoterminal callback. The simultaneous-host
+  /// gate measures the public Terminal API bounce separately, then uses this entry to isolate Runtime, PTY, and
+  /// fan-out latency without charging VS Code's extension-to-renderer-to-extension test loop to the product path.
+  writeDirectJourneyInput(runtimeGeneration: string, terminalId: string, text: string): Promise<JourneyInputTiming> {
+    const found = this.journeyHost({ runtimeGeneration, terminalId });
+    if (!found) throw new Error(`terminal ${terminalId} is not open in this VS Code window`);
+    return found[1].handleMeasuredInput(text);
+  }
+
+  /// Test-only exact stop through the same Runtime terminal identity the public open response returned.
+  async stopJourneyTerminal(runtimeGeneration: string, terminalId: string): Promise<void> {
+    const descriptor = this.journeyTargets.get(terminalIdentity(runtimeGeneration, terminalId));
+    if (!descriptor) throw new Error(`terminal ${terminalId} is not open in this VS Code window`);
+    await this.runtime.stopTerminal(descriptor);
   }
 
   private journeyHost(
@@ -290,6 +379,8 @@ export class TerminalTabs implements vscode.Disposable {
     for (const terminal of this.open.values()) terminal.dispose();
     this.open.clear();
     this.hosts.clear();
+    this.journeyTargets.clear();
+    this.journeyTargetByTab.clear();
   }
 }
 
@@ -355,6 +446,17 @@ function leaseLost(error: unknown): boolean {
     || message.includes("controlConflict");
 }
 
+function sameGeometry(
+  left: { columns: number; rows: number },
+  right: { columns: number; rows: number },
+): boolean {
+  return left.columns === right.columns && left.rows === right.rows;
+}
+
+function terminalIdentity(runtimeGeneration: string, terminalId: string): string {
+  return `${runtimeGeneration}:${terminalId}`;
+}
+
 class RuntimeTerminal implements vscode.Pseudoterminal {
   private readonly writeEmitter = new vscode.EventEmitter<string>();
   private readonly closeEmitter = new vscode.EventEmitter<number | void>();
@@ -368,19 +470,28 @@ class RuntimeTerminal implements vscode.Pseudoterminal {
   private closed = false;
   private commandTail = Promise.resolve();
   private dimensions = { columns: 120, rows: 40 };
+  private lastResize = { columns: 120, rows: 40 };
+  private resizeScheduled = false;
   /// Input typed before the connection is up is kept and sent once it is: a person who starts typing while
   /// the tab opens must not lose the first keys.
   private pending: Uint8Array[] = [];
   private pendingBytes = 0;
+  private queuedInputBytes = 0;
+  private queuedInputActions = 0;
+  private nextInputMeasurement: Omit<InputMeasurement, "receivedAtMs"> | null = null;
   /// The mark standing in the middle of the pane, lit in passes, until the service's own screen arrives.
   private opening: ReturnType<typeof setInterval> | null = null;
 
   constructor(
     private readonly runtime: StudioRuntimeClient,
     private target: Target,
-    /// Told whenever the service writes, so the sidebar can turn this conversation's icon while it works.
-    private readonly wrote: () => void,
+    /// Told whenever the service writes, for bookkeeping that does not infer model activity.
+    private readonly output: () => void,
     private readonly refreshTarget: () => Promise<Target | null>,
+    /// The exact hosted terminal identity returned by Runtime, used to name a fresh placeholder safely.
+    private readonly connected: (terminal: TerminalDescriptor) => void,
+    /// Withdraw this dead route while leaving its final editor contents visible.
+    private readonly disconnected: () => void,
   ) {}
 
   /// Every failure below leaves the tab standing with the reason written in it.
@@ -410,21 +521,21 @@ class RuntimeTerminal implements vscode.Pseudoterminal {
     return this.view?.opened.terminal ?? null;
   }
 
-  waitForOutput(text: string, deadlineMs: number): Promise<void> {
+  waitForOutput(text: string, deadlineMs: number): Promise<number> {
     if (!text) return Promise.reject(new Error("the terminal output marker is empty"));
-    return new Promise<void>((resolve, reject) => {
+    return new Promise<number>((resolve, reject) => {
       let tail = "";
       let timer: NodeJS.Timeout | undefined;
-      const finish = (error?: Error): void => {
+      const finish = (result: number | Error): void => {
         if (timer) clearTimeout(timer);
         subscription.dispose();
-        if (error) reject(error);
-        else resolve();
+        if (result instanceof Error) reject(result);
+        else resolve(result);
       };
       const subscription = this.onDidWrite((chunk) => {
         const candidate = tail + chunk;
         if (candidate.includes(text)) {
-          finish();
+          finish(Date.now());
           return;
         }
         // Only the boundary needed to match a split marker is retained. This is a test latch, not a transcript.
@@ -438,9 +549,18 @@ class RuntimeTerminal implements vscode.Pseudoterminal {
   }
 
   handleInput(data: string): void {
-    if (this.closed) return;
+    const measurement = this.takeInputMeasurement();
+    if (this.closed) {
+      measurement?.reject(new Error("the terminal closed before measured input arrived"));
+      return;
+    }
     const bytes = Buffer.from(data, "utf8");
+    if (bytes.byteLength === 0) {
+      measurement?.reject(new Error("the measured terminal input was empty"));
+      return;
+    }
     if (!this.view) {
+      measurement?.reject(new Error("the measured terminal input arrived before the Runtime view connected"));
       if (this.pendingBytes + bytes.byteLength > PUBLIC_LIMITS.maxTerminalWriteBytes) {
         this.fail(new Error("Input entered while the terminal opened exceeded the Runtime input bound."));
         return;
@@ -449,29 +569,35 @@ class RuntimeTerminal implements vscode.Pseudoterminal {
       this.pendingBytes += bytes.byteLength;
       return;
     }
-    this.queueControl(async (view, lease) => {
-      await view.write({
-        requestId: newMutationRequestId(),
-        terminalId: view.opened.terminal.terminalId,
-        leaseId: lease.leaseId,
-        leaseGeneration: lease.leaseGeneration,
-        bytesBase64: Buffer.from(bytes).toString("base64"),
-      });
+    this.queueInput(bytes, measurement);
+  }
+
+  measureNextInput(): Promise<JourneyInputTiming> {
+    if (this.nextInputMeasurement) {
+      return Promise.reject(new Error("a measured terminal input is already armed"));
+    }
+    return new Promise<JourneyInputTiming>((resolve, reject) => {
+      this.nextInputMeasurement = { resolve, reject };
     });
   }
 
+  handleMeasuredInput(data: string): Promise<JourneyInputTiming> {
+    const measured = this.measureNextInput();
+    this.handleInput(data);
+    return measured;
+  }
+
+  private takeInputMeasurement(): InputMeasurement | null {
+    const pending = this.nextInputMeasurement;
+    this.nextInputMeasurement = null;
+    return pending ? { ...pending, receivedAtMs: Date.now() } : null;
+  }
+
   setDimensions(dimensions: vscode.TerminalDimensions): void {
-    this.dimensions = { columns: dimensions.columns, rows: dimensions.rows };
-    if (this.closed || !this.view) return;
-    this.queueControl(async (view, lease) => {
-      await view.resize({
-        requestId: newMutationRequestId(),
-        terminalId: view.opened.terminal.terminalId,
-        leaseId: lease.leaseId,
-        leaseGeneration: lease.leaseGeneration,
-        geometry: this.dimensions,
-      });
-    });
+    const next = { columns: dimensions.columns, rows: dimensions.rows };
+    if (sameGeometry(this.dimensions, next)) return;
+    this.dimensions = next;
+    this.scheduleResize();
   }
 
   /// Keep the light passing over the mark until there is something real to draw.
@@ -491,13 +617,15 @@ class RuntimeTerminal implements vscode.Pseudoterminal {
   /// itself writes, and taking the mark down then left the same blank rectangle it exists to prevent
   /// (measured 2026-08-28, one click in a real window).
   private writeFromService(text: string): void {
-    if (text.length > 0) this.wrote();
     // Only something a person can see takes the mark down. The Runtime answers with the terminal's screen as
     // it stands, and for a conversation the service has not drawn yet that screen is escape sequences and
     // blanks: taking the mark down on those put the empty rectangle back that the mark exists to prevent
     // (measured 2026-08-28, one click in a real window).
     if (hasVisibleText(text)) this.stopOpeningMark();
+    // Feed VS Code's terminal buffer before rebuilding sidebar state. The activity callback is bookkeeping;
+    // it must never sit in front of bytes a person is waiting to see.
     this.writeEmitter.fire(text);
+    if (text.length > 0) this.output();
   }
 
   /// Stop and leave the pane clear. The cursor comes back because the CLI about to draw here expects it.
@@ -525,29 +653,89 @@ class RuntimeTerminal implements vscode.Pseudoterminal {
       return;
     }
     this.view = view;
+    this.connected(view.opened.terminal);
     this.lease = view.opened.controlLease ?? null;
+    this.lastResize = geometry;
     this.writeFromService(this.decoder.decode(view.initialScreen, { stream: true }));
     if (
       this.dimensions.columns !== geometry.columns
       || this.dimensions.rows !== geometry.rows
     ) {
-      this.setDimensions(this.dimensions);
+      this.scheduleResize();
     }
     const pending = this.pending;
     this.pending = [];
     this.pendingBytes = 0;
-    for (const bytes of pending) {
-      this.queueControl(async (opened, lease) => {
-        await opened.write({
-          requestId: newMutationRequestId(),
-          terminalId: opened.opened.terminal.terminalId,
-          leaseId: lease.leaseId,
-          leaseGeneration: lease.leaseGeneration,
-          bytesBase64: Buffer.from(bytes).toString("base64"),
-        });
-      });
-    }
+    for (const bytes of pending) this.queueInput(bytes);
     await this.pump(view);
+  }
+
+  /// Preserve exact keystroke order while bounding both byte ownership and Promise ownership if a Runtime stalls.
+  private queueInput(bytes: Uint8Array, measurement: InputMeasurement | null = null): void {
+    if (
+      this.queuedInputBytes + bytes.byteLength > PUBLIC_LIMITS.maxTerminalWriteBytes
+      || this.queuedInputActions >= MAX_PENDING_INPUT_ACTIONS
+    ) {
+      const error = new Error("Pending terminal input exceeded the bounded control queue.");
+      measurement?.reject(error);
+      this.fail(error);
+      return;
+    }
+    this.queuedInputBytes += bytes.byteLength;
+    this.queuedInputActions += 1;
+    let dispatchedAtMs = 0;
+    this.queueControl(async (view, lease) => {
+      dispatchedAtMs = Date.now();
+      await view.write({
+        requestId: newMutationRequestId(),
+        terminalId: view.opened.terminal.terminalId,
+        leaseId: lease.leaseId,
+        leaseGeneration: lease.leaseGeneration,
+        bytesBase64: Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString("base64"),
+      });
+    }, (error) => {
+      this.queuedInputBytes = Math.max(0, this.queuedInputBytes - bytes.byteLength);
+      this.queuedInputActions = Math.max(0, this.queuedInputActions - 1);
+      if (!measurement) return;
+      if (error) {
+        measurement.reject(error);
+      } else if (dispatchedAtMs === 0) {
+        measurement.reject(new Error("the terminal closed before measured input dispatch"));
+      } else {
+        measurement.resolve({
+          receivedAtMs: measurement.receivedAtMs,
+          dispatchedAtMs,
+          acknowledgedAtMs: Date.now(),
+        });
+      }
+    });
+  }
+
+  /// Collapse a resize burst to one in-flight request and the latest pending geometry. There is no delay: the
+  /// current size enters the control lane immediately, while obsolete intermediate sizes consume no queue or PTY I/O.
+  private scheduleResize(): void {
+    if (
+      this.closed
+      || !this.view
+      || this.resizeScheduled
+      || sameGeometry(this.dimensions, this.lastResize)
+    ) return;
+    this.resizeScheduled = true;
+    let geometry: { columns: number; rows: number } | null = null;
+    this.queueControl(async (view, lease) => {
+      geometry ??= this.dimensions;
+      await view.resize({
+        requestId: newMutationRequestId(),
+        terminalId: view.opened.terminal.terminalId,
+        leaseId: lease.leaseId,
+        leaseGeneration: lease.leaseGeneration,
+        geometry,
+      });
+      this.lastResize = geometry;
+    }, () => {
+      this.resizeScheduled = false;
+      this.scheduleResize();
+    });
   }
 
   /// Read the view until the service ends. A transport break reattaches only to the exact recorded generation and
@@ -583,8 +771,7 @@ class RuntimeTerminal implements vscode.Pseudoterminal {
             // The Core re-sends the whole screen next; clear so the redraw lands on a clean page, and start
             // decoding afresh so a multibyte tail cut off by the lag never bleeds into it.
             this.decoder = new TextDecoder("utf-8");
-            this.writeEmitter.fire("\x1b[2J\x1b[H");
-            this.writeEmitter.fire(this.decoder.decode(notification.screen, { stream: true }));
+            this.writeFromService(`\x1b[2J\x1b[H${this.decoder.decode(notification.screen, { stream: true })}`);
             break;
           case "exited":
             // A clean exit closes the tab like a shell's would. Anything else keeps the tab, with the
@@ -612,16 +799,17 @@ class RuntimeTerminal implements vscode.Pseudoterminal {
           return;
         }
         this.view = view;
+        this.connected(view.opened.terminal);
         this.lease = null;
         this.decoder = new TextDecoder("utf-8");
-        this.writeEmitter.fire("\x1b[2J\x1b[H");
-        this.writeEmitter.fire(this.decoder.decode(view.initialScreen, { stream: true }));
+        this.writeFromService(`\x1b[2J\x1b[H${this.decoder.decode(view.initialScreen, { stream: true })}`);
       }
     }
   }
 
   private queueControl(
     action: (view: TerminalView, lease: TerminalControlLease) => Promise<void>,
+    settled: (error?: unknown) => void = () => undefined,
   ): void {
     const command = this.commandTail.then(async () => {
       if (this.closed) return;
@@ -639,9 +827,16 @@ class RuntimeTerminal implements vscode.Pseudoterminal {
         await action(view, await this.ensureControl(view));
       }
     });
+    const finish = (error?: unknown): void => {
+      try {
+        settled(error);
+      } catch (settleError: unknown) {
+        this.fail(settleError);
+      }
+    };
     this.commandTail = command.then(
-      () => undefined,
-      () => undefined,
+      () => finish(),
+      (error: unknown) => finish(error),
     );
     void command.catch((error: unknown) => this.fail(error));
   }
@@ -694,6 +889,7 @@ class RuntimeTerminal implements vscode.Pseudoterminal {
     const view = this.view;
     this.view = null;
     this.lease = null;
+    if (!notifyRuntime) this.disconnected();
     if (!view) return;
     if (notifyRuntime) {
       void view.detach({

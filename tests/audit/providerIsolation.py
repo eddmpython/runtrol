@@ -168,6 +168,8 @@ def main() -> int:
             problems.append(f"  - crate `{crate}` is on the list and has no source directory")
             continue
         for path in sorted(source.rglob("*.rs")):
+            if "tests" in path.relative_to(source).parts:
+                continue
             checked += 1
             problems.extend(offences(crate, path, names, exemptions))
 

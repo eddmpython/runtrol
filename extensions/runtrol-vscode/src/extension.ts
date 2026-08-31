@@ -180,7 +180,6 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
       return state.conversations.find((candidate) => candidate.key === key) ?? null;
     },
     (key) => {
-      state.markStreaming(key);
       const home = state.conversations.find((row) => row.key === key)?.homeWorkspace;
       // The project the conversation is filed under, not the folder it runs in: a conversation in a
       // subfolder is a row of the project above it, and that is the chip to move.
@@ -342,6 +341,10 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     vscode.commands.registerCommand(
       "runtrol.switchSession",
       () => run(() => afterReady(() => controller.switchSession())),
+    ),
+    vscode.commands.registerCommand(
+      "runtrol.arrangeConversationGrid",
+      () => run(() => afterReady(() => controller.arrangeConversationGrid())),
     ),
     vscode.commands.registerCommand(
       "runtrol.startSession",

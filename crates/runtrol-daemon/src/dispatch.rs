@@ -848,8 +848,9 @@ pub(crate) async fn prepare_integration_admin(
             crate::integration_admin::IntegrationAdmin::deny(composed, pending_id)
                 .map(|()| Response::Done)
         }
-        Request::Integrations => crate::integration_admin::IntegrationAdmin::integrations(composed)
-            .map(Response::Integrations),
+        Request::Integrations => Ok(Response::Integrations(
+            crate::integration_admin::IntegrationAdmin::integrations(composed),
+        )),
         Request::ProviderHelp { provider_id } => provider_help(composed, provider_id),
         Request::IntegrationRevoke { integration_id } => {
             crate::integration_admin::IntegrationAdmin::revoke(composed, integration_id)
@@ -1379,6 +1380,7 @@ pub(crate) async fn answer_prepared(
             successor_digest,
             authorities,
             claims,
+            audit_ack,
         } => {
             if !composed.draining.load(std::sync::atomic::Ordering::Acquire) {
                 return Reply::One(refuse(
@@ -1397,18 +1399,31 @@ pub(crate) async fn answer_prepared(
             composed
                 .native_claims
                 .replace_remote(&successor_digest, claims);
+            let (audit, audit_batch) = match audit_ack {
+                Some(receipt) => {
+                    if composed.audit_relay.acknowledge(receipt).is_err() {
+                        return Reply::One(refuse(
+                            "generation audit receipt does not match this draining process",
+                        ));
+                    }
+                    (Vec::new(), Some(Box::new(composed.audit_relay.snapshot())))
+                }
+                None => (composed.audit_relay.take_legacy(), None),
+            };
             Reply::One(Response::GenerationHandoff {
                 capabilities: runtrol_ipc::GenerationHandoffCapabilities {
                     public_terminal: true,
                     authority_relay: true,
                     native_live_claims: true,
+                    audit_relay: runtrol_ipc::GenerationAuditRelayCapability::ReceiptAck,
                 },
                 claims: composed
                     .native_claims
                     .snapshot_except(Some(&successor_digest)),
-                // The rows this generation recorded since the store left. The successor appends them; a
-                // draining generation with no store of its own has nowhere else to make them durable.
-                audit: composed.audit_relay.take(),
+                // A current successor gets a replayable batch and acknowledges only after its store commit.
+                // A predecessor client receives the legacy destructive projection for wire compatibility.
+                audit,
+                audit_batch,
             })
         }
 
@@ -3164,7 +3179,9 @@ mod tests {
         let (composed, path) = composed_for("handoff-audit");
         let mut sessions = SessionManager::new();
         // Handover as the owner loop does it: freeze the grant ceiling, release the store, drain.
-        composed.generation_authority.freeze(&composed.store);
+        composed
+            .generation_authority
+            .freeze(&composed.integration_authority);
         assert!(composed.store.release(), "the store is handed over once");
         composed
             .draining
@@ -3177,6 +3194,7 @@ mod tests {
             successor_digest: "successor".into(),
             authorities: Vec::new(),
             claims: Vec::new(),
+            audit_ack: None,
         };
         let mut conversation = Conversation::at_the_machine();
         greet(&mut conversation, &composed, &mut sessions).await;
@@ -3195,6 +3213,94 @@ mod tests {
             }
             other => panic!("expected the handoff answer, got {}", shape(&other)),
         }
+        clean(composed, &path);
+    }
+
+    #[tokio::test]
+    async fn a_current_successor_replays_until_its_durable_audit_receipt_returns() {
+        let (composed, path) = composed_for("handoff-audit-receipt");
+        let mut sessions = SessionManager::new();
+        composed
+            .generation_authority
+            .freeze(&composed.integration_authority);
+        assert!(composed.store.release(), "the store is handed over once");
+        composed
+            .draining
+            .store(true, std::sync::atomic::Ordering::Release);
+        crate::runtime_audit::structural(&composed, "runtime/unknownMethod", "methodNotFound")
+            .expect("kept for the successor rather than refused");
+
+        let poll = |audit_ack| Request::GenerationHandoff {
+            successor_digest: "successor".into(),
+            authorities: Vec::new(),
+            claims: Vec::new(),
+            audit_ack: Some(audit_ack),
+        };
+        let unsupported_epoch = runtrol_ipc::GenerationAuditAck {
+            epoch: [0; 16],
+            through: 0,
+        };
+        let mut conversation = Conversation::at_the_machine();
+        greet(&mut conversation, &composed, &mut sessions).await;
+        let first = match answer(
+            &mut conversation,
+            &composed,
+            &mut sessions,
+            poll(unsupported_epoch),
+        )
+        .await
+        {
+            Reply::One(Response::GenerationHandoff {
+                capabilities,
+                audit,
+                audit_batch: Some(batch),
+                ..
+            }) => {
+                assert_eq!(
+                    capabilities.audit_relay,
+                    runtrol_ipc::GenerationAuditRelayCapability::ReceiptAck
+                );
+                assert!(
+                    audit.is_empty(),
+                    "current peers do not use the legacy batch"
+                );
+                *batch
+            }
+            other => panic!("expected the handoff batch, got {}", shape(&other)),
+        };
+        assert_eq!(first.entries.len(), 1);
+
+        let repeated = match answer(
+            &mut conversation,
+            &composed,
+            &mut sessions,
+            poll(unsupported_epoch),
+        )
+        .await
+        {
+            Reply::One(Response::GenerationHandoff {
+                audit_batch: Some(batch),
+                ..
+            }) => *batch,
+            other => panic!("expected the repeated batch, got {}", shape(&other)),
+        };
+        assert_eq!(repeated, first, "a lost response removes nothing");
+
+        let receipt = runtrol_ipc::GenerationAuditAck {
+            epoch: first.epoch,
+            through: first.entries.last().expect("the retained row").sequence,
+        };
+        match answer(&mut conversation, &composed, &mut sessions, poll(receipt)).await {
+            Reply::One(Response::GenerationHandoff {
+                audit_batch: Some(batch),
+                ..
+            }) => {
+                assert!(batch.entries.is_empty());
+                assert!(batch.loss.is_none());
+            }
+            other => panic!("expected the acknowledged batch, got {}", shape(&other)),
+        }
+        assert!(composed.audit_relay.is_empty());
         clean(composed, &path);
     }
 

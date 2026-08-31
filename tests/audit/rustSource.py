@@ -36,6 +36,9 @@ NOISE = re.compile(
 # the two readings of "this is not code" cannot drift apart.
 RAW_OPENER = re.compile(r'r(#*)"')
 CHAR_LITERAL = re.compile(r"'(?:\\.|[^'\\])'")
+CFG_TEST = re.compile(
+    r"#\s*\[\s*cfg\s*\([^]]*(?<![A-Za-z0-9_])test(?![A-Za-z0-9_])[^]]*\)\s*\]"
+)
 
 
 def withoutNoise(line: str) -> str:
@@ -171,7 +174,7 @@ def testRegions(lines: list[str]) -> list[tuple[int, int]]:
     regions: list[tuple[int, int]] = []
     i = 0
     while i < len(lines):
-        if "#[cfg(test)]" not in lines[i]:
+        if not CFG_TEST.search(lines[i]):
             i += 1
             continue
         depth = 0
@@ -226,6 +229,15 @@ def selftest() -> int:
         problems.append("a cfg(test) attribute on one function did not cover its body")
     if inRegions(4, regions):
         problems.append("the item after a cfg(test) function was read as test code")
+
+    # Platform-qualified tests are still tests. The Windows root identity proof uses this exact shape, and
+    # treating it as production reported every deliberate assertion as a panic path.
+    lines = "#[cfg(all(test, windows))]\nmod tests {\n    fn only_here() {}\n}\nfn after() {}\n".splitlines()
+    regions = testRegions(lines)
+    if not inRegions(2, regions):
+        problems.append("a platform-qualified cfg(test) module was read as production code")
+    if inRegions(4, regions):
+        problems.append("code after a platform-qualified test module was read as test code")
 
     # **The defect this walk exists for.** A raw string spanning lines is invisible one line at a time: the
     # opening line keeps braces the string owns and the closing line keeps its own, so the region closes

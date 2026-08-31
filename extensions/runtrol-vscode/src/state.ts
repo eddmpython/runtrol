@@ -16,12 +16,6 @@ import { discoveryNotice, incompleteDiscovery, providerRowsEqual, sessionRowsEqu
 import type { IsolatedWorkspaceLine } from "./protocol";
 import { workspaceIdentity } from "./workspaceCollision";
 
-/// How long after the last byte a conversation stops reading as working.
-///
-/// A model writing sends frames far closer together than this, so the row turns without flicker; a person
-/// reading an answer sees it stop about a second after the answer does.
-const STREAM_QUIET_MS = 1_200;
-
 export type RuntimeStateChange = "rows" | "selection" | "usage";
 
 /// Whether this window has heard from the Core yet.
@@ -70,14 +64,16 @@ export class RuntimeState implements vscode.Disposable {
   /// surface has none). Held here because every derived row reads it, and one place answering "is this
   /// conversation projectless" keeps the sidebar, the switcher and the tabs in agreement.
   private started: readonly StartedConversation[] = [];
-  /// The conversations whose service is writing to its screen right now, and the timer that forgets each one.
-  private readonly streaming = new Map<string, ReturnType<typeof setTimeout>>();
   private memoryBySession: ReadonlyMap<string, number> = new Map();
   private memoryByNative: ReadonlyMap<string, number> = new Map();
   /// Conversations the service is writing to right now that Runtrol does not host, by native identity.
   private activeNative: ReadonlySet<string> = new Set();
   /// Conversations owned by a provider process that Runtrol observed but did not create or attach.
   private observedNative: ReadonlySet<string> = new Set();
+  /// Live provider owners with an exact route into their terminal surface.
+  private attachableNative: ReadonlySet<string> = new Set();
+  /// Prior live owners whose current process proof could not be refreshed. They are blocked but not called live.
+  private unconfirmedNative: ReadonlySet<string> = new Set();
   /// Daemon-owned terminals delivered by the structural terminal-index watch.
   private terminalRows: readonly TerminalDescriptor[] = [];
   /// What the terminal watch could not read, generation by generation. Part of why the list is not everything.
@@ -165,10 +161,14 @@ export class RuntimeState implements vscode.Disposable {
       this.pinnedKeys,
       this.renamedTitles,
       this.started,
-      new Set(this.streaming.keys()),
+      // Terminal output is deliberately not an activity source. A live TUI repaints prompts, menus and cursors
+      // while its model is idle; only the provider's structural turn state may animate a row.
+      new Set(),
       this.activeNative,
       this.observedNative,
       this.terminalRows,
+      this.unconfirmedNative,
+      this.attachableNative,
     );
     return this.conversationRows;
   }
@@ -186,26 +186,6 @@ export class RuntimeState implements vscode.Disposable {
     return this.memoryByNative.get(`${row.providerId}:${native}`) ?? null;
   }
 
-  /// This conversation's service just wrote to its screen, so it is working.
-  ///
-  /// The Runtime's own lifecycle cannot answer this: it says a turn is running only for turns Runtrol started,
-  /// and Runtrol starts none (every conversation is the service's terminal interface). Bytes arriving is the
-  /// signal that costs nothing and reads nothing: what is counted is that they came, never what they said.
-  /// The row stops turning after `STREAM_QUIET_MS` of silence, which is longer than the gap between frames of
-  /// a model writing and shorter than a person's next keystroke turning into an answer.
-  markStreaming(key: string): void {
-    const running = this.streaming.get(key);
-    if (running) clearTimeout(running);
-    this.streaming.set(key, setTimeout(() => {
-      this.streaming.delete(key);
-      this.conversationRows = null;
-      this.changedEmitter.fire("rows");
-    }, STREAM_QUIET_MS));
-    if (running) return;
-    this.conversationRows = null;
-    this.changedEmitter.fire("rows");
-  }
-
   /// The memory poll's latest figures. Repaints only when a figure actually changed.
   setMemory(bySession: ReadonlyMap<string, number>, byNative: ReadonlyMap<string, number>): void {
     if (sameEntries(bySession, this.memoryBySession) && sameEntries(byNative, this.memoryByNative)) return;
@@ -214,11 +194,10 @@ export class RuntimeState implements vscode.Disposable {
     this.changedEmitter.fire("rows");
   }
 
-  /// The activity poll's latest answer: which conversations the services wrote to a moment ago.
+  /// The activity poll's latest answer: which conversations have a structurally open model turn.
   ///
-  /// `streaming` above covers the conversations whose terminal Runtrol hosts, because their bytes pass
-  /// through it. This covers the rest, which on a real machine is most of them: a person who runs the CLI in
-  /// their own terminal still expects the panel to show that conversation working.
+  /// This is the sole activity source for provider-owned TUI conversations, hosted or external. It is a
+  /// provider structural turn boundary, never an inference from terminal bytes.
   setNativeActivity(active: ReadonlySet<string>): void {
     if (sameMembers(active, this.activeNative)) return;
     this.activeNative = active;
@@ -226,11 +205,27 @@ export class RuntimeState implements vscode.Disposable {
     this.changedEmitter.fire("rows");
   }
 
-  /// Replace the cheap provider process roster. These rows are live but not writable until an official attach
-  /// channel exists, so selecting one must never start a duplicate resume process.
+  /// Replace the cheap provider process roster. A separate set names which exact owners are attachable, so an
+  /// unrouteable live row must never start a duplicate resume process.
   setObservedNative(live: ReadonlySet<string>): void {
     if (sameMembers(live, this.observedNative)) return;
     this.observedNative = live;
+    this.conversationRows = null;
+    this.changedEmitter.fire("rows");
+  }
+
+  /// Replace the live owners whose provider roster publishes a safe terminal route.
+  setAttachableNative(identities: ReadonlySet<string>): void {
+    if (sameMembers(identities, this.attachableNative)) return;
+    this.attachableNative = identities;
+    this.conversationRows = null;
+    this.changedEmitter.fire("rows");
+  }
+
+  /// Replace owner identities whose latest roster read failed. This is a deny state, not a running state.
+  setUnconfirmedNative(identities: ReadonlySet<string>): void {
+    if (sameMembers(identities, this.unconfirmedNative)) return;
+    this.unconfirmedNative = identities;
     this.conversationRows = null;
     this.changedEmitter.fire("rows");
   }

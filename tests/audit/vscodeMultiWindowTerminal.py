@@ -13,25 +13,31 @@ Usage::
 from __future__ import annotations
 
 import json
+import math
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
 import time
+import traceback
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
 import genericAcpSmoke as acp
 import vscodeRealProviderJourney as process
+from vscodePerformanceBudget import loadPerformanceBudget
 
 ROOT = Path(__file__).resolve().parents[2]
 EXTENSION = ROOT / "extensions" / "runtrol-vscode"
 MARKER = "RUNTROL_VSCODE_MULTI_WINDOW "
 PROVIDER = acp.PROVIDER
 TIMEOUT_S = 180.0
-MAX_DELIVERY_MS = 5_000.0
+PERFORMANCE_BUDGET = loadPerformanceBudget()["multiWindowTerminal"]
+MAX_FIRST_DELIVERY_MS = PERFORMANCE_BUDGET["firstUseDeliveryMs"]
+MAX_WARM_P95_MS = PERFORMANCE_BUDGET["warmDeliveryP95Ms"]
+SAMPLE_COUNT = int(PERFORMANCE_BUDGET["latencySampleCount"])
 
 
 class Failed(Exception):
@@ -51,12 +57,20 @@ class Evidence:
     mirror_saw_owner_input: bool
     mirror_wrote_after_owner_window_closed: bool
     mirror_saw_own_input: bool
-    owner_input_ms: float
-    mirror_saw_owner_ms: float
-    mirror_input_after_handoff_ms: float
+    owner_first_input_ms: float
+    owner_warm_input_p95_ms: float
+    mirror_first_fanout_ms: float
+    mirror_warm_fanout_p95_ms: float
+    handoff_first_input_ms: float
+    handoff_warm_input_p95_ms: float
     provider_stopped: bool
     exact_owner_generation_stopped: bool
     cleanup_complete: bool
+    owner_input_samples_ms: tuple[float, ...] = ()
+    mirror_fanout_samples_ms: tuple[float, ...] = ()
+    handoff_input_samples_ms: tuple[float, ...] = ()
+    owner_input_timings: tuple[tuple[float, float, float], ...] = ()
+    handoff_input_timings: tuple[tuple[float, float, float], ...] = ()
 
 
 def evidenceProblems(evidence: Evidence) -> list[str]:
@@ -84,33 +98,128 @@ def evidenceProblems(evidence: Evidence) -> list[str]:
     )
     problems.extend(message for held, message in checks if not held)
     for label, measured in (
-        ("owner input", evidence.owner_input_ms),
-        ("mirror fan-out", evidence.mirror_saw_owner_ms),
-        ("writer handoff", evidence.mirror_input_after_handoff_ms),
+        ("first owner input", evidence.owner_first_input_ms),
+        ("first mirror fan-out", evidence.mirror_first_fanout_ms),
+        ("first writer handoff", evidence.handoff_first_input_ms),
     ):
-        if measured < 0 or measured > MAX_DELIVERY_MS:
-            problems.append(f"{label} took {measured:.1f} ms, outside the {MAX_DELIVERY_MS:.0f} ms gate bound")
+        if measured < 0 or measured > MAX_FIRST_DELIVERY_MS:
+            problems.append(
+                f"{label} took {measured:.1f} ms, outside the {MAX_FIRST_DELIVERY_MS:.0f} ms first-use bound"
+            )
+    for label, measured in (
+        ("warm owner input p95", evidence.owner_warm_input_p95_ms),
+        ("warm mirror fan-out p95", evidence.mirror_warm_fanout_p95_ms),
+        ("warm writer handoff p95", evidence.handoff_warm_input_p95_ms),
+    ):
+        if measured < 0 or measured > MAX_WARM_P95_MS:
+            problems.append(
+                f"{label} was {measured:.1f} ms, outside the {MAX_WARM_P95_MS:.0f} ms interaction contract"
+            )
+    for label, samples, first, warm in (
+        (
+            "owner input",
+            evidence.owner_input_samples_ms,
+            evidence.owner_first_input_ms,
+            evidence.owner_warm_input_p95_ms,
+        ),
+        (
+            "mirror fan-out",
+            evidence.mirror_fanout_samples_ms,
+            evidence.mirror_first_fanout_ms,
+            evidence.mirror_warm_fanout_p95_ms,
+        ),
+        (
+            "writer handoff",
+            evidence.handoff_input_samples_ms,
+            evidence.handoff_first_input_ms,
+            evidence.handoff_warm_input_p95_ms,
+        ),
+    ):
+        if len(samples) != SAMPLE_COUNT or any(not math.isfinite(sample) or sample < 0 for sample in samples):
+            problems.append(f"{label} did not publish exactly {SAMPLE_COUNT} finite non-negative samples")
+            continue
+        if not math.isclose(samples[0], first, abs_tol=0.1):
+            problems.append(f"{label} first-use summary does not match its samples")
+        if not math.isclose(percentile95(samples[1:]), warm, abs_tol=0.1):
+            problems.append(f"{label} warm p95 summary does not match its samples")
+    for label, timings in (
+        ("owner input timing", evidence.owner_input_timings),
+        ("writer handoff timing", evidence.handoff_input_timings),
+    ):
+        if len(timings) != SAMPLE_COUNT:
+            problems.append(f"{label} did not publish exactly {SAMPLE_COUNT} samples")
+            continue
+        if any(
+            not all(math.isfinite(value) for value in timing)
+            or not timing[0] <= timing[1] <= timing[2]
+            for timing in timings
+        ):
+            problems.append(f"{label} contains a non-monotonic timestamp")
     return problems
+
+
+def percentile95(samples: tuple[float, ...]) -> float:
+    """Return the nearest-rank p95 used by the installed-host journey."""
+    ordered = sorted(samples)
+    index = max(0, math.ceil(len(ordered) * 0.95) - 1)
+    return ordered[index]
+
+
+def samplesFrom(result: dict[str, Any], key: str) -> tuple[float, ...]:
+    """Read one bounded raw latency series without accepting strings or objects as numbers."""
+    raw = result.get(key)
+    if not isinstance(raw, list):
+        return ()
+    samples: list[float] = []
+    for value in raw:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return ()
+        samples.append(float(value))
+    return tuple(samples)
+
+
+def timingsFrom(result: dict[str, Any], key: str) -> tuple[tuple[float, float, float], ...]:
+    """Read bounded receive, dispatch, and acknowledgement timestamps."""
+    raw = result.get(key)
+    if not isinstance(raw, list):
+        return ()
+    timings: list[tuple[float, float, float]] = []
+    for value in raw:
+        if not isinstance(value, dict):
+            return ()
+        fields = tuple(value.get(field) for field in ("receivedAtMs", "dispatchedAtMs", "acknowledgedAtMs"))
+        if any(isinstance(field, bool) or not isinstance(field, (int, float)) for field in fields):
+            return ()
+        timings.append(tuple(float(field) for field in fields))
+    return tuple(timings)
 
 
 def selftest() -> int:
     """Prove identity, lifecycle, delivery, latency, and cleanup defects each turn the gate red."""
     valid = Evidence(
-        True,
-        True,
-        True,
-        True,
-        True,
-        True,
-        True,
-        True,
-        True,
-        10.0,
-        20.0,
-        30.0,
-        True,
-        True,
-        True,
+        same_terminal=True,
+        one_owner_pid=True,
+        owner_alive_before_mirror=True,
+        owner_alive_while_both_open=True,
+        owner_alive_after_owner_window_closed=True,
+        owner_saw_owner_input=True,
+        mirror_saw_owner_input=True,
+        mirror_wrote_after_owner_window_closed=True,
+        mirror_saw_own_input=True,
+        owner_first_input_ms=10.0,
+        owner_warm_input_p95_ms=20.0,
+        mirror_first_fanout_ms=30.0,
+        mirror_warm_fanout_p95_ms=10.0,
+        handoff_first_input_ms=20.0,
+        handoff_warm_input_p95_ms=30.0,
+        provider_stopped=True,
+        exact_owner_generation_stopped=True,
+        cleanup_complete=True,
+        owner_input_samples_ms=(10.0, *([20.0] * (SAMPLE_COUNT - 1))),
+        mirror_fanout_samples_ms=(30.0, *([10.0] * (SAMPLE_COUNT - 1))),
+        handoff_input_samples_ms=(20.0, *([30.0] * (SAMPLE_COUNT - 1))),
+        owner_input_timings=tuple((1.0, 2.0, 3.0) for _ in range(SAMPLE_COUNT)),
+        handoff_input_timings=tuple((1.0, 2.0, 3.0) for _ in range(SAMPLE_COUNT)),
     )
     defects = [
         replace(valid, **{field: False})
@@ -130,12 +239,33 @@ def selftest() -> int:
         )
     ]
     defects.extend(
-        replace(valid, **{field: MAX_DELIVERY_MS + 1.0})
-        for field in ("owner_input_ms", "mirror_saw_owner_ms", "mirror_input_after_handoff_ms")
+        replace(valid, **{field: MAX_FIRST_DELIVERY_MS + 1.0})
+        for field in ("owner_first_input_ms", "mirror_first_fanout_ms", "handoff_first_input_ms")
+    )
+    defects.extend(
+        replace(valid, **{field: ()})
+        for field in (
+            "owner_input_samples_ms",
+            "mirror_fanout_samples_ms",
+            "handoff_input_samples_ms",
+            "owner_input_timings",
+            "handoff_input_timings",
+        )
+    )
+    defects.extend(
+        replace(valid, **{field: MAX_WARM_P95_MS + 1.0})
+        for field in ("owner_warm_input_p95_ms", "mirror_warm_fanout_p95_ms", "handoff_warm_input_p95_ms")
     )
     defects.extend(
         replace(valid, **{field: -1.0})
-        for field in ("owner_input_ms", "mirror_saw_owner_ms", "mirror_input_after_handoff_ms")
+        for field in (
+            "owner_first_input_ms",
+            "owner_warm_input_p95_ms",
+            "mirror_first_fanout_ms",
+            "mirror_warm_fanout_p95_ms",
+            "handoff_first_input_ms",
+            "handoff_warm_input_p95_ms",
+        )
     )
     if evidenceProblems(valid):
         print("[vscodeMultiWindowTerminal:selftest] FAIL. valid evidence was rejected", file=sys.stderr)
@@ -230,6 +360,11 @@ def exercise() -> Evidence:
             directory.mkdir(parents=True)
         writeManifest(home, fixture)
         daemon_env = acp.environment(home, fixture)
+        # This latency gate owns one manifest-only provider. Keeping unrelated installed CLIs off the daemon's
+        # search path prevents their background account and preparation processes from becoming unbounded,
+        # machine-specific load inside a deterministic terminal transport measurement. The VS Code hosts retain
+        # the operator PATH through hostEnvironment.
+        daemon_env["PATH"] = str(fixture.parent)
         daemon_env["RUNTROL_ACP_FIXTURE_TUI_PID_PATH"] = str(owner_pid_path)
         daemon = acp.startDaemon(binary, daemon_env, home)
         daemon_generation = process.processGeneration(daemon.pid)
@@ -301,12 +436,20 @@ def exercise() -> Evidence:
                 mirror_saw_owner_input=result.get("mirrorSawOwnerInput") is True,
                 mirror_wrote_after_owner_window_closed=result.get("mirrorWroteAfterOwnerWindowClosed") is True,
                 mirror_saw_own_input=result.get("mirrorSawOwnInput") is True,
-                owner_input_ms=float(result.get("ownerInputMs", -1.0)),
-                mirror_saw_owner_ms=float(result.get("mirrorSawOwnerMs", -1.0)),
-                mirror_input_after_handoff_ms=float(result.get("mirrorInputAfterHandoffMs", -1.0)),
+                owner_first_input_ms=float(result.get("ownerFirstInputMs", -1.0)),
+                owner_warm_input_p95_ms=float(result.get("ownerWarmInputP95Ms", -1.0)),
+                mirror_first_fanout_ms=float(result.get("mirrorFirstFanoutMs", -1.0)),
+                mirror_warm_fanout_p95_ms=float(result.get("mirrorWarmFanoutP95Ms", -1.0)),
+                handoff_first_input_ms=float(result.get("handoffFirstInputMs", -1.0)),
+                handoff_warm_input_p95_ms=float(result.get("handoffWarmInputP95Ms", -1.0)),
                 provider_stopped=result.get("providerStopped") is True,
                 exact_owner_generation_stopped=exact_owner_generation_stopped,
                 cleanup_complete=False,
+                owner_input_samples_ms=samplesFrom(result, "ownerInputSamplesMs"),
+                mirror_fanout_samples_ms=samplesFrom(result, "mirrorFanoutSamplesMs"),
+                handoff_input_samples_ms=samplesFrom(result, "handoffInputSamplesMs"),
+                owner_input_timings=timingsFrom(result, "ownerInputTimings"),
+                handoff_input_timings=timingsFrom(result, "handoffInputTimings"),
             )
         finally:
             daemon_processes.update(process.ownedDescendants(daemon.pid, daemon_generation))
@@ -337,6 +480,7 @@ def main(argv: list[str]) -> int:
         evidence = exercise()
     except (Failed, OSError, ValueError, json.JSONDecodeError, subprocess.SubprocessError) as error:
         print(f"vscodeMultiWindowTerminal FAILED: {error}", file=sys.stderr)
+        traceback.print_exc()
         return 2
     problems = evidenceProblems(evidence)
     print(json.dumps(evidence.__dict__, ensure_ascii=False, indent=2))

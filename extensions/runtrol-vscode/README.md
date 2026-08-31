@@ -1,6 +1,6 @@
 # Runtrol Studio for VS Code
 
-Run the coding-agent CLIs already installed on your computer from one native VS Code sidebar.
+Run the coding-agent CLIs already installed on your computer from one integrated VS Code sidebar.
 
 [Product site](https://eddmpython.github.io/runtrol/) | [Source](https://github.com/eddmpython/runtrol) | [Phone app](https://eddmpython.github.io/runtrol/app/)
 
@@ -22,9 +22,10 @@ model API key is ever entered into Studio.
 
 ## Updates
 
-Marketplace installations use VS Code's built-in extension updates. VS Code checks for releases and updates enabled
-extensions automatically. Its default update delay is two hours, and an immediate update is available from the
-extension's **Update** action.
+Marketplace installations use
+[VS Code's built-in extension updates](https://code.visualstudio.com/docs/configure/extensions/extension-marketplace).
+VS Code checks for releases and updates enabled extensions automatically. An immediate update is available from the
+extension's **Update** action or VS Code's **Check for Extension Updates** command.
 
 A manually installed VSIX has automatic updates disabled by VS Code. If an older Runtrol copy came from a VSIX,
 open the extension's Manage menu and enable **Auto Update**, or uninstall it and install the Marketplace version once.
@@ -36,21 +37,30 @@ restarts.
 
 ## One sidebar
 
-Studio contributes one native tree named **Runtrol**. Projects, conversations, first-run actions, and compact usage
-rows share that list instead of occupying separate VS Code view headers.
+Studio contributes one webview view whose header is **Runtrol** followed by the installed version. Projects,
+conversations, first-run actions, and compact usage
+gauges share that page instead of occupying separate VS Code view headers. The host builds the complete model from
+Runtime state; page code renders it and sends command identities back, but never calls a provider or receives a
+conversation body.
 
 - Add a project folder and its provider-owned conversations appear below it.
 - Conversations outside added projects remain ordinary top-level rows.
 - Start, open, pin, rename, archive, close, or delete through the provider capabilities Runtime discovered.
 - Opening a Studio window never continues or resumes a conversation. Live terminals attach to their exact process;
   cold conversations start only after an explicit open action.
-- Provider commands started in a new integrated terminal pass through Runtime's transparent shim and appear in every
-  open sidebar as the same PTY stream. A later provider title replaces the project placeholder in the row and tab.
+- Provider commands started in a new integrated terminal pass through Runtime's transparent shim. Every open sidebar
+  sees one live row, and every terminal tab attaches to the same PTY stream. A later provider title replaces the
+  project placeholder in the row and tab.
 - A process already running outside that broker is preserved and shown as external. Studio blocks duplicate resume
-  and attaches only when the provider or original terminal host publishes an official channel.
-- A working conversation spins its coding-service icon without adding a permanent status sentence.
-- Every installed service contributes one compact `7d` usage row. Hover shows every reported limit window, plan,
-  reset time, and report age. Press the row or its vertical menu action for the same keyboard-accessible detail.
+  and opens it only through a provider-published official target or a compatible Microsoft Windows console mirror.
+  The first click creates the one shared renderer; observation alone creates no helper, screen, or ring. Every other
+  external process remains visible but observe-only. If its live roster cannot be refreshed, the row
+  becomes `Unavailable` rather than keeping a stale `Elsewhere` badge or starting a second owner.
+- A working conversation spins its coding-service icon and lights its project-coloured left band. Idle rows have no
+  coloured band; a static warning or error band means the conversation needs attention rather than doing work.
+- Every installed service contributes one compact usage chip. Its ring shows the provider's seven-day percentage when
+  one exists. Hover or focus previews every reported limit window, plan, reset time, and report age. Pressing an
+  informational chip pins that detail; a chip with only one available account action performs that action instead.
 - A service that does not publish a seven-day number says so. Studio never invents capacity or usage.
 
 The accent uses the `runtrol.accent` theme color. VS Code intentionally masks Activity Bar symbols to the active
@@ -62,9 +72,10 @@ Opening a conversation creates an editor-area terminal tab showing that coding s
 Model selection, effort, permissions, approvals, and history remain the provider CLI's own controls. Split, grid,
 keyboard input, and full screen remain VS Code controls.
 
-The local Runtime owns the pseudo terminal and a bounded screen snapshot. Closing a tab detaches that viewer without
-ending the provider process. If an update creates a new Runtime generation, Studio reconnects a tab only to the exact
-generation that owns its terminal. It never redirects input to a different process or retries uncertain input.
+The local Runtime owns one central terminal renderer or console mirror and a bounded screen snapshot. Closing a tab
+detaches that viewer without ending the provider process. If an update creates a new Runtime generation, Studio
+reconnects a tab only to the exact generation that owns its terminal. It never redirects input to a different process
+or retries uncertain input.
 
 ## Agent Tools
 
@@ -90,6 +101,9 @@ Runtrol does not place provider credentials or model API keys in the relay.
 - A trusted local filesystem workspace for project conversations.
 - At least one supported coding-agent CLI installed and authenticated through its official account flow.
 
+The current release packages Claude Code and Codex support. Provider selection remains manifest-driven, so the
+Runtime and Studio terminal path contain no provider-name branch.
+
 Virtual workspaces and browser-only VS Code cannot start local provider CLI processes.
 
 ## Main commands
@@ -97,8 +111,10 @@ Virtual workspaces and browser-only VS Code cannot start local provider CLI proc
 - **Runtrol: New Conversation**
 - **Runtrol: Switch Conversation**
 - **Runtrol: Open Next Waiting Conversation**
+- **Runtrol: Arrange Open Conversations in a Grid**
 - **Runtrol: Refresh Conversations**
 - **Runtrol: Add Project**
+- **Runtrol: Delete All Conversations in Project**
 - **Runtrol: Set Up Coding Services**
 - **Runtrol: Check Provider Updates**
 - **Runtrol: Enable Agent Tools for This Project**

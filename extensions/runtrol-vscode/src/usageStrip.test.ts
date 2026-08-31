@@ -162,6 +162,12 @@ test("a row without a number keeps an empty ring and names its cause under it", 
   ]);
 });
 
+test("an unavailable service exposes its detailed troubleshooting route", () => {
+  const html = strip(usageChips([row({ providerId: "claude", state: "unavailable", meters: [] })]));
+  assert.ok(html.includes('data-action="fix" data-provider="claude"'));
+  assert.ok(html.includes(">Troubleshoot</button>"));
+});
+
 test("a chip with nothing to show is a way into that account", () => {
   // A chip is a button: pressing it goes into the one thing worth doing for that account. A service that
   // answered with no figure has nothing to read, so the lever is its sign-in (operator, 2026-08-28).

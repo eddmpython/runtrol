@@ -180,7 +180,8 @@ const model = {
         conversation({ title: "현재 이 프로젝트 수준은?", memory: "278 MB" }),
         conversation({ title: "/model" }),
         conversation({ title: "터미널 탭이 열릴 때 서비스가 처음 그릴 때까지 마크가 도는지", pinned: true }),
-        conversation({ title: "/logout", canOpen: false, blocked: "This coding service cannot reopen this conversation." }),
+        conversation({ title: "A live conversation with no terminal route", live: true, canOpen: false, blocked: "Live terminal unavailable." }),
+        conversation({ title: "Owner awaiting a fresh process roster", canOpen: false, blocked: "Process status unavailable." }),
       ],
     },
     {
@@ -192,7 +193,7 @@ const model = {
       pinned: false,
       current: false,
       collapsed: false,
-      attention: 1,
+      attention: 2,
       live: 0,
       agentTools: true,
       hidden: 0,
@@ -200,6 +201,7 @@ const model = {
       changes: { added: 0, removed: 0, untracked: 0, ahead: 3 },
       rows: [
         conversation({ title: "Sidebar 대화삭제 및 기능 구현 미완료", hue: "huePurple", activity: "needsYou", workspace: "C:\\work\\runtrol" }),
+        conversation({ title: "Runtime generation connection failed", hue: "huePurple", activity: "attention", workspace: "C:\\work\\runtrol" }),
         conversation({ title: "Runtroll 랜딩 사이트", hue: "huePurple", workspace: "C:\\work\\runtrol" }),
       ],
     },
@@ -221,8 +223,8 @@ const assets = {
   nonce: "eyen0nce",
   cspSource: "vscode-resource:",
   iconUris: new Map([
-    ["claude", "data:image/svg+xml;utf8," + encodeURIComponent("<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path fill='%23d97757' d='M8 1l1.6 4.2L14 6.4l-3.4 2.9L11.6 14 8 11.6 4.4 14l1-4.7L2 6.4l4.4-1.2z'/></svg>")],
-    ["codex", "data:image/svg+xml;utf8," + encodeURIComponent("<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><circle cx='8' cy='8' r='6' fill='none' stroke='%23cccccc' stroke-width='1.5'/></svg>")],
+    ["claude", "data:image/svg+xml;utf8," + encodeURIComponent("<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path fill='#d97757' d='M8 1l1.6 4.2L14 6.4l-3.4 2.9L11.6 14 8 11.6 4.4 14l1-4.7L2 6.4l4.4-1.2z'/></svg>")],
+    ["codex", "data:image/svg+xml;utf8," + encodeURIComponent("<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><circle cx='8' cy='8' r='6' fill='none' stroke='#cccccc' stroke-width='1.5'/></svg>")],
   ]),
 };
 

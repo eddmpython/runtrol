@@ -46,6 +46,8 @@ pub use presence::{
     DeviceLabels, GrantRequest, IntegrationProposal, LocalConsole, PairingIdentity, PcPresence,
     PresenceChallenge,
 };
+#[cfg(windows)]
+pub use root_identity::ProjectRootGuard;
 pub use root_identity::ProjectRootIdentity;
 pub use scope::{DeviceScope, LocalScope, RETIRED_DEVICE_SCOPES, StoredScopeError};
 pub use workspace::{DeniedPath, DenyList, WorkspaceRoot};

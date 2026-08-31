@@ -39,6 +39,22 @@ all slots are protected by active work.
 Provider structured transports use pipes rather than a terminal renderer. This preserves the provider's framing and
 avoids turning console rendering behavior into a protocol dependency.
 
+### Interactive housekeeping isolation
+
+Filesystem root identity syscalls and process resident-memory queries do not execute on the current-thread async
+executor. Root proofs use a bounded blocking lane and fail closed under the terminal contract. Resident-memory reads
+return a cached bounded sample when available, schedule stale work on the blocking pool, and wake the relevant session
+or terminal projection only when the observed value changes.
+
+Post-invalidation provider inventory rebuilds run as coalesced background work. Each rebuild is revision-bound, so an
+obsolete filesystem scan cannot replace a newer account or probe-cache state, and publication happens only after the
+background result is current. On Windows, account-probe cleanup skips `EmptyWorkingSet` whenever any terminal is open.
+The process-wide working-set release hook runs only at zero open terminals, so background account maintenance cannot
+evict the PTY hot path's resident pages.
+
+The terminal root-proof freshness and failure behavior are specified in
+[terminalSurface.md](terminalSurface.md#live-authority-without-a-database-hot-path).
+
 ## Memory and idle CPU contract
 
 The active gates measure the real debug daemon from outside the process. Provider fixtures and watch clients are not
@@ -160,7 +176,8 @@ therefore never contend for a name, and a client never talks past the hello to a
 The home's `runtime.locator.json` lists every generation currently serving (digest, both endpoints, version, process
 id, start time, running turns, draining flag). Each daemon writes only its own entry, under the home's advisory lock,
 and removes it at exit; an entry whose process no longer answers is dropped by the next generation that publishes.
-`runtrol status` prints the list and probes each entry.
+`runtrol status` prints the list and probes each entry. The locator admits at most sixteen simultaneous live
+generations. A seventeenth publish fails closed instead of creating an unbounded upgrade chain.
 
 Installing an update writes a new content-named executable and no file is ever written over. The new generation
 starts beside the running one and sends `drain` on the older generation's private endpoint. Drain is never refused:

@@ -7,13 +7,20 @@ This document is the operational source of truth for Runtrol Studio.
 Runtrol Studio is the flagship graphical client for Runtrol Runtime and the only distributed desktop GUI. Runtime
 remains independently usable through Rust, TypeScript, and Python clients plus the `runtrol` administration CLI.
 
-Studio owns VS Code navigation, workspace following, native tree items, terminal tabs, and explicit user actions.
+Studio owns VS Code navigation, workspace following, one sidebar webview projection, terminal tabs, and explicit user
+actions.
 Runtime owns process supervision, session and workspace identity, public integration authority, and bounded transport.
 Installed provider CLIs own accounts, conversations, terminal interfaces, model controls, approvals, and repository
 changes.
 
-Studio never stores a prompt, reply, draft, approval subject, terminal frame, transcript copy, or model API key.
+Studio never persists a prompt, reply, draft, approval subject, terminal frame, transcript copy, or model API key,
+and it never creates a second conversation store while transporting live terminal bytes.
 Closing or updating VS Code does not transfer provider process ownership away from Runtime.
+
+The release provider set comes from the tracked driver manifests. This release packages and verifies
+[Claude](../crates/runtrol-drivers/manifests/claude.toml) and
+[Codex](../crates/runtrol-drivers/manifests/codex.toml). Studio does not branch on either identifier, so changing the
+release set remains a manifest and driver decision rather than a sidebar or terminal transport change.
 
 ## Runtime path
 
@@ -41,22 +48,27 @@ One view, deliberately: VS Code draws a collapsible section header for every vie
 are two, and moves the title actions into those headers. With one view the container's title bar keeps the two
 actions that start things (`Add Project`, `New Conversation`) and the page below draws everything else. A native
 tree cannot draw the edges between zones, the gauges, or the row density this page has.
+The packaged container and its only view both use `Runtrol <version>` as their native manifest title. VS Code merges
+them into one header, so the operator sees the product version once, without a second page title or punctuation.
 
 The page has three zones with visible edges, in this order:
 
 - **Projects**: one row per folder the operator added (or has open in this window). A project row collapses,
   shows its conversation count, its attention and running counts, and on hover its actions: new conversation
-  here, Agent Tools on or off, pin, open in a window, remove from the sidebar (the folder on disk stays). Projects
-  reorder by drag. Each project has a colour; that colour is the bar at the left of the project row, of every
-  conversation row under it, and of the terminal tab a conversation opens in, so the tab and the row say the same
-  project without reading either.
+  here, Agent Tools on or off, pin, open in a window, delete every provider-owned conversation after exact
+  confirmation, or remove from the sidebar (the folder on disk stays). Projects
+  reorder by drag. Each project has a colour. It always marks the project heading and terminal tab, and marks a
+  conversation's left band while that conversation is working. An idle conversation keeps no coloured band.
 - **Conversations**: the conversations that belong to no project, as plain rows.
 - **Usage**: one chip per installed service, its icon inside a ring gauge with the seven-day percentage; see below.
 
 A conversation row is the service glyph, a normal-contrast one-line title with a fading tail, an optional worded
-action state, and the memory the provider process holds right now (`412 MB`, from the Runtime's `memoryBytes`, asked
-for every five seconds). A running row needs no dot because the moving ring around the provider glyph already says
-it. Only a state that changes what the operator can do spends width: `Needs you`, `Sign in`, `Limit`, `Error`,
+action state, and the memory the provider process holds right now from the Runtime's `memoryBytes`. The bounded
+refresh cadence is executable in [`controller.ts`](../extensions/runtrol-vscode/src/controller.ts). Only a provider-proven
+open model turn spins the provider glyph and moves one light down its project-coloured band. A live or paused TUI stays
+static even when it repaints its prompt, menu, or cursor. `Needs you` and `Error` use static
+warning and error bands instead, while idle rows paint no band. Only a state that changes what the operator can do
+spends width: `Needs you`, `Sign in`, `Limit`, `Error`,
 `Elsewhere`, or `Unavailable`. On hover the row shows its actions: pin, rename, stop when running, archive and delete
 when the service reports those surfaces, allow and decline when a turn waits for the person. Rows are reached with
 Tab and the arrow keys; Enter opens the conversation's terminal tab.
@@ -74,21 +86,21 @@ three providers or ten. The ring is the seven-day window when the provider publi
 provider says governs, otherwise an empty ring with a one-word cause (`No report`, `Sign in`, `Fix`, `Checking`,
 `Offline`). A blocking limit turns the ring and the number the theme's error colour.
 
-Hovering a chip shows the browser's own tooltip with every fact; focusing it (chips are buttons) opens that
-provider's panel under the chips; Enter pins the panel and Escape closes it. The panel lists the plan the provider
-named, one thin bar per reported window with its own name (`5h`, `7d`, `7d GPT-5.3-Codex`) and reset, and the
-report age. A chip whose state has one action (`Sign in`, `Fix`) performs it on click. Studio never converts a
-missing percentage into zero or derives account capacity from terminal text.
+Hovering or focusing a chip previews that provider's detail panel under the strip without adding a competing browser
+tooltip. Enter or click pins an informational panel, and Escape closes it. The panel lists the plan the provider
+named, one thin bar per reported window with the provider's own label and reset, and the report age. A chip whose state
+has one action (`Sign in`, `Fix`) performs that action instead. Studio never converts a missing percentage into zero
+or derives account capacity from terminal text.
 
 The Runtime subscription is the refresh clock. Structured provider account events publish immediately to the shared
-`providers/usageChanged` watch. Hosted terminal writes are checked by a cheap clock only while at least one terminal
-is open; one second of quiet requests that provider alone. The provider-owned process roster supplies the same
-busy-to-quiet edge for a conversation started outside Studio. Requests from multiple windows coalesce by provider.
-A manifest-declared protocol account surface has a five-second repeat floor; a process-backed account reader has a
-thirty-second floor because a measured read can briefly use hundreds of MiB. With no open terminal and no unread
-report, the supervisor sleeps until an activity wake or its ten-minute backstop instead of polling while idle. An
-activity edge inside a repeat floor stays in the same bounded provider set and runs when that floor expires; it is
-never dropped into the slow backstop.
+`providers/usageChanged` watch. Hosted terminal writes use a cheap quiet-edge clock only while a terminal is open, and
+the provider-owned process roster supplies the same busy-to-quiet edge for a conversation started outside Studio.
+Requests from multiple windows coalesce by provider. A manifest-declared protocol account surface has a shorter
+repeat floor than a process-backed reader because the latter can briefly use hundreds of MiB. With no open terminal
+and no unread report, the supervisor sleeps until an activity wake or its slow backstop instead of polling while
+idle. An activity edge inside a repeat floor stays in the same bounded provider set and runs when that floor expires;
+it is never dropped into the backstop. [`account_probe.rs`](../crates/runtrol-daemon/src/account_probe.rs) owns every
+executable deadline, floor, quiet interval, and backstop.
 
 ## Terminal tabs
 
@@ -112,12 +124,17 @@ without a catalogue poll. If the provider mints an identity and title after laun
 verified process record to that PTY and Studio rekeys the existing row and tab in place. The provider title replaces
 the project placeholder, while the project colour remains on both the row and tab.
 
-A process already running outside the broker appears as live when a provider publishes a cheap process roster. Studio
-does not attempt a duplicate resume. Runtime opens the same public terminal surface when the provider publishes an
-official live target or when Microsoft Windows exposes a compatible interactive console; otherwise the row states that
-it is running elsewhere and cannot be opened from this surface. VS Code windows are independent viewers, not process
-owners or operating-system capture boundaries. Studio's 250 ms compatibility requests are coalesced by Runtime's
-provider-specific 200 ms cache, so adding windows does not multiply roster filesystem scans.
+A process already running outside the broker appears as live only while the current provider process roster proves
+it. A failed roster read revokes `Elsewhere` and shows the prior owner as `Unavailable` until a successful round
+resolves it; that deny-only state prevents a duplicate resume without claiming the process is still live. A terminal
+descriptor is valid only while its exact generation stream remains connected. Studio does not attempt a duplicate resume.
+Runtime marks the row openable when the provider publishes an official live target or when Microsoft Windows exposes
+a compatible interactive console. The first click allocates the one shared attachment renderer; observation alone
+allocates none. Otherwise the row states that it is running elsewhere and cannot be opened from this surface. VS Code
+windows are independent viewers, not process owners or operating-system capture boundaries. The extension polling interval in
+[`controller.ts`](../extensions/runtrol-vscode/src/controller.ts) and Runtime cache window in
+[`serve.rs`](../crates/runtrol-daemon/src/serve.rs) are deliberately paired, so adding windows does not multiply
+roster filesystem scans.
 
 No published Studio version before this public terminal contract persisted a private terminal attachment identity,
 so there is no discoverable legacy tab to migrate. Runtime's native claim registry and `legacyGenerationBusy` error
@@ -125,11 +142,14 @@ protect any older live owner without inventing a client-side bridge.
 
 ## Session and workspace contract
 
-- Fifteen sessions are the daily-use baseline and 30 sessions are the release load.
-- At most eight sessions own hot provider processes.
+- The exact managed-session release load and expected hot-process cardinality for this gate are owned by the
+  `hostLoad` section of [`performance-budget.json`](../extensions/runtrol-vscode/performance-budget.json). Runtime's
+  executable admission cap remains in [`session::tier`](../crates/runtrol-core/src/session/tier.rs), and the gate
+  proves that the observed cardinality agrees.
 - Each visible tab renders its own bounded view of one central PTY stream. Runtime never duplicates the provider
   process, output ring, or screen state per window.
-- Conversation and project ordering is stable and does not jump because turn state changes.
+- Projects retain the operator's order. Conversations move between attention, working, idle, and saved bands when
+  their operational state changes, but streamed bytes never reorder rows within a band.
 - Search uses project, provider, state, and workspace metadata without reading conversation content.
 - Selecting a cold row resumes through the provider-native identity in its exact workspace.
 - Equal, ancestor, and descendant writer roots collide atomically; separate linked worktrees do not.
@@ -151,7 +171,12 @@ the provider's official CLI read and write surface. Studio does not edit provide
 | `core/managedCore.ts` | digest verification and stable bundled Runtime replacement | session state or provider policy |
 | `core/framing.ts`, `protocol.ts` | bounded private administration frames and their TypeScript projection | public terminal operations or provider fields |
 | `runtimeClient.ts` | approved public identity, locator lifetime, inventory, sessions, approvals, terminal generations | provider credentials or transcript storage |
-| `trees.ts`, `usageDisplay.ts` | one native hierarchy, compact seven-day line, tooltip and detail facts | provider-specific branches or inferred usage |
+| `terminalFleet.ts` | merge exact terminal indexes from current and draining Runtime generations | opening, redirecting, or duplicating provider processes |
+| `nativeActivityProjection.ts` | one current provider process-roster projection and failed-proof revocation | stored conversation discovery or terminal ownership |
+| `sidebarView.ts` | VS Code webview host, Runtime-state projection, bounded view state, and command dispatch | provider calls from page code or conversation content |
+| `sidebarPage.ts` | pure sidebar HTML, CSS, project and conversation row markup | Runtime access, provider policy, or durable state |
+| `usageDisplay.ts`, `usageStrip.ts` | provider-neutral usage semantics, chips, gauges, and detail panels | inferred capacity or provider-specific branches |
+| `stateRows.ts` | exact row equality and incomplete-discovery notices | rendering, Runtime calls, or transcript inspection |
 | `controller.ts` | explicit user actions, provider-neutral navigation, workspace binding | transcript discovery or an agent loop |
 | `terminalTabs.ts` | one public Runtime terminal view per editor tab | reading, storing, rewriting, or retrying terminal input |
 | `agentTools.ts` | exact project enable, disable, and readback | provider configuration bytes or grant policy |
@@ -160,20 +185,18 @@ the provider's official CLI read and write surface. Studio does not edit provide
 
 ## Performance contract
 
-The Extension Host gate runs isolated production builds on Windows, macOS, and Linux. Thirty sessions, exact counts,
-and zero dropped frames must hold in every trial. Current ceilings include:
+[`performance-budget.json`](../extensions/runtrol-vscode/performance-budget.json) is the executable catalogue for
+Studio release responsiveness, Extension Host memory growth, release-load cardinality, simultaneous-window terminal
+latency, and installed-provider delivery. The Extension Host gate
+measures activation, opening, refresh, memory growth, native resume, hot-session switching, reload restoration, and
+workspace-follow arrival against its `host` and `hostLoad` sections. Exact session counts must hold in every isolated
+trial even when timing noise requires another trial.
 
-| Measure | Ceiling |
-|---|---:|
-| Ready activation | 1,800 ms |
-| Runtrol navigation and conversation opening | 1,000 ms |
-| Refresh p95 | 50 ms |
-| Extension Host RSS growth | 64 MiB |
-| Loaded animation frame p95 | 40 ms |
-| Input and scroll p95 | 50 ms |
-| Hot-session switch p95 | 175 ms |
-| Cold provider-native resume | 3,500 ms |
-| Full workspace reload restoration | 2,500 ms |
+The multi-window gate uses the separate `multiWindowTerminal` section. Its first sample includes VS Code's public
+terminal input dispatch, while warm samples begin at the production pseudoterminal callback and cover Runtime, PTY
+echo, fan-out to the other window, and writer handoff. Raw samples are retained only in the bounded test result. The
+product stores no terminal transcript or performance trace. See [terminalSurface.md](terminalSurface.md) for the
+measurement boundary.
 
 ## Brand
 
@@ -185,28 +208,32 @@ masks contributed Activity Bar icons to the current theme foreground. Sidebar pr
 ## Distribution
 
 The public identity is `runtrol.runtrol-studio`. `release-policy.json` independently owns the Studio version while
-the workspace `Cargo.toml` owns Runtime and SDK versions. Studio releases increment the `0.1.x` patch component by
-exactly one. `release-targets.json` owns six packages: Windows, macOS, and Linux on x64 and ARM64.
+the workspace `Cargo.toml` owns Runtime and SDK versions. `release-targets.json` owns the complete native package
+matrix and runner mapping.
 
 Each VSIX contains one matching native Runtime, production bundles, canonical brand assets, license, notice, and
 Marketplace README. Source, tests, build tools, and development dependencies are excluded.
 
-Pushing a one-patch `release-policy.json` change to `main` starts the native matrix. Each runner builds Runtime,
-packages and audits the exact VSIX, installs it into an isolated VS Code profile, completes the first-run journey,
-and exercises active-session upgrade and rollback. Publication verifies all six Marketplace packages before creating
-the tagged GitHub Release. `publishExisting` can republish only already tagged exact artifacts and cannot rebuild.
+An exact release commit changes only the changelog and Studio release policy. After the Gates workflow succeeds for
+that same main commit, the release workflow creates the governed annotated tag and a tag-bound draft GitHub Release
+as durable staging. It repairs only missing or invalid target assets, audits the complete staged set, publishes and
+verifies Marketplace packages, and runs public install journeys before exposing the GitHub Release. A failed-jobs
+rerun reuses already verified draft assets. `publishExisting` reads an already public tagged release and can retry
+Marketplace publication without rebuilding or changing its assets. [automaticUpdates.md](automaticUpdates.md) owns
+the operator procedure and recovery rules.
 
 ## Verification entry points
 
 | Gate or command | Contract |
 |---|---|
 | `npm --prefix extensions/runtrol-vscode run check` | TypeScript public and private boundary consistency |
-| `npm --prefix extensions/runtrol-vscode test` | native tree, usage, Runtime client, administration, and terminal behavior |
-| `vscodeExtension` | one native view, theme color, command, storage, package, and provider-neutral boundaries |
-| `vscodeHostPerformance` | real 30-session Extension Host responsiveness |
+| `npm --prefix extensions/runtrol-vscode test` | sidebar webview projection, usage, Runtime client, administration, and terminal behavior |
+| `vscodeExtension` | one sidebar view, theme color, command, storage, package, and provider-neutral boundaries |
+| `vscodeHostPerformance` | real release-load Extension Host responsiveness against the shared budget catalogue |
+| `vscodeMultiWindowTerminal` | deterministic two-window identity, first-use dispatch, warm input and fan-out, handoff, and cleanup |
 | `vscodeRealProviderJourney` | installed provider discovery and complete real CLI control journey |
 | `node tooling/real-window-eye.mjs` | isolated real VS Code visual journey and screenshots |
-| `vscodePackage` | six-target SSOT, exact archive contents, Runtime bytes, workflow, README, and brand metadata |
+| `vscodePackage` | complete target SSOT, exact archive contents, Runtime bytes, workflow, README, and brand metadata |
 | `crossPlatformMatrix` | exact VSIX installation and first-run action on native Windows, macOS, and Linux |
 | `vscodeUpgradeRollback` | active-session continuity across official VSIX upgrade and rollback |
 | `node tooling/installed-package.mjs --marketplace` | public Marketplace download, activation, bundled Runtime, view, and first-run command |

@@ -12,6 +12,12 @@ use serde::{Deserialize, Serialize};
 /// Current atomic Runtime locator record schema.
 pub const RUNTIME_LOCATOR_SCHEMA: u32 = 2;
 
+/// Maximum simultaneously published daemon generations for one Runtime home.
+///
+/// A normal upgrade needs two entries. The larger fixed ceiling leaves room for long-lived terminals across
+/// repeated upgrades while bounding every client fleet and generation-handoff receipt set.
+pub const MAX_RUNTIME_GENERATIONS: usize = 16;
+
 /// Local transport kind named by the platform locator.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

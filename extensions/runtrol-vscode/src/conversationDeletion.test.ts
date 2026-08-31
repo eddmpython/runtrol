@@ -69,6 +69,15 @@ test("a live provider process must be stopped separately before permanent deleti
   assert.ok(decision.kind === "unsupported" && decision.why.startsWith("Stop "));
 });
 
+test("an unconfirmed former owner cannot be deleted until a current roster resolves it", () => {
+  const decision = conversationDeletion(
+    row({ presence: { kind: "unconfirmed" }, canOpen: false }),
+    capabilities({ availability: "available" }),
+  );
+  assert.equal(decision.kind, "unsupported");
+  assert.ok(decision.kind === "unsupported" && decision.why.includes("must confirm"));
+});
+
 test("a supervised pointer without a provider identity is closed rather than called deleted", () => {
   const session = { sessionId: "s1" } as SessionLine;
   assert.equal(conversationDeletion(row({ session, native: null }), null).kind, "unsupported");

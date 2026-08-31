@@ -1002,6 +1002,7 @@ async fn serve_surfaces(
     // Flipped once, by a successor's drain request, and never back. From then on the store belongs to
     // the successor, nothing new is opened here, and this loop ends when no turn is running.
     let mut draining = false;
+    let mut runtime_audit_closing = false;
     // Everything a draining generation stops doing: warming providers, updating them, probing accounts,
     // scheduling missions, and holding the relay, all of which the successor now does for this home.
     let mut background: Vec<tokio::task::AbortHandle> = Vec::new();
@@ -1029,6 +1030,7 @@ async fn serve_surfaces(
     let mut provider_update_notices = BTreeMap::<ProviderId, Box<str>>::new();
     let initial_index = build_session_index(&composed, &sessions, &provider_update_notices);
     let (session_index, _initial_index_receiver) = watch::channel(initial_index);
+    let mut resident_memory_changes = crate::runtime_inventory::resident_session_changes();
     let initial_runtime_sessions =
         Arc::new(crate::runtime_inventory::sessions(&composed, &sessions)?);
     let (runtime_sessions, _initial_runtime_sessions_receiver) =
@@ -1046,12 +1048,22 @@ async fn serve_surfaces(
         )));
     let discovering = Arc::new(DiscoveryGates::new(&composed.registry));
     let mut connections = JoinSet::new();
-    background.push(
-        connections.spawn(crate::generations::relay_generation_state(
-            Arc::clone(&composed),
-            identity.digest().to_owned(),
-        )),
-    );
+    let (runtime_audit, runtime_audit_writer) =
+        crate::runtime_audit::journal(Arc::clone(&composed));
+    let mut runtime_audit_writer = tokio::spawn(runtime_audit_writer);
+    let mut runtime_audit_writer_joined = None;
+    let (generation_failed, mut generation_failures) = mpsc::unbounded_channel();
+    {
+        let composed = Arc::clone(&composed);
+        let own_digest = identity.digest().to_owned();
+        background.push(connections.spawn(async move {
+            if let Err(error) =
+                crate::generations::relay_generation_state(composed, own_digest).await
+            {
+                drop(generation_failed.send(error.to_string()));
+            }
+        }));
+    }
     let push_wake_active = Arc::new(AtomicBool::new(false));
     let mut relay_hub = match relay {
         Some(relay) => {
@@ -1169,6 +1181,7 @@ async fn serve_surfaces(
     {
         let runtime_instance = runtime_instance.clone();
         let composed = Arc::clone(&composed);
+        let runtime_audit = runtime_audit.clone();
         let discovering = Arc::clone(&discovering);
         let runtime_native_cursors = Arc::clone(&runtime_native_cursors);
         let runtime_providers = runtime_providers.clone();
@@ -1187,6 +1200,7 @@ async fn serve_surfaces(
                                 connection,
                                 runtime_instance.clone(),
                                 Arc::clone(&composed),
+                                runtime_audit.clone(),
                                 Arc::clone(&discovering),
                                 Arc::clone(&runtime_native_cursors),
                                 runtime_providers.clone(),
@@ -1221,9 +1235,30 @@ async fn serve_surfaces(
             _ = drain_sweep.tick(), if draining => {
                 crate::terminal_surface::close_idle_while_draining(&composed).await;
                 generation.update(live_work_of(&sessions, &composed), true);
-                if live_work_of(&sessions, &composed) == 0 {
-                    break Ok(());
-                }
+                begin_runtime_audit_shutdown_if_drained(
+                    draining,
+                    &sessions,
+                    &composed,
+                    &runtime_audit,
+                    &mut runtime_audit_closing,
+                );
+            }
+
+            () = wait_until_runtime_audit_relay_empty(
+                &runtime_audit,
+                &composed.audit_relay,
+            ), if runtime_audit_closing => {
+                break Ok(());
+            }
+
+            joined = &mut runtime_audit_writer => {
+                let message = match &joined {
+                    Ok(Ok(())) => "Runtime audit writer closed while the service was active".to_owned(),
+                    Ok(Err(error)) => format!("Runtime audit writer failed: {error}"),
+                    Err(error) => format!("Runtime audit writer task stopped: {error}"),
+                };
+                runtime_audit_writer_joined = Some(joined);
+                break Err(ServeError::RuntimeBootstrap(message));
             }
 
             Some(error) = local_failures.recv() => {
@@ -1232,6 +1267,18 @@ async fn serve_surfaces(
 
             Some(error) = runtime_failures.recv() => {
                 break Err(error.into());
+            }
+
+            Some(error) = generation_failures.recv() => {
+                break Err(ServeError::RuntimeBootstrap(format!(
+                    "generation audit relay failed: {error}"
+                )));
+            }
+
+            changed = resident_memory_changes.changed() => {
+                if changed.is_ok() {
+                    publish_runtime_session_catalogue(&runtime_sessions, &composed, &sessions);
+                }
             }
 
             arrived = accept_phone(phone.as_ref()), if phone.is_some() => {
@@ -1448,17 +1495,25 @@ async fn serve_surfaces(
                         composed.account_probe_wake.provider(provider).await;
                     }
                 }
-                if draining && live_work_of(&sessions, &composed) == 0 {
-                    break Ok(());
-                }
+                begin_runtime_audit_shutdown_if_drained(
+                    draining,
+                    &sessions,
+                    &composed,
+                    &runtime_audit,
+                    &mut runtime_audit_closing,
+                );
             }
 
             // A hosted terminal ended. Only a draining owner cares: it may now be free to finish.
             () = composed.terminal_closed.notified(), if draining => {
                 generation.update(live_work_of(&sessions, &composed), true);
-                if live_work_of(&sessions, &composed) == 0 {
-                    break Ok(());
-                }
+                begin_runtime_audit_shutdown_if_drained(
+                    draining,
+                    &sessions,
+                    &composed,
+                    &runtime_audit,
+                    &mut runtime_audit_closing,
+                );
             }
 
             Some(ask) = runtime_asked.recv() => {
@@ -1783,9 +1838,13 @@ async fn serve_surfaces(
                         &provider_update_notices,
                     );
                     generation.update(live_work_of(&sessions, &composed), draining);
-                    if draining && live_work_of(&sessions, &composed) == 0 {
-                        break Ok(());
-                    }
+                    begin_runtime_audit_shutdown_if_drained(
+                        draining,
+                        &sessions,
+                        &composed,
+                        &runtime_audit,
+                        &mut runtime_audit_closing,
+                    );
                 }
                 if index_changed {
                     // A turn ended or a conversation changed state: the account probe asks the services
@@ -1842,10 +1901,31 @@ async fn serve_surfaces(
         }
     };
 
+    runtime_audit.begin_shutdown();
     connections.abort_all();
     while connections.join_next().await.is_some() {}
+    drop(runtime_audit);
+    let runtime_audit_writer = match runtime_audit_writer_joined {
+        Some(joined) => joined,
+        None => runtime_audit_writer.await,
+    };
     // Removed before the process ends, so nothing reads an entry for a daemon that is gone.
     drop(generation);
+    if outcome.is_ok() {
+        match runtime_audit_writer {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                return Err(ServeError::RuntimeBootstrap(format!(
+                    "Runtime audit writer failed during shutdown: {error}"
+                )));
+            }
+            Err(error) => {
+                return Err(ServeError::RuntimeBootstrap(format!(
+                    "Runtime audit writer stopped during shutdown: {error}"
+                )));
+            }
+        }
+    }
     outcome
 }
 
@@ -1867,7 +1947,9 @@ fn begin_drain(
         .store(true, std::sync::atomic::Ordering::Release);
     // Freeze before releasing the database. Failure leaves the relay unavailable, which retires public
     // terminal authority instead of letting a draining generation keep an independent stale grant.
-    composed.generation_authority.freeze(&composed.store);
+    composed
+        .generation_authority
+        .freeze(&composed.integration_authority);
     // The successor is retrying its open right now; this is the moment it succeeds. The session store is
     // the exclusive file it waits on, and holding it a moment longer than needed is the whole gap
     // generations exist to close.
@@ -1905,6 +1987,27 @@ fn live_work_of(sessions: &SessionManager, composed: &Composed) -> u32 {
     .unwrap_or(u32::MAX);
     let supervised = u32::try_from(sessions.live_sessions().count()).unwrap_or(u32::MAX);
     supervised.saturating_add(terminals)
+}
+
+fn begin_runtime_audit_shutdown_if_drained(
+    draining: bool,
+    sessions: &SessionManager,
+    composed: &Composed,
+    audit: &crate::runtime_audit::AuditJournal,
+    closing: &mut bool,
+) {
+    if draining && !*closing && live_work_of(sessions, composed) == 0 {
+        audit.begin_shutdown();
+        *closing = true;
+    }
+}
+
+async fn wait_until_runtime_audit_relay_empty(
+    audit: &crate::runtime_audit::AuditJournal,
+    relay: &crate::audit_relay::AuditRelay,
+) {
+    audit.wait_until_idle().await;
+    relay.wait_until_empty().await;
 }
 
 fn schedule_push_wakes(
@@ -3164,6 +3267,15 @@ fn publish_session_index(
         *current = next;
         true
     });
+    publish_runtime_session_catalogue(runtime_sessions, composed, sessions);
+}
+
+/// Publish a memory or lifecycle change without rebuilding the legacy index frame.
+fn publish_runtime_session_catalogue(
+    runtime_sessions: &watch::Sender<Arc<crate::runtime_inventory::RuntimeSessionCatalogue>>,
+    composed: &Composed,
+    sessions: &SessionManager,
+) {
     let public = match crate::runtime_inventory::sessions(composed, sessions) {
         Ok(catalogue) => Arc::new(catalogue),
         Err(_) => Arc::new(crate::runtime_inventory::RuntimeSessionCatalogue::unavailable()),

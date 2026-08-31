@@ -1,11 +1,10 @@
 name: vscode-release
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - extensions/runtrol-vscode/release-policy.json
+  workflow_run:
+    workflows: [gates]
+    types: [completed]
+    branches: [main]
   workflow_dispatch:
     inputs:
       release:
@@ -22,91 +21,493 @@ on:
 concurrency:
   group: vscode-release
   cancel-in-progress: false
+  queue: max
+
+permissions:
+  actions: read
+  contents: read
 
 jobs:
-  prepare:
+  route:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'push' &&
+        github.event.workflow_run.head_branch == 'main' &&
+        github.event.workflow_run.path == '.github/workflows/gates.yml' &&
+        github.event.workflow_run.head_repository.full_name == github.repository
+      )
     runs-on: ubuntu-latest
     outputs:
+      createRelease: ${{ steps.route.outputs.createRelease }}
+      publishExisting: ${{ steps.route.outputs.publishExisting }}
+      releaseSha: ${{ steps.route.outputs.releaseSha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+      - name: Select only an exact gated main release commit
+        id: route
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_RELEASE_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+          MANUAL_RELEASE: ${{ inputs.release }}
+          MANUAL_PUBLISH_EXISTING: ${{ inputs.publishExisting }}
+          REPOSITORY: ${{ github.repository }}
+          REF: ${{ github.ref }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import { spawnSync } from 'node:child_process';
+
+          const releasePolicy = 'extensions/runtrol-vscode/release-policy.json';
+          const allowedReleaseFiles = new Set(['CHANGELOG.md', releasePolicy]);
+
+          const runCommand = (command, args) => {
+            const result = spawnSync(command, args, { encoding: 'utf8' });
+            if (result.status !== 0) {
+              throw new Error(`${command} ${args.join(' ')} failed: ${result.stderr.trim()}`);
+            }
+            return result.stdout.trim();
+          };
+
+          const eventName = process.env.EVENT_NAME;
+          const releaseSha = process.env.EVENT_RELEASE_SHA;
+          const manualRelease = process.env.MANUAL_RELEASE === 'true';
+          const publishExisting = process.env.MANUAL_PUBLISH_EXISTING === 'true';
+          const checkedOutSha = runCommand('git', ['rev-parse', 'HEAD']);
+          if (checkedOutSha !== releaseSha) {
+            throw new Error(`checkout ${checkedOutSha} differs from selected release SHA ${releaseSha}`);
+          }
+
+          if (eventName === 'workflow_dispatch') {
+            if (process.env.REF !== 'refs/heads/main') {
+              throw new Error('manual release operations run only from refs/heads/main');
+            }
+            if (manualRelease === publishExisting) {
+              throw new Error('select exactly one of release or publishExisting');
+            }
+          }
+
+          const changedFiles = runCommand(
+            'git',
+            ['diff-tree', '--root', '--no-commit-id', '--name-only', '-r', releaseSha],
+          ).split('\n').filter(Boolean);
+          const changesReleasePolicy = changedFiles.includes(releasePolicy);
+          if (changesReleasePolicy) {
+            if (changedFiles.length !== allowedReleaseFiles.size || changedFiles.some((path) => !allowedReleaseFiles.has(path))) {
+              throw new Error(`the release commit contains unrelated files: ${changedFiles.join(', ')}`);
+            }
+            runCommand('git', ['fetch', '--no-tags', 'origin', 'main']);
+            const releaseIsOnMain = spawnSync(
+              'git',
+              ['merge-base', '--is-ancestor', releaseSha, 'FETCH_HEAD'],
+              { stdio: 'ignore' },
+            ).status === 0;
+            if (!releaseIsOnMain) {
+              throw new Error(`selected release SHA ${releaseSha} is outside the current main history`);
+            }
+          }
+
+          if (manualRelease && !changesReleasePolicy) {
+            throw new Error('manual release requires the exact release-policy and CHANGELOG commit');
+          }
+          if (manualRelease) {
+            const response = runCommand('gh', [
+              'api',
+              '-X',
+              'GET',
+              `repos/${process.env.REPOSITORY}/actions/workflows/gates.yml/runs`,
+              '-f',
+              `head_sha=${releaseSha}`,
+              '-f',
+              'branch=main',
+              '-f',
+              'event=push',
+              '-f',
+              'status=completed',
+              '-f',
+              'per_page=100',
+            ]);
+            const gatesRuns = JSON.parse(response).workflow_runs;
+            const exactRuns = gatesRuns.filter((run) => (
+              run.head_sha === releaseSha &&
+              run.head_branch === 'main' &&
+              run.event === 'push'
+            )).sort((left, right) => right.id - left.id);
+            const latestRun = exactRuns[0];
+            if (!latestRun || latestRun.status !== 'completed' || latestRun.conclusion !== 'success') {
+              throw new Error(`the latest Gates main push run for ${releaseSha} did not succeed`);
+            }
+          }
+
+          const createRelease = eventName === 'workflow_run' ? changesReleasePolicy : manualRelease;
+          fs.appendFileSync(
+            process.env.GITHUB_OUTPUT,
+            `createRelease=${createRelease}\npublishExisting=${publishExisting}\nreleaseSha=${releaseSha}\n`,
+          );
+          NODE
+
+  prepare:
+    needs: route
+    if: needs.route.outputs.createRelease == 'true' || needs.route.outputs.publishExisting == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
       matrix: ${{ steps.manifest.outputs.matrix }}
+      packageCount: ${{ steps.staging.outputs.packageCount }}
+      packageMatrix: ${{ steps.staging.outputs.packageMatrix }}
+      releaseCommit: ${{ steps.identity.outputs.releaseCommit }}
+      releaseId: ${{ steps.staging.outputs.releaseId }}
+      tag: ${{ steps.manifest.outputs.tag }}
+      tagObjectSha: ${{ steps.identity.outputs.tagObjectSha }}
       targetCount: ${{ steps.manifest.outputs.targetCount }}
       version: ${{ steps.manifest.outputs.version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - name: Verify patch-only extension release sequence
-        env:
-          CREATE_RELEASE: ${{ github.event_name == 'push' || inputs.release }}
-          PUBLISH_EXISTING: ${{ inputs.publishExisting }}
-          RELEASE_REF: ${{ github.ref }}
-        run: |
-          node --input-type=module <<'NODE'
-          import { spawnSync } from 'node:child_process';
-          import {
-            extensionReleaseTag,
-            previousExtensionReleaseTag,
-          } from './extensions/runtrol-vscode/tooling/extension-manifest.mjs';
-
-          const tagExists = (tag) => spawnSync(
-            'git',
-            ['show-ref', '--verify', '--quiet', `refs/tags/${tag}`],
-            { stdio: 'ignore' },
-          ).status === 0;
-
-          const tagIsAncestorOfHead = (tag) => spawnSync(
-            'git',
-            ['merge-base', '--is-ancestor', tag, 'HEAD'],
-            { stdio: 'ignore' },
-          ).status === 0;
-
-          if (process.env.CREATE_RELEASE === 'true' && process.env.PUBLISH_EXISTING === 'true') {
-            throw new Error('release and publishExisting are mutually exclusive');
-          }
-          if (
-            (process.env.CREATE_RELEASE === 'true' || process.env.PUBLISH_EXISTING === 'true')
-            && process.env.RELEASE_REF !== 'refs/heads/main'
-          ) {
-            throw new Error('Marketplace publication runs only from main');
-          }
-
-          if (!tagExists(previousExtensionReleaseTag)) {
-            throw new Error(`the exact previous extension release ${previousExtensionReleaseTag} is missing`);
-          }
-          if (process.env.PUBLISH_EXISTING === 'true') {
-            if (!tagExists(extensionReleaseTag)) {
-              throw new Error(`the extension release ${extensionReleaseTag} does not exist`);
-            }
-            if (!tagIsAncestorOfHead(extensionReleaseTag)) {
-              throw new Error(`the extension release ${extensionReleaseTag} is not in the current main history`);
-            }
-          } else if (process.env.CREATE_RELEASE === 'true' && tagExists(extensionReleaseTag)) {
-            throw new Error(`the extension release ${extensionReleaseTag} already exists`);
-          }
-          NODE
+          ref: ${{ needs.route.outputs.releaseSha }}
       - name: Read the extension release SSOT
         id: manifest
         run: |
           node --input-type=module <<'NODE'
           import fs from 'node:fs';
-          import { packageManifest as manifest } from './extensions/runtrol-vscode/tooling/extension-manifest.mjs';
+          import {
+            extensionReleaseTag,
+            packageManifest as manifest,
+          } from './extensions/runtrol-vscode/tooling/extension-manifest.mjs';
           const targets = JSON.parse(fs.readFileSync('./extensions/runtrol-vscode/release-targets.json', 'utf8'));
           const include = Object.entries(targets).map(([target, contract]) => ({ target, ...contract }));
           fs.appendFileSync(
             process.env.GITHUB_OUTPUT,
-            `version=${manifest.version}\ntargetCount=${include.length}\nmatrix=${JSON.stringify({ include })}\n`,
+            `version=${manifest.version}\ntag=${extensionReleaseTag}\ntargetCount=${include.length}\nmatrix=${JSON.stringify({ include })}\n`,
+          );
+          NODE
+      - name: Generate and validate the governed release message
+        env:
+          VERSION: ${{ steps.manifest.outputs.version }}
+        run: |
+          python -X utf8 .github/scripts/release/releaseNotes.py --selftest
+          python -X utf8 .github/scripts/release/releaseNotes.py "$VERSION" "$RUNNER_TEMP/release-message.md"
+          test -s "$RUNNER_TEMP/release-message.md"
+      - name: Verify patch-only extension release sequence and tag identity
+        id: identity
+        env:
+          CREATE_RELEASE: ${{ needs.route.outputs.createRelease }}
+          PUBLISH_EXISTING: ${{ needs.route.outputs.publishExisting }}
+          RELEASE_SHA: ${{ needs.route.outputs.releaseSha }}
+          RELEASE_MESSAGE: ${{ runner.temp }}/release-message.md
+          TAG: ${{ steps.manifest.outputs.tag }}
+        run: |
+          git fetch --tags origin
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import { spawnSync } from 'node:child_process';
+          import { previousExtensionReleaseTag } from './extensions/runtrol-vscode/tooling/extension-manifest.mjs';
+
+          const runCommand = (command, args, allowFailure = false) => {
+            const result = spawnSync(command, args, { encoding: 'utf8' });
+            if (!allowFailure && result.status !== 0) {
+              throw new Error(`${command} ${args.join(' ')} failed: ${result.stderr.trim()}`);
+            }
+            return result;
+          };
+          const tagExists = (tag) => runCommand(
+            'git',
+            ['show-ref', '--verify', '--quiet', `refs/tags/${tag}`],
+            true,
+          ).status === 0;
+          const releaseSha = process.env.RELEASE_SHA;
+          const tag = process.env.TAG;
+          const parseTagVersion = (tagName) => {
+            const match = /^vscode-v(\d+)\.(\d+)\.(\d+)$/.exec(tagName);
+            return match ? match.slice(1).map(Number) : null;
+          };
+          const compareVersions = (left, right) => {
+            for (let index = 0; index < left.length; index += 1) {
+              if (left[index] !== right[index]) {
+                return left[index] - right[index];
+              }
+            }
+            return 0;
+          };
+          const currentVersion = parseTagVersion(tag);
+          if (!currentVersion) {
+            throw new Error(`invalid extension release tag ${tag}`);
+          }
+          const newerTags = runCommand('git', ['tag', '--list', 'vscode-v*']).stdout
+            .split('\n')
+            .filter(Boolean)
+            .filter((tagName) => {
+              const candidateVersion = parseTagVersion(tagName);
+              return candidateVersion && compareVersions(candidateVersion, currentVersion) > 0;
+            });
+          if (newerTags.length > 0) {
+            throw new Error(`newer extension release tags already exist: ${newerTags.join(', ')}`);
+          }
+          if (!tagExists(previousExtensionReleaseTag)) {
+            throw new Error(`the exact previous extension release ${previousExtensionReleaseTag} is missing`);
+          }
+          if (runCommand('git', ['merge-base', '--is-ancestor', previousExtensionReleaseTag, releaseSha], true).status !== 0) {
+            throw new Error(`the previous extension release ${previousExtensionReleaseTag} is not in release history`);
+          }
+
+          let releaseCommit = releaseSha;
+          if (tagExists(tag)) {
+            const tagType = runCommand('git', ['cat-file', '-t', tag]).stdout.trim();
+            if (process.env.CREATE_RELEASE === 'true' && tagType !== 'tag') {
+              throw new Error(`the extension release ${tag} is not an annotated tag`);
+            }
+            releaseCommit = runCommand('git', ['rev-parse', `${tag}^{commit}`]).stdout.trim();
+            if (process.env.CREATE_RELEASE === 'true' && releaseCommit !== releaseSha) {
+              throw new Error(`the extension release ${tag} targets ${releaseCommit}, expected ${releaseSha}`);
+            }
+            if (
+              process.env.PUBLISH_EXISTING === 'true' &&
+              runCommand('git', ['merge-base', '--is-ancestor', releaseCommit, releaseSha], true).status !== 0
+            ) {
+              throw new Error(`the extension release ${tag} is not in the current main history`);
+            }
+            if (tagType === 'tag') {
+              const tagObject = runCommand('git', ['cat-file', 'tag', tag]).stdout;
+              const separator = tagObject.indexOf('\n\n');
+              const tagMessage = separator < 0 ? '' : tagObject.slice(separator + 2);
+              const releaseMessage = fs.readFileSync(process.env.RELEASE_MESSAGE, 'utf8');
+              if (tagMessage !== releaseMessage) {
+                throw new Error(`the annotated tag ${tag} does not use the governed release message`);
+              }
+            }
+          } else if (process.env.PUBLISH_EXISTING === 'true') {
+            throw new Error(`the extension release ${tag} does not exist`);
+          } else {
+            runCommand('git', ['config', 'user.name', 'runtrol release']);
+            runCommand('git', ['config', 'user.email', 'release@users.noreply.github.com']);
+            runCommand('git', [
+              'tag',
+              '-a',
+              '-F',
+              process.env.RELEASE_MESSAGE,
+              '--cleanup=verbatim',
+              tag,
+              releaseSha,
+            ]);
+            runCommand('git', ['push', 'origin', `refs/tags/${tag}`]);
+          }
+
+          const remoteTags = runCommand(
+            'git',
+            ['ls-remote', '--tags', 'origin', `refs/tags/${tag}`, `refs/tags/${tag}^{}`],
+          ).stdout.split('\n').filter(Boolean);
+          const peeledTag = remoteTags.find((line) => line.endsWith(`refs/tags/${tag}^{}`));
+          const directTag = remoteTags.find((line) => line.endsWith(`refs/tags/${tag}`));
+          const remoteTagObject = (directTag ?? '').split('\t')[0];
+          const localTagObject = runCommand('git', ['rev-parse', tag]).stdout.trim();
+          if (remoteTagObject !== localTagObject) {
+            throw new Error(`the remote extension release ${tag} object differs from the checked tag`);
+          }
+          const remoteTagCommit = (peeledTag ?? directTag ?? '').split('\t')[0];
+          if (remoteTagCommit !== releaseCommit) {
+            throw new Error(`the remote extension release ${tag} targets ${remoteTagCommit}, expected ${releaseCommit}`);
+          }
+          fs.appendFileSync(
+            process.env.GITHUB_OUTPUT,
+            `releaseCommit=${releaseCommit}\ntagObjectSha=${remoteTagObject}\n`,
+          );
+          NODE
+      - name: Create or repair durable draft release staging
+        id: staging
+        if: needs.route.outputs.createRelease == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_MESSAGE: ${{ runner.temp }}/release-message.md
+          RELEASE_SHA: ${{ steps.identity.outputs.releaseCommit }}
+          TAG: ${{ steps.manifest.outputs.tag }}
+          VERSION: ${{ steps.manifest.outputs.version }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/staged-assets"
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import path from 'node:path';
+          import { spawnSync } from 'node:child_process';
+
+          const apiBase = process.env.GITHUB_API_URL;
+          const repository = process.env.GITHUB_REPOSITORY;
+          const token = process.env.GH_TOKEN;
+          const tag = process.env.TAG;
+          const version = process.env.VERSION;
+          const releaseSha = process.env.RELEASE_SHA;
+          const title = `Runtrol Studio ${version}`;
+          const releaseMessage = fs.readFileSync(process.env.RELEASE_MESSAGE, 'utf8');
+          const targetContracts = JSON.parse(
+            fs.readFileSync('extensions/runtrol-vscode/release-targets.json', 'utf8'),
+          );
+          const expectedNames = new Set(
+            Object.keys(targetContracts).map((target) => `runtrol-studio-${version}-${target}.vsix`),
+          );
+          const jsonHeaders = {
+            Accept: 'application/vnd.github+json',
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+            'X-GitHub-Api-Version': '2022-11-28',
+          };
+
+          const apiJson = async (apiPath, options = {}) => {
+            const response = await fetch(`${apiBase}${apiPath}`, {
+              ...options,
+              headers: { ...jsonHeaders, ...options.headers },
+            });
+            const text = await response.text();
+            if (!response.ok) {
+              throw new Error(`GitHub API ${options.method ?? 'GET'} ${apiPath} returned ${response.status}: ${text}`);
+            }
+            return text.length === 0 ? null : JSON.parse(text);
+          };
+          const findRelease = async () => {
+            const matches = [];
+            for (let pageNumber = 1; pageNumber <= 100; pageNumber += 1) {
+              const releases = await apiJson(
+                `/repos/${repository}/releases?per_page=100&page=${pageNumber}`,
+              );
+              matches.push(...releases.filter((release) => release.tag_name === tag));
+              if (releases.length < 100) {
+                break;
+              }
+              if (pageNumber === 100) {
+                throw new Error('release lookup exceeded 100 pages');
+              }
+            }
+            if (matches.length > 1) {
+              throw new Error(`multiple GitHub releases use exact tag ${tag}`);
+            }
+            return matches[0];
+          };
+          const deleteAsset = async (asset) => {
+            await apiJson(`/repos/${repository}/releases/assets/${asset.id}`, { method: 'DELETE' });
+          };
+          const downloadAsset = async (asset) => {
+            const response = await fetch(asset.url, {
+              headers: {
+                Accept: 'application/octet-stream',
+                Authorization: `Bearer ${token}`,
+                'X-GitHub-Api-Version': '2022-11-28',
+              },
+            });
+            if (!response.ok) {
+              throw new Error(`asset download ${asset.name} returned ${response.status}`);
+            }
+            return Buffer.from(await response.arrayBuffer());
+          };
+
+          let release = await findRelease();
+          if (!release) {
+            try {
+              release = await apiJson(`/repos/${repository}/releases`, {
+                method: 'POST',
+                body: JSON.stringify({
+                  tag_name: tag,
+                  target_commitish: process.env.RELEASE_SHA,
+                  name: title,
+                  body: releaseMessage,
+                  draft: true,
+                  prerelease: false,
+                }),
+              });
+            } catch (error) {
+              release = await findRelease();
+              if (!release) {
+                throw error;
+              }
+            }
+          }
+          if (release.tag_name !== tag) {
+            throw new Error(`release ${release.id} has unexpected tag ${release.tag_name}`);
+          }
+          if (release.name !== title || release.body !== releaseMessage || release.prerelease) {
+            release = await apiJson(`/repos/${repository}/releases/${release.id}`, {
+              method: 'PATCH',
+              body: JSON.stringify({ name: title, body: releaseMessage, prerelease: false }),
+            });
+          }
+
+          const assetsByName = new Map();
+          for (const asset of release.assets) {
+            const sameName = assetsByName.get(asset.name) ?? [];
+            sameName.push(asset);
+            assetsByName.set(asset.name, sameName);
+          }
+          const packageEntries = [];
+          for (const [target, contract] of Object.entries(targetContracts)) {
+            const assetName = `runtrol-studio-${version}-${target}.vsix`;
+            const assetLabel = `${assetName} @ ${releaseSha}`;
+            const assets = assetsByName.get(assetName) ?? [];
+            if (assets.length !== 1 || assets[0].label !== assetLabel) {
+              for (const asset of assets) {
+                await deleteAsset(asset);
+              }
+              packageEntries.push({ target, ...contract });
+              continue;
+            }
+            const archivePath = path.join(process.env.RUNNER_TEMP, 'staged-assets', assetName);
+            let archiveIsValid = false;
+            try {
+              fs.writeFileSync(archivePath, await downloadAsset(assets[0]));
+              const audit = spawnSync(
+                'python',
+                ['-X', 'utf8', 'tests/audit/vscodePackage.py', '--archive', archivePath, '--target', target],
+                { encoding: 'utf8' },
+              );
+              if (audit.status === 0) {
+                archiveIsValid = true;
+              } else {
+                process.stderr.write(audit.stdout);
+                process.stderr.write(audit.stderr);
+              }
+            } catch (error) {
+              process.stderr.write(`discarding unreadable staging asset ${assetName}: ${error.message}\n`);
+            }
+            if (!archiveIsValid) {
+              await deleteAsset(assets[0]);
+              if (fs.existsSync(archivePath)) {
+                fs.rmSync(archivePath);
+              }
+              packageEntries.push({ target, ...contract });
+            }
+          }
+          for (const [assetName, assets] of assetsByName) {
+            if (!expectedNames.has(assetName)) {
+              for (const asset of assets) {
+                await deleteAsset(asset);
+              }
+            }
+          }
+
+          fs.appendFileSync(
+            process.env.GITHUB_OUTPUT,
+            `releaseId=${release.id}\npackageCount=${packageEntries.length}\npackageMatrix=${JSON.stringify({ include: packageEntries })}\n`,
           );
           NODE
 
   package:
-    needs: prepare
-    if: ${{ github.event_name == 'push' || ! inputs.publishExisting }}
+    needs: [route, prepare]
+    if: needs.route.outputs.createRelease == 'true' && needs.prepare.outputs.packageCount != '0'
     timeout-minutes: 60
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
-      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+      matrix: ${{ fromJSON(needs.prepare.outputs.packageMatrix) }}
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ needs.prepare.outputs.releaseCommit }}
       - name: Linux native build and VS Code test dependencies
         if: matrix.family == 'linux'
         run: |
@@ -174,45 +575,328 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: python -X utf8 tests/audit/shippedRuntimeInterop.py
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: runtrol-studio-${{ needs.prepare.outputs.version }}-${{ matrix.target }}
-          path: release/runtrol-studio-${{ needs.prepare.outputs.version }}-${{ matrix.target }}.vsix
-          if-no-files-found: error
+      - name: Reconcile the exact VSIX into durable release staging
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ needs.prepare.outputs.releaseCommit }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          TARGET: ${{ matrix.target }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          python -X utf8 .github/scripts/release/releaseNotes.py "$VERSION" "$RUNNER_TEMP/release-message.md"
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+
+          const apiBase = process.env.GITHUB_API_URL;
+          const repository = process.env.GITHUB_REPOSITORY;
+          const token = process.env.GH_TOKEN;
+          const tag = process.env.TAG;
+          const version = process.env.VERSION;
+          const target = process.env.TARGET;
+          const releaseSha = process.env.RELEASE_SHA;
+          const assetName = `runtrol-studio-${version}-${target}.vsix`;
+          const assetLabel = `${assetName} @ ${releaseSha}`;
+          const assetPath = `release/${assetName}`;
+          const localBytes = fs.readFileSync(assetPath);
+          const releaseMessage = fs.readFileSync(
+            `${process.env.RUNNER_TEMP}/release-message.md`,
+            'utf8',
+          ).replace(/\r\n/g, '\n');
+          const jsonHeaders = {
+            Accept: 'application/vnd.github+json',
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+            'X-GitHub-Api-Version': '2022-11-28',
+          };
+
+          const apiJson = async (apiPath, options = {}) => {
+            const response = await fetch(`${apiBase}${apiPath}`, {
+              ...options,
+              headers: { ...jsonHeaders, ...options.headers },
+            });
+            const text = await response.text();
+            if (!response.ok) {
+              throw new Error(`GitHub API ${options.method ?? 'GET'} ${apiPath} returned ${response.status}: ${text}`);
+            }
+            return text.length === 0 ? null : JSON.parse(text);
+          };
+          const findRelease = async () => {
+            const matches = [];
+            for (let pageNumber = 1; pageNumber <= 100; pageNumber += 1) {
+              const releases = await apiJson(
+                `/repos/${repository}/releases?per_page=100&page=${pageNumber}`,
+              );
+              matches.push(...releases.filter((release) => release.tag_name === tag));
+              if (releases.length < 100) {
+                break;
+              }
+              if (pageNumber === 100) {
+                throw new Error('release lookup exceeded 100 pages');
+              }
+            }
+            if (matches.length !== 1) {
+              throw new Error(`expected one durable staging release for ${tag}, found ${matches.length}`);
+            }
+            return matches[0];
+          };
+          const deleteAsset = async (asset) => {
+            await apiJson(`/repos/${repository}/releases/assets/${asset.id}`, { method: 'DELETE' });
+          };
+          const downloadAsset = async (asset) => {
+            const response = await fetch(asset.url, {
+              headers: {
+                Accept: 'application/octet-stream',
+                Authorization: `Bearer ${token}`,
+                'X-GitHub-Api-Version': '2022-11-28',
+              },
+            });
+            if (!response.ok) {
+              throw new Error(`asset download ${asset.name} returned ${response.status}`);
+            }
+            return Buffer.from(await response.arrayBuffer());
+          };
+          const uploadAsset = async (releaseState) => {
+            const uploadBase = releaseState.upload_url.replace(/\{.*\}$/, '');
+            const uploadQuery = `name=${encodeURIComponent(assetName)}&label=${encodeURIComponent(assetLabel)}`;
+            const response = await fetch(`${uploadBase}?${uploadQuery}`, {
+              method: 'POST',
+              headers: {
+                Accept: 'application/vnd.github+json',
+                Authorization: `Bearer ${token}`,
+                'Content-Type': 'application/octet-stream',
+                'X-GitHub-Api-Version': '2022-11-28',
+              },
+              body: localBytes,
+            });
+            const text = await response.text();
+            if (!response.ok) {
+              throw new Error(`GitHub asset upload ${assetName} returned ${response.status}: ${text}`);
+            }
+          };
+
+          let release = await findRelease();
+          if (
+            release.tag_name !== tag ||
+            release.name !== `Runtrol Studio ${version}` ||
+            release.body !== releaseMessage ||
+            release.prerelease
+          ) {
+            throw new Error(`durable staging identity differs from exact release ${tag} at ${process.env.RELEASE_SHA}`);
+          }
+          const matchingAssets = release.assets.filter((asset) => asset.name === assetName);
+          let assetIsReady = false;
+          if (matchingAssets.length === 1 && matchingAssets[0].label === assetLabel) {
+            try {
+              const existingBytes = await downloadAsset(matchingAssets[0]);
+              if (existingBytes.equals(localBytes)) {
+                process.stdout.write(`durable staging already contains exact ${assetName}\n`);
+                assetIsReady = true;
+              } else {
+                await deleteAsset(matchingAssets[0]);
+              }
+            } catch (error) {
+              process.stderr.write(`discarding unreadable staging asset ${assetName}: ${error.message}\n`);
+              await deleteAsset(matchingAssets[0]);
+            }
+          } else {
+            for (const asset of matchingAssets) {
+              await deleteAsset(asset);
+            }
+          }
+          if (!assetIsReady) {
+            try {
+              await uploadAsset(release);
+              assetIsReady = true;
+            } catch (error) {
+              release = await findRelease();
+              const recoveredAssets = release.assets.filter((asset) => asset.name === assetName);
+              if (recoveredAssets.length === 1 && recoveredAssets[0].label === assetLabel) {
+                try {
+                  const recoveredBytes = await downloadAsset(recoveredAssets[0]);
+                  if (recoveredBytes.equals(localBytes)) {
+                    assetIsReady = true;
+                  } else {
+                    await deleteAsset(recoveredAssets[0]);
+                  }
+                } catch (downloadError) {
+                  process.stderr.write(`discarding incomplete upload ${assetName}: ${downloadError.message}\n`);
+                  await deleteAsset(recoveredAssets[0]);
+                }
+              } else {
+                for (const asset of recoveredAssets) {
+                  await deleteAsset(asset);
+                }
+              }
+              if (!assetIsReady) {
+                process.stderr.write(`retrying interrupted upload ${assetName}: ${error.message}\n`);
+                release = await findRelease();
+                await uploadAsset(release);
+              }
+            }
+          }
+
+          release = await findRelease();
+          const verifiedAssets = release.assets.filter((asset) => asset.name === assetName);
+          if (verifiedAssets.length !== 1 || verifiedAssets[0].label !== assetLabel) {
+            throw new Error(`durable staging has ${verifiedAssets.length} assets named ${assetName}`);
+          }
+          const verifiedBytes = await downloadAsset(verifiedAssets[0]);
+          if (!verifiedBytes.equals(localBytes)) {
+            throw new Error(`durable staging bytes differ for ${assetName}`);
+          }
+          NODE
 
   publish:
-    needs: [prepare, package]
-    if: ${{ github.event_name == 'push' || inputs.release }}
+    needs: [route, prepare, package]
+    if: >-
+      always() &&
+      needs.route.result == 'success' &&
+      needs.prepare.result == 'success' &&
+      needs.route.outputs.createRelease == 'true' &&
+      (
+        needs.prepare.outputs.packageCount == '0' ||
+        needs.package.result == 'success'
+      )
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.prepare.outputs.releaseCommit }}
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24"
           cache: npm
           cache-dependency-path: extensions/runtrol-vscode/package-lock.json
       - run: npm --prefix extensions/runtrol-vscode ci
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          pattern: runtrol-studio-${{ needs.prepare.outputs.version }}-*
-          path: release
-          merge-multiple: true
-      - name: Refuse an incomplete platform set
+      - name: Download the exact durable staging asset set
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ needs.prepare.outputs.releaseCommit }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          mkdir -p release
+          python -X utf8 .github/scripts/release/releaseNotes.py "$VERSION" "$RUNNER_TEMP/release-message.md"
+          git fetch --tags origin
+          test "$(git cat-file -t "$TAG")" = tag
+          test "$(git rev-parse "${TAG}^{commit}")" = "$RELEASE_SHA"
+          test "$(git ls-remote --tags origin "refs/tags/${TAG}^{}" | cut -f1)" = "$RELEASE_SHA"
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import path from 'node:path';
+          import { spawnSync } from 'node:child_process';
+
+          const apiBase = process.env.GITHUB_API_URL;
+          const repository = process.env.GITHUB_REPOSITORY;
+          const token = process.env.GH_TOKEN;
+          const tag = process.env.TAG;
+          const version = process.env.VERSION;
+          const releaseSha = process.env.RELEASE_SHA;
+          const releaseMessage = fs.readFileSync(`${process.env.RUNNER_TEMP}/release-message.md`, 'utf8');
+          const tagObjectResult = spawnSync('git', ['cat-file', 'tag', tag], { encoding: 'utf8' });
+          if (tagObjectResult.status !== 0) {
+            throw new Error(`cannot read annotated tag ${tag}: ${tagObjectResult.stderr.trim()}`);
+          }
+          const tagSeparator = tagObjectResult.stdout.indexOf('\n\n');
+          const tagMessage = tagSeparator < 0 ? '' : tagObjectResult.stdout.slice(tagSeparator + 2);
+          if (tagMessage !== releaseMessage) {
+            throw new Error(`annotated tag ${tag} differs from the governed release message`);
+          }
+          const targets = JSON.parse(
+            fs.readFileSync('extensions/runtrol-vscode/release-targets.json', 'utf8'),
+          );
+          const expectedNames = Object.keys(targets)
+            .map((target) => `runtrol-studio-${version}-${target}.vsix`)
+            .sort();
+          const headers = {
+            Accept: 'application/vnd.github+json',
+            Authorization: `Bearer ${token}`,
+            'X-GitHub-Api-Version': '2022-11-28',
+          };
+          const apiJson = async (apiPath) => {
+            const response = await fetch(`${apiBase}${apiPath}`, { headers });
+            const text = await response.text();
+            if (!response.ok) {
+              throw new Error(`GitHub API GET ${apiPath} returned ${response.status}: ${text}`);
+            }
+            return JSON.parse(text);
+          };
+          const matches = [];
+          for (let pageNumber = 1; pageNumber <= 100; pageNumber += 1) {
+            const releases = await apiJson(
+              `/repos/${repository}/releases?per_page=100&page=${pageNumber}`,
+            );
+            matches.push(...releases.filter((release) => release.tag_name === tag));
+            if (releases.length < 100) {
+              break;
+            }
+            if (pageNumber === 100) {
+              throw new Error('release lookup exceeded 100 pages');
+            }
+          }
+          if (matches.length !== 1) {
+            throw new Error(`expected one durable staging release for ${tag}, found ${matches.length}`);
+          }
+          const release = matches[0];
+          const actualNames = release.assets.map((asset) => asset.name).sort();
+          if (
+            release.name !== `Runtrol Studio ${version}` ||
+            release.body !== releaseMessage ||
+            release.prerelease ||
+            release.assets.some((asset) => asset.label !== `${asset.name} @ ${releaseSha}`) ||
+            JSON.stringify(actualNames) !== JSON.stringify(expectedNames)
+          ) {
+            throw new Error(`durable staging identity or asset set differs from exact release ${tag}`);
+          }
+          for (const asset of release.assets) {
+            const response = await fetch(asset.url, {
+              headers: { ...headers, Accept: 'application/octet-stream' },
+            });
+            if (!response.ok) {
+              throw new Error(`asset download ${asset.name} returned ${response.status}`);
+            }
+            fs.writeFileSync(
+              path.join('release', asset.name),
+              Buffer.from(await response.arrayBuffer()),
+            );
+          }
+          NODE
+      - name: Inspect every staged VSIX before Marketplace publication
         run: |
           count="$(find release -maxdepth 1 -name 'runtrol-studio-${{ needs.prepare.outputs.version }}-*.vsix' -type f | wc -l)"
           test "$count" -eq "${{ needs.prepare.outputs.targetCount }}"
+          for archive in release/runtrol-studio-${{ needs.prepare.outputs.version }}-*.vsix; do
+            target="${archive#release/runtrol-studio-${{ needs.prepare.outputs.version }}-}"
+            target="${target%.vsix}"
+            python -X utf8 tests/audit/vscodePackage.py --archive "$archive" --target "$target"
+          done
+      - name: Refuse a release commit outside the current main history
+        run: |
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "${{ needs.prepare.outputs.releaseCommit }}" FETCH_HEAD
       - name: Publish and verify all Marketplace platform packages
         env:
+          RELEASE_SHA: ${{ needs.prepare.outputs.releaseCommit }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          TAG_OBJECT_SHA: ${{ needs.prepare.outputs.tagObjectSha }}
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
-        run: >-
-          node extensions/runtrol-vscode/tooling/publish-marketplace.mjs
-          --directory release
+        run: |
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "$RELEASE_SHA" FETCH_HEAD
+          test "$(git rev-parse "$TAG")" = "$TAG_OBJECT_SHA"
+          test "$(git ls-remote --tags origin "refs/tags/${TAG}" | cut -f1)" = "$TAG_OBJECT_SHA"
+          test "$(git ls-remote --tags origin "refs/tags/${TAG}^{}" | cut -f1)" = "$RELEASE_SHA"
+          latest_release_tag="$(git ls-remote --tags origin 'refs/tags/vscode-v*' | cut -f2 | sed -E 's#^refs/tags/##; s/\^\{\}$//' | grep -E '^vscode-v[0-9]+\.[0-9]+\.[0-9]+$' | sort -uV | tail -n1)"
+          test "$latest_release_tag" = "$TAG"
+          node extensions/runtrol-vscode/tooling/publish-marketplace.mjs --directory release
 
   marketplace:
-    needs: [prepare, publish]
-    if: ${{ github.event_name == 'push' || inputs.release }}
+    needs: [route, prepare, publish]
+    if: needs.route.outputs.createRelease == 'true'
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -220,6 +904,8 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.releaseCommit }}
       - name: Linux native VS Code dependencies
         if: matrix.family == 'linux'
         run: |
@@ -260,19 +946,30 @@ jobs:
         run: xvfb-run -a node extensions/runtrol-vscode/tooling/installed-package.mjs --marketplace
 
   publishExisting:
-    needs: prepare
-    if: inputs.publishExisting
+    needs: [route, prepare]
+    if: needs.route.outputs.publishExisting == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check out the exact tagged release history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.prepare.outputs.releaseCommit }}
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24"
           cache: npm
           cache-dependency-path: extensions/runtrol-vscode/package-lock.json
       - run: npm --prefix extensions/runtrol-vscode ci
+      - name: Regenerate the exact tagged release message
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          python -X utf8 .github/scripts/release/releaseNotes.py --selftest
+          python -X utf8 .github/scripts/release/releaseNotes.py "$VERSION" "$RUNNER_TEMP/release-message.md"
+          test -s "$RUNNER_TEMP/release-message.md"
       - name: Download the exact tagged GitHub release assets
         env:
           GH_TOKEN: ${{ github.token }}
@@ -281,6 +978,39 @@ jobs:
           gh release download vscode-v${{ needs.prepare.outputs.version }} \
             --pattern 'runtrol-studio-${{ needs.prepare.outputs.version }}-*.vsix' \
             --dir release
+      - name: Verify the exact tagged release message and asset set
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_MESSAGE: ${{ runner.temp }}/release-message.md
+          TAG: ${{ needs.prepare.outputs.tag }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          gh release view "$TAG" --json assets,body,isDraft,isPrerelease,name,tagName > "$RUNNER_TEMP/release-state.json"
+          python -X utf8 - "$RUNNER_TEMP/release-state.json" "$RELEASE_MESSAGE" "$VERSION" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          statePath, messagePath, version = sys.argv[1:]
+          state = json.loads(Path(statePath).read_text(encoding="utf-8"))
+          targets = json.loads(Path("extensions/runtrol-vscode/release-targets.json").read_text(encoding="utf-8"))
+          expectedAssets = sorted(f"runtrol-studio-{version}-{target}.vsix" for target in targets)
+          actualAssets = sorted(asset["name"] for asset in state["assets"])
+          expectedMessage = Path(messagePath).read_text(encoding="utf-8")
+          problems = []
+          if state["tagName"] != f"vscode-v{version}":
+              problems.append("tag name")
+          if state["name"] != f"Runtrol Studio {version}":
+              problems.append("title")
+          if state["body"] != expectedMessage:
+              problems.append("body")
+          if state["isDraft"] or state["isPrerelease"]:
+              problems.append("publication state")
+          if actualAssets != expectedAssets:
+              problems.append("asset set")
+          if problems:
+              raise SystemExit(f"release identity mismatch: {', '.join(problems)}")
+          PY
       - name: Refuse an incomplete platform set
         run: |
           count="$(find release -maxdepth 1 -name 'runtrol-studio-${{ needs.prepare.outputs.version }}-*.vsix' -type f | wc -l)"
@@ -294,27 +1024,425 @@ jobs:
           done
       - name: Publish and verify the tagged Marketplace platform packages
         env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_MESSAGE: ${{ runner.temp }}/release-message.md
+          RELEASE_SHA: ${{ needs.prepare.outputs.releaseCommit }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          TAG_OBJECT_SHA: ${{ needs.prepare.outputs.tagObjectSha }}
+          VERSION: ${{ needs.prepare.outputs.version }}
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
-        run: >-
-          node extensions/runtrol-vscode/tooling/publish-marketplace.mjs
-          --directory release
+        run: |
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "$RELEASE_SHA" FETCH_HEAD
+          remote_tag_object="$(git ls-remote --tags origin "refs/tags/${TAG}" | cut -f1)"
+          test "$(git rev-parse "$TAG")" = "$TAG_OBJECT_SHA"
+          test "$remote_tag_object" = "$TAG_OBJECT_SHA"
+          remote_tag_commit="$(git ls-remote --tags origin "refs/tags/${TAG}^{}" | cut -f1)"
+          if [ -z "$remote_tag_commit" ]; then
+            remote_tag_commit="$remote_tag_object"
+          fi
+          test "$remote_tag_commit" = "$RELEASE_SHA"
+          latest_release_tag="$(git ls-remote --tags origin 'refs/tags/vscode-v*' | cut -f2 | sed -E 's#^refs/tags/##; s/\^\{\}$//' | grep -E '^vscode-v[0-9]+\.[0-9]+\.[0-9]+$' | sort -uV | tail -n1)"
+          test "$latest_release_tag" = "$TAG"
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import path from 'node:path';
+
+          const apiBase = process.env.GITHUB_API_URL;
+          const repository = process.env.GITHUB_REPOSITORY;
+          const tag = process.env.TAG;
+          const token = process.env.GH_TOKEN;
+          const version = process.env.VERSION;
+          const releaseMessage = fs.readFileSync(process.env.RELEASE_MESSAGE, 'utf8');
+          const targets = JSON.parse(
+            fs.readFileSync('extensions/runtrol-vscode/release-targets.json', 'utf8'),
+          );
+          const expectedNames = Object.keys(targets)
+            .map((target) => `runtrol-studio-${version}-${target}.vsix`)
+            .sort();
+          const headers = {
+            Accept: 'application/vnd.github+json',
+            Authorization: `Bearer ${token}`,
+            'X-GitHub-Api-Version': '2022-11-28',
+          };
+          const response = await fetch(
+            `${apiBase}/repos/${repository}/releases/tags/${encodeURIComponent(tag)}`,
+            { headers },
+          );
+          const text = await response.text();
+          if (!response.ok) {
+            throw new Error(`GitHub release lookup returned ${response.status}: ${text}`);
+          }
+          const release = JSON.parse(text);
+          const actualNames = release.assets.map((asset) => asset.name).sort();
+          if (
+            release.tag_name !== tag ||
+            release.name !== `Runtrol Studio ${version}` ||
+            release.body !== releaseMessage ||
+            release.draft ||
+            release.prerelease ||
+            JSON.stringify(actualNames) !== JSON.stringify(expectedNames)
+          ) {
+            throw new Error(`tagged GitHub release ${tag} changed before Marketplace publication`);
+          }
+          for (const asset of release.assets) {
+            const assetResponse = await fetch(asset.url, {
+              headers: { ...headers, Accept: 'application/octet-stream' },
+            });
+            if (!assetResponse.ok) {
+              throw new Error(`tagged asset download ${asset.name} returned ${assetResponse.status}`);
+            }
+            const localBytes = fs.readFileSync(path.join('release', asset.name));
+            const manualRemoteBytes = Buffer.from(await assetResponse.arrayBuffer());
+            if (!manualRemoteBytes.equals(localBytes)) {
+              throw new Error(`tagged asset bytes changed before Marketplace publication for ${asset.name}`);
+            }
+          }
+          NODE
+          node extensions/runtrol-vscode/tooling/publish-marketplace.mjs --directory release
 
   release:
-    needs: [prepare, package, publish, marketplace]
-    if: ${{ github.event_name == 'push' || inputs.release }}
+    needs: [route, prepare, package, publish, marketplace]
+    if: >-
+      always() &&
+      needs.route.result == 'success' &&
+      needs.prepare.result == 'success' &&
+      needs.route.outputs.createRelease == 'true' &&
+      (
+        needs.prepare.outputs.packageCount == '0' ||
+        needs.package.result == 'success'
+      ) &&
+      needs.publish.result == 'success' &&
+      needs.marketplace.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          pattern: runtrol-studio-${{ needs.prepare.outputs.version }}-*
-          path: release
-          merge-multiple: true
-      - name: Create the tagged GitHub release
+          fetch-depth: 0
+          ref: ${{ needs.prepare.outputs.releaseCommit }}
+      - name: Regenerate the governed message and verify the exact annotated tag
+        env:
+          RELEASE_MESSAGE: ${{ runner.temp }}/release-message.md
+          RELEASE_SHA: ${{ needs.prepare.outputs.releaseCommit }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          python -X utf8 .github/scripts/release/releaseNotes.py --selftest
+          python -X utf8 .github/scripts/release/releaseNotes.py "$VERSION" "$RELEASE_MESSAGE"
+          test -s "$RELEASE_MESSAGE"
+          git fetch --tags origin
+          test "$(git cat-file -t "$TAG")" = tag
+          test "$(git rev-parse "${TAG}^{commit}")" = "$RELEASE_SHA"
+          git cat-file tag "$TAG" > "$RUNNER_TEMP/tag-object"
+          python -X utf8 - "$RUNNER_TEMP/tag-object" "$RELEASE_MESSAGE" <<'PY'
+          import sys
+          from pathlib import Path
+
+          tagObject = Path(sys.argv[1]).read_bytes()
+          separator = tagObject.find(b"\n\n")
+          tagMessage = b"" if separator < 0 else tagObject[separator + 2 :]
+          releaseMessage = Path(sys.argv[2]).read_bytes()
+          if tagMessage != releaseMessage:
+              raise SystemExit("annotated tag message differs from the governed release message")
+          PY
+          test "$(git ls-remote --tags origin "refs/tags/${TAG}^{}" | cut -f1)" = "$RELEASE_SHA"
+      - name: Reconcile and download the exact release before publication
+        id: reconcile
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_MESSAGE: ${{ runner.temp }}/release-message.md
+          RELEASE_SHA: ${{ needs.prepare.outputs.releaseCommit }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          VERSION: ${{ needs.prepare.outputs.version }}
         run: |
-          python -X utf8 .github/scripts/release/releaseNotes.py "${{ needs.prepare.outputs.version }}" "$RUNNER_TEMP/release-notes.md"
-          gh release create vscode-v${{ needs.prepare.outputs.version }} release/runtrol-studio-${{ needs.prepare.outputs.version }}-*.vsix --title "Runtrol Studio ${{ needs.prepare.outputs.version }}" --notes-file "$RUNNER_TEMP/release-notes.md"
+          mkdir -p release
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import path from 'node:path';
+
+          const apiBase = process.env.GITHUB_API_URL;
+          const repository = process.env.GITHUB_REPOSITORY;
+          const token = process.env.GH_TOKEN;
+          const tag = process.env.TAG;
+          const version = process.env.VERSION;
+          const releaseSha = process.env.RELEASE_SHA;
+          const title = `Runtrol Studio ${version}`;
+          const releaseMessage = fs.readFileSync(process.env.RELEASE_MESSAGE, 'utf8');
+          const targets = JSON.parse(
+            fs.readFileSync('extensions/runtrol-vscode/release-targets.json', 'utf8'),
+          );
+          const expectedNames = Object.keys(targets)
+            .map((target) => `runtrol-studio-${version}-${target}.vsix`)
+            .sort();
+          const expectedNameSet = new Set(expectedNames);
+          const jsonHeaders = {
+            Accept: 'application/vnd.github+json',
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+            'X-GitHub-Api-Version': '2022-11-28',
+          };
+          const apiJson = async (apiPath, options = {}) => {
+            const response = await fetch(`${apiBase}${apiPath}`, {
+              ...options,
+              headers: { ...jsonHeaders, ...options.headers },
+            });
+            const text = await response.text();
+            if (!response.ok) {
+              throw new Error(`GitHub API ${options.method ?? 'GET'} ${apiPath} returned ${response.status}: ${text}`);
+            }
+            return text.length === 0 ? null : JSON.parse(text);
+          };
+          const matches = [];
+          for (let pageNumber = 1; pageNumber <= 100; pageNumber += 1) {
+            const releases = await apiJson(
+              `/repos/${repository}/releases?per_page=100&page=${pageNumber}`,
+            );
+            matches.push(...releases.filter((release) => release.tag_name === tag));
+            if (releases.length < 100) {
+              break;
+            }
+            if (pageNumber === 100) {
+              throw new Error('release lookup exceeded 100 pages');
+            }
+          }
+          if (matches.length !== 1) {
+            throw new Error(`expected one GitHub release for ${tag}, found ${matches.length}`);
+          }
+          let release = matches[0];
+          if (release.name !== title || release.body !== releaseMessage || release.prerelease) {
+            release = await apiJson(`/repos/${repository}/releases/${release.id}`, {
+              method: 'PATCH',
+              body: JSON.stringify({ name: title, body: releaseMessage, prerelease: false }),
+            });
+          }
+          for (const asset of release.assets) {
+            if (!expectedNameSet.has(asset.name)) {
+              await apiJson(`/repos/${repository}/releases/assets/${asset.id}`, { method: 'DELETE' });
+            }
+          }
+          release = await apiJson(`/repos/${repository}/releases/${release.id}`);
+          const actualNames = release.assets.map((asset) => asset.name).sort();
+          if (
+            release.assets.some((asset) => asset.label !== `${asset.name} @ ${releaseSha}`) ||
+            JSON.stringify(actualNames) !== JSON.stringify(expectedNames)
+          ) {
+            throw new Error(`release ${tag} does not have the exact complete asset set`);
+          }
+          for (const asset of release.assets) {
+            const response = await fetch(asset.url, {
+              headers: {
+                Accept: 'application/octet-stream',
+                Authorization: `Bearer ${token}`,
+                'X-GitHub-Api-Version': '2022-11-28',
+              },
+            });
+            if (!response.ok) {
+              throw new Error(`asset download ${asset.name} returned ${response.status}`);
+            }
+            fs.writeFileSync(
+              path.join('release', asset.name),
+              Buffer.from(await response.arrayBuffer()),
+            );
+          }
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `releaseId=${release.id}\n`);
+          NODE
+      - name: Inspect every release VSIX before making the release public
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          archiveCount="$(find release -maxdepth 1 -name "runtrol-studio-${VERSION}-*.vsix" -type f | wc -l)"
+          test "$archiveCount" -eq "${{ needs.prepare.outputs.targetCount }}"
+          for archive in release/runtrol-studio-${VERSION}-*.vsix; do
+            target="${archive#release/runtrol-studio-${VERSION}-}"
+            target="${target%.vsix}"
+            python -X utf8 tests/audit/vscodePackage.py --archive "$archive" --target "$target"
+          done
+      - name: Publish and verify the exact repaired GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ steps.reconcile.outputs.releaseId }}
+          RELEASE_MESSAGE: ${{ runner.temp }}/release-message.md
+          RELEASE_SHA: ${{ needs.prepare.outputs.releaseCommit }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          TAG_OBJECT_SHA: ${{ needs.prepare.outputs.tagObjectSha }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "$RELEASE_SHA" FETCH_HEAD
+          test "$(git rev-parse "$TAG")" = "$TAG_OBJECT_SHA"
+          test "$(git ls-remote --tags origin "refs/tags/${TAG}" | cut -f1)" = "$TAG_OBJECT_SHA"
+          test "$(git ls-remote --tags origin "refs/tags/${TAG}^{}" | cut -f1)" = "$RELEASE_SHA"
+          latest_release_tag="$(git ls-remote --tags origin 'refs/tags/vscode-v*' | cut -f2 | sed -E 's#^refs/tags/##; s/\^\{\}$//' | grep -E '^vscode-v[0-9]+\.[0-9]+\.[0-9]+$' | sort -uV | tail -n1)"
+          test "$latest_release_tag" = "$TAG"
+          node --input-type=module <<'NODE'
+          import { createHash } from 'node:crypto';
+          import fs from 'node:fs';
+          import path from 'node:path';
+          import {
+            extensionIdentifier,
+            packageManifest,
+          } from './extensions/runtrol-vscode/tooling/extension-manifest.mjs';
+
+          const apiBase = process.env.GITHUB_API_URL;
+          const repository = process.env.GITHUB_REPOSITORY;
+          const token = process.env.GH_TOKEN;
+          const releaseId = process.env.RELEASE_ID;
+          const tag = process.env.TAG;
+          const version = process.env.VERSION;
+          const releaseSha = process.env.RELEASE_SHA;
+          const title = `Runtrol Studio ${version}`;
+          const releaseMessage = fs.readFileSync(process.env.RELEASE_MESSAGE, 'utf8');
+          const targets = JSON.parse(
+            fs.readFileSync('extensions/runtrol-vscode/release-targets.json', 'utf8'),
+          );
+          const expectedNames = Object.keys(targets)
+            .map((target) => `runtrol-studio-${version}-${target}.vsix`)
+            .sort();
+          const jsonHeaders = {
+            Accept: 'application/vnd.github+json',
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+            'X-GitHub-Api-Version': '2022-11-28',
+          };
+          const apiJson = async (apiPath, options = {}) => {
+            const response = await fetch(`${apiBase}${apiPath}`, {
+              ...options,
+              headers: { ...jsonHeaders, ...options.headers },
+            });
+            const text = await response.text();
+            if (!response.ok) {
+              throw new Error(`GitHub API ${options.method ?? 'GET'} ${apiPath} returned ${response.status}: ${text}`);
+            }
+            return text.length === 0 ? null : JSON.parse(text);
+          };
+          let release = await apiJson(`/repos/${repository}/releases/${releaseId}`);
+          const actualNames = release.assets.map((asset) => asset.name).sort();
+          if (
+            release.tag_name !== tag ||
+            release.name !== title ||
+            release.body !== releaseMessage ||
+            release.prerelease ||
+            release.assets.some((asset) => asset.label !== `${asset.name} @ ${releaseSha}`) ||
+            JSON.stringify(actualNames) !== JSON.stringify(expectedNames)
+          ) {
+            throw new Error(`release ${releaseId} changed after exact archive validation`);
+          }
+          for (const asset of release.assets) {
+            const response = await fetch(asset.url, {
+              headers: {
+                Accept: 'application/octet-stream',
+                Authorization: `Bearer ${token}`,
+                'X-GitHub-Api-Version': '2022-11-28',
+              },
+            });
+            if (!response.ok) {
+              throw new Error(`pre-publication asset download ${asset.name} returned ${response.status}`);
+            }
+            const localBytes = fs.readFileSync(path.join('release', asset.name));
+            const stagedBytes = Buffer.from(await response.arrayBuffer());
+            if (!stagedBytes.equals(localBytes)) {
+              throw new Error(`release asset bytes changed before publication for ${asset.name}`);
+            }
+          }
+          const marketplaceResponse = await fetch(
+            'https://marketplace.visualstudio.com/_apis/public/gallery/extensionquery',
+            {
+              method: 'POST',
+              headers: {
+                Accept: 'application/json;api-version=3.0-preview.1',
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                filters: [{
+                  pageNumber: 1,
+                  pageSize: 1,
+                  criteria: [{ filterType: 7, value: extensionIdentifier }],
+                }],
+                assetTypes: [],
+                flags: 17,
+              }),
+            },
+          );
+          const marketplaceText = await marketplaceResponse.text();
+          if (!marketplaceResponse.ok) {
+            throw new Error(`Marketplace digest lookup returned ${marketplaceResponse.status}: ${marketplaceText}`);
+          }
+          const marketplaceExtensions = JSON.parse(marketplaceText).results?.[0]?.extensions ?? [];
+          const matchingExtensions = marketplaceExtensions.filter((extension) => (
+            extension.publisher?.publisherName === packageManifest.publisher &&
+            extension.extensionName === packageManifest.name
+          ));
+          if (matchingExtensions.length !== 1) {
+            throw new Error(`Marketplace returned ${matchingExtensions.length} matching extensions`);
+          }
+          const marketplaceVersions = matchingExtensions[0].versions.filter(
+            (candidate) => candidate.version === version,
+          );
+          const expectedTargets = Object.keys(targets).sort();
+          const marketplaceTargets = marketplaceVersions
+            .map((candidate) => candidate.targetPlatform)
+            .sort();
+          if (JSON.stringify(marketplaceTargets) !== JSON.stringify(expectedTargets)) {
+            throw new Error(`Marketplace target set differs before GitHub exposure: ${JSON.stringify(marketplaceTargets)}`);
+          }
+          for (const target of expectedTargets) {
+            const candidates = marketplaceVersions.filter(
+              (candidate) => candidate.targetPlatform === target,
+            );
+            if (candidates.length !== 1) {
+              throw new Error(`Marketplace has ${candidates.length} entries for ${target}`);
+            }
+            const marketplaceDigest = candidates[0].properties?.find(
+              (property) => property.key === 'Microsoft.VisualStudio.Services.VsixSha256',
+            )?.value;
+            const assetName = `runtrol-studio-${version}-${target}.vsix`;
+            const localDigest = createHash('sha256')
+              .update(fs.readFileSync(path.join('release', assetName)))
+              .digest('hex');
+            if (marketplaceDigest !== localDigest) {
+              throw new Error(`Marketplace digest differs from the GitHub candidate for ${target}`);
+            }
+          }
+          release = await apiJson(`/repos/${repository}/releases/${releaseId}`, {
+            method: 'PATCH',
+            body: JSON.stringify({
+              name: title,
+              body: releaseMessage,
+              draft: false,
+              prerelease: false,
+              make_latest: 'true',
+            }),
+          });
+          release = await apiJson(`/repos/${repository}/releases/${releaseId}`);
+          const verifiedNames = release.assets.map((asset) => asset.name).sort();
+          if (
+            release.tag_name !== tag ||
+            release.name !== title ||
+            release.body !== releaseMessage ||
+            release.draft ||
+            release.prerelease ||
+            release.assets.some((asset) => asset.label !== `${asset.name} @ ${releaseSha}`) ||
+            JSON.stringify(verifiedNames) !== JSON.stringify(expectedNames)
+          ) {
+            throw new Error(`published GitHub release ${tag} did not converge to the exact state`);
+          }
+          for (const asset of release.assets) {
+            const response = await fetch(asset.url, {
+              headers: {
+                Accept: 'application/octet-stream',
+                Authorization: `Bearer ${token}`,
+                'X-GitHub-Api-Version': '2022-11-28',
+              },
+            });
+            if (!response.ok) {
+              throw new Error(`published asset download ${asset.name} returned ${response.status}`);
+            }
+            const localBytes = fs.readFileSync(path.join('release', asset.name));
+            const verifiedBytes = Buffer.from(await response.arrayBuffer());
+            if (!verifiedBytes.equals(localBytes)) {
+              throw new Error(`published asset bytes differ for ${asset.name}`);
+            }
+          }
+          NODE

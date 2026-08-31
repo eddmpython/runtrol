@@ -11,6 +11,12 @@ Provider CLIs already own current model selection, permissions, approvals, histo
 Rebuilding those controls in every client creates a second product that drifts from the provider. A terminal viewer
 inherits new provider features without prompt injection, semantic parsing, or a model connection owned by Runtrol.
 
+The release provider set is data, not a Core branch. The tracked
+[Claude](../crates/runtrol-drivers/manifests/claude.toml) and
+[Codex](../crates/runtrol-drivers/manifests/codex.toml) manifests are the providers packaged and exercised for this
+release. A future provider still enters through the same manifest and driver contracts without changing terminal
+transport or Studio navigation.
+
 ## Host
 
 - `runtrol-childproc::pty` owns ConPTY on Microsoft Windows and `openpty` on Unix.
@@ -18,18 +24,20 @@ inherits new provider features without prompt injection, semantic parsing, or a 
   renderer for it: either the owner TUI, one official attachment client, or one Windows console mirror. That renderer
   has one reader, one bounded output ring, and one `vt100` screen snapshot without scrollback. Adding VS Code windows,
   phone views, or SDK viewers never duplicates those central objects.
-- The hard per-terminal bounds are a 512 KiB output ring, no scrollback, and at most 25,000 screen cells. The
-  primary and alternate screens, reader queue, fan-out queue, and slot metadata have a 3 MiB shared-state ceiling.
-  Runtime admits at most eight hosted provider terminals, for a 24 MiB complete-set ceiling. Viewers reuse that
+- [`runtrol-core::terminal`](../crates/runtrol-core/src/terminal/mod.rs) owns the executable ring, geometry, screen,
+  and shared-state limits. [`terminal_surface.rs`](../crates/runtrol-daemon/src/terminal_surface.rs) binds hosted
+  terminal admission to the Core hot-process ceiling and proves the complete-set memory bound. Viewers reuse that
   fan-out and add no payload ring of their own; control records are bounded separately.
 - Runtime answers terminal capability and cursor-position queries once at the host. Viewers do not race to answer.
 - Snapshot creation and live fan-out share one output-state critical section. A viewer receives a chunk in its
   snapshot or subscribes before that chunk is published, never both and never neither.
-- Mouse reports are normalized into provider-visible key input. Provider-specific launch behavior remains declarative
-  in the manifest `[tui]` section through `new`, `resume`, `attach`, `stop`, `env`, and `env_unset`.
+- A desktop terminal viewer keeps VS Code's own selection, focus, and scroll behavior. Runtime strips provider mouse
+  mode toggles from the viewer stream and rejects stray desktop mouse reports. Only a touch viewer may translate
+  gestures into bounded terminal input. Provider-specific launch behavior remains declarative in the manifest `[tui]`
+  section through `new`, `resume`, `attach`, `stop`, `env`, and `env_unset`.
 - No Runtime, Studio, SDK, or phone code selects behavior by a hardcoded provider name.
 
-The screen model exists only for geometry, mouse translation, and late-view snapshots. It is dropped with the hosted
+The screen model exists only for geometry, touch translation, and late-view snapshots. It is dropped with the hosted
 terminal and is never persisted as a conversation copy.
 
 ## Process-birth broker
@@ -58,8 +66,9 @@ Runtime selects the strongest structurally proven route for each live process, n
 2. If the provider roster publishes a complete official target and the manifest declares paired `attach` and `stop`
    commands, Runtime starts one provider TUI attachment client only when the first viewer opens the conversation.
    `attach` is not `resume`: the original owner remains the only conversation owner.
-3. On Microsoft Windows, an interactive console process can be joined through `AttachConsole`. One bounded helper
-   reads the visible `CONOUT$` buffer and writes viewer input to `CONIN$` without replacing the owner.
+3. On Microsoft Windows, an interactive console process can be joined through `AttachConsole`. Runtime starts one
+   bounded helper only when the first viewer opens the conversation. It reads the visible `CONOUT$` buffer and writes
+   viewer input to `CONIN$` without replacing the owner.
 4. Without one of those proofs, the process is observe-only. Runtime shows that it is live, blocks duplicate resume
    and deletion, and refuses to pretend that it can stream the session.
 
@@ -67,12 +76,13 @@ The provider driver reports this per-process fact as unavailable, console, or of
 does not infer an attachment command from a provider name, a session identifier, terminal text, or a path. The opaque
 official target may differ from the durable native conversation identity and is never persisted as transcript state.
 
-Official attachment is lazy for memory and process efficiency. Merely listing a live conversation retains only its
-bounded roster record. Before the first open it allocates no renderer process, PTY, screen model, or output ring. Once
-opened, all viewers share the same renderer and the existing 3 MiB per-terminal ceiling. Official attachments and
-console mirrors hold a content-free terminal-surface admission claim while their renderer is live. The external CLI
-still owns the conversation and transcript; the claim only prevents another Runtime generation from allocating a
-second renderer, ring, and screen for that owner.
+Every external attachment is lazy for memory and process efficiency. Merely listing a live conversation retains only
+its bounded roster record. Before the first open an official route allocates no renderer process or PTY, and a console
+route allocates no helper. Neither allocates a screen model or output ring. Once opened, all viewers share the same
+renderer and the executable per-terminal shared-state ceiling. Official attachments and console mirrors hold a
+content-free terminal-surface admission claim while their renderer is live. The external CLI still owns the
+conversation and transcript; the claim only prevents another Runtime generation from allocating a second renderer,
+ring, and screen for that owner.
 
 ## Public Runtime contract
 
@@ -108,15 +118,66 @@ instead of letting a duplicate process satisfy the journey.
 
 Two operator gates add the installed-provider layer without spending a model turn. `providerTerminalParity` measures
 Claude and Codex through independent public Runtime clients, requires byte-identical fresh snapshots, closes one
-viewer, hands input to a new writer, caps delivery at 250 ms, stops the exact terminal, and proves it can no longer be
-attached. `vscodeRealProviderMultiWindow` runs the production extension in two simultaneous isolated VS Code windows
-for each installed TUI. The first window's input reaches both windows, the first window exits, and the second writes
-within 500 ms and stops the terminal. Both gates use reversible navigation when a provider startup modal ignores
-printable bytes. They never submit a line, parse provider text, or retain a transcript.
+viewer, hands input to a new writer within the catalogue's Runtime-client delivery ceiling, stops the exact terminal,
+and proves it can no longer be attached. `vscodeRealProviderMultiWindow` runs the production extension in two
+simultaneous isolated VS Code windows for each installed TUI. The first window's input reaches both windows, the first
+window exits, and the second writes within the catalogue's first-use delivery ceiling and stops the terminal. Both
+gates use reversible navigation when a provider startup modal ignores printable bytes. They never submit a line,
+parse provider text, or retain a transcript.
+
+### Multi-window latency evidence
+
+The deterministic Extension Host journey separates cold integration overhead from the warm transport path. The first
+sample in each phase enters through VS Code's public `Terminal.sendText` surface. Later samples start at the same
+`Pseudoterminal.handleInput` callback to measure Studio, the public TypeScript client, Runtime authorization, PTY echo,
+and cross-window fan-out without charging the test-control bounce through the renderer process to the product path.
+It records independent raw sample series for sender echo, second-view delivery, and writer handoff after the first
+window closes. Summaries are recomputed from those bounded series rather than trusted as standalone numbers.
+
+The 2026-08-31 deterministic two-window run used 21 warm samples per phase. Owner echo and second-window fan-out
+each measured 5 ms p95, and writer handoff measured 4 ms p95. Their separate first interactions measured 5 ms,
+5 ms, and 10 ms respectively. The preceding recorded run measured 110 ms, 110 ms, and 14 ms p95. These are observed
+results, not replacement ceilings; the executable catalogue below remains the release contract.
+
+[`performance-budget.json`](../extensions/runtrol-vscode/performance-budget.json) owns the first-use ceiling, warm p95
+ceiling, exact sample count, and installed-provider Runtime-client ceiling. The deterministic and real-provider gates
+read that catalogue directly. [`vscodeMultiWindowTerminal.py`](../tests/audit/vscodeMultiWindowTerminal.py) rejects
+missing samples, invalid summaries, a duplicate owner, a replaced process generation, or any task-owned survivor.
+Documentation does not carry a second copy of those values.
 
 Fresh open needs `session.start`; native resume needs `session.resume`; listing and viewing need
 `session.output.read`; write and lifecycle mutations need the corresponding input or stop scope plus an unexpired
 control lease. Canonical root checks and provider capabilities are the same boundaries used by structured sessions.
+
+## Live authority without a database hot path
+
+The durable integration store remains authoritative. Before public listeners start, the daemon's integration
+authority restores a read-optimized projection of
+the committed rows. Approval, grant change, key rotation, and revocation update that projection only after the store
+commit succeeds. Reads share immutable rows, so a terminal write does not clone the scope and root collections or
+open a synchronous database transaction.
+
+A terminal relay subscribes to authority changes before reading its current row. This closes the admission race:
+an update is either already in the row it reads or wakes the subscription. Authority notifications are selected
+before terminal output, and a revoked key, reduced grant, changed key generation, or missing row closes that view
+before it can keep streaming under old authority.
+
+Filesystem identity is still part of authority. Every terminal mutation validates the current canonical roots before
+touching the PTY. Root identity syscalls run outside the async executor on the bounded blocking lane shared by terminal
+views and indexes. A quiet output-only view also receives a background root proof. No successful proof is accepted
+after one second, and a failure, timeout, or blocking-task failure closes the affected view or index. A successful
+result whose key, grant, or terminal generation changed while the check ran authorizes nothing and is discarded. The
+exact scheduling, timeout, and concurrency limits are executable constants in
+[`runtime_terminal.rs`](../crates/runtrol-daemon/src/runtime_terminal.rs) and the relay ordering lives in
+the Runtime serving modules.
+
+During a Runtime upgrade, the old generation freezes its last committed ceiling and accepts only monotonic
+intersections delivered by a successor. Missing rows, key changes, revocations, and stale or conflicting snapshots
+fail closed. A later successor may continue the same shrinking chain, but no successor can widen what the draining
+generation knew before handoff. [`generation_authority.rs`](../crates/runtrol-daemon/src/generation_authority.rs) owns
+that transition contract. This authority relay is a periodic fail-closed projection, not a durable replication log.
+Missing or stale relay state denies access instead of preserving authority by assumption. The separate control-plane
+audit durability boundary is documented in [runtimeSecurity.md](runtimeSecurity.md#public-audit-boundary).
 
 ## Generation continuity
 
@@ -171,8 +232,9 @@ explicit open action. A live descriptor always attaches to its exact terminal an
 
 A process that began outside the transparent broker remains the conversation owner. A provider observer may detect its
 exact live native identity and Studio marks it as externally running within the bounded compatibility clock. Multiple
-windows share a 200 ms daemon cache, so provider roster scans do not multiply with viewer count. While the original
-process is live, Runtime blocks duplicate resume and permanent deletion.
+windows share the bounded daemon roster cache owned by
+[`NATIVE_ACTIVITY_CACHE_MS`](../crates/runtrol-daemon/src/serve.rs), so provider scans do not multiply with viewer
+count. While the original process is live, Runtime blocks duplicate resume and permanent deletion.
 
 Microsoft Windows is the operating-system capture layer here. A VS Code window is only a viewer. Windows does not
 expose another terminal host's original ConPTY byte pipes, but `AttachConsole` does expose the current console screen

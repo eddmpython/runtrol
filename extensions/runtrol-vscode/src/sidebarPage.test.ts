@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  conversationTitle,
   formatMemory,
   rowKeys,
   sidebarBody,
@@ -102,15 +103,19 @@ test("what the page draws is separable from the document, so a figure ticking ne
   assert.ok(html.includes("__runtrolBindUsage"));
 });
 
-test("a project's colour reaches its heading bar and every conversation under it", () => {
-  const html = sidebarHtml(model({}), assets);
+test("project colour marks the heading and only a conversation that is working", () => {
+  const html = sidebarHtml(model({ projects: [project({ rows: [
+    conversation({ key: "idle" }),
+    conversation({ key: "working", activity: "working" }),
+  ] })] }), assets);
   // The class, not a colour written onto the element: the page's CSP allows styles only from its nonced
   // stylesheet, and a nonce never covers an inline `style` attribute, so a colour put there paints nothing.
-  assert.equal((html.match(/class="bar hueBlue"/gu) ?? []).length, 2, "heading and its one row");
+  assert.equal((html.match(/class="bar hueBlue"/gu) ?? []).length, 3, "the hue identity remains on the DOM rows");
   assert.ok(
-    html.includes(".row .bar.hueBlue { background: var(--vscode-terminal-ansiBlue); }"),
-    "the page carries the rule that paints the band",
+    html.includes(".project-row .bar.hueBlue, .conv.working .bar.hueBlue { background: var(--vscode-terminal-ansiBlue); }"),
+    "only the project heading and working conversation paint that hue",
   );
+  assert.ok(!html.includes(".row .bar.hueBlue {"), "an idle conversation does not paint a project band");
   assert.ok(!html.includes('style="background'), "no colour is written onto an element for the CSP to drop");
   assert.ok(html.includes('class="bar"></span>'), "a loose conversation has no project colour");
 });
@@ -163,7 +168,7 @@ test("memory reads as a short figure and rides the row", () => {
   assert.ok(html.includes('<span class="memory" title="Memory the provider process holds now">412 MB</span>'));
 });
 
-test("a running conversation is marked once at its icon, and action states use words instead of dots", () => {
+test("working and attention states own distinct bands while idle rows have none", () => {
   const html = sidebarHtml(model({
     projects: [project({
       rows: [
@@ -175,9 +180,7 @@ test("a running conversation is marked once at its icon, and action states use w
     })],
     loose: [],
   }), assets);
-  // The mark is on the slot around the icon, not on the icon itself: an image cannot carry the arc, and the
-  // arc is what a person sees when the service's own icon is symmetric enough that turning it shows nothing.
-  // Running is said once, on the row, and the icon and the band both read it from there.
+  // Running is said once on the row, and the icon and the band both read it from there.
   assert.equal(html.match(/class="row conv working"/gu)?.length, 1);
   assert.ok(!html.includes('class="glyph-slot working"'), "the icon slot no longer carries its own copy of the state");
   assert.ok(html.includes('<span class="glyph-slot"><img class="glyph"'), "an idle row carries no mark");
@@ -191,6 +194,9 @@ test("a running conversation is marked once at its icon, and action states use w
   // The band of a running row carries a light sliding down it, as a compositor transform and never a repaint
   // of the band (operator, 2026-08-30: the colour bar should move too, unless that costs memory).
   assert.ok(html.includes(".conv.working .bar::after {"), "the light lives on the band of a working row");
+  assert.ok(html.includes(".conv.needs-you .bar { background: var(--vscode-editorWarning-foreground"));
+  assert.ok(html.includes(".conv.attention .bar { background: var(--vscode-errorForeground"));
+  assert.ok(html.includes(".conv:not(.working):not(.needs-you):not(.attention) .bar { background: transparent; }"));
   assert.ok(html.includes("animation: flow 1.1s linear infinite"), "in step with the turning icon");
   assert.ok(html.includes("@keyframes flow { from { transform: translateY(-100%); } to { transform: translateY(100%); } }"));
   assert.ok(html.includes(".row .bar { position: relative; overflow: hidden; }"), "the light is clipped to the band");
@@ -262,4 +268,20 @@ test("a project shows its uncommitted lines, new files and unpushed commits, and
   assert.ok(!clean.includes('class="badge changes"'), "a clean, pushed project has no chip");
   const unknown = sidebarHtml(model({ projects: [project({ changes: null })] }), assets);
   assert.ok(!unknown.includes('class="badge changes"'));
+
+  const large = sidebarHtml(model({ projects: [project({ changes: { added: 9120, removed: 8305, untracked: 1234, ahead: 1000 } })] }), assets);
+  assert.ok(large.includes('<span class="add">+9,120</span>'));
+  assert.ok(large.includes('<span class="del">-8,305</span>'));
+  assert.ok(large.includes('<span class="new">?1,234</span>'));
+  assert.ok(large.includes('<span class="ahead">↑1,000</span>'));
+});
+
+test("long provider titles are bounded only in the sidebar projection", () => {
+  const title = "Claude uses the first prompt as a provider-owned title and it can be much wider than one row";
+  const visible = conversationTitle(title);
+  const html = sidebarHtml(model({ projects: [project({ rows: [conversation({ title })] })] }), assets);
+  assert.equal(Array.from(visible).length, 48);
+  assert.ok(visible.endsWith("…"));
+  assert.ok(html.includes(visible));
+  assert.ok(html.includes(`title="${title}"`), "the full provider title remains available without replacing it");
 });

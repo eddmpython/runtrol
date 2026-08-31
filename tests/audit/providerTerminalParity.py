@@ -27,17 +27,30 @@ from typing import Any
 
 import genericAcpSmoke as daemonSupport
 import vscodeRealProviderJourney as process
+from vscodePerformanceBudget import loadPerformanceBudget
 
 ROOT = Path(__file__).resolve().parents[2]
 MANIFESTS = ROOT / "crates" / "runtrol-drivers" / "manifests"
-MAX_ECHO_MS = 250.0
-MAX_SCREEN_BYTES = 3 * 1024 * 1024
+MAX_ECHO_MS = loadPerformanceBudget()["realProviderTerminal"]["runtimeClientDeliveryMs"]
+PROTOCOL_SCHEMA = ROOT / "crates" / "runtrol-runtime-protocol" / "schema" / "runtime.schema.json"
 COMMAND_TIMEOUT_S = 120.0
 BUILD_TIMEOUT_S = 300.0
 
 
 class Failed(Exception):
     """The real-provider terminal fabric contract did not hold."""
+
+
+def protocolScreenLimit() -> int:
+    """Read the public terminal snapshot limit from the generated protocol schema."""
+    schema = json.loads(PROTOCOL_SCHEMA.read_text(encoding="utf-8"))
+    value = schema.get("x-runtrol-limits", {}).get("maxTerminalScreenBytes")
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError("the public Runtime schema has no positive maxTerminalScreenBytes limit")
+    return value
+
+
+MAX_SCREEN_BYTES = protocolScreenLimit()
 
 
 @dataclass(frozen=True)
@@ -81,7 +94,7 @@ def evidenceProblems(evidence: Evidence) -> list[str]:
         (evidence.viewer_closed, "the first viewer was not closed before writer handoff"),
         (evidence.writer_handoff, "a new writer did not reach the remaining live viewer"),
         (evidence.handoff_screen_changed, "writer handoff did not change the shared screen"),
-        (evidence.bounded_screen, "the provider screen was empty or exceeded the 3 MiB terminal budget"),
+        (evidence.bounded_screen, "the provider screen was empty or exceeded the public Runtime screen limit"),
         (evidence.exact_stop, "the exact terminal stop did not succeed in its owning generation"),
         (evidence.terminal_gone, "the stopped terminal remained attachable"),
         (evidence.cleanup_complete, "a task-owned daemon or provider process survived cleanup"),
@@ -350,11 +363,14 @@ def exerciseProvider(core: Path, probe: Path, root: Path, provider: str) -> Evid
         generation = str(opened.get("generation", ""))
         if not terminal or not generation:
             raise Failed(f"{provider} open returned no terminal identity or generation")
-        parity = runJson(
-            probe,
-            environment,
-            ["parity-raw", str(home), str(identity), generation, terminal],
-        )
+        try:
+            parity = runJson(
+                probe,
+                environment,
+                ["parity-navigation", str(home), str(identity), generation, terminal],
+            )
+        except Failed as error:
+            raise Failed(f"{provider}: {error}") from error
         owned_processes.update(process.ownedDescendants(daemon.pid, daemon_generation))
         stopped = runJson(
             probe,
