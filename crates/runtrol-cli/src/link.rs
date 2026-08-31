@@ -35,9 +35,12 @@ pub const DAEMON_ARGUMENT: &str = "daemon";
 
 /// How long to keep trying to reach a daemon that has just been started.
 ///
-/// It has to establish containment, find its home, read the manifests, and bind. Generous against a loaded machine,
-/// and short enough that a daemon which failed to start is reported rather than waited on.
-const WHILE_STARTING: Duration = Duration::from_secs(10);
+/// It has to establish containment, find its home, read the manifests, and bind. A copied macOS binary may spend
+/// more than ten seconds in the operating system's first-launch inspection before its first instruction runs
+/// (measured 2026-08-31 on the hosted macOS 26 arm64 runner). The native surface gives the whole endpoint probe
+/// thirty seconds, so this inner wait leaves five seconds for the answer and cleanup while still returning the
+/// instant the endpoint appears.
+const WHILE_STARTING: Duration = Duration::from_secs(25);
 
 /// How long to wait before asking again.
 const BETWEEN_TRIES: Duration = Duration::from_millis(25);
