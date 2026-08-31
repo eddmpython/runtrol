@@ -208,6 +208,21 @@ def swapWorkflowStepTokens(
     return f"{workflow[:stepStart]}{mutatedStep}{workflow[stepStart + len(stepBody):]}"
 
 
+def replaceWorkflowJobToken(
+    workflow: str,
+    jobName: str,
+    token: str,
+    replacement: str,
+) -> str:
+    """Replace one unique token inside one workflow job."""
+    jobBody = workflowJobBody(workflow, jobName)
+    if jobBody.count(token) != 1:
+        raise AssertionError(f"cannot replace unique token in {jobName}")
+    mutatedJob = jobBody.replace(token, replacement, 1)
+    jobStart = workflow.index(jobBody, workflow.index(f"  {jobName}:"))
+    return f"{workflow[:jobStart]}{mutatedJob}{workflow[jobStart + len(jobBody):]}"
+
+
 def releaseGovernanceProblems(releaseWorkflow: str) -> list[str]:
     """Require one exact gated SHA and durable, repairable release staging."""
     found: list[str] = []
@@ -319,6 +334,9 @@ def releaseGovernanceProblems(releaseWorkflow: str) -> list[str]:
     for token in requiredTokens:
         if token not in releaseWorkflow:
             found.append(f"vscode-release.yml is missing release governance contract {token}")
+    publishJob = workflowJobBody(releaseWorkflow, "publish")
+    if re.search(r"(?m)^    permissions:\r?$\n^      contents: write\r?$", publishJob) is None:
+        found.append("the publish job cannot read the private durable draft release")
 
     localizedContracts = (
         (
@@ -650,8 +668,10 @@ def releaseGovernanceProblems(releaseWorkflow: str) -> list[str]:
         found.append("the annotated tag must consume the governed message exactly once")
     if releaseWorkflow.count("tagMessage !== releaseMessage") != 2:
         found.append("the tag message must be rechecked before Marketplace publication")
-    if releaseWorkflow.count("      contents: write") != 3:
-        found.append("only prepare, package, and final release may mutate GitHub release state")
+    if releaseWorkflow.count("      contents: write") != 4:
+        found.append(
+            "only prepare, package, staging publish, and final release may access draft release state"
+        )
     return found
 
 
@@ -1408,6 +1428,17 @@ def selftest() -> int:
         (
             sourcePackage,
             releaseWorkflow.replace("      contents: write", "      contents: read", 1),
+            marketplaceScript,
+            coreManifest,
+        ),
+        (
+            sourcePackage,
+            replaceWorkflowJobToken(
+                releaseWorkflow,
+                "publish",
+                "      contents: write",
+                "      contents: read",
+            ),
             marketplaceScript,
             coreManifest,
         ),
