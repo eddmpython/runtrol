@@ -219,7 +219,7 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
         "extension.ts": [
             "afterReady",
             "selfApproveIntegration(client, pendingId, signature)",
-            'initializationStage = "runtime:bootstrap"',
+            'initializationStage = "core:currency"',
             'executeCommand("runtrol.sidebar.focus")',
             '"runtrol.setUpServices"',
             "registerWebviewViewProvider(SIDEBAR_VIEW_ID, sidebar",
@@ -483,7 +483,7 @@ def selftest() -> int:
         ),
         "extension.ts": (
             "afterReady selfApproveIntegration(client, pendingId, signature) "
-            'initializationStage = "runtime:bootstrap" missionController.startAutoFlights() '
+            'initializationStage = "core:currency" missionController.startAutoFlights() '
             'executeCommand("runtrol.sidebar.focus") '
             '"runtrol.setUpServices" registerWebviewViewProvider(SIDEBAR_VIEW_ID, sidebar '
             "await controller.signInProvider(provider) await controller.fixService(provider)"

@@ -89,7 +89,12 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
   let runtime: StudioRuntimeClient;
   const locator = new CoreLocator(
     context,
-    () => runtime.warmLocator().then((listed) => listed?.controlEndpoint ?? null),
+    // Windows can overlap the public native locator with the private endpoint probe. On POSIX the private probe
+    // must be the only first-start owner: asking the public locator here starts a second inspection against the
+    // same freshly copied Core and can leave both VS Code windows waiting on concurrent image startup.
+    () => process.platform === "win32"
+      ? runtime.warmLocator().then((listed) => listed?.controlEndpoint ?? null)
+      : Promise.resolve(null),
   );
   const client = new CoreClient(locator);
   const providerShimDirectory = vscode.Uri.joinPath(
@@ -102,7 +107,7 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
   context.environmentVariableCollection.prepend("PATH", `${providerShimDirectory}${path.delimiter}`);
   context.environmentVariableCollection.replace("RUNTROL_PROVIDER_SHIM_PATH", providerShimDirectory);
   const agentTools = new AgentToolsController(() => locator.runtimeExecutable());
-  let initializationStage = "runtime:bootstrap";
+  let initializationStage = "core:currency";
   runtime = new StudioRuntimeClient(
     context,
     async () => {
