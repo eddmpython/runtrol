@@ -10,7 +10,7 @@ The public surfaces share product contracts and brand assets, not a mandatory co
 | VS Code extension | One bounded sidebar webview plus native editor terminal tabs | Keeps dense navigation in one projection while provider-owned TUIs retain VS Code terminal behavior |
 | Phone PWA | Static HTML, CSS, browser JavaScript, WebCrypto, IndexedDB, and a service worker | Keeps the installed origin dependency-free while implementing the exact Noise record and reconnect contracts used by Core |
 
-The previous desktop-window frontend was removed when the PC surface became VS Code-only. A static distribution page and the phone PWA do not carry an application component runtime. Both reuse the canonical brand assets and the PWA renders only one bounded current session view or bounded Mission metadata view.
+The previous desktop-window frontend was removed when the PC surface became VS Code-only. A static distribution page and the phone PWA do not carry an application component runtime. Both reuse the canonical brand assets and the PWA renders only one bounded current session view.
 
 ## Shared contracts
 
@@ -63,12 +63,6 @@ On a narrow screen, the session list is the initial surface. Core's bounded `per
 one `Needs you` count and a cyclic next action; conversation events are not parsed to choose a destination. A generic
 notification carries only an attention intent, then the authenticated session catalogue decides the current target.
 No session identifier enters the notification, launch URL, service-worker cache, or durable browser storage.
-
-The Mission tab exists only when the authenticated greeting holds `mission.read`. It validates a closed set of
-Mission and Task states, bounds the catalogue and snapshot, renders with text nodes, and shows pause, safe resume, or
-cancel only when the current state and matching exact scope both permit that action. Mission creation, reviewed
-start, Task instruction submission, integration, archive, Gate registration, and capability trust changes remain
-local-only VS Code actions.
 
 `phoneDrivesPcSmoke` and `approvalRoundtripSmoke` execute the same shipped WebCrypto, Noise, record, and CoreClient
 modules in a headless phone process. They connect to the production daemon, drive an installed real CLI, observe

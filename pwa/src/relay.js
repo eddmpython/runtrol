@@ -28,7 +28,6 @@ export async function pairThroughRelay(material, identity, labels, dependencies 
         scopes: Object.freeze(result.scopes),
         roots: Object.freeze([]),
         providers: Object.freeze([]),
-        missionSignalCursor: null,
       }),
       pcFingerprint: await keyFingerprint(material.pcPublicKey),
       channel: new RelayChannel(socket, new RecordChannel(completed.cipher)),
