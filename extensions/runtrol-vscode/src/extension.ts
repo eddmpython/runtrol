@@ -89,12 +89,9 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
   let runtime: StudioRuntimeClient;
   const locator = new CoreLocator(
     context,
-    // Windows can overlap the public native locator with the private endpoint probe. On POSIX the private probe
-    // must be the only first-start owner: asking the public locator here starts a second inspection against the
-    // same freshly copied Core and can leave both VS Code windows waiting on concurrent image startup.
-    () => process.platform === "win32"
-      ? runtime.warmLocator().then((listed) => listed?.controlEndpoint ?? null)
-      : Promise.resolve(null),
+    // Reuse a live public Runtime generation before spawning the private endpoint probe. On POSIX this is an
+    // owner and mode checked locator read only; on Windows the installed Core validates the locator natively.
+    () => runtime.warmLocator().then((listed) => listed?.controlEndpoint ?? null),
   );
   const client = new CoreClient(locator);
   const providerShimDirectory = vscode.Uri.joinPath(

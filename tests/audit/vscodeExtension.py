@@ -342,6 +342,8 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
         ],
         "core/client.ts": ["commandConnection", "commandTail"],
         "runtimeClient.ts": [
+            'this.reportInitialization("identity+core")',
+            'this.reportInitialization("locator")',
             "RuntimeLocator.system(",
             "RUNTIME_LOCATOR_SETTLE_MS",
             "isAbsolute(runtimeExecutable)",

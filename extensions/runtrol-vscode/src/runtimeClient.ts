@@ -151,11 +151,10 @@ export class StudioRuntimeClient implements vscode.Disposable {
 
   /// Begin the locator inspection now, before anything waits on it.
   ///
-  /// On Windows the inspection runs the installed Core once to verify the locator natively, and a Core process
-  /// costs a few hundred milliseconds to start (measured 2026-08-27: 250 to 390 ms per spawn on a desktop). Run
-  /// from activation, that spawn overlaps the private endpoint probe instead of following it, and `initialize`
-  /// finds the answer already in hand. Errors are not reported here: `initialize` re-inspects on its own path and
-  /// reports what it finds, so nothing is lost by letting this early attempt fail quietly.
+  /// On POSIX the inspection is an owner and mode checked locator read. On Windows it runs the installed Core once
+  /// to verify the locator natively, and a Core process costs a few hundred milliseconds to start (measured
+  /// 2026-08-27: 250 to 390 ms per spawn on a desktop). Errors are not reported here: `initialize` re-inspects on
+  /// its own path and reports what it finds, so nothing is lost by letting this early attempt fail quietly.
   warmLocator(): Promise<ValidatedLocator | null> {
     this.firstInspection ??= this.resolveExecutable(this.expectedRuntime)
       .then(() => this.inspectOnce())
@@ -181,11 +180,16 @@ export class StudioRuntimeClient implements vscode.Disposable {
   }
 
   async initialize(): Promise<void> {
-    this.reportInitialization("bootstrap");
-    const [stored] = await Promise.all([
-      this.loadOrCreateIdentity(),
-      this.resolveExecutable(this.locateRuntime),
-    ]);
+    const pendingStages = new Set(["identity", "core"]);
+    const stageSettled = (stage: string): void => {
+      pendingStages.delete(stage);
+      if (pendingStages.size > 0) this.reportInitialization([...pendingStages].join("+"));
+    };
+    this.reportInitialization("identity+core");
+    const identity = this.loadOrCreateIdentity().finally(() => stageSettled("identity"));
+    const core = this.resolveExecutable(this.locateRuntime).finally(() => stageSettled("core"));
+    const [stored] = await Promise.all([identity, core]);
+    this.reportInitialization("locator");
     await this.withRuntimeLocator(async () => undefined);
     this.reportInitialization("integration");
     try {
