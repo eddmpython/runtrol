@@ -84,6 +84,11 @@ async function ownerJourney(coordination: string): Promise<void> {
     if (inputTiming) ownerInputTimings.push(inputTiming);
     const ownerObservedAtMs = await ownerOutput;
     ownerSamples.push(Math.max(0, ownerObservedAtMs - startedAtMs));
+    // Finish this independent sample at the second window before starting the next one. Without this barrier,
+    // one host scheduling pause delays every marker queued behind it and the same pause is counted as several
+    // latency samples. The timestamp is captured before this between-sample file handoff, so coordination I/O
+    // never enters the measured duration.
+    await readPublished(coordination, `mirror-sample-${index}.json`, DEADLINE_MS);
   }
   const mirrorObserved = await readPublished<{ observations: number[] }>(
     coordination,
@@ -122,8 +127,16 @@ async function mirrorJourney(coordination: string): Promise<void> {
   const observations = Array.from({ length: SAMPLE_COUNT }, (_, index) =>
     waitForInputOutput(journey, terminal, `${OWNER_TEXT}-${index}`));
   await publish(coordination, "mirror-samples-armed.json", { sampleCount: SAMPLE_COUNT });
+  const observed: number[] = [];
+  for (let index = 0; index < observations.length; index += 1) {
+    const observation = observations[index];
+    if (!observation) throw new Error(`mirror sample ${index} was not armed`);
+    const observedAtMs = await observation;
+    observed.push(observedAtMs);
+    await publish(coordination, `mirror-sample-${index}.json`, { observedAtMs });
+  }
   await publish(coordination, "mirror-samples-observed.json", {
-    observations: await Promise.all(observations),
+    observations: observed,
   });
 
   await readPublished(coordination, "owner-closed.json", DEADLINE_MS);
