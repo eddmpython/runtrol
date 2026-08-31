@@ -16,7 +16,7 @@
   "multiWindowTerminal": {
     "firstUseDeliveryMs": 500,
     "warmDeliveryP95Ms": 50,
-    "latencySampleCount": 21
+    "latencySampleCount": 61
   },
   "realProviderTerminal": {
     "runtimeClientDeliveryMs": 250
