@@ -10,6 +10,32 @@ and refactoring that no user can observe do not belong here.
 
 ## [Unreleased]
 
+## [0.1.42] - 2026-09-01
+
+### Added
+
+- Conversation tabs can be arranged into an editor grid. When another known VS Code window owns a conversation,
+  Runtrol can reveal that window without starting another coding CLI.
+
+### Changed
+
+- One live conversation now keeps one provider process and one Runtime terminal across VS Code windows. Every
+  attached window receives the same terminal output, and a remaining window takes writer ownership when the earlier
+  writer closes.
+- Sidebar colour and motion now mean provider-proven model work. An open but idle conversation stays still and
+  monochrome, while attention and failure states remain visible without pretending the model is running.
+- Runtrol Studio ships Claude Code and Codex in this release. Recent provider conversations render before slower
+  history completes, with bounded titles, compact loading chrome, comma-formatted repository counts, and a wider
+  project colour palette.
+
+### Fixed
+
+- Stale "Elsewhere" labels, ghost activity, the inactive project add button, exact-generation terminal reattachment,
+  input after reopening an externally created conversation, and delayed discovery of new conversations are corrected.
+- POSIX windows reuse a running Core and serialize first startup. New macOS machine identities use a login-user
+  Keychain policy that survives content-named Core updates, and an existing path-bound identity is recovered after
+  the Runtrol home is recreated.
+
 ## [0.1.41] - 2026-08-30
 
 ### Changed
