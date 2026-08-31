@@ -12,11 +12,13 @@ import { extensionUnderTest } from "./extensionUnderTest.test";
 
 type ExtensionApi = {
   readonly ready: Promise<void>;
+  readonly initializationStage?: string;
   refresh(): Promise<void>;
   verifyRestoredSession?(sessionId: string): Promise<void>;
 };
 
 const continuityTimeoutMs = 15_000;
+const initializationDeadlineMs = 60_000;
 let currentStage = "starting";
 
 export async function run(): Promise<void> {
@@ -53,7 +55,20 @@ async function verifyPhase(resultPath: string): Promise<void> {
 
   currentStage = `${phase}-activation`;
   const api = await within(extension.activate() as Promise<ExtensionApi>, 10_000, `${phase} activation`);
-  await within(api.ready, 15_000, `${phase} Core discovery`);
+  currentStage = `${phase}-initialization`;
+  try {
+    // A phase starts a fresh installed Extension Host. The bootstrap phase can also start the first daemon for a
+    // fresh home, so this is a hang boundary rather than a performance budget. The dedicated host performance
+    // gate owns activation latency; upgrade continuity must not fail first-daemon assembly on a loaded CI disk.
+    await within(api.ready, initializationDeadlineMs, `${phase} Core discovery`);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `${phase} initialization failed at ${api.initializationStage ?? "unknown"}: ${detail}`,
+      { cause: error },
+    );
+  }
+  currentStage = `${phase}-refresh`;
   await within(api.refresh(), continuityTimeoutMs, `${phase} refresh`);
 
   if (expectedSession) {
