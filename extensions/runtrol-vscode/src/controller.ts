@@ -319,7 +319,10 @@ export class Controller implements vscode.Disposable {
   }
 
   async refreshChats(): Promise<void> {
-    await this.refresh();
+    // The visible list repaints from its live watch snapshots immediately. The explicit provider list request is
+    // retained beside it because it is the zero-configuration trigger for a CLI installed since the last refresh;
+    // Runtime performs that filesystem restamp behind the provider watch rather than on this response path.
+    await Promise.all([this.refresh(), this.runtime.refreshProviderInventory()]);
     const providers = this.state.providers.filter(isUsable);
     await Promise.all(providers.flatMap((provider) => [
       this.loadNativeChats(provider.providerId, true),

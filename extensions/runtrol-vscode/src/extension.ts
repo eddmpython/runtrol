@@ -689,9 +689,10 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
   context.subscriptions.push(projectStore.onDidChange(() => {
     void run(() => afterReady(() => rootFollowing.follow()));
   }));
-  // The public locator's native verification starts now; the private locator reads the control endpoint off
-  // its answer instead of spawning `endpoint`, and `initialize` finds it settled. See `warmLocator`.
-  void runtime.warmLocator();
+  // On Windows the public locator's native verification overlaps the private endpoint probe and saves one process
+  // launch. POSIX first launch uses the private probe alone: starting both locator paths against the same fresh Core
+  // made macOS execute and inspect the copied image concurrently, leaving Runtime bootstrap waiting behind it.
+  if (process.platform === "win32") void runtime.warmLocator();
   // The generation supervision (re-check and reconnect to the installed build) runs, but says nothing on the
   // sidebar: the "update applies when the running conversations end" line read as out of nowhere on a machine
   // with several generations alive, especially when this window sees none of them running (operator, 2026-08-29).

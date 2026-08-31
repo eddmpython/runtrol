@@ -293,16 +293,26 @@ export class StudioRuntimeClient implements vscode.Disposable {
 
   async inventory(): Promise<RuntimeInventory> {
     const sessions = this.sessionSnapshot;
+    const providers = this.providerSnapshot;
+    if (sessions && providers) return { providers, sessions };
     return this.read(async (runtime) => {
-      // A refresh is also the operator's zero-configuration service discovery trigger. Runtime restamps its local
-      // PATH surface and normally answers from the structural provider cache; a newly installed executable changes
-      // that stamp and enters the same provider watch without Studio knowing any provider name.
-      const nextProviders = await runtime.providers().list();
+      const nextProviders = this.providerSnapshot ?? await runtime.providers().list();
       const nextSessions = this.sessionSnapshot ?? await runtime.sessions().list();
       if (this.providerWatch) this.providerSnapshot = nextProviders;
       if (this.sessionWatch) this.sessionSnapshot = nextSessions;
       return { providers: nextProviders, sessions: nextSessions };
     });
+  }
+
+  /// Ask Runtime to restamp its executable search surface without making a normal sidebar repaint wait for it.
+  ///
+  /// Provider and session watches already own the current inventory. A list request is still the explicit
+  /// zero-configuration discovery trigger, but its answer is the current snapshot and the potentially expensive
+  /// search happens behind the provider watch. Keeping that request separate lets ordinary refreshes paint from
+  /// the pushed snapshots instead of paying one audited round trip for facts already in memory.
+  async refreshProviderInventory(): Promise<void> {
+    const nextProviders = await this.read((runtime) => runtime.providers().list());
+    if (this.providerWatch) this.providerSnapshot = nextProviders;
   }
 
   /// Every hosted terminal the Runtime lists right now, with what each process holds in memory.
