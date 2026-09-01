@@ -10,6 +10,14 @@ and refactoring that no user can observe do not belong here.
 
 ## [Unreleased]
 
+## [0.1.44] - 2026-09-01
+
+### Changed
+
+- Conversation rows and editor tabs now use the provider's actual glyph with one exact project accent. Open idle
+  conversations remain static, only provider-proven model work spins the sidebar glyph, and the old left colour bars
+  are removed.
+
 ## [0.1.43] - 2026-09-01
 
 ### Changed
