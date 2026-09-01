@@ -55,7 +55,7 @@ The page has three zones with visible edges, in this order:
 
 - **Projects**: one row per folder the operator added (or has open in this window). A project row collapses,
   shows its conversation count, its attention and running counts, and on hover its actions: new conversation
-  here, Agent Tools on or off, pin, open in a window, delete every provider-owned conversation after exact
+  here, pin, open in a window, delete every provider-owned conversation after exact
   confirmation, or remove from the sidebar (the folder on disk stays). Projects
   reorder by drag. Each project has one deterministic provider-glyph accent. A conversation tab and its open
   sidebar row embed that exact colour in the exact same provider SVG. Rows have no left colour bar.
@@ -159,11 +159,12 @@ protect any older live owner without inventing a client-side bridge.
 - A session waiting on the operator contributes to the view badge and **Open Next Waiting Conversation**. Quota waits
   do not pretend to be operator tasks.
 
-## Agent Tools
+## Legacy cleanup
 
-The project sparkle calls `agentTools.ts`, which invokes exact Core enable, disable, and list commands. Runtime grants
-are limited to the canonical project root and credentials remain in OS-protected storage. Provider registration uses
-the provider's official CLI read and write surface. Studio does not edit provider configuration files directly.
+The first activation of each Core image calls `legacyCleanup.ts`, which runs the exact Core `legacy cleanup` command
+once. Core removes the provider MCP registrations, Runtime grants, and local credential slots that earlier Runtrol
+builds created for the retired Agent Tools and cross-consult surfaces, through each provider's official CLI commands,
+and reports every entry it preserved. Studio registers nothing and edits no provider configuration file.
 
 ## Module boundaries
 
@@ -181,7 +182,7 @@ the provider's official CLI read and write surface. Studio does not edit provide
 | `stateRows.ts` | exact row equality and incomplete-discovery notices | rendering, Runtime calls, or transcript inspection |
 | `controller.ts` | explicit user actions, provider-neutral navigation, workspace binding | transcript discovery or an agent loop |
 | `terminalTabs.ts` | one public Runtime terminal view per editor tab | reading, storing, rewriting, or retrying terminal input |
-| `agentTools.ts` | exact project enable, disable, and readback | provider configuration bytes or grant policy |
+| `legacyCleanup.ts` | one exact Core cleanup run per Core image | provider configuration bytes or any registration |
 | `selectionStore.ts` | one bounded selected-session identifier | prompts, replies, terminal frames, or provider state |
 | `pairingAdministration.ts` | local phone pairing and authority review | relay trust or conversation content |
 

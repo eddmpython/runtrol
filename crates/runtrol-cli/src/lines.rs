@@ -95,10 +95,8 @@ pub fn render(response: &Response) -> Vec<String> {
             next_expected.stream, next_expected.epoch, next_expected.seq
         )],
 
-        Response::Consult(directions) => render_consult(directions),
-
-        Response::LegacyMcpInventory(entries) | Response::LegacyMcpCleanup(entries) => {
-            render_legacy_mcp_inventory(entries)
+        Response::LegacyMcpInventory(report) | Response::LegacyMcpCleanup(report) => {
+            render_legacy_report(report)
         }
 
         Response::Failed(failure) => {
@@ -184,28 +182,42 @@ fn render_models(catalogue: &ModelCatalog) -> Vec<String> {
     }
 }
 
-fn render_consult(directions: &[runtrol_ipc::wire::ConsultLine]) -> Vec<String> {
-    if directions.is_empty() {
-        return vec!["no consult directions".to_owned()];
+/// What earlier builds left behind: registrations first, then the local slot directory, one line each.
+fn render_legacy_report(report: &runtrol_ipc::wire::LegacyReport) -> Vec<String> {
+    let mut lines = render_legacy_mcp_inventory(&report.registrations);
+    if report.local.is_empty() {
+        lines.push("legacy-local  none".to_owned());
+    } else {
+        lines.extend(report.local.iter().map(render_legacy_local));
     }
-    directions
-        .iter()
-        .map(|one| {
-            let state = match one.state {
-                runtrol_ipc::wire::ConsultState::Wired => "wired",
-                runtrol_ipc::wire::ConsultState::Unwired => "unwired",
-                runtrol_ipc::wire::ConsultState::Unsupported => "unsupported",
-            };
-            // Fixed fields first, prose last, so the line splits on whitespace like every other listing on
-            // this surface.
-            let why = one
-                .why
-                .as_deref()
-                .map(|why| format!("  ({why})"))
-                .unwrap_or_default();
-            format!("consult  {}  {}  {state}{why}", one.from, one.to)
-        })
-        .collect()
+    lines
+}
+
+fn render_legacy_local(line: &runtrol_ipc::wire::LegacyLocalLine) -> String {
+    use runtrol_ipc::wire::LegacyLocalState;
+
+    let state = match line.state {
+        LegacyLocalState::Approved => "approved",
+        LegacyLocalState::OrphanGrant => "orphan-grant",
+        LegacyLocalState::Partial => "partial",
+        LegacyLocalState::Invalid => "invalid-preserve",
+        LegacyLocalState::Unrecognized => "unrecognized-preserve",
+        LegacyLocalState::Overflow => "overflow-preserve",
+        LegacyLocalState::Unreadable => "unreadable-preserve",
+        LegacyLocalState::Removed => "removed",
+        LegacyLocalState::Revoked => "revoked",
+    };
+    let detail = line
+        .detail
+        .as_deref()
+        .map(|detail| format!("  ({detail})"))
+        .unwrap_or_default();
+    format!(
+        "legacy-local  {state}  {}  {}  {}{detail}",
+        line.slot,
+        line.integration_id.as_deref().unwrap_or("-"),
+        line.root.as_deref().unwrap_or("-")
+    )
 }
 
 fn render_legacy_mcp_inventory(entries: &[runtrol_ipc::wire::LegacyMcpLine]) -> Vec<String> {
@@ -452,53 +464,55 @@ mod tests {
         );
     }
 
-    #[test]
-    fn consult_directions_are_one_per_line_with_the_reason_last() {
-        let lines = render(&Response::Consult(vec![
-            runtrol_ipc::wire::ConsultLine {
-                from: "claude".into(),
-                to: "codex".into(),
-                state: runtrol_ipc::wire::ConsultState::Wired,
-                why: None,
-            },
-            runtrol_ipc::wire::ConsultLine {
-                from: "codex".into(),
-                to: "claude".into(),
-                state: runtrol_ipc::wire::ConsultState::Unsupported,
-                why: Some("measured absent".into()),
-            },
-        ]));
-        assert_eq!(lines.len(), 2);
-        let wired = lines.first().expect("two lines");
-        // Fixed fields first so the line splits on whitespace like every other listing here.
-        let fields: Vec<&str> = wired.split_whitespace().collect();
-        assert_eq!(fields, vec!["consult", "claude", "codex", "wired"]);
-        let unsupported = lines.get(1).expect("two lines");
-        assert!(unsupported.contains("unsupported"), "{unsupported}");
-        assert!(unsupported.contains("measured absent"), "{unsupported}");
-
-        assert_eq!(
-            render(&Response::Consult(Vec::new())),
-            vec!["no consult directions"],
-            "an empty answer says so rather than printing nothing"
-        );
+    fn legacy_report(
+        registrations: Vec<runtrol_ipc::wire::LegacyMcpLine>,
+        local: Vec<runtrol_ipc::wire::LegacyLocalLine>,
+    ) -> runtrol_ipc::wire::LegacyReport {
+        runtrol_ipc::wire::LegacyReport {
+            registrations,
+            local,
+        }
     }
 
     #[test]
     fn legacy_mcp_cleanup_says_removed_only_for_a_confirmed_removal() {
-        use runtrol_ipc::wire::{LegacyMcpKind, LegacyMcpLine, LegacyMcpState};
+        use runtrol_ipc::wire::{
+            LegacyLocalLine, LegacyLocalState, LegacyMcpKind, LegacyMcpLine, LegacyMcpState,
+        };
 
-        let lines = render(&Response::LegacyMcpCleanup(vec![LegacyMcpLine {
-            kind: LegacyMcpKind::AgentTools,
-            provider: "claude".into(),
-            name: "runtrolTools".into(),
-            target: None,
-            state: LegacyMcpState::Removed,
-            why: None,
-        }]));
+        let lines = render(&Response::LegacyMcpCleanup(legacy_report(
+            vec![LegacyMcpLine {
+                kind: LegacyMcpKind::AgentTools,
+                provider: "claude".into(),
+                name: "runtrolTools".into(),
+                target: None,
+                state: LegacyMcpState::Removed,
+                why: None,
+            }],
+            vec![LegacyLocalLine {
+                slot: "slot".into(),
+                root: Some("C:\\work".into()),
+                integration_id: Some("int_1".into()),
+                state: LegacyLocalState::Removed,
+                detail: None,
+            }],
+        )));
         assert_eq!(
             lines,
-            vec!["legacy-mcp  agent-tools  claude  runtrolTools  -  removed".to_owned()]
+            vec![
+                "legacy-mcp  agent-tools  claude  runtrolTools  -  removed".to_owned(),
+                "legacy-local  removed  slot  int_1  C:\\work".to_owned(),
+            ]
+        );
+        assert_eq!(
+            render(&Response::LegacyMcpCleanup(legacy_report(
+                Vec::new(),
+                Vec::new()
+            ))),
+            vec![
+                "no inspectable legacy MCP names".to_owned(),
+                "legacy-local  none".to_owned()
+            ]
         );
     }
 
@@ -506,14 +520,17 @@ mod tests {
     fn legacy_mcp_inventory_marks_foreign_names_for_preservation() {
         use runtrol_ipc::wire::{LegacyMcpKind, LegacyMcpLine, LegacyMcpState};
 
-        let lines = render(&Response::LegacyMcpInventory(vec![LegacyMcpLine {
-            kind: LegacyMcpKind::AgentTools,
-            provider: "claude".into(),
-            name: "runtrolTools".into(),
-            target: None,
-            state: LegacyMcpState::Foreign,
-            why: Some("different command".into()),
-        }]));
+        let lines = render(&Response::LegacyMcpInventory(legacy_report(
+            vec![LegacyMcpLine {
+                kind: LegacyMcpKind::AgentTools,
+                provider: "claude".into(),
+                name: "runtrolTools".into(),
+                target: None,
+                state: LegacyMcpState::Foreign,
+                why: Some("different command".into()),
+            }],
+            Vec::new(),
+        )));
         let line = lines.first().expect("one inventory line");
         assert_eq!(
             line.split_whitespace().take(6).collect::<Vec<_>>(),

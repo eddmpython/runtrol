@@ -17,7 +17,7 @@ use runtrol_provider::{ApprovalId, OptionId, SessionId, StreamId, WatchCursor, W
 pub enum Misunderstood {
     /// Nothing was typed.
     #[error(
-        "no command. try: list, models, start, resume, say, answer, stop, watch, close, consult, panic"
+        "no command. try: list, models, start, resume, say, answer, stop, watch, close, legacy, panic"
     )]
     Nothing,
 
@@ -26,7 +26,7 @@ pub enum Misunderstood {
     /// Names what was typed, because the operator's next move is to correct it and a message that does not repeat it
     /// makes them guess what runtrol thought they said.
     #[error(
-        "no command called {typed:?}. try: list, models, start, resume, say, answer, stop, watch, close, consult, panic"
+        "no command called {typed:?}. try: list, models, start, resume, say, answer, stop, watch, close, legacy, panic"
     )]
     NoSuchCommand {
         /// What they typed.
@@ -193,7 +193,7 @@ pub fn understand(words: &[String], here: &str) -> Result<Request, Misunderstood
 
         "panic" => Ok(Request::StopEverything),
 
-        "consult" => consult_of(rest),
+        "legacy" => legacy_of(rest),
 
         typed => Err(Misunderstood::NoSuchCommand {
             typed: typed.to_owned(),
@@ -201,29 +201,24 @@ pub fn understand(words: &[String], here: &str) -> Result<Request, Misunderstood
     }
 }
 
-/// The consult command: bare for status, `unwire` with both ends named to remove one direction.
-///
-/// There is no `wire`. Registering one CLI inside another is a retired surface, and a word that still did it
-/// would be the one registration path left in the product.
-fn consult_of(rest: &[String]) -> Result<Request, Misunderstood> {
+/// The legacy command: `inventory` reads what earlier builds left behind, `cleanup` removes what is exactly ours.
+fn legacy_of(rest: &[String]) -> Result<Request, Misunderstood> {
+    if let Some(typed) = rest.get(1) {
+        return Err(Misunderstood::Extra {
+            command: "legacy",
+            typed: typed.clone(),
+        });
+    }
     match rest.first().map(String::as_str) {
-        // Bare, it asks where every direction stands. The state lives in the CLIs' own configuration, so
-        // there is nothing to name.
-        None => Ok(Request::Consult),
-        Some("unwire") => {
-            if let Some(typed) = rest.get(3) {
-                return Err(Misunderstood::Extra {
-                    command: "consult",
-                    typed: typed.clone(),
-                });
-            }
-            let from = word(rest, 1, "consult", "which provider holds the registration")?.into();
-            let to = word(rest, 2, "consult", "which provider is unregistered")?.into();
-            Ok(Request::ConsultUnwire { from, to })
-        }
+        Some("inventory") => Ok(Request::LegacyMcpInventory),
+        Some("cleanup") => Ok(Request::LegacyMcpCleanup),
         Some(typed) => Err(Misunderstood::Extra {
-            command: "consult",
+            command: "legacy",
             typed: typed.to_owned(),
+        }),
+        None => Err(Misunderstood::Missing {
+            command: "legacy",
+            missing: "inventory or cleanup",
         }),
     }
 }
@@ -521,31 +516,22 @@ mod tests {
     }
 
     #[test]
-    fn consult_asks_for_status_bare_and_names_both_ends_to_unwire() {
+    fn legacy_names_inventory_or_cleanup_and_nothing_else() {
         assert!(matches!(
-            understand(&typed("consult"), here()).expect("understandable"),
-            Request::Consult
+            understand(&typed("legacy inventory"), here()).expect("understandable"),
+            Request::LegacyMcpInventory
         ));
-        match understand(&typed("consult unwire claude codex"), here()).expect("understandable") {
-            Request::ConsultUnwire { from, to } => {
-                assert_eq!(&*from, "claude");
-                assert_eq!(&*to, "codex");
-            }
-            other => panic!("expected an unwire, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn a_consult_wire_or_an_unwire_missing_an_end_or_carrying_extras_is_refused() {
-        // Unwiring edits another program's configuration. A guessed direction would edit one nobody named, and
-        // `wire` is not a word at all: nothing in the product registers one CLI inside another any more.
+        assert!(matches!(
+            understand(&typed("legacy cleanup"), here()).expect("understandable"),
+            Request::LegacyMcpCleanup
+        ));
+        // Cleanup edits provider configuration through their own commands. A word that is not exactly one of
+        // the two must never land on it by accident, and `wire` is not a word at all any more.
         for line in [
-            "consult wire",
-            "consult wire claude codex",
-            "consult unwire",
-            "consult unwire claude",
-            "consult unwire claude codex extra",
-            "consult status",
+            "legacy",
+            "legacy wire",
+            "legacy cleanup now",
+            "legacy enable",
         ] {
             assert!(
                 understand(&typed(line), here()).is_err(),

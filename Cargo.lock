@@ -1597,7 +1597,6 @@ dependencies = [
 name = "runtrol"
 version = "0.1.1"
 dependencies = [
- "runtrol-agent-tools",
  "runtrol-childproc",
  "runtrol-cli",
  "runtrol-daemon",
@@ -1605,25 +1604,6 @@ dependencies = [
  "runtrol-ipc",
  "runtrol-runtime-client",
  "serde_json",
- "tokio",
-]
-
-[[package]]
-name = "runtrol-agent-tools"
-version = "0.1.1"
-dependencies = [
- "getrandom 0.4.3",
- "runtrol-cli",
- "runtrol-core",
- "runtrol-ipc",
- "runtrol-provider",
- "runtrol-runtime-client",
- "runtrol-runtime-protocol",
- "runtrol-vault",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "thiserror 2.0.19",
  "tokio",
 ]
 

@@ -33,10 +33,6 @@ enum Personality {
     RuntimeLocator(Option<String>),
     /// Print every daemon generation of this home and whether each still answers.
     Status { json: bool },
-    /// Serve the permission-bounded Agent Tools MCP protocol on stdio.
-    AgentToolsMcp,
-    /// Enable or inspect Agent Tools locally.
-    AgentToolsCommand(Vec<String>),
     /// Carry one exact provider invocation through the daemon-owned terminal.
     TerminalBridge {
         /// Runtime-discovered provider identity.
@@ -118,8 +114,6 @@ fn main() -> ExitCode {
         Personality::Endpoint => run(endpointing()),
         Personality::RuntimeLocator(prefer) => runtime_locating(prefer.as_deref()),
         Personality::Status { json } => run(status_reporting(json)),
-        Personality::AgentToolsMcp => run(agent_tools_serving()),
-        Personality::AgentToolsCommand(words) => run(agent_tools_commanding(&words)),
         Personality::TerminalBridge {
             provider,
             arguments,
@@ -155,7 +149,7 @@ fn main() -> ExitCode {
 fn choose(words: &[String]) -> Personality {
     match words.first().map(String::as_str) {
         None => Personality::Usage(
-            "runtrol <command>. try: endpoint, status, runtime-locator, integrations, requests, providers, tools, list, start, resume, say, answer, stop, watch, close, consult, panic"
+            "runtrol <command>. try: endpoint, status, runtime-locator, integrations, requests, providers, list, start, resume, say, answer, stop, watch, close, legacy, panic"
                 .to_owned(),
         ),
         // Spelled as a subcommand rather than inferred from how the program was invoked. Inferring it from the
@@ -171,8 +165,6 @@ fn choose(words: &[String]) -> Personality {
         Some(word) if word == STATUS_ARGUMENT => Personality::Status {
             json: words.get(1).is_some_and(|flag| flag == "--json"),
         },
-        Some("mcp") => Personality::AgentToolsMcp,
-        Some("tools") => Personality::AgentToolsCommand(words.get(1..).unwrap_or_default().to_vec()),
         Some(word) if word == TERMINAL_BRIDGE_ARGUMENT => match words.get(1) {
             Some(provider) => Personality::TerminalBridge {
                 provider: provider.clone(),
@@ -320,42 +312,6 @@ fn administering(words: &[String]) -> impl FnOnce(&tokio::runtime::Runtime) -> E
         )) {
             Ok(runtrol_cli::Outcome::Carried) => ExitCode::SUCCESS,
             Ok(runtrol_cli::Outcome::Refused) => ExitCode::FAILURE,
-            Err(error) => {
-                report(&error.to_string());
-                ExitCode::FAILURE
-            }
-        }
-    }
-}
-
-/// Serve Agent Tools without allowing diagnostics onto its protocol stdout.
-fn agent_tools_serving() -> impl FnOnce(&tokio::runtime::Runtime) -> ExitCode {
-    |runtime| match runtime.block_on(runtrol_agent_tools::serve()) {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(error) => {
-            report(&error.to_string());
-            ExitCode::FAILURE
-        }
-    }
-}
-
-/// Run one local Agent Tools administration command.
-fn agent_tools_commanding(words: &[String]) -> impl FnOnce(&tokio::runtime::Runtime) -> ExitCode {
-    move |runtime| {
-        let Some((executable, endpoint)) = own_generation() else {
-            return ExitCode::FAILURE;
-        };
-        let context = runtrol_agent_tools::CommandContext {
-            endpoint,
-            executable,
-        };
-        match runtime.block_on(runtrol_agent_tools::run_command(words, &context)) {
-            Ok(lines) => {
-                for line in lines {
-                    say(&line);
-                }
-                ExitCode::SUCCESS
-            }
             Err(error) => {
                 report(&error.to_string());
                 ExitCode::FAILURE
@@ -776,17 +732,6 @@ mod tests {
             choose(&typed("status")),
             Personality::Status { json: false }
         ));
-    }
-
-    #[test]
-    fn agent_tools_protocol_and_local_administration_are_distinct_personalities() {
-        assert!(matches!(choose(&typed("mcp")), Personality::AgentToolsMcp));
-        match choose(&typed("tools enable project")) {
-            Personality::AgentToolsCommand(words) => {
-                assert_eq!(words, typed("enable project"));
-            }
-            _ => panic!("expected the Agent Tools administration personality"),
-        }
     }
 
     #[test]

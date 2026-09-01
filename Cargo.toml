@@ -17,7 +17,6 @@ members = [
     "crates/runtrol-update",
     "crates/runtrol-runtime-protocol",
     "crates/runtrol-runtime-client",
-    "crates/runtrol-agent-tools",
     "crates/runtrol-core",
     "crates/runtrol-drivers",
     "crates/runtrol-daemon",
@@ -136,7 +135,6 @@ runtrol-vault = { path = "crates/runtrol-vault" }
 runtrol-update = { path = "crates/runtrol-update" }
 runtrol-runtime-protocol = { path = "crates/runtrol-runtime-protocol", version = "0.1.1" }
 runtrol-runtime-client = { path = "crates/runtrol-runtime-client" }
-runtrol-agent-tools = { path = "crates/runtrol-agent-tools" }
 runtrol-core = { path = "crates/runtrol-core" }
 runtrol-drivers = { path = "crates/runtrol-drivers" }
 runtrol-daemon = { path = "crates/runtrol-daemon" }

@@ -277,10 +277,7 @@ const NATIVE_PROVIDER_KINDS: &[runtrol_drivers::DriverKind] = &[runtrol_drivers:
     kind: "native-fixture-kind",
     make: Some(make_native_fixture),
     flags: &[],
-    consult: runtrol_drivers::ConsultSurface {
-        registrar: None,
-        server: None,
-    },
+    legacy_mcp: runtrol_drivers::LegacyMcpSurface::NONE,
     unavailable: None,
 }];
 const NATIVE_PROVIDER_MANIFESTS: &[&str] = &[NATIVE_PROVIDER_MANIFEST];

@@ -61,7 +61,7 @@ use crate::compose::Composed;
 use crate::dispatch::{
     Cleanup, CleanupReservation, Conversation, Discovered, Prepared, PreparedKind, Reply,
     answer_prepared, complete_prepare_for, discover, is_integration_admin, needs_driver,
-    prepare_consult, prepare_integration_admin, prepare_isolated_workspace,
+    prepare_integration_admin, prepare_isolated_workspace, prepare_legacy,
     prepare_provider_updates, refuse,
 };
 
@@ -108,7 +108,7 @@ pub(crate) const NATIVE_ACTIVITY_CACHE_MS: u64 = 200;
 /// waiting on each other). The probe-cache file itself stays consistent without a global hold: saves are
 /// keyed merges guarded by [`crate::Composed::probe_cache_writing`], held for milliseconds.
 ///
-/// A caller that must hold several lanes (consult prepares both of its providers) takes them in identifier
+/// A caller that must hold several lanes (a legacy read prepares every provider) takes them in identifier
 /// order, so two such callers cannot deadlock.
 ///
 /// `listing` bounds native-catalogue children instead of serializing them. It was one mutex once, held across
@@ -2268,9 +2268,8 @@ fn requested_workspace(request: &Request) -> Option<(&str, WorkspaceAccess)> {
 
 /// Which providers a request prepares, so a connection holds exactly those lanes.
 ///
-/// Consult runs provider processes for the configured pair, and which pair is configuration read later, so
-/// it holds every registered lane; identifier order (the registry map's own) keeps multi-lane holders from
-/// deadlocking each other.
+/// A legacy read runs every registered provider's own configuration commands, so it holds every registered
+/// lane; identifier order (the registry map's own) keeps multi-lane holders from deadlocking each other.
 fn preparation_providers(
     request: &Request,
     registry: &runtrol_core::registry::ProviderRegistry,
@@ -2285,7 +2284,7 @@ fn preparation_providers(
             // nothing will be prepared for it, so there is no lane to hold.
             Err(_) => Vec::new(),
         },
-        request if crate::consult::is_consult(request) => registry
+        request if crate::legacy_mcp::is_legacy_mcp(request) => registry
             .all()
             .map(runtrol_core::registry::Provider::id)
             .collect(),
@@ -2679,10 +2678,10 @@ async fn converse_inner(
                 model_preparation_budget(),
             ))
             .await
-        } else if crate::consult::is_consult(&request) {
-            // The whole consult exchange runs here in the connection's own task, behind the same gate that
-            // bounds temporary provider processes, so a toggle never stops a running session's events.
-            prepare_consult(&conversation, &composed, &request).await
+        } else if crate::legacy_mcp::is_legacy_mcp(&request) {
+            // The whole legacy exchange runs here in the connection's own task, behind the same gate that
+            // bounds temporary provider processes, so a cleanup never stops a running session's events.
+            prepare_legacy(&conversation, &composed, &request).await
         } else if matches!(request, Request::ProviderUpdates) {
             prepare_provider_updates(&conversation, &composed, &request, &discovering).await
         } else if is_integration_admin(&request) {

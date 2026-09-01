@@ -86,10 +86,7 @@ const KINDS: &[runtrol_drivers::DriverKind] = &[runtrol_drivers::DriverKind {
     kind: "official-fixture-kind",
     make: Some(make_provider),
     flags: &[],
-    consult: runtrol_drivers::ConsultSurface {
-        registrar: None,
-        server: None,
-    },
+    legacy_mcp: runtrol_drivers::LegacyMcpSurface::NONE,
     unavailable: None,
 }];
 const MANIFESTS: &[&str] = &[MANIFEST];

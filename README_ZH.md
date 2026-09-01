@@ -146,16 +146,6 @@ active subscription 与 Code-hot workspace 始终有界。streaming 与后台工
 公开版本与六个平台 VSIX 也可从 [GitHub Releases](https://github.com/eddmpython/runtrol/releases) 获取。
 VS Code 会自动更新从 Marketplace 安装的扩展。如果旧版本是直接通过 VSIX 安装的，请从 Marketplace 重新安装一次，因为 VS Code 会关闭手动 VSIX 安装的自动更新。
 
-## 让代理使用 Runtrol
-
-点击项目标题上的闪光按钮并选择 **Enable Agent Tools for This Project**。已安装的编码代理可以发现
-provider 和模型、启动项目会话、发送指令、读取事件并停止准确的会话。项目行显示 `Agent Tools` 时即已就绪。
-
-权限只绑定到该 canonical 项目根。它不能回答批准、删除对话、静默共享工作树，也不持有 API key、
-transcript 副本或 Runtrol 自有 agent loop。选择 **Disable Agent Tools for This Project** 会移除 Runtime
-权限与受 OS 保护的凭据；禁用最后一个项目时也会移除 provider 注册。完整契约见
-[Agent Tools](docs/agentTools.md)。
-
 ## 不需要 runtrol 的人
 
 **如果你只用一个供应商，那么该供应商自己的远程控制更好。这一点先写在前面。**

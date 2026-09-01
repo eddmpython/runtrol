@@ -19,11 +19,9 @@ the product remains outside this index.
 | [runtimeSecurity.md](runtimeSecurity.md) | public endpoint trust layers, data ownership, authorization, hostile provider input, hosted companions, and incident response |
 | [runtimeOperations.md](runtimeOperations.md) | standalone Runtime artifacts, install, locator repair, independent CLI administration, update, rollback, and uninstall |
 | [automaticUpdates.md](automaticUpdates.md) | Studio Marketplace release operation, resilient artifact staging, client update ownership, provider update confirmation, and rollback |
-| [agentTools.md](agentTools.md) | one-click project enablement, the fixed seven-tool MCP catalogue, root-bound Runtime authority, provider registration, revocation, recovery, and real CLI verification |
 | [productSurfaces.md](productSurfaces.md) | Runtime-first product identity, public client family, Studio GUI decision, unified sidebar, distribution, and phone boundary |
 | [phonePwa.md](phonePwa.md) | phone pairing, relay transport, durable device authority, bodyless Web Push, browser storage, reconnect, and current release limits |
 | [vscodeSurface.md](vscodeSurface.md) | the public VS Code runtime, module boundaries, release-load and performance contracts, target-catalogue distribution, and verification entry points |
 | [siteDeployment.md](siteDeployment.md) | GitHub Pages operating manual: what deploys and when, the everyday change loop, local preview, build budget, contract test, page anatomy, brand regeneration, post-deploy checks, rollback, and troubleshooting |
-| [crossConsult.md](crossConsult.md) | the consult toggle: official-command wiring, control-name judgements, tools/list verification, the measured direction asymmetry, and the at-machine-only capability |
 | [frontendStack.md](frontendStack.md) | surface-specific frontend choices and the shared brand, theme, performance, storage, and accessibility contracts |
 | [northStarEvidence.md](northStarEvidence.md) | what each evidence gate proves; [`tests/audit/northStar/board.toml`](../tests/audit/northStar/board.toml) owns axis membership and scoring, which `northStarBoard` computes |

@@ -283,28 +283,20 @@ pub fn is_per_thread(method: &str) -> Option<bool> {
         .map(|notice| notice.per_thread)
 }
 
-/// This CLI's part in cross-consult wiring.
+/// What earlier builds registered through this CLI, and how this build reads it back and removes it.
 ///
-/// Measured on 0.146.0:
-///
-/// - Registration is official: `codex mcp add <name> -- <command...>`, with `remove` and `get` beside it.
-///   Its configuration is global, so there is no scope word to bind.
-/// - Serving is official and consultable: `codex mcp-server` answers `tools/list` with a `codex` tool that
-///   runs a session, which is exactly what a counterpart calls to get this CLI's opinion. The name is
-///   verified against a fresh `tools/list` before every wiring, so a vendor rename becomes a refusal at the
-///   toggle rather than a failure mid-turn.
-pub const CONSULT: crate::consult::ConsultSurface = crate::consult::ConsultSurface {
-    registrar: Some(crate::consult::McpRegistrar {
+/// Measured on 0.146.0: registration was official (`codex mcp add <name> -- <command...>`), with `remove` and
+/// `get` beside it; its configuration is global, so there is no scope word to bind. An earlier build registered
+/// this CLI inside another as `codex mcp-server`; that is the only consultant shape recognised as ours.
+pub const LEGACY_MCP: crate::legacy_mcp::LegacyMcpSurface = crate::legacy_mcp::LegacyMcpSurface {
+    registrar: Some(crate::legacy_mcp::McpRegistrar {
         add: &["mcp", "add"],
         remove: &["mcp", "remove"],
         get: &["mcp", "get"],
         get_suffix: &["--json"],
-        readback: crate::consult::McpReadback::Json,
+        readback: crate::legacy_mcp::McpReadback::Json,
     }),
-    server: Some(crate::consult::McpConsultServer {
-        serve: &["mcp-server"],
-        tool: crate::consult::ConsultTool::Named("codex"),
-    }),
+    consult_serve: Some(&["mcp-server"]),
 };
 
 #[cfg(test)]

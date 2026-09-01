@@ -48,7 +48,7 @@ export class LegacyCleanup {
         throw new Error(`legacy cleanup needs an absolute project path, got ${JSON.stringify(workspace)}`);
       }
       const executable = await this.locateCore();
-      const lines = linesOf(await this.runner(executable, ["tools", "cleanup"], workspace));
+      const lines = linesOf(await this.runner(executable, ["legacy", "cleanup"], workspace));
       for (const line of lines) {
         if (!line.startsWith("legacy-mcp  ") && !line.startsWith("legacy-local  ")) {
           throw new Error(`the Core returned an invalid legacy cleanup line: ${JSON.stringify(line)}`);

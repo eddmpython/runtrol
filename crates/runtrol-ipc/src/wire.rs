@@ -455,12 +455,6 @@ pub enum Request {
         claims: Vec<GenerationLiveClaimLine>,
     },
 
-    /// Every cross-consult direction this build knows, with its current wired state.
-    ///
-    /// Read-only: the state lives in the CLIs' own configuration and is asked for fresh, so there is no second
-    /// place for it to go stale.
-    Consult,
-
     /// Read every legacy Runtrol MCP registration this build can prove or safely identify by its reserved name.
     ///
     /// This request runs only provider-owned read commands. It never starts, repairs, registers, enables, disables,
@@ -472,17 +466,6 @@ pub enum Request {
     ///
     /// Exact and superseded entries are removed. A foreign, unreadable, or absent name is left exactly as found.
     LegacyMcpCleanup,
-
-    /// Remove the consultant `to` from `from` with `from`'s own removal command, restoring its configuration.
-    ConsultUnwire {
-        /// The CLI that loses its consultant.
-        from: Box<str>,
-        /// The CLI being unregistered.
-        to: Box<str>,
-    },
-
-    /// Remove this exact runtrol Agent Tools MCP registration through every usable provider CLI.
-    AgentToolsUnwire,
 }
 
 /// Bytes on the terminal view, in both directions: what the hosted CLI wrote, or what a viewer typed.
@@ -729,18 +712,12 @@ pub enum Response {
         audit_batch: Option<Box<GenerationAuditBatch>>,
     },
 
-    /// Every cross-consult direction, each with its current state.
-    ///
-    /// Answered for the status request and after a wire or unwire, so a surface renders one shape and never
-    /// derives state on its own.
-    Consult(Vec<ConsultLine>),
+    /// Read-only report of what earlier Runtrol builds left behind: provider MCP names and local credential slots.
+    LegacyMcpInventory(LegacyReport),
 
-    /// Read-only legacy MCP registration inventory.
-    LegacyMcpInventory(Vec<LegacyMcpLine>),
-
-    /// Every legacy name after cleanup: `removed` for the entries this build removed and then proved absent,
+    /// The same report after cleanup: `removed` and `revoked` for what this build took away and proved gone,
     /// otherwise the preserved state exactly as the inventory reports it.
-    LegacyMcpCleanup(Vec<LegacyMcpLine>),
+    LegacyMcpCleanup(LegacyReport),
 
     /// It did not work.
     Failed(WireError),
@@ -922,18 +899,53 @@ pub struct GenerationAuditEntry {
     pub row: GenerationAuditLine,
 }
 
-/// One cross-consult direction, as a surface shows it.
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct ConsultLine {
-    /// The CLI that would gain a consultant.
-    pub from: Box<str>,
-    /// The CLI whose opinion would become reachable.
-    pub to: Box<str>,
-    /// Where this direction stands.
-    pub state: ConsultState,
-    /// Why, when the state needs a sentence: the measured absence for an unsupported direction, or the
-    /// CLI's own words when its answer could not be trusted.
-    pub why: Option<Box<str>>,
+/// Everything an earlier Runtrol build left behind that this build can read or remove.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub struct LegacyReport {
+    /// Provider-owned MCP names an earlier build may have registered, one line per name and provider.
+    pub registrations: Vec<LegacyMcpLine>,
+    /// Entries of the credential slot directory an earlier Agent Tools build kept in the Runtrol home.
+    pub local: Vec<LegacyLocalLine>,
+}
+
+/// One entry of the local credential slot directory, as read or as left after cleanup.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub struct LegacyLocalLine {
+    /// The directory entry name, or `*` for a finding about the directory itself, or `-` for a Runtime grant
+    /// that has no slot.
+    pub slot: Box<str>,
+    /// The project root the slot was bound to, when its record could be read.
+    pub root: Option<Box<str>>,
+    /// The Runtime grant the slot named, when its record could be read.
+    pub integration_id: Option<Box<str>>,
+    /// What was found, or what was done.
+    pub state: LegacyLocalState,
+    /// A safe structural reason for anything preserved or unread.
+    pub detail: Option<Box<str>>,
+}
+
+/// Structural state of one local entry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum LegacyLocalState {
+    /// A closed grant and its protected identity are both present.
+    Approved,
+    /// A valid grant remains but the protected identity is absent.
+    OrphanGrant,
+    /// The slot exists without an approved grant.
+    Partial,
+    /// A grant file exists but does not match the closed Runtrol-owned record shape.
+    Invalid,
+    /// An entry exists in the owned directory but is not an exact Runtrol slot.
+    Unrecognized,
+    /// More entries exist than the bounded inventory will inspect.
+    Overflow,
+    /// The entry or directory could not be read, or a removal did not complete; nothing was changed.
+    Unreadable,
+    /// This build removed the exact slot after revoking its grant.
+    Removed,
+    /// This build revoked a Runtime grant that had no slot left.
+    Revoked,
 }
 
 /// One provider-owned MCP name that an earlier Runtrol feature may have registered.
@@ -981,18 +993,6 @@ pub enum LegacyMcpState {
     Unreadable,
     /// This build removed its own exact or superseded entry and the provider then proved the name absent.
     Removed,
-}
-
-/// Where one cross-consult direction stands.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub enum ConsultState {
-    /// The registration exists in the `from` CLI's own configuration.
-    Wired,
-    /// It does not.
-    Unwired,
-    /// This direction cannot be wired, and `why` says what was measured.
-    Unsupported,
 }
 
 /// The small fixed edges around an already encoded event payload.
@@ -1785,14 +1785,8 @@ mod tests {
                 subject_digest: [3; 32],
             },
             Request::StopEverything,
-            Request::Consult,
-            Request::ConsultUnwire {
-                from: "claude".into(),
-                to: "codex".into(),
-            },
             Request::LegacyMcpInventory,
             Request::LegacyMcpCleanup,
-            Request::AgentToolsUnwire,
         ] {
             let back = round_trip_request(&request);
             assert_eq!(
@@ -2005,72 +1999,54 @@ mod tests {
     }
 
     #[test]
-    fn a_consult_answer_carries_every_direction_with_its_state_and_reason() {
-        // One shape for status and for the answer to a wire, so a surface never derives state on its own.
-        let response = Response::Consult(vec![
-            ConsultLine {
-                from: "claude".into(),
-                to: "codex".into(),
-                state: ConsultState::Wired,
-                why: None,
-            },
-            ConsultLine {
-                from: "codex".into(),
-                to: "claude".into(),
-                state: ConsultState::Unsupported,
-                why: Some("measured absent".into()),
-            },
-        ]);
-        let encoded = serde_json::to_string(&response).expect("writable");
-        assert!(encoded.contains("unsupported"), "{encoded}");
-        match serde_json::from_str::<Response>(&encoded).expect("readable") {
-            Response::Consult(lines) => {
-                assert_eq!(lines.len(), 2);
-                let unsupported = lines
-                    .iter()
-                    .find(|line| line.state == ConsultState::Unsupported)
-                    .expect("the unsupported direction survives the wire");
-                assert!(unsupported.why.is_some(), "and it says why");
-            }
-            other => panic!("expected a consult answer, got {other:?}"),
-        }
-    }
-
-    #[test]
     fn a_legacy_mcp_inventory_preserves_exact_foreign_and_absent_states() {
-        let response = Response::LegacyMcpInventory(vec![
-            LegacyMcpLine {
-                kind: LegacyMcpKind::AgentTools,
-                provider: "claude".into(),
-                name: "runtrolTools".into(),
-                target: None,
-                state: LegacyMcpState::ExactEnabled,
-                why: None,
-            },
-            LegacyMcpLine {
-                kind: LegacyMcpKind::AgentTools,
-                provider: "codex".into(),
-                name: "runtrolTools".into(),
-                target: None,
-                state: LegacyMcpState::Foreign,
-                why: Some("same name, different command".into()),
-            },
-            LegacyMcpLine {
-                kind: LegacyMcpKind::CrossConsult,
-                provider: "claude".into(),
-                name: "codexConsult".into(),
-                target: Some("codex".into()),
-                state: LegacyMcpState::Absent,
-                why: None,
-            },
-        ]);
+        let response = Response::LegacyMcpInventory(LegacyReport {
+            local: vec![LegacyLocalLine {
+                slot: "a".repeat(64).into(),
+                root: Some("C:\\work".into()),
+                integration_id: Some("int_1".into()),
+                state: LegacyLocalState::Approved,
+                detail: None,
+            }],
+            registrations: vec![
+                LegacyMcpLine {
+                    kind: LegacyMcpKind::AgentTools,
+                    provider: "claude".into(),
+                    name: "runtrolTools".into(),
+                    target: None,
+                    state: LegacyMcpState::ExactEnabled,
+                    why: None,
+                },
+                LegacyMcpLine {
+                    kind: LegacyMcpKind::AgentTools,
+                    provider: "codex".into(),
+                    name: "runtrolTools".into(),
+                    target: None,
+                    state: LegacyMcpState::Foreign,
+                    why: Some("same name, different command".into()),
+                },
+                LegacyMcpLine {
+                    kind: LegacyMcpKind::CrossConsult,
+                    provider: "claude".into(),
+                    name: "codexConsult".into(),
+                    target: Some("codex".into()),
+                    state: LegacyMcpState::Absent,
+                    why: None,
+                },
+            ],
+        });
         let encoded = serde_json::to_string(&response).expect("writable");
         assert!(encoded.contains("exactEnabled"), "{encoded}");
+        assert!(encoded.contains("approved"), "{encoded}");
         assert!(encoded.contains("foreign"), "{encoded}");
         assert!(encoded.contains("absent"), "{encoded}");
         match serde_json::from_str::<Response>(&encoded).expect("readable") {
-            Response::LegacyMcpInventory(lines) => {
+            Response::LegacyMcpInventory(LegacyReport {
+                registrations: lines,
+                local,
+            }) => {
                 assert_eq!(lines.len(), 3);
+                assert_eq!(local.len(), 1);
                 let foreign = lines
                     .iter()
                     .find(|line| line.state == LegacyMcpState::Foreign)

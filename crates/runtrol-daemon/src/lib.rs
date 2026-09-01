@@ -11,14 +11,14 @@
 //! - [`compose`] establishing containment, finding the home, and reading which providers exist
 //! - [`scope`] what each request needs before anybody is allowed to make it
 //! - [`dispatch`] one request in, one answer out
-//! - [`consult`] wiring one CLI into another as a consultant, through the CLIs' own commands
+//! - [`legacy_mcp`] reading and removing what earlier builds registered in the CLIs, through their own commands
+//! - [`legacy_slots`] reading and removing the credential slots earlier builds left in this home
 //! - [`serve`] one owner of the sessions, and a task for every connection beside it
 
 mod account_probe;
 mod audit_relay;
 mod build_identity;
 pub mod compose;
-mod consult;
 mod crash;
 pub mod dispatch;
 mod generation_authority;
@@ -26,6 +26,8 @@ pub mod generations;
 mod integration_admin;
 mod integration_authority;
 mod isolated_workspace;
+mod legacy_mcp;
+mod legacy_slots;
 mod native_claims;
 mod native_deletions;
 mod pairing_admin;

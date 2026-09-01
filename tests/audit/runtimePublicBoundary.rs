@@ -127,8 +127,8 @@ fn public_method_table_has_no_private_control_vocabulary_or_provider_enum() {
         "Request::",
         "Response::",
         "providerUpdate",
-        "consultWire",
-        "consultUnwire",
+        "legacyMcpInventory",
+        "legacyMcpCleanup",
         "WIRE_VERSION",
     ] {
         assert!(

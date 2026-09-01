@@ -164,41 +164,24 @@ pub(crate) struct Opened {
     agent: Box<dyn Agent>,
 }
 
-/// The exact consult request a prepared consult answer belongs to.
+/// The exact legacy request a prepared legacy answer belongs to.
 ///
-/// Carried beside the answer so that one consult's answer cannot be replayed for a different consult request,
-/// the same binding rule every other prepared result follows.
+/// Carried beside the answer so that one request's answer cannot be replayed for the other, the same binding
+/// rule every other prepared result follows.
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub(crate) enum ConsultAsked {
-    /// The status of every direction.
-    Status,
-    /// Read-only inventory of legacy Runtrol MCP registration names.
-    LegacyMcpInventory,
-    /// Removal of every legacy Runtrol MCP registration this build owns outright.
-    LegacyMcpCleanup,
-    /// One direction being unwired.
-    Unwire {
-        /// The registering provider.
-        from: Box<str>,
-        /// The provider being unregistered.
-        to: Box<str>,
-    },
-    /// This executable's Agent Tools registration being removed from every usable provider CLI.
-    AgentToolsUnwire,
+pub(crate) enum LegacyAsked {
+    /// Read-only inventory of what earlier builds left in the CLIs and in this home.
+    Inventory,
+    /// Removal of everything in that inventory this build owns outright.
+    Cleanup,
 }
 
-impl ConsultAsked {
-    /// The binding for one request, or `None` for a request that is not a consult.
+impl LegacyAsked {
+    /// The binding for one request, or `None` for a request that is not a legacy read or cleanup.
     fn of(request: &Request) -> Option<Self> {
         match request {
-            Request::Consult => Some(Self::Status),
-            Request::LegacyMcpInventory => Some(Self::LegacyMcpInventory),
-            Request::LegacyMcpCleanup => Some(Self::LegacyMcpCleanup),
-            Request::ConsultUnwire { from, to } => Some(Self::Unwire {
-                from: from.clone(),
-                to: to.clone(),
-            }),
-            Request::AgentToolsUnwire => Some(Self::AgentToolsUnwire),
+            Request::LegacyMcpInventory => Some(Self::Inventory),
+            Request::LegacyMcpCleanup => Some(Self::Cleanup),
             _ => None,
         }
     }
@@ -277,13 +260,13 @@ pub(crate) enum Prepared {
         result: Result<Opened, Response>,
     },
 
-    /// A consult exchange completed by the connection task, outside the session owner.
+    /// A legacy read or cleanup completed by the connection task, outside the session owner.
     ///
-    /// The whole exchange, not a handle to one: consult work is a few bounded process questions and holds no
+    /// The whole exchange, not a handle to one: legacy work is a few bounded process questions and holds no
     /// agent, so by the time the owner sees this there is nothing left that could wait.
-    Consult {
-        /// The exact consult request the answer was computed for.
-        asked: ConsultAsked,
+    Legacy {
+        /// The exact legacy request the answer was computed for.
+        asked: LegacyAsked,
         /// The completed answer.
         response: Response,
     },
@@ -605,11 +588,11 @@ pub(crate) const fn needs_driver(request: &Request) -> bool {
     )
 }
 
-/// Complete a consult exchange in the connection task, or nothing when the wall would refuse it anyway.
+/// Complete a legacy read or cleanup in the connection task, or nothing when the wall would refuse it anyway.
 ///
-/// The wall is still asked by the owner before the answer is used. It is asked here first because consult
+/// The wall is still asked by the owner before the answer is used. It is asked here first because legacy
 /// work runs provider processes, and an unauthorized request must cost nothing before it is refused.
-pub(crate) async fn prepare_consult(
+pub(crate) async fn prepare_legacy(
     conversation: &Conversation,
     composed: &Composed,
     request: &Request,
@@ -624,12 +607,12 @@ pub(crate) async fn prepare_consult(
     {
         return Prepared::None;
     }
-    let Some(asked) = ConsultAsked::of(request) else {
+    let Some(asked) = LegacyAsked::of(request) else {
         return Prepared::None;
     };
-    Prepared::Consult {
+    Prepared::Legacy {
         asked,
-        response: crate::consult::answer(composed, request).await,
+        response: crate::legacy_mcp::answer(composed, request).await,
     }
 }
 
@@ -1443,13 +1426,9 @@ pub(crate) async fn answer_prepared(
 
         // The exchange already happened in the connection task. What is verified here is the binding: the
         // answer must be the one computed for this exact request, the rule every prepared result follows.
-        consult @ (Request::Consult
-        | Request::LegacyMcpInventory
-        | Request::LegacyMcpCleanup
-        | Request::ConsultUnwire { .. }
-        | Request::AgentToolsUnwire) => match prepared {
-            Prepared::Consult { asked, response }
-                if ConsultAsked::of(&consult).as_ref() == Some(&asked) =>
+        legacy @ (Request::LegacyMcpInventory | Request::LegacyMcpCleanup) => match prepared {
+            Prepared::Legacy { asked, response }
+                if LegacyAsked::of(&legacy).as_ref() == Some(&asked) =>
             {
                 Reply::One(response)
             }
@@ -1660,9 +1639,9 @@ fn bound(
     requested_provider: &str,
 ) -> Result<Prepared, Reply> {
     let matches = match &prepared {
-        // A consult answer never belongs to a provider request; its own binding is checked where it is used.
+        // A legacy answer never belongs to a provider request; its own binding is checked where it is used.
         Prepared::None
-        | Prepared::Consult { .. }
+        | Prepared::Legacy { .. }
         | Prepared::ProviderUpdates { .. }
         | Prepared::IntegrationAdmin { .. }
         | Prepared::PairingAdmin { .. }
@@ -3055,7 +3034,7 @@ mod tests {
         let optional = runtrol_drivers::DriverKind {
             kind: "fixture",
             make: None,
-            consult: runtrol_drivers::ConsultSurface::NONE,
+            legacy_mcp: runtrol_drivers::LegacyMcpSurface::NONE,
             flags: &[runtrol_drivers::kinds::DriverFlag {
                 flag: "--optional",
                 required: false,

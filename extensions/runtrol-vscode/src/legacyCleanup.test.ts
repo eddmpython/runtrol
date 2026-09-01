@@ -20,7 +20,7 @@ test("legacy cleanup runs the selected Core once with the project as its working
 
   assert.deepEqual(calls, [{
     executable: path.resolve("managed", "runtrol"),
-    words: ["tools", "cleanup"],
+    words: ["legacy", "cleanup"],
     workspace: project,
   }]);
   assert.equal(lines.length, 2);

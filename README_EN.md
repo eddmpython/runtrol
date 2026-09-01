@@ -154,17 +154,6 @@ At every fork, take the side that is easier for the user. The test is not taste.
 Public releases and all six platform VSIX packages are also available from [GitHub Releases](https://github.com/eddmpython/runtrol/releases).
 VS Code automatically updates Marketplace installations. If an older version was installed directly from a VSIX, reinstall it once from the Marketplace because VS Code disables automatic updates for manual VSIX installations.
 
-## Let agents use Runtrol
-
-Select the sparkle on a project heading and choose **Enable Agent Tools for This Project**. Installed coding agents
-can discover providers and models, start project sessions, send instructions, read events, and stop exact sessions.
-The project row says `Agent Tools` when ready.
-
-Authority is bound to that one canonical project root. There is no approval answering, conversation deletion, silent
-shared start, API key, transcript copy, or Runtrol-owned agent loop. **Disable Agent Tools for This Project** removes
-Runtime authority and the OS-protected credential, plus provider registrations when it is the last enabled project.
-The exact contract is in [Agent Tools](docs/agentTools.md).
-
 ## Who does not need runtrol
 
 **If you use exactly one provider, that provider's own remote control is better. This is stated first.**

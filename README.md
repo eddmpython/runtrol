@@ -162,17 +162,6 @@ Code-hot workspace는 bounded 상태를 유지한다. streaming과 background �
 공개 릴리스와 6개 플랫폼별 VSIX는 [GitHub Releases](https://github.com/eddmpython/runtrol/releases)에서도 받을 수 있다.
 Marketplace 설치는 VS Code가 자동 갱신한다. 예전 버전을 VSIX로 직접 설치했다면 VS Code가 그 확장의 자동 갱신을 끄므로 Marketplace에서 한 번 다시 설치한다.
 
-## 에이전트에게 Runtrol 맡기기
-
-프로젝트 헤딩의 반짝임 버튼에서 **Enable Agent Tools for This Project**를 누르면 된다. 설치된 코딩
-에이전트는 provider와 모델을 발견하고, 그 프로젝트 안의 세션을 시작하고, 지시를 보내고, 이벤트를
-읽고, 정확한 세션을 멈출 수 있다. 프로젝트 행에 `Agent Tools`가 나타나면 준비된 상태다.
-
-권한은 그 canonical 프로젝트 root 하나에만 묶인다. 승인 응답, 대화 삭제, 몰래 공유 시작, API key,
-transcript 사본, Runtrol 자체 agent loop는 없다. **Disable Agent Tools for This Project**를 누르면 Runtime
-권한과 OS 보호 자격이 삭제되고, 마지막 프로젝트라면 provider 등록도 제거된다. 정확한 경계는
-[Agent Tools 운영 문서](docs/agentTools.md)에 있다.
-
 ## runtrol 이 필요 없는 사람
 
 **공급자 하나만 쓴다면 그 공급자 자신의 원격 제어가 더 낫다. 이걸 먼저 적는다.**

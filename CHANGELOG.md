@@ -15,6 +15,9 @@ and refactoring that no user can observe do not belong here.
 - The project actions and commands that turned Agent Tools on or off, the `tools enable` command, the `consult wire`
   command, and every Core request that could register an MCP entry in a provider's configuration. Runtrol no longer
   registers itself or one CLI inside another; only inventory, cleanup, and removal of earlier registrations remain.
+- The `runtrol mcp` server, the `runtrol tools` and `runtrol consult` commands, and the Agent Tools crate. What earlier
+  builds left in Claude, Codex, and the Runtrol home is read with `runtrol legacy inventory` and removed with
+  `runtrol legacy cleanup`, which Studio runs once per Core image. Ordinary provider MCP entries are never touched.
 
 ### Changed
 

@@ -196,33 +196,21 @@ pub const FLAGS: &[BoundFlag] = &[
     },
 ];
 
-/// This CLI's part in cross-consult wiring.
+/// What earlier builds registered through this CLI, and how this build reads it back and removes it.
 ///
-/// Measured on 2.1.220:
-///
-/// - Registration is official: `claude mcp add --scope user <name> -- <command...>`, with `remove` and `get`
-///   beside it. User scope is bound deliberately, because it is the one scope whose canonical file the CLI
-///   itself names on every change, which is what lets a smoke assert the mutation is exactly one entry.
-/// - Serving is official (`claude mcp serve`) but there is nothing to consult: `tools/list` answers with the
-///   CLI's own toolset, and the one delegating tool in it answers "Agent type 'general-purpose' not found"
-///   over an empty available list in serve context. Declaring the absence keeps the reverse direction an
-///   honest "unsupported" instead of a wiring that fails mid-turn.
-pub const CONSULT: crate::consult::ConsultSurface = crate::consult::ConsultSurface {
-    registrar: Some(crate::consult::McpRegistrar {
+/// Measured on 2.1.220: registration was official (`claude mcp add --scope user <name> -- <command...>`), with
+/// `remove` and `get` beside it. User scope is bound deliberately, because it is the one scope whose canonical
+/// file the CLI itself names on every change. An earlier build registered this CLI inside another as
+/// `claude mcp serve`; that is the only consultant shape recognised as ours.
+pub const LEGACY_MCP: crate::legacy_mcp::LegacyMcpSurface = crate::legacy_mcp::LegacyMcpSurface {
+    registrar: Some(crate::legacy_mcp::McpRegistrar {
         add: &["mcp", "add", "--scope", "user"],
         remove: &["mcp", "remove", "--scope", "user"],
         get: &["mcp", "get"],
         get_suffix: &[],
-        readback: crate::consult::McpReadback::LabeledText,
+        readback: crate::legacy_mcp::McpReadback::LabeledText,
     }),
-    server: Some(crate::consult::McpConsultServer {
-        serve: &["mcp", "serve"],
-        tool: crate::consult::ConsultTool::Absent {
-            why: "this CLI's own MCP server exposes its toolset, not a consultation: measured on 2.1.220, \
-                  its delegating tool answers 'Agent type not found' with an empty available list in serve \
-                  context",
-        },
-    }),
+    consult_serve: Some(&["mcp", "serve"]),
 };
 
 #[cfg(test)]

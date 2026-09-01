@@ -31,6 +31,6 @@ mod roster;
 mod store;
 
 pub use agent::ClaudeAgent;
-pub use bound::{BoundFlag, BoundFrame, CONSULT, CONTROL, FLAGS, FRAMES, TERMINAL};
+pub use bound::{BoundFlag, BoundFrame, CONTROL, FLAGS, FRAMES, LEGACY_MCP, TERMINAL};
 pub use map::{Ended, Frame, MapError, Startup};
 pub use provider::ClaudeProvider;

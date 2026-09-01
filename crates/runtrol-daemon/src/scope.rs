@@ -78,15 +78,14 @@ pub fn needed(request: &Request) -> Needed {
         // rows inside its live workspace roots (`dispatch::sessions_visible_to`), so holding this scope
         // alone discloses nothing about projects the device was never granted.
         Request::List | Request::WatchSessions => Needed::Scope(DeviceScope::SessionList),
-        // Model discovery and consult status both read configuration and touch nothing.
+        // Model discovery and update status read configuration and touch nothing.
         Request::Models { .. }
         | Request::ProviderUpdates
         | Request::ProviderUpdateStatus
-        | Request::RemoteConnection
-        | Request::Consult => Needed::Scope(DeviceScope::ConfigRead),
+        | Request::RemoteConnection => Needed::Scope(DeviceScope::ConfigRead),
         Request::LegacyMcpInventory => Needed::AtTheMachine(LocalScope::IntegrationAdmin),
         Request::ProviderUpdate { .. } => Needed::AtTheMachine(LocalScope::ProviderUpdate),
-        Request::RemoteConfigure { .. } | Request::AgentToolsUnwire | Request::LegacyMcpCleanup => {
+        Request::RemoteConfigure { .. } | Request::LegacyMcpCleanup => {
             Needed::AtTheMachine(LocalScope::ConfigWrite)
         }
         Request::PairingBegin
@@ -172,10 +171,6 @@ pub fn needed(request: &Request) -> Needed {
             "the security posture requires the panic button to work from anywhere with no permission, and the \
              worst it achieves is that work stops",
         ),
-
-        // Unwiring edits the CLIs' own configuration. A configuration write is answered at the keyboard or not
-        // at all, so no grant can carry it.
-        Request::ConsultUnwire { .. } => Needed::AtTheMachine(LocalScope::ConfigWrite),
 
         _ => Needed::Unknown,
     }
@@ -431,14 +426,8 @@ mod tests {
                 authorities: Vec::new(),
                 claims: Vec::new(),
             },
-            Request::Consult,
             Request::LegacyMcpInventory,
             Request::LegacyMcpCleanup,
-            Request::ConsultUnwire {
-                from: "claude".into(),
-                to: "codex".into(),
-            },
-            Request::AgentToolsUnwire,
         ]
     }
 
@@ -480,7 +469,7 @@ mod tests {
     }
 
     #[test]
-    fn consult_unwiring_is_refused_to_every_device_no_matter_what_it_holds() {
+    fn legacy_cleanup_is_refused_to_every_device_no_matter_what_it_holds() {
         // A provider configuration write is answered at the keyboard or not at all. "No matter what it holds" is
         // total by construction rather than by enumeration: the check is presence, the ledger is never consulted,
         // and there is no conversion from `LocalScope` into anything the grant ledger accepts. The refusal names
@@ -489,10 +478,7 @@ mod tests {
         let caller = Caller::Device {
             device: DeviceId::now(),
         };
-        let request = Request::ConsultUnwire {
-            from: "claude".into(),
-            to: "codex".into(),
-        };
+        let request = Request::LegacyMcpCleanup;
         match allowed(&caller, &request, &ledger) {
             Err(WallRefusal::NeverRemote { capability }) => {
                 assert_eq!(capability.name(), "config.write");

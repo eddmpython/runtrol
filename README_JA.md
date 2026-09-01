@@ -151,17 +151,6 @@ streaming と background 作業が入力、スクロール、セッション切�
 公開リリースと六つの platform VSIX は [GitHub Releases](https://github.com/eddmpython/runtrol/releases) からも取得できる。
 Marketplace からインストールした拡張は VS Code が自動更新する。以前の版を VSIX から直接インストールした場合、VS Code はその拡張の自動更新を無効にするため、Marketplace から一度再インストールする。
 
-## エージェントに Runtrol を使わせる
-
-プロジェクト見出しの sparkle を選び、**Enable Agent Tools for This Project** を実行する。インストール済み
-コーディングエージェントは provider と model を発見し、project session の開始、instruction の送信、
-event の読み取り、正確な session の停止を行える。プロジェクト行に `Agent Tools` と表示されれば準備完了である。
-
-権限はその canonical project root 一つに限定される。approval の応答、会話の削除、暗黙の shared start、
-API key、transcript の複製、Runtrol 所有 agent loop は存在しない。**Disable Agent Tools for This Project**
-は Runtime 権限と OS 保護資格情報を削除し、最後の project を無効化した場合は provider 登録も削除する。
-正確な契約は [Agent Tools](docs/agentTools.md) にある。
-
 ## runtrol が要らない人
 
 **プロバイダーを一つしか使わないなら、そのプロバイダー自身のリモートコントロールの方が良い。これを先に書いておく。**

@@ -18,7 +18,6 @@ name = "runtrol"
 path = "src/main.rs"
 
 [dependencies]
-runtrol-agent-tools = { workspace = true }
 runtrol-cli = { workspace = true }
 runtrol-daemon = { workspace = true }
 # What this process passes on to anything it starts. A process-wide setting, so it belongs to the program.

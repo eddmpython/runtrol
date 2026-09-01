@@ -33,7 +33,7 @@ mod roster;
 
 pub use agent::CodexAgent;
 pub use bound::{
-    Answer, BoundCall, BoundNotice, BoundReport, BoundRequest, CALLS, CONSULT, NOTICES, REPORTS,
+    Answer, BoundCall, BoundNotice, BoundReport, BoundRequest, CALLS, LEGACY_MCP, NOTICES, REPORTS,
     REQUESTS, TERMINAL,
 };
 pub use conn::{Connection, Delivery, INBOX_DEPTH, Inbox};

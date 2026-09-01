@@ -9,7 +9,7 @@
 //! - [`framing`] getting bytes to and from a child in the shapes these CLIs speak
 //! - [`claude`] the driver for the CLI that runs one process per session, and its measured surface
 //! - [`codex`] the driver for the CLI whose sessions share one daemon, and its measured surface
-//! - [`consult`] how a driver takes part in cross-consult wiring, as a declared surface
+//! - [`legacy_mcp`] how a driver reads back and removes what earlier builds registered in its CLI
 //! - [`kinds`] the kind table
 //! - [`shipped`] the manifests compiled into this binary
 //!
@@ -22,17 +22,15 @@ pub mod acp;
 mod catalogue;
 pub mod claude;
 pub mod codex;
-pub mod consult;
 pub mod framing;
 pub mod kinds;
+pub mod legacy_mcp;
 mod operator;
 mod shipped;
 
-pub use consult::{
-    ConsultSurface, ConsultTool, McpConsultServer, McpReadback, McpRegistrar, McpRegistrationState,
-};
 pub use framing::{FrameError, Incoming, LineError, Lines, Pending, RequestId};
 pub use kinds::{DriverContext, DriverKind, KINDS, MakeDriver};
+pub use legacy_mcp::{LegacyMcpSurface, McpReadback, McpRegistrar, McpRegistrationState};
 pub use shipped::MANIFESTS;
 
 /// What this build ships.

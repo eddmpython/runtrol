@@ -77,17 +77,6 @@ detaches that viewer without ending the provider process. If an update creates a
 reconnects a tab only to the exact generation that owns its terminal. It never redirects input to a different process
 or retries uncertain input.
 
-## Agent Tools
-
-Select the sparkle on a project or run **Runtrol: Enable Agent Tools for This Project** to let installed coding agents
-use Runtrol's bounded Runtime tools for that canonical project root. Each provider is registered only through its
-official CLI command. Disabling Agent Tools revokes the protected local credential and removes provider registration
-when no enabled project still needs it.
-
-Agent Tools cannot answer approvals, delete provider conversations, silently share a working tree, hold an API key,
-keep a transcript copy, or run a Runtrol-owned agent loop. See the complete
-[Agent Tools contract](https://github.com/eddmpython/runtrol/blob/main/docs/agentTools.md).
-
 ## Phone continuity
 
 Pair the phone PWA from Studio's one-use QR to view the same Core-hosted conversations remotely. Remote authority is
@@ -117,7 +106,6 @@ Virtual workspaces and browser-only VS Code cannot start local provider CLI proc
 - **Runtrol: Delete All Conversations in Project**
 - **Runtrol: Set Up Coding Services**
 - **Runtrol: Check Provider Updates**
-- **Runtrol: Enable Agent Tools for This Project**
 - **Runtrol: Review Integration Requests**
 - **Runtrol: Manage Runtime Integrations**
 - **Runtrol: Review Runtime Requests**

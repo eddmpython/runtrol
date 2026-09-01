@@ -989,7 +989,7 @@ fn mutation_key(
     Ok((IntegrationMutationKey::new(integration, request_bytes), now))
 }
 
-fn random_key() -> Result<[u8; 16], AdminError> {
+pub(crate) fn random_key() -> Result<[u8; 16], AdminError> {
     let mut key = [0_u8; 16];
     getrandom::fill(&mut key).map_err(|_| AdminError::state())?;
     Ok(key)

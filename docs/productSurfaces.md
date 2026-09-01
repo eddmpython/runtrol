@@ -27,9 +27,6 @@ branch for that provider.
 The Runtime is the only process-lifecycle authority. Closing Studio, closing the PWA, or replacing an SDK connection
 does not transfer ownership. Draining Runtime generations continue only the live work they already own.
 
-Installed coding agents may also call the Runtime through project-scoped [Agent Tools](agentTools.md). That is an
-agent-facing adapter to the same public authority, not another agent loop and not a user interface.
-
 ## Studio decision
 
 Studio is the distributed desktop GUI. There is no separately distributed desktop window. VS Code supplies the
