@@ -7,7 +7,7 @@ import {
 } from "@runtrol/runtime-client";
 import * as vscode from "vscode";
 import type { Conversation, StartedConversation } from "./conversationList";
-import { tabColorId } from "./projectColor";
+import { projectAccentColor } from "./projectColor";
 import { tabName } from "./tabName";
 
 import { HIDE_CURSOR, hasVisibleText, MARK_FRAME_MS, paintMark, SHOW_CURSOR } from "./openingMark";
@@ -40,6 +40,8 @@ type InputMeasurement = {
 /// The Core answers the terminal's own questions and translates the mouse, so two viewers (this tab and
 /// a phone) share one screen and one keyboard.
 export class TerminalTabs implements vscode.Disposable {
+  private readonly changedEmitter = new vscode.EventEmitter<void>();
+  readonly onDidChange = this.changedEmitter.event;
   private readonly open = new Map<string, vscode.Terminal>();
   /// The extension PTY behind each tab, which owns the public name-change event for active and inactive tabs.
   private readonly hosts = new Map<vscode.Terminal, RuntimeTerminal>();
@@ -59,9 +61,9 @@ export class TerminalTabs implements vscode.Disposable {
   constructor(
     private readonly runtime: StudioRuntimeClient,
     /// The glyph for a conversation's service, drawn on the tab so two services' tabs tell apart at a glance.
-    private readonly iconFor: (conversation: Conversation) => vscode.ThemeIcon | vscode.Uri,
+    private readonly iconFor: (conversation: Conversation, accent: string) => vscode.Uri,
     /// The same glyph by service id, for a fresh conversation that has no row yet.
-    private readonly iconForProvider: (providerId: string) => vscode.ThemeIcon | vscode.Uri,
+    private readonly iconForProvider: (providerId: string, accent: string) => vscode.Uri,
     /// Told whenever the set of not-yet-described conversations changes, so the list redraws at once.
     private readonly startedChanged: () => void = () => undefined,
     /// The same conversation after the provider catalogue was read again, or null when it is gone. A row's
@@ -76,6 +78,7 @@ export class TerminalTabs implements vscode.Disposable {
     private readonly nameOf: (conversationKey: string) => string | null = () => null,
   ) {
     this.closing = vscode.window.onDidCloseTerminal((terminal) => {
+      const known = this.hosts.has(terminal);
       this.forgetJourneyTerminal(terminal);
       for (const [key, open] of this.open) {
         if (open === terminal) this.open.delete(key);
@@ -85,6 +88,7 @@ export class TerminalTabs implements vscode.Disposable {
       if (this.started.delete(terminal)) this.startedChanged();
       this.named.delete(terminal);
       this.hosts.delete(terminal);
+      if (known) this.changedEmitter.fire();
     });
   }
 
@@ -111,6 +115,7 @@ export class TerminalTabs implements vscode.Disposable {
     // The tab now has a name to wear. Only the active tab can be renamed, and it is the active one whenever
     // the person is sitting in the conversation they just started, which is the whole of this moment.
     for (const terminal of moved) this.correctName(terminal);
+    this.changedEmitter.fire();
   }
 
   /// Rename any tab to the conversation's current name through its public pseudoterminal event.
@@ -150,6 +155,7 @@ export class TerminalTabs implements vscode.Disposable {
     if (this.started.delete(terminal)) this.startedChanged();
     this.named.delete(terminal);
     this.hosts.delete(terminal);
+    this.changedEmitter.fire();
   }
 
   /// Show the conversation's terminal: the tab that already shows it, or a new one beside the active editor.
@@ -177,17 +183,17 @@ export class TerminalTabs implements vscode.Disposable {
     });
     // The tab is named for the conversation and coloured for its project. The name answers "which conversation",
     // the colour answers "whose project", and the two together fit in the width a tab actually has.
-    const colour = conversation.projectless ? null : tabColorId(conversation.homeWorkspace);
+    const accent = projectAccentColor(conversation.projectless ? null : conversation.homeWorkspace);
     terminal = vscode.window.createTerminal({
       name: tabName(conversation.title),
-      iconPath: tabIcon(colour, () => this.iconFor(conversation)),
-      color: colour ? new vscode.ThemeColor(colour) : undefined,
+      iconPath: this.iconFor(conversation, accent),
       pty,
       location: vscode.TerminalLocation.Editor,
       isTransient: true,
     });
     this.open.set(conversation.key, terminal);
     this.hosts.set(terminal, pty);
+    this.changedEmitter.fire();
     terminal.show(preserveFocus);
     return terminal;
   }
@@ -215,11 +221,10 @@ export class TerminalTabs implements vscode.Disposable {
     }, (reason) => {
       if (terminal) this.retireDisconnected(terminal, reason);
     });
-    const colour = projectless ? null : tabColorId(workspace);
+    const accent = projectAccentColor(projectless ? null : workspace);
     terminal = vscode.window.createTerminal({
       name: tabName(name),
-      iconPath: tabIcon(colour, () => this.iconForProvider(providerId)),
-      color: colour ? new vscode.ThemeColor(colour) : undefined,
+      iconPath: this.iconForProvider(providerId, accent),
       pty,
       location: vscode.TerminalLocation.Editor,
       isTransient: true,
@@ -234,6 +239,7 @@ export class TerminalTabs implements vscode.Disposable {
     });
     this.hosts.set(terminal, pty);
     this.startedChanged();
+    this.changedEmitter.fire();
     terminal.show(false);
     return terminal;
   }
@@ -407,6 +413,7 @@ export class TerminalTabs implements vscode.Disposable {
     this.journeyTargets.clear();
     this.journeyTargetByTab.clear();
     this.journeyEnds.clear();
+    this.changedEmitter.dispose();
   }
 }
 
@@ -449,17 +456,6 @@ const STALE_PROOF = "native catalogue observation expired";
 /// Output is decoded as streaming UTF-8 (a multi-byte character may straddle two chunks). Input is sent as
 /// the UTF-8 bytes of what VS Code hands over, which for mouse reports and special keys is already the
 /// terminal's own escape vocabulary.
-/// The tab's glyph: the project's colour when it has one, the service's own mark when it does not.
-///
-/// VS Code tints a tab icon only when the icon is one of its own; a file handed to `iconPath` is drawn as the
-/// image it is and the `color` beside it does nothing (measured 2026-08-28: the tab kept the service's brand
-/// colour while the sidebar row beside it carried the project's). The operator asked twice for the project's
-/// colour to reach the tab, so a project's conversation trades the brand mark for the colour that says whose
-/// work the tab belongs to. A conversation with no project keeps the mark, having no colour to show instead.
-function tabIcon(colour: string | null, service: () => vscode.ThemeIcon | vscode.Uri): vscode.ThemeIcon | vscode.Uri {
-  return colour === null ? service() : new vscode.ThemeIcon("comment-discussion");
-}
-
 /// Whether a refusal is the control lease being gone rather than the action being wrong.
 ///
 /// Named by the Runtime, so the word is matched rather than guessed at. Leases are independent per view, but this

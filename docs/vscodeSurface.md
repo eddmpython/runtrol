@@ -57,17 +57,17 @@ The page has three zones with visible edges, in this order:
   shows its conversation count, its attention and running counts, and on hover its actions: new conversation
   here, Agent Tools on or off, pin, open in a window, delete every provider-owned conversation after exact
   confirmation, or remove from the sidebar (the folder on disk stays). Projects
-  reorder by drag. Each project has a colour. It always marks the project heading and terminal tab, and marks a
-  conversation's left band while that conversation is working. An idle conversation keeps no coloured band.
+  reorder by drag. Each project has one deterministic provider-glyph accent. A conversation tab and its open
+  sidebar row embed that exact colour in the exact same provider SVG. Rows have no left colour bar.
 - **Conversations**: the conversations that belong to no project, as plain rows.
 - **Usage**: one chip per installed service, its icon inside a ring gauge with the seven-day percentage; see below.
 
 A conversation row is the service glyph, a normal-contrast one-line title with a fading tail, an optional worded
 action state, and the memory the provider process holds right now from the Runtime's `memoryBytes`. The bounded
 refresh cadence is executable in [`controller.ts`](../extensions/runtrol-vscode/src/controller.ts). Only a provider-proven
-open model turn spins the provider glyph and moves one light down its project-coloured band. A live or paused TUI stays
-static even when it repaints its prompt, menu, or cursor. `Needs you` and `Error` use static
-warning and error bands instead, while idle rows paint no band. Only a state that changes what the operator can do
+open model turn spins the provider glyph. Opening a tab applies its project accent but does not start animation. A live
+or paused TUI stays static even when it repaints its prompt, menu, or cursor. `Needs you` and `Error` remain static
+worded states. Only a state that changes what the operator can do
 spends width: `Needs you`, `Sign in`, `Limit`, `Error`,
 `Elsewhere`, or `Unavailable`. On hover the row shows its actions: pin, rename, stop when running, archive and delete
 when the service reports those surfaces, allow and decline when a turn waits for the person. Rows are reached with
@@ -106,6 +106,8 @@ executable deadline, floor, quiet interval, and backstop.
 
 A conversation opens as the provider CLI's own terminal interface in an editor tab. The provider owns its composer,
 model and effort controls, permissions, approvals, and history. Studio writes no prompt and parses no screen meaning.
+The tab uses the provider's own glyph, accented with the same exact colour value as its open sidebar row. A generic
+conversation codicon is never substituted for a project identity.
 
 `terminalTabs.ts` uses the public TypeScript Runtime terminal client. On transport loss it re-reads the locator and
 reattaches only to the descriptor's exact Runtime generation. The returned screen snapshot replaces the view. If an
@@ -122,7 +124,7 @@ generation; a cold provider-owned row starts only after the operator explicitly 
 Provider terminals started through an installed transparent command shim appear through the terminal index watch
 without a catalogue poll. If the provider mints an identity and title after launch, Runtime binds the provider's
 verified process record to that PTY and Studio rekeys the existing row and tab in place. The provider title replaces
-the project placeholder, while the project colour remains on both the row and tab.
+the project placeholder, while the provider glyph and exact accent remain identical on the open row and tab.
 
 A process already running outside the broker appears as live only while the current provider process roster proves
 it. A failed roster read revokes `Elsewhere` and shows the prior owner as `Unavailable` until a successful round

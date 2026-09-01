@@ -215,6 +215,12 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             'const icon = /^[a-z0-9-]{1,64}$/u.test(declared) ? declared : "sparkle"',
             "existsSync(candidate.fsPath)",
             'vscode.Uri.joinPath(extensionUri, "resources", "provider-icons", "sparkle.svg")',
+            "export function accentedConversationIcon",
+            "data:image/svg+xml;base64",
+        ],
+        "terminalTabs.ts": [
+            "projectAccentColor(",
+            "iconPath: this.iconFor(",
         ],
         "extension.ts": [
             "afterReady",
@@ -252,15 +258,13 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             'aria-label="Projects"',
             'aria-label="Conversations"',
             'aria-label="Usage"',
-            # Project colour always identifies the heading and paints a conversation band only while that
-            # conversation works. Idle bands are empty, while needs-you and error bands use semantic colours.
-            # The CSP allows styles only from the nonced block, so a colour written onto the element is dropped.
-            'class="bar${project.hue',
-            'class="bar${row.hue',
-            ".project-row .bar.${hue.band}, .conv.working .bar.${hue.band}",
-            ".conv:not(.working):not(.needs-you):not(.attention) .bar { background: transparent; }",
-            ".conv.needs-you .bar { background: var(--vscode-editorWarning-foreground",
-            ".conv.attention .bar { background: var(--vscode-errorForeground",
+            # Open rows and terminal tabs consume the same accented provider SVG. Work adds rotation without
+            # changing that identity, and no row spends a separate left band on the same state.
+            "readonly accent: string;",
+            "readonly open: boolean;",
+            "assets.accentIconUris.get",
+            'row.open ? " open" : ""',
+            ".conv.open .glyph, .conv.working .glyph { filter: none; opacity: 1; }",
             # Row actions appear on hover, and deletion only where the provider reports it.
             ".row:hover .actions",
             'row.canDelete ? action("runtrol.deleteConversation"',
@@ -268,17 +272,9 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             # (operator, 2026-08-28). Memory rides the row.
             "white-space: nowrap",
             "mask-image: linear-gradient(to right",
-            # A running turn is unmistakable: one row-level state turns the icon and moves a compositor-only
-            # light down its project band. The arc that used to turn around the icon remains absent.
+            # A running turn is unmistakable: one row-level state turns only the provider icon. The arc that
+            # used to turn around the icon remains absent.
             ".conv.working .glyph { animation: spin",
-            ".row .bar { position: relative; overflow: hidden; }",
-            ".conv.working .bar::after {",
-            "animation: flow 1.1s linear infinite",
-            "@keyframes flow { from { transform: translateY(-100%); } to { transform: translateY(100%); } }",
-            # The running colour is named once and is not the editor's progress colour: that one is grey in
-            # the default dark theme this build ships, which drew a running row as an idle one (measured on
-            # the operator's window 2026-08-28).
-            "--runtrol-running: var(--vscode-charts-blue",
             # A project shows five conversations and says how many more there are.
             'data-kind="more"',
             'class="memory"',
@@ -298,7 +294,9 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             '"runtrol.isVerifyingProvider"',
             "awaitsVerification",
             "this.state.incompleteDiscovery",
-            "rowHueClass(group.workspace)",
+            "projectAccentColor(group.workspace)",
+            "this.tabs.isOpen(row.key)",
+            "accentedConversationIcon(",
             "ROWS_PER_PROJECT",
             "canDelete(row, capabilities)",
         ],
@@ -383,6 +381,8 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
         for token in tokens:
             if token not in source:
                 found.append(f"{relative} does not contain required contract `{token}`")
+    if '<span class="bar' in sources.get("sidebarPage.ts", ""):
+        found.append("sidebar conversation and project rows must not restore a left colour bar")
     if "view.description" in sources.get("trees.ts", ""):
         found.append("the machine-wide conversation view must not look scoped under the current folder")
     return found
@@ -472,13 +472,14 @@ def selftest() -> int:
             "this.socket.end()"
         ),
         "terminalTabs.ts": (
-            "this.opening = setInterval(() => { clearInterval"
+            "this.opening = setInterval(() => { clearInterval projectAccentColor( iconPath: this.iconFor("
         ),
         "conversationIcon.ts": (
             'vscode.Uri.joinPath(extensionUri, "resources", "provider-icons", `${icon}.svg`) '
             'const icon = /^[a-z0-9-]{1,64}$/u.test(declared) ? declared : "sparkle" '
             'existsSync(candidate.fsPath) '
-            'vscode.Uri.joinPath(extensionUri, "resources", "provider-icons", "sparkle.svg")'
+            'vscode.Uri.joinPath(extensionUri, "resources", "provider-icons", "sparkle.svg") '
+            "export function accentedConversationIcon data:image/svg+xml;base64"
         ),
         "extension.ts": (
             "afterReady selfApproveIntegration(client, pendingId, signature) "
@@ -504,18 +505,12 @@ def selftest() -> int:
         "sidebarPage.ts": (
             "<!DOCTYPE html> "
             'aria-label="Projects" aria-label="Conversations" aria-label="Usage" '
-            'class="bar${project.hue class="bar${row.hue '
-            '.project-row .bar.${hue.band}, .conv.working .bar.${hue.band} '
-            '.conv:not(.working):not(.needs-you):not(.attention) .bar { background: transparent; } '
-            '.conv.needs-you .bar { background: var(--vscode-editorWarning-foreground '
-            '.conv.attention .bar { background: var(--vscode-errorForeground '
+            'readonly accent: string; readonly open: boolean; assets.accentIconUris.get '
+            'row.open ? " open" : "" .conv.open .glyph, .conv.working .glyph { filter: none; opacity: 1; } '
             '.row:hover .actions row.canDelete ? action("runtrol.deleteConversation" '
             "white-space: nowrap mask-image: linear-gradient(to right "
             '.conv.working .glyph { animation: spin '
-            '.row .bar { position: relative; overflow: hidden; } '
-            '.conv.working .bar::after { animation: flow 1.1s linear infinite '
-            '@keyframes flow { from { transform: translateY(-100%); } to { transform: translateY(100%); } } '
-            '--runtrol-running: var(--vscode-charts-blue data-kind="more" '
+            'data-kind="more" '
             'class="memory" Content-Security-Policy script-src \'nonce-'
         ),
         "sidebarView.ts": (
@@ -523,7 +518,8 @@ def selftest() -> int:
             "Cannot reach the Runtrol Core. Connecting to the Runtrol Core... "
             "Checking the installed coding-agent CLI... No coding-agent CLI was found on this machine. "
             '"runtrol.hasUsableProvider" "runtrol.isVerifyingProvider" awaitsVerification '
-            "this.state.incompleteDiscovery rowHueClass(group.workspace) ROWS_PER_PROJECT "
+            "this.state.incompleteDiscovery projectAccentColor(group.workspace) this.tabs.isOpen(row.key) "
+            "accentedConversationIcon( ROWS_PER_PROJECT "
             "canDelete(row, capabilities)"
         ),
         "usageStrip.ts": (
@@ -632,9 +628,11 @@ def selftest() -> int:
         (package, {**sources, "sidebarView.ts": sources["sidebarView.ts"].replace("Cannot reach the Runtrol Core.", "")}),
         (package, {**sources, "sidebarPage.ts": sources["sidebarPage.ts"].replace('row.canDelete ? action("runtrol.deleteConversation"', "")}),
         (package, {**sources, "sidebarPage.ts": sources["sidebarPage.ts"].replace(".conv.working .glyph { animation: spin", "")}),
-        (package, {**sources, "sidebarPage.ts": sources["sidebarPage.ts"].replace(".conv.working .bar::after {", "")}),
-        (package, {**sources, "sidebarPage.ts": sources["sidebarPage.ts"].replace("animation: flow 1.1s linear infinite", "")}),
-        (package, {**sources, "sidebarPage.ts": sources["sidebarPage.ts"].replace("--runtrol-running: var(--vscode-charts-blue", "")}),
+        (package, {**sources, "sidebarPage.ts": sources["sidebarPage.ts"].replace("assets.accentIconUris.get", "")}),
+        (package, {**sources, "sidebarPage.ts": sources["sidebarPage.ts"] + '<span class="bar"></span>'}),
+        (package, {**sources, "sidebarPage.ts": sources["sidebarPage.ts"].replace(".conv.open .glyph, .conv.working .glyph { filter: none; opacity: 1; }", "")}),
+        (package, {**sources, "sidebarView.ts": sources["sidebarView.ts"].replace("projectAccentColor(group.workspace)", "")}),
+        (package, {**sources, "sidebarView.ts": sources["sidebarView.ts"].replace("this.tabs.isOpen(row.key)", "")}),
         (package, {**sources, "extension.ts": sources["extension.ts"].replace('executeCommand("runtrol.sidebar.focus")', "")}),
         (package, {**sources, "stateRows.ts": sources["stateRows.ts"].replace("discoveryNotice", "")}),
         (

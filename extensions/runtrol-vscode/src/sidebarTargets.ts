@@ -5,9 +5,6 @@
 /// Every command keeps its `instanceof` guard, which is what makes an invocation with the wrong thing refuse rather
 /// than act on something surprising.
 
-import * as vscode from "vscode";
-
-import { conversationIcon } from "./conversationIcon";
 import type { Conversation, ProjectGroup } from "./conversationList";
 
 export class ConversationItem {
@@ -20,15 +17,4 @@ export class ProjectItem {
 
 export class ServiceChoiceItem {
   constructor(readonly providerId: string, readonly workspace: string) {}
-}
-
-/// The provider glyph always identifies the coding service. While work is actually running, the same glyph spins.
-export function icon(conversation: Conversation, extensionUri: vscode.Uri | null): vscode.ThemeIcon | vscode.Uri {
-  if (conversation.activity === "working") {
-    return new vscode.ThemeIcon("sync~spin");
-  }
-  if (!extensionUri) {
-    return new vscode.ThemeIcon(conversation.serviceIcon);
-  }
-  return conversationIcon(extensionUri, conversation.serviceIcon);
 }

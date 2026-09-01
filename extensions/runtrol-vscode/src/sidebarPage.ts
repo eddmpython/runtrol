@@ -12,7 +12,6 @@
 
 import type { ConversationActivity } from "./conversationList";
 import { hasChanges, type GitChanges } from "./gitChanges";
-import { HUES } from "./projectColor";
 import { escapeHtml, usageChipsMarkup, usagePanelsMarkup, USAGE_SCRIPT, USAGE_STYLE, type UsageChip, type UsageStripAssets } from "./usageStrip";
 
 export type SidebarConversationRow = {
@@ -21,8 +20,10 @@ export type SidebarConversationRow = {
   readonly serviceName: string;
   /// The declared icon name, resolved to a page URI by the host.
   readonly icon: string;
-  /// The project's colour as a VS Code theme colour id, or null for a conversation outside every project.
-  readonly hue: string | null;
+  /// Exact colour embedded into both the sidebar and terminal-tab provider glyphs.
+  readonly accent: string;
+  /// Whether this VS Code window currently has the conversation tab open.
+  readonly open: boolean;
   readonly activity: ConversationActivity;
   readonly live: boolean;
   /// Whether Runtrol can end this conversation's process: it supervises it or hosts its terminal. A process
@@ -45,7 +46,6 @@ export type SidebarProjectRow = {
   readonly key: string;
   readonly name: string;
   readonly workspace: string;
-  readonly hue: string | null;
   readonly kind: "created" | "open";
   readonly pinned: boolean;
   readonly current: boolean;
@@ -86,23 +86,9 @@ export type SidebarModel = {
   readonly version: string;
 };
 
-export type SidebarAssets = UsageStripAssets;
-
-/// One rule per hue, generated from the palette so the page and the projects cannot disagree about a colour.
-///
-/// In the stylesheet rather than on the element: the page's CSP allows styles from this nonced block only, and a
-/// nonce does not cover inline `style` attributes, so a colour written onto the element is simply dropped.
-/// The first six hues are the editor's own terminal palette and follow the theme through their variables; the
-/// band-only extras have no editor name, so their light value is applied by the theme kind VS Code stamps on
-/// the page's body (absent in the eye harness, which therefore shows the dark pair).
-const HUE_STYLE = HUES
-  .map((hue) => {
-    const rule = `.project-row .bar.${hue.band}, .conv.working .bar.${hue.band} { background: ${hue.dark}; }`;
-    if (hue.light === hue.dark) return rule;
-    return `${rule}
-body[data-vscode-theme-kind="vscode-light"] .project-row .bar.${hue.band}, body[data-vscode-theme-kind="vscode-light"] .conv.working .bar.${hue.band}, body[data-vscode-theme-kind="vscode-high-contrast-light"] .project-row .bar.${hue.band}, body[data-vscode-theme-kind="vscode-high-contrast-light"] .conv.working .bar.${hue.band} { background: ${hue.light}; }`;
-  })
-  .join("\n");
+export type SidebarAssets = UsageStripAssets & {
+  readonly accentIconUris: ReadonlyMap<string, string>;
+};
 
 /// Bytes as the short figure a row can carry: whole megabytes below a gigabyte, one decimal above.
 export function formatMemory(bytes: number): string {
@@ -129,7 +115,7 @@ export function sidebarHtml(model: SidebarModel, assets: SidebarAssets): string 
 <meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${assets.cspSource} data:; style-src 'nonce-${assets.nonce}'; script-src 'nonce-${assets.nonce}'">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<style nonce="${assets.nonce}">${STYLE}${HUE_STYLE}${USAGE_STYLE}</style>
+<style nonce="${assets.nonce}">${STYLE}${USAGE_STYLE}</style>
 </head>
 <body>
 <div id="page">${sidebarBody(model, assets)}</div>
@@ -230,7 +216,6 @@ ${action("runtrol.removeProject", "Remove from the sidebar (the folder stays)", 
     : `<span class="actions">${action("runtrol.newConversationInProject", "New conversation here", "add")}${action("runtrol.createProjectHere", "Keep this folder as a project", "folder-library")}</span>`;
   return `<div class="project${project.collapsed ? " collapsed" : ""}" data-project="${escapeHtml(project.key)}"${project.kind === "created" ? ' draggable="true"' : ""}>
 <div class="row project-row${project.current ? " current" : ""}" role="button" tabindex="0" data-kind="project" data-key="${escapeHtml(project.key)}" aria-expanded="${project.collapsed ? "false" : "true"}" title="${escapeHtml(project.workspace)}">
-<span class="bar${project.hue ? ` ${project.hue}` : ""}"></span>
 <span class="chevron" aria-hidden="true"></span>
 <span class="name">${escapeHtml(project.name)}</span>
 <span class="count">${count}</span>
@@ -249,13 +234,15 @@ function moreHtml(project: SidebarProjectRow): string {
   if (project.hidden <= 0) return "";
   const many = project.hidden === 1 ? "1 more conversation" : `${project.hidden} more conversations`;
   return `<div class="row more" role="button" tabindex="0" data-kind="more" data-key="${escapeHtml(project.key)}">
-<span class="bar"></span>
 <span class="more-label">Show all (${many})</span>
 </div>`;
 }
 
 function conversationHtml(row: SidebarConversationRow, assets: SidebarAssets): string {
-  const iconUri = assets.iconUris.get(row.icon) ?? "";
+  const coloured = row.open || row.activity === "working";
+  const iconUri = coloured
+    ? assets.accentIconUris.get(`${row.icon}\0${row.accent}`) ?? assets.iconUris.get(row.icon) ?? ""
+    : assets.iconUris.get(row.icon) ?? "";
   const state = conversationStateHtml(row);
   const signal = row.signIn || row.activity === "needsYou"
     ? " needs-you"
@@ -276,11 +263,10 @@ function conversationHtml(row: SidebarConversationRow, assets: SidebarAssets): s
   // A native tooltip only where it says the one thing the row cannot show: why an open would be refused.
   // Everything else the tooltip used to repeat (service, activity, model) is already on the row, and a
   // tooltip floating beside the hover actions reads as clutter (operator, 2026-08-27).
-  // Running is a state of the whole row, said once on the row: the icon turns and the band flows from it.
+  // Running is a state of the whole row, said once on the row: the provider icon turns.
   const visibleTitle = conversationTitle(row.title);
   const tooltip = row.blocked ?? (visibleTitle === row.title ? null : row.title);
-  return `<div class="row conv${row.canOpen ? "" : " blocked"}${row.pinned ? " pinned" : ""}${state ? " stateful" : ""}${signal}" role="button" tabindex="0" data-kind="conversation" data-key="${escapeHtml(row.key)}"${tooltip ? ` title="${escapeHtml(tooltip)}"` : ""}>
-<span class="bar${row.hue ? ` ${row.hue}` : ""}"></span>
+  return `<div class="row conv${row.canOpen ? "" : " blocked"}${row.pinned ? " pinned" : ""}${row.open ? " open" : ""}${state ? " stateful" : ""}${signal}" role="button" tabindex="0" data-kind="conversation" data-key="${escapeHtml(row.key)}"${tooltip ? ` title="${escapeHtml(tooltip)}"` : ""}>
 <span class="glyph-slot"><img class="glyph" src="${escapeHtml(iconUri)}" alt="${escapeHtml(row.serviceName)}" draggable="false"></span>
 <span class="title">${escapeHtml(visibleTitle)}</span>
 ${state}
@@ -349,14 +335,6 @@ function firstRunHtml(): string {
 // icon font, and an <img> would not follow the theme colour. Each is the codicon outline in a 16-unit box.
 const STYLE = `
 :root { color-scheme: light dark; }
-/* The fallback colour that says a projectless conversation is running.
-
-   Not the editor's progress colour, which is the obvious choice and is not a state colour. What it paints is
-   up to whichever theme is on: measured 2026-08-28, the dark theme this build of the editor falls back to
-   when nobody has chosen one paints progressBar.background #878889, and a running row drawn in it was grey,
-   which is what an idle row is. The chart colours are the ones meant to be told apart at a glance, and this
-   one is vivid in both light and dark. */
-:root { --runtrol-running: var(--vscode-charts-blue, #4e94ce); }
 /* The panel's height, taken twice: the editor gives the frame its height and the document has to claim it, or
    the page is only as tall as its rows and the usage strip stops being the bottom of the sidebar. */
 html { height: 100%; }
@@ -398,10 +376,9 @@ button { font: inherit; color: inherit; }
 .zone + .zone { border-top: 1px solid var(--vscode-sideBarSectionHeader-border, var(--vscode-widget-border)); margin-top: 4px; }
 .zone-title { display: flex; align-items: center; gap: 4px; margin: 4px 4px 2px; font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; opacity: 0.55; }
 .usage-zone { flex: none; padding-bottom: 4px; padding-right: 8px; border-top: 1px solid var(--vscode-sideBarSectionHeader-border, var(--vscode-widget-border)); }
-.row { position: relative; display: flex; align-items: center; gap: 6px; min-height: 24px; padding: 2px 4px 2px 0; border-radius: 4px; cursor: pointer; outline: none; }
+.row { position: relative; display: flex; align-items: center; gap: 6px; min-height: 24px; padding: 2px 4px; border-radius: 4px; cursor: pointer; outline: none; }
 .row:hover { background: var(--vscode-list-hoverBackground); }
 .row:focus-visible { box-shadow: inset 0 0 0 1px var(--vscode-focusBorder); }
-.row .bar { flex: none; width: 3px; align-self: stretch; border-radius: 2px; margin: 2px 5px 2px 2px; }
 .project-row { font-weight: 600; }
 .project-row .chevron { flex: none; width: 10px; height: 10px; margin-right: -2px; background: currentColor; opacity: 0.6; -webkit-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M5 3l6 5-6 5z'/></svg>") center / contain no-repeat; mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M5 3l6 5-6 5z'/></svg>") center / contain no-repeat; transform: rotate(90deg); transition: transform 80ms; }
 .project.collapsed .project-row .chevron { transform: rotate(0deg); }
@@ -432,26 +409,16 @@ button { font: inherit; color: inherit; }
 .badge.tools { background: transparent; border: 1px solid var(--vscode-widget-border); font-weight: 400; opacity: 0.8; }
 .conv .glyph-slot { position: relative; flex: none; display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; }
 .conv .glyph { flex: none; width: 14px; height: 14px; filter: grayscale(1); opacity: 0.64; }
-/* The icon alone turns (operator, 2026-08-29: no ring, just the icon). Fast enough that a symmetric mark
-   still reads as moving, and a full turn is a plain transform the compositor can run without a repaint. */
-.conv.working .glyph { animation: spin 1.1s linear infinite; will-change: transform; filter: none; opacity: 1; }
+/* An open tab and its sidebar row use the same accented provider SVG. Work adds only compositor rotation, so
+   opening a terminal never claims the model is active and a stopped turn consumes no animation work. */
+.conv.open .glyph, .conv.working .glyph { filter: none; opacity: 1; }
+.conv.working .glyph { animation: spin 1.1s linear infinite; will-change: transform; }
 @keyframes spin { to { transform: rotate(360deg); } }
-/* Idle rows keep the bar's alignment slot but paint nothing. A working row uses its project colour, or the
-   running fallback when it has no project. Needs-you and error rows use static semantic colours, so urgency
-   cannot be mistaken for progress. */
-.row .bar { position: relative; overflow: hidden; }
-.conv:not(.working):not(.needs-you):not(.attention) .bar { background: transparent; }
-.conv.working .bar { background: var(--runtrol-running); }
-.conv.needs-you .bar { background: var(--vscode-editorWarning-foreground, #cca700); }
-.conv.attention .bar { background: var(--vscode-errorForeground, #f85149); }
-/* A compositor-only light runs down the working band in step with the icon. */
-.conv.working .bar::after { content: ""; position: absolute; left: 0; right: 0; top: 0; height: 100%; background: linear-gradient(to bottom, transparent, rgba(255, 255, 255, 0.75), transparent); animation: flow 1.1s linear infinite; will-change: transform; }
-@keyframes flow { from { transform: translateY(-100%); } to { transform: translateY(100%); } }
 /* One line, and the tail fades out rather than ending in dots: the reader sees there is more without a
    glyph spending width to say so, and two-line rows made the list hard to scan (operator, 2026-08-28). */
 .conv .title { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; line-height: 1.4; -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 20px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 20px), transparent); }
 .conv.pinned .title::before { content: ""; display: inline-block; width: 9px; height: 9px; margin-right: 4px; background: currentColor; opacity: 0.55; -webkit-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M10 1l5 5-3 1-2 2 1 4-3 1-2-4-4 4-1-1 4-4-4-2 1-3 4 1 2-2z'/></svg>") center / contain no-repeat; mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M10 1l5 5-3 1-2 2 1 4-3 1-2-4-4 4-1-1 4-4-4-2 1-3 4 1 2-2z'/></svg>") center / contain no-repeat; }
-/* Working needs no word: the moving icon and band say it. Only states that change what the person can do spend
+/* Working needs no word: the moving provider icon says it. Only states that change what the person can do spend
    width, and they say their meaning instead of asking the person to memorize coloured dots. */
 .conv-state { flex: none; max-width: 72px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; line-height: 15px; padding: 0 5px; border-radius: 8px; }
 .conv-state.attention { color: var(--vscode-notificationsWarningIcon-foreground, #cca700); background: color-mix(in srgb, currentColor 14%, transparent); }

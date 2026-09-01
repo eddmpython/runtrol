@@ -13,11 +13,11 @@ import { randomBytes } from "node:crypto";
 
 import * as vscode from "vscode";
 
-import { conversationIcon } from "./conversationIcon";
+import { accentedConversationIcon, conversationIcon } from "./conversationIcon";
 import { canDelete } from "./conversationDeletion";
 import { loose, projects, type Conversation, type ProjectGroup } from "./conversationList";
 import type { ProjectRecord } from "./projects";
-import { rowHueClass } from "./projectColor";
+import { projectAccentColor } from "./projectColor";
 import { readGitBranch } from "./gitBranch";
 import type { GitChanges } from "./gitChanges";
 import { awaitsVerification, isUsable } from "./providerHealth";
@@ -80,6 +80,11 @@ export type UsageActions = {
   update(providerId: string): Promise<void>;
 };
 
+export type ConversationTabsPort = {
+  isOpen(conversationKey: string): boolean;
+  onDidChange(listener: () => void): { dispose(): void };
+};
+
 /// What the Core's private help line says per service (`ProviderHelpCache`).
 export type ProviderHelpPort = {
   signOutFor(providerId: string): string | null;
@@ -131,6 +136,7 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
     private readonly releases: ProviderReleasePort,
     private readonly help: ProviderHelpPort,
     private readonly usageActions: UsageActions,
+    private readonly tabs: ConversationTabsPort,
     private readonly report: (error: unknown) => void,
   ) {
     this.collapsed = new Set(context.workspaceState.get<string[]>(COLLAPSED_KEY, []));
@@ -145,6 +151,7 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
       changes.onDidChange(() => this.render()),
       releases.onDidChange(() => this.render()),
       help.onDidChange(() => this.render()),
+      tabs.onDidChange(() => this.render()),
       vscode.workspace.onDidChangeWorkspaceFolders(() => this.render()),
     );
   }
@@ -308,18 +315,29 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
     if (key === this.lastRendered) return;
     this.lastRendered = key;
     const icons = new Map<string, string>();
+    const accentIcons = new Map<string, string>();
     const iconUri = (declared: string): void => {
       if (icons.has(declared)) return;
       icons.set(declared, view.webview.asWebviewUri(conversationIcon(this.context.extensionUri, declared)).toString());
     };
     for (const project of model.projects) for (const row of project.rows) iconUri(row.icon);
     for (const row of model.loose) iconUri(row.icon);
+    for (const row of [...model.projects.flatMap((project) => project.rows), ...model.loose]) {
+      const key = `${row.icon}\0${row.accent}`;
+      if (!accentIcons.has(key)) {
+        accentIcons.set(
+          key,
+          accentedConversationIcon(this.context.extensionUri, row.icon, row.accent).toString(),
+        );
+      }
+    }
     for (const chip of model.usage) iconUri(chip.icon);
     for (const service of model.serviceChoice?.services ?? []) iconUri(service.icon);
     const assets = {
       cspSource: view.webview.cspSource,
       nonce: this.documentNonce ?? randomBytes(16).toString("base64url"),
       iconUris: icons,
+      accentIconUris: accentIcons,
     };
     if (this.documentNonce === null) {
       this.documentNonce = assets.nonce;
@@ -343,7 +361,6 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
       key: group.key,
       name: group.name,
       workspace: group.workspace,
-      hue: rowHueClass(group.workspace),
       kind: group.kind,
       pinned: group.pinned,
       current: group.current,
@@ -355,7 +372,7 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
       changes: this.changes.get(group.workspace) ?? null,
       ...this.rowsOf(group),
     }));
-    const looseRows = pinnedFirst(loose(rows)).map((row) => this.conversationRow(row, null));
+    const looseRows = pinnedFirst(loose(rows)).map((row) => this.conversationRow(row, projectAccentColor(null)));
     // Which services publish a sign-in line, so the account panel can offer it whatever the account's state
     // is. A person switching accounts, or checking one that looks healthy, had no way there at all.
     const signInAble = new Set(this.state.providers
@@ -424,12 +441,12 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
     const ordered = pinnedFirst(group.rows);
     const shown = this.expanded.has(group.key) ? ordered : ordered.slice(0, ROWS_PER_PROJECT);
     return {
-      rows: shown.map((row) => this.conversationRow(row, rowHueClass(group.workspace))),
+      rows: shown.map((row) => this.conversationRow(row, projectAccentColor(group.workspace))),
       hidden: ordered.length - shown.length,
     };
   }
 
-  private conversationRow(row: Conversation, hue: string | null): SidebarConversationRow {
+  private conversationRow(row: Conversation, accent: string): SidebarConversationRow {
     const capabilities: ProviderCapabilities | null = this.state.providerCapabilities(row.providerId);
     const memoryBytes = this.state.memoryFor(row) ?? row.session?.memoryBytes ?? null;
     return {
@@ -437,7 +454,8 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
       title: row.title,
       serviceName: row.serviceName,
       icon: row.serviceIcon,
-      hue,
+      accent,
+      open: this.tabs.isOpen(row.key) || (row.hostedKey !== null && this.tabs.isOpen(row.hostedKey)),
       activity: row.activity,
       live: row.live,
       canStop: row.canStop,

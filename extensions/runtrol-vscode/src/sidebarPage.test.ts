@@ -18,7 +18,8 @@ function conversation(overrides: Partial<SidebarConversationRow>): SidebarConver
     title: "Fix the login flow",
     serviceName: "Claude Code",
     icon: "claude",
-    hue: "hueBlue",
+    accent: "#4e94ce",
+    open: false,
     activity: "saved",
     live: false,
     canStop: false,
@@ -40,7 +41,6 @@ function project(overrides: Partial<SidebarProjectRow>): SidebarProjectRow {
     key: "project:app",
     name: "app",
     workspace: "C:\\work\\app",
-    hue: "hueBlue",
     kind: "created",
     pinned: false,
     current: false,
@@ -60,7 +60,7 @@ function model(overrides: Partial<SidebarModel>): SidebarModel {
   return {
     notices: [],
     projects: [project({})],
-    loose: [conversation({ key: "codex:loose", hue: null, serviceName: "Codex", icon: "codex" })],
+    loose: [conversation({ key: "codex:loose", serviceName: "Codex", icon: "codex" })],
     usage: [],
     serviceChoice: null,
     firstRun: false,
@@ -73,6 +73,10 @@ const assets = {
   cspSource: "vscode-resource:",
   nonce: "n0nce",
   iconUris: new Map([["claude", "https://icons/claude.svg"], ["codex", "https://icons/codex.svg"]]),
+  accentIconUris: new Map([
+    ["claude\0#4e94ce", "https://icons/claude-blue.svg"],
+    ["codex\0#4e94ce", "https://icons/codex-blue.svg"],
+  ]),
 };
 
 test("the three zones are drawn in order with their own titles, and the project carries its conversations", () => {
@@ -103,21 +107,17 @@ test("what the page draws is separable from the document, so a figure ticking ne
   assert.ok(html.includes("__runtrolBindUsage"));
 });
 
-test("project colour marks the heading and only a conversation that is working", () => {
+test("left bars are absent and open or working conversations use the exact accented provider glyph", () => {
   const html = sidebarHtml(model({ projects: [project({ rows: [
     conversation({ key: "idle" }),
+    conversation({ key: "open", open: true }),
     conversation({ key: "working", activity: "working" }),
   ] })] }), assets);
-  // The class, not a colour written onto the element: the page's CSP allows styles only from its nonced
-  // stylesheet, and a nonce never covers an inline `style` attribute, so a colour put there paints nothing.
-  assert.equal((html.match(/class="bar hueBlue"/gu) ?? []).length, 3, "the hue identity remains on the DOM rows");
-  assert.ok(
-    html.includes(".project-row .bar.hueBlue, .conv.working .bar.hueBlue { background: var(--vscode-terminal-ansiBlue); }"),
-    "only the project heading and working conversation paint that hue",
-  );
-  assert.ok(!html.includes(".row .bar.hueBlue {"), "an idle conversation does not paint a project band");
-  assert.ok(!html.includes('style="background'), "no colour is written onto an element for the CSP to drop");
-  assert.ok(html.includes('class="bar"></span>'), "a loose conversation has no project colour");
+  assert.ok(!html.includes('class="bar'), "project and conversation rows carry no left colour bars");
+  assert.equal((html.match(/https:\/\/icons\/claude-blue\.svg/gu) ?? []).length, 2);
+  assert.equal((html.match(/https:\/\/icons\/claude\.svg/gu) ?? []).length, 1);
+  assert.ok(html.includes('class="row conv open"'));
+  assert.ok(html.includes('class="row conv working"'));
 });
 
 test("the build's version is not drawn in the body: the host puts it in the title bar beside Runtrol", () => {
@@ -168,7 +168,7 @@ test("memory reads as a short figure and rides the row", () => {
   assert.ok(html.includes('<span class="memory" title="Memory the provider process holds now">412 MB</span>'));
 });
 
-test("working and attention states own distinct bands while idle rows have none", () => {
+test("only actual working state rotates while attention remains a static labelled state", () => {
   const html = sidebarHtml(model({
     projects: [project({
       rows: [
@@ -180,26 +180,18 @@ test("working and attention states own distinct bands while idle rows have none"
     })],
     loose: [],
   }), assets);
-  // Running is said once on the row, and the icon and the band both read it from there.
+  // Running is said once on the row, and only its provider icon animates.
   assert.equal(html.match(/class="row conv working"/gu)?.length, 1);
   assert.ok(!html.includes('class="glyph-slot working"'), "the icon slot no longer carries its own copy of the state");
   assert.ok(html.includes('<span class="glyph-slot"><img class="glyph"'), "an idle row carries no mark");
   assert.ok(!html.includes('class="dot'), "no unexplained status dot is drawn");
   assert.ok(html.includes('class="conv-state attention" title="Needs you">Needs you</span>'));
   assert.ok(html.includes('class="conv-state muted" title="running outside runtrol">Elsewhere</span>'));
-  assert.ok(html.includes("--runtrol-running: var(--vscode-charts-blue"));
-  // The icon alone turns; there is no ring around it (operator, 2026-08-29).
+  assert.ok(html.includes(".conv.open .glyph, .conv.working .glyph { filter: none; opacity: 1; }"));
   assert.ok(html.includes(".conv.working .glyph { animation: spin"));
   assert.ok(!html.includes(".glyph-slot.working::after"), "no ring is drawn around a turning icon");
-  // The band of a running row carries a light sliding down it, as a compositor transform and never a repaint
-  // of the band (operator, 2026-08-30: the colour bar should move too, unless that costs memory).
-  assert.ok(html.includes(".conv.working .bar::after {"), "the light lives on the band of a working row");
-  assert.ok(html.includes(".conv.needs-you .bar { background: var(--vscode-editorWarning-foreground"));
-  assert.ok(html.includes(".conv.attention .bar { background: var(--vscode-errorForeground"));
-  assert.ok(html.includes(".conv:not(.working):not(.needs-you):not(.attention) .bar { background: transparent; }"));
-  assert.ok(html.includes("animation: flow 1.1s linear infinite"), "in step with the turning icon");
-  assert.ok(html.includes("@keyframes flow { from { transform: translateY(-100%); } to { transform: translateY(100%); } }"));
-  assert.ok(html.includes(".row .bar { position: relative; overflow: hidden; }"), "the light is clipped to the band");
+  assert.ok(!html.includes(".conv.working .bar"));
+  assert.ok(!html.includes("animation: flow"));
   assert.ok(!html.includes(".conv.blocked .title"), "an externally running conversation stays readable");
 });
 
@@ -230,7 +222,7 @@ test("a project counts what it holds, and says how many wait behind the row that
 
 test("the page spends no row on a menu, and escapes what services said", () => {
   const html = sidebarHtml(model({
-    loose: [conversation({ key: "x", title: "<script>alert(1)</script>", hue: null })],
+    loose: [conversation({ key: "x", title: "<script>alert(1)</script>" })],
   }), assets);
   // The rare actions live behind the title bar's own `⋮` now. A strip inside the page spent a whole row of a
   // 200px panel on one button, which is the row the operator asked about on 2026-08-28.

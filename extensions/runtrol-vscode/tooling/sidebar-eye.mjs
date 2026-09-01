@@ -110,7 +110,8 @@ function conversation(over = {}) {
     title: "A conversation",
     serviceName: "Claude Code",
     icon: "claude",
-    hue: "hueGreen",
+    accent: "#48a868",
+    open: false,
     activity: "saved",
     live: false,
     canOpen: true,
@@ -164,7 +165,6 @@ const model = {
       key: "project:cleangov",
       name: "cleangov",
       workspace: "C:\\work\\cleangov",
-      hue: "hueGreen",
       kind: "created",
       pinned: false,
       current: true,
@@ -176,8 +176,8 @@ const model = {
       branch: "main",
       changes: { added: 119, removed: 4, untracked: 2, ahead: 0 },
       rows: [
-        conversation({ title: "돈을 벌 수 있는 구조인지 지금 상태에서 판단해라", activity: "working", live: true, memory: "306 MB" }),
-        conversation({ title: "현재 이 프로젝트 수준은?", memory: "278 MB" }),
+        conversation({ title: "돈을 벌 수 있는 구조인지 지금 상태에서 판단해라", activity: "working", live: true, open: true, memory: "306 MB" }),
+        conversation({ title: "현재 이 프로젝트 수준은?", open: true, memory: "278 MB" }),
         conversation({ title: "/model" }),
         conversation({ title: "터미널 탭이 열릴 때 서비스가 처음 그릴 때까지 마크가 도는지", pinned: true }),
         conversation({ title: "A live conversation with no terminal route", live: true, canOpen: false, blocked: "Live terminal unavailable." }),
@@ -188,7 +188,6 @@ const model = {
       key: "project:runtrol",
       name: "runtrol",
       workspace: "C:\\work\\runtrol",
-      hue: "hueTeal",
       kind: "created",
       pinned: false,
       current: false,
@@ -200,13 +199,13 @@ const model = {
       branch: "feature/sidebar",
       changes: { added: 0, removed: 0, untracked: 0, ahead: 3 },
       rows: [
-        conversation({ title: "Sidebar 대화삭제 및 기능 구현 미완료", hue: "huePurple", activity: "needsYou", workspace: "C:\\work\\runtrol" }),
-        conversation({ title: "Runtime generation connection failed", hue: "huePurple", activity: "attention", workspace: "C:\\work\\runtrol" }),
-        conversation({ title: "Runtroll 랜딩 사이트", hue: "huePurple", workspace: "C:\\work\\runtrol" }),
+        conversation({ title: "Sidebar 대화삭제 및 기능 구현 미완료", accent: "#b07bd8", activity: "needsYou", workspace: "C:\\work\\runtrol" }),
+        conversation({ title: "Runtime generation connection failed", accent: "#b07bd8", activity: "attention", workspace: "C:\\work\\runtrol" }),
+        conversation({ title: "Runtroll 랜딩 사이트", accent: "#b07bd8", workspace: "C:\\work\\runtrol" }),
       ],
     },
   ],
-  loose: [conversation({ title: "폴더 없이 시작한 대화", hue: null, workspace: "" })],
+  loose: [conversation({ title: "폴더 없이 시작한 대화", accent: "#4e94ce", workspace: "" })],
   usage: [
     chip("claude", "Claude Code", 32, [
       { label: "7 days", percent: 32 },
@@ -225,6 +224,11 @@ const assets = {
   iconUris: new Map([
     ["claude", "data:image/svg+xml;utf8," + encodeURIComponent("<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path fill='#d97757' d='M8 1l1.6 4.2L14 6.4l-3.4 2.9L11.6 14 8 11.6 4.4 14l1-4.7L2 6.4l4.4-1.2z'/></svg>")],
     ["codex", "data:image/svg+xml;utf8," + encodeURIComponent("<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><circle cx='8' cy='8' r='6' fill='none' stroke='#cccccc' stroke-width='1.5'/></svg>")],
+  ]),
+  accentIconUris: new Map([
+    ["claude\0#48a868", "data:image/svg+xml;utf8," + encodeURIComponent("<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path fill='#48a868' d='M8 1l1.6 4.2L14 6.4l-3.4 2.9L11.6 14 8 11.6 4.4 14l1-4.7L2 6.4l4.4-1.2z'/></svg>")],
+    ["claude\0#b07bd8", "data:image/svg+xml;utf8," + encodeURIComponent("<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path fill='#b07bd8' d='M8 1l1.6 4.2L14 6.4l-3.4 2.9L11.6 14 8 11.6 4.4 14l1-4.7L2 6.4l4.4-1.2z'/></svg>")],
+    ["claude\0#4e94ce", "data:image/svg+xml;utf8," + encodeURIComponent("<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path fill='#4e94ce' d='M8 1l1.6 4.2L14 6.4l-3.4 2.9L11.6 14 8 11.6 4.4 14l1-4.7L2 6.4l4.4-1.2z'/></svg>")],
   ]),
 };
 

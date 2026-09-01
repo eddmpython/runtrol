@@ -42,9 +42,9 @@ import { rememberedList, rememberList } from "./listMemory";
 import { rememberedUsage, rememberUsage } from "./usageMemory";
 import { setupRows } from "./usageDisplay";
 import { WorkspaceRootFollowing } from "./workspaceRoots";
-import { conversationIcon } from "./conversationIcon";
+import { accentedConversationIcon, conversationIcon } from "./conversationIcon";
 import { TerminalTabs } from "./terminalTabs";
-import { ConversationItem, ProjectItem, ServiceChoiceItem, icon } from "./sidebarTargets";
+import { ConversationItem, ProjectItem, ServiceChoiceItem } from "./sidebarTargets";
 import { SIDEBAR_VIEW_ID, SidebarView } from "./sidebarView";
 import { showMoreActions } from "./moreActions";
 
@@ -174,8 +174,12 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
   // The conversation surface: the service's own terminal interface in an editor tab, hosted by the Core.
   const terminals = new TerminalTabs(
     runtime,
-    (row) => icon(row, context.extensionUri),
-    (providerId) => conversationIcon(context.extensionUri, providerIcon(providerId, state.providers)),
+    (row, accent) => accentedConversationIcon(context.extensionUri, row.serviceIcon, accent),
+    (providerId, accent) => accentedConversationIcon(
+      context.extensionUri,
+      providerIcon(providerId, state.providers),
+      accent,
+    ),
     () => state.setStarted(terminals.startedConversations()),
     async (key) => {
       await controller.refreshChats();
@@ -260,7 +264,7 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
       await controller.inspectProviderUpdates(sideChannel);
       await releases.check(true);
     }),
-  }, (error) => void vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error)));
+  }, terminals, (error) => void vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error)));
   context.subscriptions.push(state.onDidChange((change) => {
     if (change !== "rows") return;
     if (state.coreReach !== "reached") {
