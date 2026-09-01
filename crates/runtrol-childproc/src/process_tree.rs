@@ -62,7 +62,14 @@ impl ProcessTree {
     /// A missing, vanished, cyclic, or deeper-than-bounded chain is not attributed.
     #[must_use]
     pub fn contains(&self, root: u32, candidate: u32) -> bool {
-        within(root, candidate, |pid| self.node_of(pid))
+        #[cfg(windows)]
+        {
+            within(root, candidate, |pid| self.node_of(pid))
+        }
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        {
+            within(root, candidate, Self::node_of)
+        }
     }
 
     #[cfg(windows)]
@@ -74,14 +81,23 @@ impl ProcessTree {
     }
 
     #[cfg(target_os = "linux")]
-    fn node_of(&self, pid: u32) -> Option<ProcessNode> {
-        let text = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    fn node_of(pid: u32) -> Option<ProcessNode> {
+        let text = match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+            Ok(text) => text,
+            Err(_) => return None,
+        };
         let tail = text.rsplit_once(") ")?.1;
         let mut fields = tail.split_whitespace();
         // The tail begins at field 3. Field 4 is the parent process id and field 22 is the kernel start tick.
         fields.next()?;
-        let parent = fields.next()?.parse().ok()?;
-        let started = fields.nth(17)?.parse().ok()?;
+        let parent = match fields.next()?.parse() {
+            Ok(parent) => parent,
+            Err(_) => return None,
+        };
+        let started = match fields.nth(17)?.parse() {
+            Ok(started) => started,
+            Err(_) => return None,
+        };
         Some(ProcessNode { parent, started })
     }
 
@@ -90,10 +106,16 @@ impl ProcessTree {
         unsafe_code,
         reason = "macOS exposes a process parent only through proc_pidinfo"
     )]
-    fn node_of(&self, pid: u32) -> Option<ProcessNode> {
-        let pid = i32::try_from(pid).ok()?;
+    fn node_of(pid: u32) -> Option<ProcessNode> {
+        let pid = match i32::try_from(pid) {
+            Ok(pid) => pid,
+            Err(_) => return None,
+        };
         let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::uninit();
-        let size = i32::try_from(size_of::<libc::proc_bsdinfo>()).ok()?;
+        let size = match i32::try_from(size_of::<libc::proc_bsdinfo>()) {
+            Ok(size) => size,
+            Err(_) => return None,
+        };
         // SAFETY: `info` is writable for the exact size passed to the kernel and is read only after a complete-size
         // result states that the structure was initialized.
         let read = unsafe {
