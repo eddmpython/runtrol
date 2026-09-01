@@ -10,6 +10,22 @@ and refactoring that no user can observe do not belong here.
 
 ## [Unreleased]
 
+## [0.1.43] - 2026-09-01
+
+### Changed
+
+- Idle Runtime recovery now uses one provider-neutral bounded schedule, and account usage readers start only when a
+  client asks for usage. Immediate provider filesystem notifications remain the primary discovery path.
+
+### Fixed
+
+- Two distinct provider conversations started in separate VS Code terminals under the same project now replace their
+  own provisional sidebar rows independently. Shell launchers are matched to their exact provider descendants by
+  current process ancestry and creation identity instead of requiring the provider PID to equal the terminal root.
+- Simultaneous terminal tabs no longer inherit the shared content-named Core executable label. Each tab identifies its
+  provider and hosted terminal process, while ambiguous process mappings remain unresolved instead of merging two
+  conversations.
+
 ## [0.1.42] - 2026-09-01
 
 ### Added
