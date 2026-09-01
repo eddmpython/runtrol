@@ -38,6 +38,11 @@ windows-sys = { workspace = true, features = [
     "Win32_System_Threading",
 ] }
 
+[target.'cfg(unix)'.dependencies]
+# Linux exposes the peer PID through Tokio's safe SO_PEERCRED wrapper. Apple additionally needs proc_pidinfo to
+# freeze that PID's kernel start instant while the authenticated socket is still live.
+libc = { workspace = true }
+
 [dev-dependencies]
 # Both ends of the connection run in one test, so one of them is a task.
 tokio = { workspace = true, features = ["rt", "macros", "net", "io-util", "time"] }

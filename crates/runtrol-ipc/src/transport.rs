@@ -33,6 +33,31 @@ use crate::frame::{Decoded, FrameError, MAX_FRAME, encode};
 /// that frame is being assembled and no longer, so one big message is a spike and not a new resting size.
 pub const READ_BUFFER: usize = 64 * 1024;
 
+/// Kernel identity of the process at the client end of an owner-only connection.
+///
+/// A PID alone can be reused. The start value is captured while the authenticated connection is accepted and uses
+/// the platform's native unit: Windows file time ticks, Linux boot ticks, or macOS epoch microseconds. Callers compare
+/// the complete pair and never interpret the value or persist it across a reboot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PeerProcess {
+    pid: u32,
+    started: u64,
+}
+
+impl PeerProcess {
+    /// Operating-system process identifier observed on the connected transport.
+    #[must_use]
+    pub const fn pid(self) -> u32 {
+        self.pid
+    }
+
+    /// Kernel start value that closes PID reuse for the lifetime of this machine boot.
+    #[must_use]
+    pub const fn started(self) -> u64 {
+        self.started
+    }
+}
+
 /// A connection could not be made, kept, or read.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
@@ -102,9 +127,19 @@ pub struct Connection {
     pending: BytesMut,
     /// Set once the other end has gone, so nothing keeps reading a finished connection.
     closed: bool,
+    /// Exact client process identity, present only on the accepting end of an owner-only endpoint.
+    peer_process: Option<PeerProcess>,
 }
 
 impl Connection {
+    /// Exact process at the other end when this is the accepting side of an owner-only endpoint.
+    ///
+    /// Ordinary private control endpoints and the connecting side carry no process authority.
+    #[must_use]
+    pub const fn peer_process(&self) -> Option<PeerProcess> {
+        self.peer_process
+    }
+
     /// Send one frame.
     ///
     /// # Errors
@@ -294,11 +329,12 @@ impl Listener {
     ///
     /// [`TransportError::Bind`] when the platform refuses to keep listening.
     pub async fn accept(&mut self) -> Result<Connection, TransportError> {
-        let stream = self.inner.accept(&self.address, self.owner_only).await?;
+        let (stream, peer_process) = self.inner.accept(&self.address, self.owner_only).await?;
         Ok(Connection {
             stream,
             pending: BytesMut::with_capacity(READ_BUFFER),
             closed: false,
+            peer_process,
         })
     }
 }
@@ -314,6 +350,7 @@ pub async fn connect(address: &str) -> Result<Connection, TransportError> {
         stream: platform::connect(address).await?,
         pending: BytesMut::with_capacity(READ_BUFFER),
         closed: false,
+        peer_process: None,
     })
 }
 
@@ -340,7 +377,7 @@ mod platform {
         ClientOptions, NamedPipeClient, NamedPipeServer, ServerOptions,
     };
     use windows_sys::Win32::Foundation::{
-        CloseHandle, GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE, LocalFree,
+        CloseHandle, FILETIME, GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE, LocalFree,
     };
     use windows_sys::Win32::Security::Authorization::{
         ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW,
@@ -359,10 +396,11 @@ mod platform {
         PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
     };
     use windows_sys::Win32::System::Threading::{
-        GetCurrentProcess, OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
+        GetCurrentProcess, GetProcessTimes, OpenProcess, OpenProcessToken,
+        PROCESS_QUERY_LIMITED_INFORMATION,
     };
 
-    use super::TransportError;
+    use super::{PeerProcess, TransportError};
 
     /// The byte stream, whichever end this is.
     pub(super) enum Stream {
@@ -451,7 +489,7 @@ mod platform {
             &mut self,
             address: &str,
             owner_only: bool,
-        ) -> Result<Stream, TransportError> {
+        ) -> Result<(Stream, Option<PeerProcess>), TransportError> {
             if owner_only != self.owner_only {
                 return Err(TransportError::Bind {
                     address: address.to_owned(),
@@ -494,7 +532,7 @@ mod platform {
                     address: address.to_owned(),
                     detail: "the Windows listener lost its connected pipe".to_owned(),
                 })?;
-                if owner_only {
+                let peer_process = if owner_only {
                     let mut peer = 0_u32;
                     // SAFETY: `waiting` owns a live connected pipe handle, and `peer` is a valid writable u32 for the
                     // duration of the call. The call borrows the handle and does not close or retain it.
@@ -517,8 +555,16 @@ mod platform {
                             });
                         }
                     }
-                }
-                return Ok(Stream::Server(waiting));
+                    let started =
+                        process_start_for_pid(peer).map_err(|error| TransportError::Bind {
+                            address: address.to_owned(),
+                            detail: error.to_string(),
+                        })?;
+                    Some(PeerProcess { pid: peer, started })
+                } else {
+                    None
+                };
+                return Ok((Stream::Server(waiting), peer_process));
             }
         }
     }
@@ -817,6 +863,38 @@ mod platform {
 
     #[expect(
         unsafe_code,
+        reason = "the connected pipe reports one client PID whose query handle yields an exact process creation time"
+    )]
+    fn process_start_for_pid(process_id: u32) -> std::io::Result<u64> {
+        // SAFETY: the process identifier came from the live connected pipe. The returned query-only handle is checked
+        // and transferred to `OwnedHandle` exactly once.
+        let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, process_id) };
+        if process.is_null() {
+            return Err(std::io::Error::last_os_error());
+        }
+        let process = OwnedHandle(process);
+        let mut creation = FILETIME::default();
+        let mut exit = FILETIME::default();
+        let mut kernel = FILETIME::default();
+        let mut user = FILETIME::default();
+        // SAFETY: the checked process handle has query rights and every output pointer names one writable FILETIME.
+        if unsafe {
+            GetProcessTimes(
+                process.0,
+                &raw mut creation,
+                &raw mut exit,
+                &raw mut kernel,
+                &raw mut user,
+            )
+        } == 0
+        {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok((u64::from(creation.dwHighDateTime) << 32) | u64::from(creation.dwLowDateTime))
+    }
+
+    #[expect(
+        unsafe_code,
         reason = "a borrowed live process handle is used only to open one owned query token"
     )]
     fn process_handle_user(process: HANDLE) -> std::io::Result<OwnedTokenUser> {
@@ -929,7 +1007,7 @@ mod platform {
 
     use tokio::net::{UnixListener, UnixStream};
 
-    use super::TransportError;
+    use super::{PeerProcess, TransportError};
 
     pub(super) fn create_owner_only_file(
         path: &std::path::Path,
@@ -1022,7 +1100,7 @@ mod platform {
             &mut self,
             address: &str,
             owner_only: bool,
-        ) -> Result<Stream, TransportError> {
+        ) -> Result<(Stream, Option<PeerProcess>), TransportError> {
             use std::os::unix::fs::MetadataExt as _;
 
             let (stream, _peer) =
@@ -1033,29 +1111,107 @@ mod platform {
                         address: address.to_owned(),
                         detail: error.to_string(),
                     })?;
-            if owner_only {
+            let peer_process = if owner_only {
                 let expected = std::fs::metadata(address)
                     .map_err(|error| TransportError::Bind {
                         address: address.to_owned(),
                         detail: error.to_string(),
                     })?
                     .uid();
-                let actual = stream
-                    .peer_cred()
-                    .map_err(|error| TransportError::Bind {
-                        address: address.to_owned(),
-                        detail: error.to_string(),
-                    })?
-                    .uid();
+                let credentials = stream.peer_cred().map_err(|error| TransportError::Bind {
+                    address: address.to_owned(),
+                    detail: error.to_string(),
+                })?;
+                let actual = credentials.uid();
                 if actual != expected {
                     return Err(TransportError::Bind {
                         address: address.to_owned(),
                         detail: "the Runtime socket peer does not match its owner".to_owned(),
                     });
                 }
-            }
-            Ok(stream)
+                let raw_pid = credentials.pid().ok_or_else(|| TransportError::Bind {
+                    address: address.to_owned(),
+                    detail: "the Runtime socket did not expose its peer process".to_owned(),
+                })?;
+                let pid = u32::try_from(raw_pid).map_err(|error| TransportError::Bind {
+                    address: address.to_owned(),
+                    detail: error.to_string(),
+                })?;
+                let started = process_start_for_pid(pid).map_err(|error| TransportError::Bind {
+                    address: address.to_owned(),
+                    detail: error.to_string(),
+                })?;
+                Some(PeerProcess { pid, started })
+            } else {
+                None
+            };
+            Ok((stream, peer_process))
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn process_start_for_pid(pid: u32) -> std::io::Result<u64> {
+        let text = std::fs::read_to_string(format!("/proc/{pid}/stat"))?;
+        let tail = text
+            .rsplit_once(") ")
+            .map(|(_, tail)| tail)
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "the process stat record has no command boundary",
+                )
+            })?;
+        tail.split_whitespace()
+            // Field 22 overall. The tail begins at field 3, so the start tick is index 19.
+            .nth(19)
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "the process stat record has no start tick",
+                )
+            })?
+            .parse::<u64>()
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
+    }
+
+    #[cfg(target_os = "macos")]
+    #[expect(
+        unsafe_code,
+        reason = "macOS exposes the connected peer process start instant only through proc_pidinfo"
+    )]
+    fn process_start_for_pid(pid: u32) -> std::io::Result<u64> {
+        let pid = i32::try_from(pid)
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))?;
+        let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::uninit();
+        let size = i32::try_from(std::mem::size_of::<libc::proc_bsdinfo>())
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))?;
+        // SAFETY: `info` is writable for the exact size passed to the kernel and is read only after a complete-size
+        // result states that every byte was initialized.
+        let read = unsafe {
+            libc::proc_pidinfo(
+                pid,
+                libc::PROC_PIDTBSDINFO,
+                0,
+                info.as_mut_ptr().cast(),
+                size,
+            )
+        };
+        if read != size {
+            return Err(if read == 0 {
+                std::io::Error::last_os_error()
+            } else {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "the kernel returned an incomplete process identity",
+                )
+            });
+        }
+        // SAFETY: the complete-size result above initialized every byte of `info`.
+        let info = unsafe { info.assume_init() };
+        info.pbi_start_tvsec
+            .checked_mul(1_000_000)
+            .and_then(|seconds| seconds.checked_add(info.pbi_start_tvusec))
+            .ok_or_else(|| std::io::Error::other("the process start identity overflowed"))
     }
 
     /// Connect to the daemon's socket.
@@ -1129,16 +1285,24 @@ mod tests {
             .expect("the owner-only endpoint binds");
         let serving = tokio::spawn(async move {
             let mut connection = listener.accept().await.expect("the owner arrives");
-            connection
+            let peer = connection
+                .peer_process()
+                .expect("an accepted owner-only connection carries its kernel peer");
+            let frame = connection
                 .recv()
                 .await
                 .expect("owner connection is readable")
-                .expect("owner frame arrives")
+                .expect("owner frame arrives");
+            (peer, frame)
         });
 
         let mut client = connect(&address).await.expect("the owner connects");
+        assert_eq!(client.peer_process(), None);
         client.send(b"owner").await.expect("owner frame writes");
-        assert_eq!(&*serving.await.expect("server task finishes"), b"owner");
+        let (peer, frame) = serving.await.expect("server task finishes");
+        assert_eq!(peer.pid(), std::process::id());
+        assert_ne!(peer.started(), 0);
+        assert_eq!(&*frame, b"owner");
     }
 
     #[tokio::test]
