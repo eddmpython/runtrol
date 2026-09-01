@@ -44,6 +44,8 @@ windows-sys = { workspace = true, features = [
 libc = { workspace = true }
 
 [dev-dependencies]
+# The owner-only transport and process-tree authority must agree on the exact PID plus birth tuple on every target.
+runtrol-childproc = { workspace = true }
 # Both ends of the connection run in one test, so one of them is a task.
 tokio = { workspace = true, features = ["rt", "macros", "net", "io-util", "time"] }
 

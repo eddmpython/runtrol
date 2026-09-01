@@ -1749,6 +1749,7 @@ dependencies = [
  "base64ct",
  "bytes",
  "libc",
+ "runtrol-childproc",
  "runtrol-provider",
  "serde",
  "serde_json",

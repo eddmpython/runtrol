@@ -35,6 +35,7 @@ pub mod id;
 pub mod manifest;
 pub mod native_catalogue;
 pub mod path;
+pub mod process;
 pub mod time;
 
 pub use account::{
@@ -78,4 +79,5 @@ pub use native_catalogue::{
     NativeSessionDeletion, NativeSessionEntry, NativeSessionQuery,
 };
 pub use path::{AbsPath, PathError, WorkspaceAccess};
+pub use process::ProcessIdentity;
 pub use time::WallMs;

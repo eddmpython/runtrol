@@ -236,6 +236,9 @@ struct Live {
     /// The process the driver owns, read when it attached. Kept here rather than asked of the agent, because
     /// the agent is taken out of this map for the length of every turn and the listing must not go blank then.
     pid: Option<u32>,
+    /// Exact process incarnation captured at attach for authority checks. Missing proof disables structural
+    /// attribution without hiding the PID from best-effort resource observation.
+    process: Option<runtrol_provider::ProcessIdentity>,
     /// Where its events are numbered and fanned out.
     hub: SessionHub,
     /// Its two names.
@@ -249,6 +252,30 @@ struct Live {
     project: ProjectIdentity,
     /// What it is doing.
     state: SessionState,
+}
+
+impl Live {
+    fn attached(
+        session: SessionId,
+        agent: Box<dyn Agent>,
+        identity: Identity,
+        workspace: AbsPath,
+        project: ProjectIdentity,
+        state: SessionState,
+    ) -> Self {
+        let pid = agent.pid();
+        let process = pid.and_then(runtrol_childproc::process_identity);
+        Self {
+            agent: Some(agent),
+            pid,
+            process,
+            hub: SessionHub::new(session),
+            identity,
+            workspace,
+            project,
+            state,
+        }
+    }
 }
 
 /// One event, and which session produced it.
@@ -886,18 +913,9 @@ impl SessionManager {
         drop(state.observe(Observed::Attaching, now));
         drop(state.observe(Observed::Attached, now));
 
-        let pid = agent.pid();
         self.live.insert(
             session,
-            Live {
-                agent: Some(agent),
-                pid,
-                hub: SessionHub::new(session),
-                identity,
-                workspace,
-                project: held.project,
-                state,
-            },
+            Live::attached(session, agent, identity, workspace, held.project, state),
         );
         Ok(AttachedSession { session })
     }
@@ -1569,6 +1587,7 @@ impl SessionManager {
             workspace: &live.workspace,
             tier: Tier::Hot,
             pid: live.pid,
+            process: live.process,
             state: &live.state,
             stream: live.hub.live_at().stream,
         })
@@ -1593,6 +1612,7 @@ impl SessionManager {
             workspace: &live.workspace,
             tier: Tier::Hot,
             pid: live.pid,
+            process: live.process,
             state: &live.state,
             stream: live.hub.live_at().stream,
         })
@@ -1649,6 +1669,8 @@ pub struct LiveSession<'manager> {
     pub tier: Tier,
     /// The provider process behind it, when the driver owns one.
     pub pid: Option<u32>,
+    /// Exact provider process incarnation, when the operating system proved it at attach.
+    pub process: Option<runtrol_provider::ProcessIdentity>,
     /// What it is doing.
     pub state: &'manager SessionState,
     /// Volatile process incarnation used to invalidate authority across close and reopen.

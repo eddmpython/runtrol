@@ -40,21 +40,30 @@ pub const READ_BUFFER: usize = 64 * 1024;
 /// the complete pair and never interpret the value or persist it across a reboot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PeerProcess {
-    pid: u32,
-    started: u64,
+    identity: runtrol_provider::ProcessIdentity,
 }
 
 impl PeerProcess {
+    fn new(pid: u32, started: u64) -> Option<Self> {
+        runtrol_provider::ProcessIdentity::new(pid, started).map(|identity| Self { identity })
+    }
+
     /// Operating-system process identifier observed on the connected transport.
     #[must_use]
     pub const fn pid(self) -> u32 {
-        self.pid
+        self.identity.pid()
     }
 
     /// Kernel start value that closes PID reuse for the lifetime of this machine boot.
     #[must_use]
     pub const fn started(self) -> u64 {
-        self.started
+        self.identity.started()
+    }
+
+    /// Complete structural process identity for ancestry and PID-reuse checks.
+    #[must_use]
+    pub const fn identity(self) -> runtrol_provider::ProcessIdentity {
+        self.identity
     }
 }
 
@@ -560,7 +569,13 @@ mod platform {
                             address: address.to_owned(),
                             detail: error.to_string(),
                         })?;
-                    Some(PeerProcess { pid: peer, started })
+                    Some(
+                        PeerProcess::new(peer, started).ok_or_else(|| TransportError::Bind {
+                            address: address.to_owned(),
+                            detail: "the Runtime pipe peer exposed an unusable process identity"
+                                .to_owned(),
+                        })?,
+                    )
                 } else {
                     None
                 };
@@ -1141,7 +1156,13 @@ mod platform {
                     address: address.to_owned(),
                     detail: error.to_string(),
                 })?;
-                Some(PeerProcess { pid, started })
+                Some(
+                    PeerProcess::new(pid, started).ok_or_else(|| TransportError::Bind {
+                        address: address.to_owned(),
+                        detail: "the Runtime socket peer exposed an unusable process identity"
+                            .to_owned(),
+                    })?,
+                )
             } else {
                 None
             };
@@ -1302,6 +1323,11 @@ mod tests {
         let (peer, frame) = serving.await.expect("server task finishes");
         assert_eq!(peer.pid(), std::process::id());
         assert_ne!(peer.started(), 0);
+        assert_eq!(
+            peer.identity(),
+            runtrol_childproc::process_identity(std::process::id())
+                .expect("the process-tree authority reads the same current client")
+        );
         assert_eq!(&*frame, b"owner");
     }
 

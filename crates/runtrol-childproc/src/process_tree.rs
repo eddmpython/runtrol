@@ -8,6 +8,8 @@
 #[cfg(any(windows, target_os = "macos"))]
 use std::mem::size_of;
 
+use runtrol_provider::ProcessIdentity;
+
 const MAX_ANCESTOR_DEPTH: usize = 64;
 
 /// A bounded snapshot or query surface for current process ancestry.
@@ -69,6 +71,23 @@ impl ProcessTree {
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
             within(root, candidate, Self::node_of)
+        }
+    }
+
+    /// Whether one exact process incarnation is the root or its current descendant.
+    ///
+    /// Both endpoint birth stamps are checked before any captured parent edge is trusted. This is the authority
+    /// form of [`Self::contains`]: callers holding an authenticated peer or supervised process identity must use the
+    /// complete tuple so a recycled endpoint PID cannot inherit authority.
+    #[must_use]
+    pub fn contains_identity(&self, root: ProcessIdentity, candidate: ProcessIdentity) -> bool {
+        #[cfg(windows)]
+        {
+            within_identity(root, candidate, |pid| self.node_of(pid))
+        }
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        {
+            within_identity(root, candidate, Self::node_of)
         }
     }
 
@@ -138,6 +157,22 @@ impl ProcessTree {
     }
 }
 
+/// Read the exact current incarnation of one process.
+///
+/// This performs one bounded kernel query and returns `None` when the PID is zero, has vanished, cannot be inspected,
+/// or exposes no usable start stamp. It does not enumerate the process table.
+#[must_use]
+pub fn process_identity(pid: u32) -> Option<ProcessIdentity> {
+    if pid == 0 {
+        return None;
+    }
+    #[cfg(windows)]
+    let started = windows_process_start(pid)?;
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    let started = ProcessTree::node_of(pid)?.started;
+    ProcessIdentity::new(pid, started)
+}
+
 fn within(
     root: u32,
     mut candidate: u32,
@@ -169,6 +204,22 @@ fn within(
         candidate = node.parent;
     }
     false
+}
+
+fn within_identity(
+    root: ProcessIdentity,
+    candidate: ProcessIdentity,
+    mut node_of: impl FnMut(u32) -> Option<ProcessNode>,
+) -> bool {
+    let root_node = node_of(root.pid());
+    if root_node.is_none_or(|node| node.started != root.started()) {
+        return false;
+    }
+    let candidate_node = node_of(candidate.pid());
+    if candidate_node.is_none_or(|node| node.started != candidate.started()) {
+        return false;
+    }
+    within(root.pid(), candidate.pid(), node_of)
 }
 
 #[cfg(windows)]
@@ -440,10 +491,48 @@ mod tests {
     }
 
     #[test]
+    fn exact_endpoint_stamps_close_pid_reuse_at_both_ends() {
+        let nodes = BTreeMap::from([
+            (
+                10,
+                ProcessNode {
+                    parent: 1,
+                    started: 10,
+                },
+            ),
+            (
+                20,
+                ProcessNode {
+                    parent: 10,
+                    started: 20,
+                },
+            ),
+        ]);
+        let root = ProcessIdentity::new(10, 10).expect("the fixture root is usable");
+        let candidate = ProcessIdentity::new(20, 20).expect("the fixture child is usable");
+        let stale_root = ProcessIdentity::new(10, 9).expect("the stale fixture root is usable");
+        let stale_candidate =
+            ProcessIdentity::new(20, 19).expect("the stale fixture child is usable");
+
+        assert!(within_identity(root, candidate, |pid| nodes
+            .get(&pid)
+            .copied()));
+        assert!(!within_identity(stale_root, candidate, |pid| nodes
+            .get(&pid)
+            .copied()));
+        assert!(!within_identity(root, stale_candidate, |pid| nodes
+            .get(&pid)
+            .copied()));
+    }
+
+    #[test]
     fn captured_tree_contains_the_current_process_itself() {
         let tree = ProcessTree::capture().expect("the current process tree is inspectable");
+        let current = process_identity(std::process::id())
+            .expect("the current process has an exact kernel identity");
 
         assert!(tree.contains(std::process::id(), std::process::id()));
+        assert!(tree.contains_identity(current, current));
     }
 
     #[test]
@@ -462,8 +551,13 @@ mod tests {
             .expect("the owned descendant probe starts");
         let child = ProbeChild(child);
         let tree = ProcessTree::capture().expect("the current process tree is inspectable");
+        let root = process_identity(std::process::id())
+            .expect("the current process has an exact kernel identity");
+        let descendant =
+            process_identity(child.0.id()).expect("the child has an exact kernel identity");
 
         assert!(tree.contains(std::process::id(), child.0.id()));
+        assert!(tree.contains_identity(root, descendant));
     }
 
     #[test]

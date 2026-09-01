@@ -67,7 +67,7 @@ pub use footprint::resident_bytes;
 pub use handoff::keep_handles_to_ourselves;
 pub use held::{holder_of, holder_of_here, write_locked};
 pub use local_terminal::{LocalTerminal, LocalTerminalSize};
-pub use process_tree::{ProcessTree, ProcessTreeError};
+pub use process_tree::{ProcessTree, ProcessTreeError, process_identity};
 pub use pty::{PtyChild, PtySize, PtySpawn};
 pub use resolve::{LauncherKept, Program, ProgramKind, resolve};
 pub use run::{MAX_OUTPUT_BYTES, Output, capture, capture_in, capture_with_input};
