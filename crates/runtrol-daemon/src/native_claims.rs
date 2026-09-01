@@ -266,6 +266,7 @@ impl NativeLiveClaimRegistry {
     ///
     /// The same conflict scan as a native resume runs before the local claim changes, so a late provider roster
     /// observation cannot create a second owner for a conversation already claimed elsewhere.
+    #[cfg(test)]
     pub(crate) fn bind_terminal_native(
         &self,
         terminal: TerminalId,
@@ -273,18 +274,38 @@ impl NativeLiveClaimRegistry {
         native_session_id: &str,
         workspace: &str,
     ) -> Result<bool, TerminalClaimError> {
+        self.bind_terminal_natives(&[(terminal, provider_id, native_session_id, workspace)])
+            .map(|mut changed| changed.pop().unwrap_or(false))
+    }
+
+    /// Atomically bind one provider observation containing several previously unnamed terminals.
+    ///
+    /// Two fresh conversations may start in separate terminals of the same workspace before either provider-native
+    /// identity exists. Binding them one at a time makes the still-unnamed sibling look like a possible duplicate of
+    /// the first. A complete structural observation resolves both at once, so the batch excludes only its own exact
+    /// terminal claims while checking every structured, remote, pending, and unrelated terminal owner.
+    pub(crate) fn bind_terminal_natives(
+        &self,
+        bindings: &[(TerminalId, &str, &str, &str)],
+    ) -> Result<Vec<bool>, TerminalClaimError> {
         let mut state = self.state.write().map_err(|_| TerminalClaimError::State)?;
-        let existing = state
-            .terminals
-            .get(&terminal)
-            .cloned()
-            .ok_or(TerminalClaimError::State)?;
-        if existing.provider_id.as_ref() != provider_id || existing.workspace.as_ref() != workspace
-        {
+        let terminal_ids = bindings
+            .iter()
+            .map(|(terminal, _, _, _)| *terminal)
+            .collect::<BTreeSet<_>>();
+        if terminal_ids.len() != bindings.len() {
             return Err(TerminalClaimError::State);
         }
-        if existing.native_session_id.as_deref() == Some(native_session_id) {
-            return Ok(false);
+        for (terminal, provider_id, _native_session_id, workspace) in bindings {
+            let existing = state
+                .terminals
+                .get(terminal)
+                .ok_or(TerminalClaimError::State)?;
+            if existing.provider_id.as_ref() != *provider_id
+                || existing.workspace.as_ref() != *workspace
+            {
+                return Err(TerminalClaimError::State);
+            }
         }
         // A terminal already bound to one conversation may move to another: the CLI's own `/resume` and
         // `/clear` change the conversation a running process is in, and its roster then names the new one
@@ -292,35 +313,60 @@ impl NativeLiveClaimRegistry {
         // the old conversation, so the row for the new one had no terminal to join and a click opened a
         // second process on the same conversation; every roster round after that answered with an error.
         // The new identity is checked against every other claim exactly as a first binding is.
-        for claim in state
-            .structured
-            .values()
-            .chain(state.pending_terminals.values())
-            .chain(
-                state
-                    .terminals
-                    .iter()
-                    .filter(|(id, _)| **id != terminal)
-                    .map(|(_, claim)| claim),
-            )
-            .chain(state.remote.values().flatten())
-        {
-            if let Some(error) = claim_conflict(
-                provider_id,
-                Some(native_session_id),
-                workspace,
-                claim,
-                false,
-            ) {
-                return Err(error);
+        for (_terminal, provider_id, native_session_id, workspace) in bindings {
+            for claim in state
+                .structured
+                .values()
+                .chain(state.pending_terminals.values())
+                .chain(
+                    state
+                        .terminals
+                        .iter()
+                        .filter(|(id, _)| !terminal_ids.contains(id))
+                        .map(|(_, claim)| claim),
+                )
+                .chain(state.remote.values().flatten())
+            {
+                if let Some(error) = claim_conflict(
+                    provider_id,
+                    Some(native_session_id),
+                    workspace,
+                    claim,
+                    false,
+                ) {
+                    return Err(error);
+                }
             }
         }
-        let claim = state
-            .terminals
-            .get_mut(&terminal)
-            .ok_or(TerminalClaimError::State)?;
-        claim.native_session_id = Some(native_session_id.into());
-        Ok(true)
+        for (index, (_terminal, provider_id, native_session_id, workspace)) in
+            bindings.iter().enumerate()
+        {
+            for (_other_terminal, other_provider, other_native, other_workspace) in
+                bindings.iter().skip(index + 1)
+            {
+                if provider_id != other_provider || native_session_id != other_native {
+                    continue;
+                }
+                return Err(if workspace == other_workspace {
+                    TerminalClaimError::TerminalAlreadyLive
+                } else {
+                    TerminalClaimError::WorkspaceConflict
+                });
+            }
+        }
+        let mut changed = Vec::with_capacity(bindings.len());
+        for (terminal, _provider_id, native_session_id, _workspace) in bindings {
+            let claim = state
+                .terminals
+                .get_mut(terminal)
+                .ok_or(TerminalClaimError::State)?;
+            let is_changed = claim.native_session_id.as_deref() != Some(*native_session_id);
+            if is_changed {
+                claim.native_session_id = Some((*native_session_id).into());
+            }
+            changed.push(is_changed);
+        }
+        Ok(changed)
     }
 
     /// Whether a live process claim makes one provider-native mutation unsafe.
@@ -640,6 +686,40 @@ mod tests {
                 .first()
                 .and_then(|claim| claim.native_session_id.as_deref()),
             Some("native")
+        );
+    }
+
+    #[test]
+    fn one_provider_observation_atomically_names_two_fresh_sibling_terminals() {
+        let registry = NativeLiveClaimRegistry::default();
+        let first = TerminalId::now();
+        let second = TerminalId::now();
+        for terminal_id in [first, second] {
+            let TerminalClaimAdmission::Reserved(terminal) = registry
+                .reserve_terminal(terminal_id, "example", None, "/work", false)
+                .expect("fresh terminal claim")
+            else {
+                panic!("fresh terminal unexpectedly joined");
+            };
+            terminal.commit().expect("committed terminal claim");
+        }
+
+        assert_eq!(
+            registry
+                .bind_terminal_natives(&[
+                    (first, "example", "native-first", "/work"),
+                    (second, "example", "native-second", "/work"),
+                ])
+                .expect("the complete provider observation binds atomically"),
+            vec![true, true]
+        );
+        let claims = registry.snapshot_except(None);
+        assert_eq!(
+            claims
+                .iter()
+                .filter_map(|claim| claim.native_session_id.as_deref())
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from(["native-first", "native-second"])
         );
     }
 

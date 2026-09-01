@@ -180,8 +180,8 @@ where
         },
     )
     .await?;
-    let writable = match receive(&mut connection).await? {
-        Response::TerminalOpened { writable, .. } => writable,
+    let (pid, writable) = match receive(&mut connection).await? {
+        Response::TerminalOpened { pid, writable, .. } => (pid, writable),
         Response::Failed(error) => {
             return Err(BridgeFailure::Refused {
                 message: error.message,
@@ -194,8 +194,16 @@ where
         }
     };
 
-    let mut input = tokio::io::stdin();
     let mut output = tokio::io::stdout();
+    // This title is local viewer presentation. It never enters the hosted PTY, shared screen, output ring, another
+    // viewer, or the provider transcript. Showing the hosted terminal process rather than the content-named Core
+    // executable keeps two simultaneous shell-launched conversations visibly distinct until the provider publishes
+    // a title.
+    output
+        .write_all(&local_process_title(provider, pid))
+        .await?;
+    output.flush().await?;
+    let mut input = tokio::io::stdin();
     let mut input_buffer = [0_u8; 4096];
     let mut last_size = initial_size;
     let mut resize = tokio::time::interval(RESIZE_INTERVAL);
@@ -247,6 +255,10 @@ where
             }
         }
     }
+}
+
+fn local_process_title(provider: &str, pid: u32) -> Vec<u8> {
+    format!("\x1b]0;Runtrol {provider} [{pid}]\x07").into_bytes()
 }
 
 async fn draw(
@@ -303,5 +315,18 @@ fn response_kind(response: &Response) -> &'static str {
         Response::TerminalExited { .. } => "a terminal exit before open acknowledgement",
         Response::Failed(_) => "a refusal",
         _ => "a non-terminal response",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::local_process_title;
+
+    #[test]
+    fn local_bridge_title_names_the_hosted_process_not_the_shared_core_binary() {
+        assert_eq!(
+            local_process_title("codex", 30_996),
+            b"\x1b]0;Runtrol codex [30996]\x07"
+        );
     }
 }

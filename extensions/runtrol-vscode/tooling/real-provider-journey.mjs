@@ -12,14 +12,16 @@ import {
   withoutHostIdentity,
 } from "./isolated-vscode.mjs";
 
-const output = path.join(extensionRoot, ".test-dist");
-const testEntry = path.join(output, "realProviderJourney.test.cjs");
 const core = requiredEnvironment("RUNTROL_TEST_CORE");
 const resultPath = requiredEnvironment("RUNTROL_VSCODE_RESULT");
 const firstWorkspace = requiredEnvironment("RUNTROL_VSCODE_WORKSPACE_ONE");
 const secondWorkspace = requiredEnvironment("RUNTROL_VSCODE_WORKSPACE_TWO");
 const userData = requiredEnvironment("RUNTROL_VSCODE_USER_DATA");
 const extensions = requiredEnvironment("RUNTROL_VSCODE_EXTENSIONS");
+// The journey spans two separate Extension Hosts. Its test module must survive between them and must not share the
+// repository's unit-test output directory with another tool that owns cleanup there.
+const output = path.join(userData, "tests");
+const testEntry = path.join(output, "realProviderJourney.test.cjs");
 const configuredVscode = requiredEnvironment("RUNTROL_TEST_VSCODE_EXECUTABLE");
 const repositoryRoot = path.resolve(extensionRoot, "../..");
 const publicSchema = JSON.parse(await readFile(

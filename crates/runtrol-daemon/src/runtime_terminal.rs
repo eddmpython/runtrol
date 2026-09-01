@@ -6,6 +6,7 @@
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use base64ct::{Base64, Encoding as _};
 use runtrol_core::terminal::{Attachment, TerminalError, ViewerKind};
@@ -41,6 +42,40 @@ use crate::terminal_surface::HostedTerminal;
 const LEASE_LIFETIME_MS: u64 = runtrol_runtime_protocol::CONTROL_LEASE_LIFETIME_MS;
 /// Filesystem identity checks may block in the operating system, so they get a small separate global lane.
 pub(crate) const ROOT_CHECK_SLOTS: usize = 2;
+pub(crate) const ROOT_CHECK_DEADLINE: Duration = Duration::from_millis(400);
+
+/// Run one filesystem proof without mistaking a delayed async poll for a late blocking result.
+pub(crate) async fn run_root_check<T, F>(
+    permits: Arc<tokio::sync::Semaphore>,
+    check: F,
+) -> Result<T, ()>
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
+    let started = Instant::now();
+    let deadline = started + ROOT_CHECK_DEADLINE;
+    let permit = tokio::select! {
+        biased;
+        permit = permits.acquire_owned() => permit.map_err(drop)?,
+        () = tokio::time::sleep_until(tokio::time::Instant::from_std(deadline)) => return Err(()),
+    };
+    let mut worker = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        let answer = check();
+        (Instant::now(), answer)
+    });
+    let deadline_wait = tokio::time::sleep_until(tokio::time::Instant::from_std(deadline));
+    tokio::pin!(deadline_wait);
+    tokio::select! {
+        biased;
+        joined = &mut worker => match joined {
+            Ok((finished, answer)) if finished <= deadline => Ok(answer),
+            Ok(_) | Err(_) => Err(()),
+        },
+        () = &mut deadline_wait => Err(()),
+    }
+}
 
 /// Public terminal state that is deliberately separate from the PTY host.
 pub(crate) struct TerminalRuntimeAdapter {
@@ -232,20 +267,11 @@ impl TerminalRuntimeAdapter {
     ) -> Result<Vec<AuthorizedRoot>, TerminalRuntimeFailure> {
         let permits = composed.terminal_root_checks.clone();
         let authority = authority.clone();
-        let checked = tokio::time::timeout(std::time::Duration::from_millis(400), async {
-            let permit = permits.acquire_owned().await.map_err(drop)?;
-            tokio::task::spawn_blocking(move || {
-                let _permit = permit;
-                current_roots(&authority)
-            })
-            .await
-            .map_err(drop)
-        })
-        .await;
+        let checked = run_root_check(permits, move || current_roots(&authority)).await;
         match checked {
-            Ok(Ok(Ok(roots))) => Ok(roots),
-            Ok(Ok(Err(failure))) => Err(failure),
-            Ok(Err(())) | Err(_) => Err(root_authority_failure()),
+            Ok(Ok(roots)) => Ok(roots),
+            Ok(Err(failure)) => Err(failure),
+            Err(()) => Err(root_authority_failure()),
         }
     }
 
@@ -1720,6 +1746,45 @@ pub(crate) fn has_scopes(grant: &IntegrationGrant, scopes: &[AppScope]) -> bool 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_completed_root_check_survives_delayed_async_observation() {
+        let permits = Arc::new(tokio::sync::Semaphore::new(1));
+        let (started_tx, started_rx) = std::sync::mpsc::sync_channel(1);
+        let (release_tx, release_rx) = std::sync::mpsc::sync_channel(1);
+        let check = tokio::spawn(run_root_check(permits, move || {
+            started_tx.send(()).expect("announce blocking check");
+            release_rx.recv().expect("release blocking check");
+            true
+        }));
+        loop {
+            match started_rx.try_recv() {
+                Ok(()) => break,
+                Err(std::sync::mpsc::TryRecvError::Empty) => tokio::task::yield_now().await,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    panic!("blocking check ended before announcing itself")
+                }
+            }
+        }
+        release_tx.send(()).expect("finish blocking check");
+        std::thread::sleep(ROOT_CHECK_DEADLINE + Duration::from_millis(100));
+        assert_eq!(
+            check.await.expect("join root check"),
+            Ok(true),
+            "a result completed within the deadline must win when the async runtime observes both it and the timer late"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_root_check_that_really_finishes_late_is_refused() {
+        let permits = Arc::new(tokio::sync::Semaphore::new(1));
+        let checked = run_root_check(permits, || {
+            std::thread::sleep(ROOT_CHECK_DEADLINE + Duration::from_millis(100));
+            true
+        })
+        .await;
+        assert_eq!(checked, Err(()));
+    }
 
     #[test]
     fn terminal_geometry_is_rejected_instead_of_silently_clamped() {

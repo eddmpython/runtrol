@@ -14,6 +14,8 @@ import { HIDE_CURSOR, hasVisibleText, MARK_FRAME_MS, paintMark, SHOW_CURSOR } fr
 import type { StudioRuntimeClient } from "./runtimeClient";
 
 const MAX_PENDING_INPUT_ACTIONS = 256;
+const MAX_RECENT_JOURNEY_ENDS = 32;
+const MAX_JOURNEY_END_REASON_CHARS = 512;
 
 export type JourneyInputTiming = {
   receivedAtMs: number;
@@ -44,6 +46,9 @@ export class TerminalTabs implements vscode.Disposable {
   /// Exact public identities returned for open tabs, retained until that tab closes even if its watch drops.
   private readonly journeyTargets = new Map<string, TerminalDescriptor>();
   private readonly journeyTargetByTab = new Map<vscode.Terminal, string>();
+  /// Bounded test diagnostics for a terminal that ended before an installed-host assertion reached it.
+  /// Reasons contain lifecycle metadata only, never terminal output or a conversation transcript.
+  private readonly journeyEnds = new Map<string, string>();
   /// Conversations opened here that no service has described yet, by the tab showing each one.
   private readonly started = new Map<vscode.Terminal, StartedConversation>();
   private nextStarted = 0;
@@ -136,7 +141,9 @@ export class TerminalTabs implements vscode.Disposable {
 
   /// Stop routing future clicks to a terminal whose Runtime view has ended, while leaving its final screen in
   /// the editor for diagnosis. A later click can then make a fresh connection instead of revealing a dead tab.
-  private retireDisconnected(terminal: vscode.Terminal): void {
+  private retireDisconnected(terminal: vscode.Terminal, reason: string): void {
+    const journeyKey = this.journeyTargetByTab.get(terminal);
+    if (journeyKey !== undefined) this.rememberJourneyEnd(journeyKey, reason);
     for (const [key, open] of this.open) {
       if (open === terminal) this.open.delete(key);
     }
@@ -165,8 +172,8 @@ export class TerminalTabs implements vscode.Disposable {
       return again ? targetOf(again) : null;
     }, (descriptor) => {
       if (terminal) this.rememberJourneyTerminal(terminal, descriptor);
-    }, () => {
-      if (terminal) this.retireDisconnected(terminal);
+    }, (reason) => {
+      if (terminal) this.retireDisconnected(terminal, reason);
     });
     // The tab is named for the conversation and coloured for its project. The name answers "which conversation",
     // the colour answers "whose project", and the two together fit in the width a tab actually has.
@@ -205,8 +212,8 @@ export class TerminalTabs implements vscode.Disposable {
         this.rememberJourneyTerminal(terminal, descriptor);
         this.bindStartedTerminal(terminal, descriptor);
       }
-    }, () => {
-      if (terminal) this.retireDisconnected(terminal);
+    }, (reason) => {
+      if (terminal) this.retireDisconnected(terminal, reason);
     });
     const colour = projectless ? null : tabColorId(workspace);
     terminal = vscode.window.createTerminal({
@@ -261,6 +268,17 @@ export class TerminalTabs implements vscode.Disposable {
     const key = terminalIdentity(descriptor.runtimeGeneration, descriptor.terminalId);
     this.journeyTargetByTab.set(terminal, key);
     this.journeyTargets.set(key, descriptor);
+    this.journeyEnds.delete(key);
+  }
+
+  private rememberJourneyEnd(key: string, reason: string): void {
+    this.journeyEnds.delete(key);
+    this.journeyEnds.set(key, reason.slice(0, MAX_JOURNEY_END_REASON_CHARS));
+    while (this.journeyEnds.size > MAX_RECENT_JOURNEY_ENDS) {
+      const oldest = this.journeyEnds.keys().next().value as string | undefined;
+      if (oldest === undefined) break;
+      this.journeyEnds.delete(oldest);
+    }
   }
 
   private forgetJourneyTerminal(terminal: vscode.Terminal): void {
@@ -295,13 +313,13 @@ export class TerminalTabs implements vscode.Disposable {
     deadlineMs: number,
   ): Promise<number> {
     const found = this.journeyHost({ runtimeGeneration, terminalId });
-    if (!found) throw new Error(`terminal ${terminalId} is not open in this VS Code window`);
+    if (!found) throw this.journeyUnavailable(runtimeGeneration, terminalId);
     return found[1].waitForOutput(text, deadlineMs);
   }
 
   writeJourneyInput(runtimeGeneration: string, terminalId: string, text: string): Promise<JourneyInputTiming> {
     const found = this.journeyHost({ runtimeGeneration, terminalId });
-    if (!found) throw new Error(`terminal ${terminalId} is not open in this VS Code window`);
+    if (!found) throw this.journeyUnavailable(runtimeGeneration, terminalId);
     // Use VS Code's public Terminal API. This enters RuntimeTerminal.handleInput exactly as keyboard input does.
     const measured = found[1].measureNextInput();
     found[0].sendText(text, true);
@@ -313,15 +331,22 @@ export class TerminalTabs implements vscode.Disposable {
   /// fan-out latency without charging VS Code's extension-to-renderer-to-extension test loop to the product path.
   writeDirectJourneyInput(runtimeGeneration: string, terminalId: string, text: string): Promise<JourneyInputTiming> {
     const found = this.journeyHost({ runtimeGeneration, terminalId });
-    if (!found) throw new Error(`terminal ${terminalId} is not open in this VS Code window`);
+    if (!found) throw this.journeyUnavailable(runtimeGeneration, terminalId);
     return found[1].handleMeasuredInput(text);
   }
 
   /// Test-only exact stop through the same Runtime terminal identity the public open response returned.
   async stopJourneyTerminal(runtimeGeneration: string, terminalId: string): Promise<void> {
     const descriptor = this.journeyTargets.get(terminalIdentity(runtimeGeneration, terminalId));
-    if (!descriptor) throw new Error(`terminal ${terminalId} is not open in this VS Code window`);
+    if (!descriptor) throw this.journeyUnavailable(runtimeGeneration, terminalId);
     await this.runtime.stopTerminal(descriptor);
+  }
+
+  private journeyUnavailable(runtimeGeneration: string, terminalId: string): Error {
+    const reason = this.journeyEnds.get(terminalIdentity(runtimeGeneration, terminalId));
+    return new Error(reason
+      ? `terminal ${terminalId} ended in this VS Code window: ${reason}`
+      : `terminal ${terminalId} is not open in this VS Code window`);
   }
 
   private journeyHost(
@@ -381,6 +406,7 @@ export class TerminalTabs implements vscode.Disposable {
     this.hosts.clear();
     this.journeyTargets.clear();
     this.journeyTargetByTab.clear();
+    this.journeyEnds.clear();
   }
 }
 
@@ -491,7 +517,7 @@ class RuntimeTerminal implements vscode.Pseudoterminal {
     /// The exact hosted terminal identity returned by Runtime, used to name a fresh placeholder safely.
     private readonly connected: (terminal: TerminalDescriptor) => void,
     /// Withdraw this dead route while leaving its final editor contents visible.
-    private readonly disconnected: () => void,
+    private readonly disconnected: (reason: string) => void,
   ) {}
 
   /// Every failure below leaves the tab standing with the reason written in it.
@@ -783,7 +809,7 @@ class RuntimeTerminal implements vscode.Pseudoterminal {
               this.writeEmitter.fire(`
 \x1b[2m[${this.target.provider} ended with code ${notification.exitCode}]\x1b[0m
 `);
-              this.detach(false);
+              this.detach(false, `provider terminal exited with code ${notification.exitCode}`);
             }
             return;
         }
@@ -868,17 +894,17 @@ class RuntimeTerminal implements vscode.Pseudoterminal {
     const message = error instanceof Error ? error.message : String(error);
     this.stopOpeningMark();
     this.writeEmitter.fire(`\r\n\x1b[31m${message}\x1b[0m\r\n`);
-    this.detach(false);
+    this.detach(false, `Runtime terminal failed: ${message}`);
   }
 
   private end(code?: number): void {
     if (this.closed) return;
-    this.detach(false);
+    this.detach(false, `provider terminal exited with code ${code ?? "unknown"}`);
     this.closeEmitter.fire(code);
   }
 
   /// Stop carrying the view but leave the tab open, so what the service wrote last stays readable.
-  private detach(notifyRuntime: boolean): void {
+  private detach(notifyRuntime: boolean, reason = "terminal view disconnected"): void {
     if (this.closed) return;
     this.closed = true;
     // A tab closed while it was still opening leaves a timer drawing into an emitter nobody reads.
@@ -889,7 +915,7 @@ class RuntimeTerminal implements vscode.Pseudoterminal {
     const view = this.view;
     this.view = null;
     this.lease = null;
-    if (!notifyRuntime) this.disconnected();
+    if (!notifyRuntime) this.disconnected(reason);
     if (!view) return;
     if (notifyRuntime) {
       void view.detach({

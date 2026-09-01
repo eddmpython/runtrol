@@ -62,6 +62,9 @@ struct Open {
     workspace: AbsPath,
     /// Provider-owned identity known before launch, never inferred from output.
     native: Option<Box<str>>,
+    /// Provider-roster process structurally attributed to this owned PTY for the current native identity.
+    /// Remembering it avoids a whole-system ancestry snapshot on every unchanged provider observation.
+    native_process_pid: Option<u32>,
     /// Structural process start time.
     opened_at_ms: u64,
     /// Process incarnation for stale lease checks. Terminal IDs are unique, so the first incarnation is one.
@@ -158,45 +161,150 @@ impl Terminals {
         Some(HostedTerminal::from_open(id, open))
     }
 
-    /// Bind a provider-minted identity to the exact PTY process that its roster names.
-    pub(crate) fn bind_native_process(
-        &mut self,
-        claims: &crate::native_claims::NativeLiveClaimRegistry,
+    /// Whether binding this provider's current process roster needs an operating-system ancestry query.
+    ///
+    /// Exact root-PID matches need no query. An already-bound descendant also needs no repeated process-table walk
+    /// while the provider roster still maps that exact PID to that exact native identity. The ancestry snapshot is
+    /// therefore paid only while a new or moved terminal identity is unresolved.
+    pub(crate) fn needs_process_tree(
+        &self,
         provider: ProviderId,
-        pid: u32,
-        native: &str,
-    ) -> Result<bool, TerminalClaimError> {
-        let Some((terminal_id, open)) = self
-            .by_id
-            .iter_mut()
-            .find(|(_, open)| open.provider == provider && open.terminal.pid() == pid)
-        else {
-            return Ok(false);
-        };
-        if open.native.as_deref() == Some(native) {
-            return Ok(false);
-        }
-        if matches!(open.origin, TerminalOrigin::Owned) {
-            claims.bind_terminal_native(
-                *terminal_id,
-                provider.as_str(),
-                native,
-                open.workspace.as_str(),
-            )?;
-        }
-        let terminal_id = *terminal_id;
-        // The process moved to another conversation (`/resume`, `/clear` in its own interface): the old
-        // conversation no longer has a terminal here, and the new one is this terminal from now on.
-        if let Some(previous) = open.native.replace(native.into()) {
-            let key = (provider, previous);
-            if self.by_conversation.get(&key) == Some(&terminal_id) {
-                self.by_conversation.remove(&key);
+        activity: &runtrol_provider::NativeProcessActivity,
+    ) -> bool {
+        for open in self.by_id.values().filter(|open| {
+            open.provider == provider && matches!(open.origin, TerminalOrigin::Owned)
+        }) {
+            let root = open.terminal.pid();
+            if activity.processes.iter().any(|process| process.pid == root) {
+                continue;
+            }
+            if open.native_process_pid.is_some_and(|pid| {
+                activity.processes.iter().any(|process| {
+                    process.pid == pid && open.native.as_deref() == Some(process.native.as_str())
+                })
+            }) {
+                continue;
+            }
+            if !activity.processes.is_empty() {
+                return true;
             }
         }
-        self.by_conversation
-            .insert((provider, native.into()), terminal_id);
-        self.publish_change();
-        Ok(true)
+        false
+    }
+
+    /// Bind one complete provider process observation to exact PTY-owned process trees.
+    ///
+    /// One PID must belong to exactly one terminal tree, one terminal tree must name exactly one native identity, and
+    /// one native identity must belong to exactly one terminal. Anything structurally ambiguous stays unresolved.
+    /// Sibling terminals in one workspace are committed as one claim batch so neither unnamed sibling falsely blocks
+    /// the other while both are being promoted.
+    pub(crate) fn bind_native_processes<'a>(
+        &mut self,
+        claims: &crate::native_claims::NativeLiveClaimRegistry,
+        process_tree: Option<&runtrol_childproc::ProcessTree>,
+        provider: ProviderId,
+        processes: impl IntoIterator<Item = (u32, &'a str)>,
+    ) -> Vec<(u32, TerminalClaimError)> {
+        let mut by_terminal = BTreeMap::<TerminalId, BTreeMap<&'a str, u32>>::new();
+        for (pid, native) in processes {
+            let matches = self
+                .by_id
+                .iter()
+                .filter(|(_, open)| {
+                    open.provider == provider
+                        && matches!(open.origin, TerminalOrigin::Owned)
+                        && (open.terminal.pid() == pid
+                            || process_tree
+                                .is_some_and(|tree| tree.contains(open.terminal.pid(), pid)))
+                })
+                .map(|(terminal_id, _)| *terminal_id)
+                .collect::<Vec<_>>();
+            if let [terminal_id] = matches.as_slice() {
+                by_terminal
+                    .entry(*terminal_id)
+                    .or_default()
+                    .entry(native)
+                    .or_insert(pid);
+            }
+        }
+
+        let candidates = by_terminal
+            .into_iter()
+            .filter_map(|(terminal_id, natives)| {
+                let mut natives = natives.into_iter();
+                let (native, pid) = natives.next()?;
+                if natives.next().is_some() {
+                    return None;
+                }
+                Some((terminal_id, pid, native))
+            })
+            .collect::<Vec<_>>();
+        let mut native_owners = BTreeMap::<&str, Option<TerminalId>>::new();
+        for (terminal_id, _pid, native) in &candidates {
+            native_owners
+                .entry(native)
+                .and_modify(|owner| {
+                    if owner.is_some_and(|owner| owner != *terminal_id) {
+                        *owner = None;
+                    }
+                })
+                .or_insert(Some(*terminal_id));
+        }
+        let mut by_workspace = BTreeMap::<Box<str>, Vec<(TerminalId, u32, &'a str)>>::new();
+        for (terminal_id, pid, native) in candidates {
+            if native_owners.get(native) != Some(&Some(terminal_id)) {
+                continue;
+            }
+            let Some(open) = self.by_id.get(&terminal_id) else {
+                continue;
+            };
+            by_workspace
+                .entry(open.workspace.as_str().into())
+                .or_default()
+                .push((terminal_id, pid, native));
+        }
+
+        let mut conflicts = Vec::new();
+        let mut any_changed = false;
+        for (workspace, batch) in by_workspace {
+            let requested = batch
+                .iter()
+                .map(|(terminal_id, _pid, native)| {
+                    (*terminal_id, provider.as_str(), *native, workspace.as_ref())
+                })
+                .collect::<Vec<_>>();
+            let changed = match claims.bind_terminal_natives(&requested) {
+                Ok(changed) => changed,
+                Err(error) => {
+                    conflicts.extend(batch.iter().map(|(_, pid, _)| (*pid, error)));
+                    continue;
+                }
+            };
+            for ((terminal_id, pid, native), changed) in batch.into_iter().zip(changed) {
+                if let Some(open) = self.by_id.get_mut(&terminal_id) {
+                    open.native_process_pid = Some(pid);
+                    if changed {
+                        let previous = open.native.replace(native.into());
+                        if let Some(previous) = previous {
+                            let key = (provider, previous);
+                            if self.by_conversation.get(&key) == Some(&terminal_id) {
+                                self.by_conversation.remove(&key);
+                            }
+                        }
+                    }
+                }
+                if !changed {
+                    continue;
+                }
+                self.by_conversation
+                    .insert((provider, native.into()), terminal_id);
+                any_changed = true;
+            }
+        }
+        if any_changed {
+            self.publish_change();
+        }
+        conflicts
     }
 
     fn insert(
@@ -215,6 +323,7 @@ impl Terminals {
                 terminal,
                 workspace,
                 native,
+                native_process_pid: None,
                 opened_at_ms: WallMs::now().as_millis(),
                 generation: 1,
                 stopping: false,
@@ -267,6 +376,7 @@ impl Terminals {
                 terminal,
                 workspace,
                 native: Some(native.into()),
+                native_process_pid: None,
                 opened_at_ms: WallMs::now().as_millis(),
                 generation: 1,
                 stopping: false,
@@ -1006,9 +1116,134 @@ pub(crate) async fn attach_current(
 
 #[cfg(test)]
 mod tests {
+    use std::io::Write as _;
+    use std::process::{Command, Stdio};
     use std::time::{Duration, Instant};
 
     use super::*;
+
+    const LAUNCHER_PROBE_ENV: &str = "RUNTROL_TERMINAL_LAUNCHER_PROBE";
+    const DESCENDANT_PROBE_ENV: &str = "RUNTROL_TERMINAL_DESCENDANT_PROBE";
+    const DESCENDANT_PID_MARKER: &str = "RUNTROL_DESCENDANT_PID=";
+
+    struct OwnedTerminals(Vec<Terminal>);
+
+    impl Drop for OwnedTerminals {
+        fn drop(&mut self) {
+            for terminal in &self.0 {
+                drop(terminal.kill());
+            }
+        }
+    }
+
+    async fn descendant_pid(terminal: &Terminal) -> u32 {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let attachment = terminal.attach(ViewerKind::Terminal).await;
+            let screen = String::from_utf8_lossy(&attachment.snapshot);
+            if let Some(tail) = screen.split(DESCENDANT_PID_MARKER).nth(1) {
+                let digits = tail
+                    .chars()
+                    .take_while(char::is_ascii_digit)
+                    .collect::<String>();
+                if let Ok(pid) = digits.parse() {
+                    return pid;
+                }
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "the launcher did not publish its descendant PID: {screen:?}"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+
+    async fn open_launcher_terminal(
+        terminals: &mut Terminals,
+        claims: &crate::native_claims::NativeLiveClaimRegistry,
+        workspace: &AbsPath,
+        provider: ProviderId,
+        program: &runtrol_childproc::Program,
+    ) -> (Terminal, u32) {
+        let terminal_id = TerminalId::now();
+        let TerminalClaimAdmission::Reserved(reservation) = claims
+            .reserve_terminal(
+                terminal_id,
+                provider.as_str(),
+                None,
+                workspace.as_str(),
+                false,
+            )
+            .expect("the fresh terminal reserves its claim")
+        else {
+            panic!("a fresh terminal unexpectedly joined another terminal");
+        };
+        let terminal = Terminal::open(&TerminalLaunch {
+            program,
+            arguments: vec![
+                "--exact".to_owned(),
+                "terminal_surface::tests::launcher_probe_helper".to_owned(),
+                "--nocapture".to_owned(),
+            ],
+            cwd: workspace,
+            env: vec![(LAUNCHER_PROBE_ENV.to_owned(), "1".to_owned())],
+            env_unset: Vec::new(),
+            size: runtrol_childproc::PtySize {
+                cols: 120,
+                rows: 30,
+            },
+        })
+        .expect("the launcher terminal opens");
+        terminals.insert(
+            terminal_id,
+            provider,
+            None,
+            terminal.clone(),
+            workspace.clone(),
+            None,
+        );
+        reservation.commit().expect("the terminal claim commits");
+        let descendant = descendant_pid(&terminal).await;
+        (terminal, descendant)
+    }
+
+    fn fixture_activity(
+        identities: &[(&str, u32, u32)],
+        first_native: &str,
+    ) -> runtrol_provider::NativeProcessActivity {
+        let live = if first_native == "native-first" {
+            vec!["native-first", "native-second"]
+        } else {
+            vec!["native-first", first_native, "native-second"]
+        };
+        runtrol_provider::NativeProcessActivity {
+            live: live
+                .into_iter()
+                .map(|native| {
+                    runtrol_provider::NativeSessionId::new(native)
+                        .expect("the fixture native identity is valid")
+                })
+                .collect(),
+            active: Vec::new(),
+            processes: identities
+                .iter()
+                .enumerate()
+                .map(|(index, (_native, _root, descendant))| {
+                    runtrol_provider::NativeProcessBinding {
+                        pid: *descendant,
+                        native: runtrol_provider::NativeSessionId::new(if index == 0 {
+                            first_native
+                        } else {
+                            "native-second"
+                        })
+                        .expect("the fixture process identity is valid"),
+                        cwd: None,
+                        terminal_access: runtrol_provider::NativeTerminalAccess::Unavailable,
+                    }
+                })
+                .collect(),
+        }
+    }
 
     #[test]
     fn only_the_manifest_declared_resume_shape_becomes_a_native_join_key() {
@@ -1054,6 +1289,131 @@ mod tests {
             p95 <= BUDGET,
             "terminal registry publication p95 was {p95:?}, over {BUDGET:?}"
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn two_launcher_terminals_bind_to_their_own_distinct_provider_processes() {
+        let executable = std::env::current_exe().expect("the test executable has a path");
+        let program = runtrol_childproc::resolve(executable.to_string_lossy().as_ref())
+            .expect("the test executable resolves");
+        let workspace = AbsPath::canonicalize(
+            std::env::current_dir()
+                .expect("the test has a current directory")
+                .to_string_lossy()
+                .as_ref(),
+        )
+        .expect("the test directory canonicalizes");
+        let provider = ProviderId::parse("launcher-fixture").expect("a valid provider identifier");
+        let claims = crate::native_claims::NativeLiveClaimRegistry::default();
+        let mut terminals = Terminals::default();
+        let mut owned = OwnedTerminals(Vec::new());
+        let mut identities = Vec::new();
+
+        for native in ["native-first", "native-second"] {
+            let (terminal, descendant) =
+                open_launcher_terminal(&mut terminals, &claims, &workspace, provider, &program)
+                    .await;
+            identities.push((native, terminal.pid(), descendant));
+            owned.0.push(terminal);
+        }
+
+        let [first, second] = identities.as_slice() else {
+            panic!("the fixture must own exactly two terminal identities");
+        };
+        assert_ne!(first.1, second.1);
+        assert_ne!(first.2, second.2);
+        let tree = runtrol_childproc::ProcessTree::capture()
+            .expect("the provider process tree is inspectable");
+        for (_native, root, descendant) in &identities {
+            assert!(tree.contains(*root, *descendant));
+        }
+        let initial_activity = fixture_activity(&identities, "native-first");
+        assert!(terminals.needs_process_tree(provider, &initial_activity));
+        assert!(
+            terminals
+                .bind_native_processes(
+                    &claims,
+                    Some(&tree),
+                    provider,
+                    identities
+                        .iter()
+                        .map(|(native, _root, descendant)| (*descendant, *native)),
+                )
+                .is_empty(),
+            "both structurally distinct descendants bind without a claim conflict"
+        );
+        assert!(!terminals.needs_process_tree(provider, &initial_activity));
+
+        for (native, root, _descendant) in &identities {
+            let hosted = terminals
+                .open_for(provider, native)
+                .expect("the native identity finds its hosted terminal");
+            assert_eq!(hosted.terminal.pid(), *root);
+        }
+
+        // The old identity may remain live in another provider process. The exact PID mapping, rather than the
+        // provider-wide live set, detects that this hosted CLI moved to a different conversation and pays for one
+        // new ancestry snapshot before rebinding.
+        let moved_activity = fixture_activity(&identities, "native-first-moved");
+        assert!(terminals.needs_process_tree(provider, &moved_activity));
+        assert!(
+            terminals
+                .bind_native_processes(
+                    &claims,
+                    Some(&tree),
+                    provider,
+                    moved_activity
+                        .processes
+                        .iter()
+                        .map(|process| (process.pid, process.native.as_str())),
+                )
+                .is_empty()
+        );
+        assert!(terminals.open_for(provider, "native-first").is_none());
+        assert_eq!(
+            terminals
+                .open_for(provider, "native-first-moved")
+                .expect("the moved identity reuses the first terminal")
+                .terminal
+                .pid(),
+            first.1
+        );
+        assert!(!terminals.needs_process_tree(provider, &moved_activity));
+        assert_eq!(terminals.hosted_all().len(), 2);
+    }
+
+    #[test]
+    fn launcher_probe_helper() {
+        if std::env::var_os(LAUNCHER_PROBE_ENV).is_none() {
+            return;
+        }
+        let mut child =
+            Command::new(std::env::current_exe().expect("the test executable has a path"))
+                .args([
+                    "--exact",
+                    "terminal_surface::tests::descendant_probe_helper",
+                    "--nocapture",
+                ])
+                .env(DESCENDANT_PROBE_ENV, "1")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .expect("the provider descendant starts");
+        println!("{DESCENDANT_PID_MARKER}{}", child.id());
+        std::io::stdout()
+            .flush()
+            .expect("the descendant identity reaches the PTY");
+        std::thread::sleep(Duration::from_secs(15));
+        drop(child.kill());
+        drop(child.wait());
+    }
+
+    #[test]
+    fn descendant_probe_helper() {
+        if std::env::var_os(DESCENDANT_PROBE_ENV).is_some() {
+            std::thread::sleep(Duration::from_secs(15));
+        }
     }
 
     #[test]

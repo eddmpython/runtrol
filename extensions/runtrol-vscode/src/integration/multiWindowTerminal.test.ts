@@ -53,14 +53,25 @@ async function ownerJourney(coordination: string): Promise<void> {
   const api = await activate();
   const journey = requireJourney(api);
   await waitForUsableProvider(journey, provider);
-  const terminal = await journey.terminalStart(provider, workspace, DEADLINE_MS);
+  const terminal = await journey.terminalStart(provider, workspace, INITIALIZATION_DEADLINE_MS);
   if (NAVIGATION_MODE) {
     await delay(8_000);
-    await warmNavigationPath(journey, terminal);
+    try {
+      await warmNavigationPath(journey, terminal);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new Error(`provider startup terminal ${JSON.stringify(terminal)} became unusable: ${detail}`, {
+        cause: error,
+      });
+    }
   }
   await publish(coordination, "owner-ready.json", terminal);
 
-  const mirror = await readPublished<JourneyTerminal>(coordination, "mirror-armed.json", DEADLINE_MS);
+  const mirror = await readPublished<JourneyTerminal>(
+    coordination,
+    "mirror-armed.json",
+    INITIALIZATION_DEADLINE_MS,
+  );
   requireSameTerminal(terminal, mirror);
 
   const ownerSamples: number[] = [];
@@ -111,14 +122,18 @@ async function ownerJourney(coordination: string): Promise<void> {
 
 async function mirrorJourney(coordination: string): Promise<void> {
   const provider = requiredEnvironment("RUNTROL_VSCODE_PROVIDER");
-  const owner = await readPublished<JourneyTerminal>(coordination, "owner-ready.json", DEADLINE_MS);
+  const owner = await readPublished<JourneyTerminal>(
+    coordination,
+    "owner-ready.json",
+    INITIALIZATION_DEADLINE_MS,
+  );
   const api = await activate();
   const journey = requireJourney(api);
   await waitForUsableProvider(journey, provider);
   const terminal = await journey.terminalAttach(
     owner.runtimeGeneration,
     owner.terminalId,
-    DEADLINE_MS,
+    INITIALIZATION_DEADLINE_MS,
   );
   requireSameTerminal(owner, terminal);
 

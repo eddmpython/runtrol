@@ -65,6 +65,18 @@ charged to the daemon's RSS budget.
 | Residual increase after each live journey | 4 MiB | 6 MiB | 4 MiB |
 | Idle process CPU during a 10 second window | 100 ms | 100 ms | 100 ms |
 
+Native session discovery reacts immediately to each provider's directory notification. A single provider-neutral
+recovery clock also requests one scan every 15 seconds, rotating across the installed providers, solely to repair a
+lost operating-system notification. Independent provider clocks are deliberately absent: they clustered full roster
+scans inside one CPU-budget window. With two installed providers each still receives one recovery scan every 30
+seconds, while normal session creation and activity changes do not wait for that clock.
+
+Account status and usage work is demand-driven. Daemon startup launches no account reader while there is no provider
+subscriber and no provider activity. The first provider watch requests every installed account immediately; later
+turn boundaries request only the provider that moved, with the existing ten-minute sweep as a backstop after that
+first demand. An unused Runtime therefore pays neither the child-process memory nor the inventory rebuild CPU of a
+report nobody can observe.
+
 The Linux ceiling records the higher hosted debug measurement. The macOS residual allowance records measured
 allocator retention. On macOS the daemon performs one early self-exec with the system allocator's
 space-efficient policy. Its central supervised-command boundary restores the operator's original allocator

@@ -1,6 +1,8 @@
 //! Provider inventory, capability discovery, and native activity requests.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use runtrol_runtime_protocol::{
@@ -575,24 +577,73 @@ pub(crate) async fn reconcile_native_activity(
     provider: runtrol_provider::ProviderId,
     activity: &runtrol_provider::NativeProcessActivity,
 ) {
-    {
-        let mut terminals = composed.terminals.lock().await;
-        for process in &activity.processes {
-            // One process whose new conversation is already claimed elsewhere (another live terminal, a
-            // structured session) must not turn the whole provider's activity answer into an error: that
-            // froze every icon of the service on the last successful round (measured 2026-08-29). The
-            // conflict is not lost: the same process is offered again next round and stays refused until the
-            // other claim ends, and its own row keeps whatever identity it had.
-            if let Err(conflict) = terminals.bind_native_process(
-                &composed.native_claims,
-                provider,
-                process.pid,
-                process.native.as_str(),
-            ) {
-                report_binding_conflict(provider, process.pid, conflict);
+    // A package-manager launcher may remain as the PTY root while the provider executable that owns the native
+    // conversation runs below it. Capture once per provider observation, never once per binding. If the operating
+    // system refuses the ancestry view, exact root-PID binding remains available and descendant attribution closes.
+    let needs_process_tree = composed
+        .terminals
+        .lock()
+        .await
+        .needs_process_tree(provider, activity);
+    let process_tree = if needs_process_tree {
+        match runtrol_childproc::ProcessTree::capture() {
+            Ok(tree) => Some(tree),
+            Err(error) => {
+                report_process_tree_failure(&error);
+                None
             }
         }
+    } else {
+        None
+    };
+    // One process can structurally own several provider conversations, as a multiplexed editor app server does. A
+    // single-screen terminal cannot be assigned to an arbitrary one of them. Bind only an unambiguous process-to-
+    // conversation answer; a later provider observation may narrow it.
+    {
+        let mut terminals = composed.terminals.lock().await;
+        let processes = unambiguous_processes(activity);
+        let conflicts = terminals.bind_native_processes(
+            &composed.native_claims,
+            process_tree.as_ref(),
+            provider,
+            processes
+                .iter()
+                .map(|process| (process.pid, process.native.as_str())),
+        );
+        // One process whose new conversation is already claimed elsewhere must not turn the complete provider
+        // answer into an error. Its workspace batch keeps its previous bindings, independent workspaces still
+        // reconcile, and the same structural observation retries after the conflicting claim ends.
+        for (pid, conflict) in conflicts {
+            report_binding_conflict(provider, pid, conflict);
+        }
     }
+}
+
+/// Process bindings that identify one conversation rather than a multiplexed set.
+///
+/// A provider app server may hold several native conversations under one PID. That is valid provider ownership but
+/// cannot identify which one a single-screen terminal is drawing. Returning none for that PID prevents stable sort
+/// order from silently choosing and repeatedly rekeying the terminal to an arbitrary conversation.
+pub(super) fn unambiguous_processes(
+    activity: &runtrol_provider::NativeProcessActivity,
+) -> Vec<&runtrol_provider::NativeProcessBinding> {
+    let mut by_process = BTreeMap::new();
+    for process in &activity.processes {
+        by_process
+            .entry(process.pid)
+            .and_modify(
+                |known: &mut Option<&runtrol_provider::NativeProcessBinding>| {
+                    if known
+                        .as_ref()
+                        .is_some_and(|known| known.native != process.native)
+                    {
+                        *known = None;
+                    }
+                },
+            )
+            .or_insert(Some(process));
+    }
+    by_process.into_values().flatten().collect()
 }
 
 pub(super) async fn native_activity(
@@ -739,4 +790,16 @@ fn report_binding_conflict(
         "runtrol: process {pid} of {} names a conversation another live claim holds: {conflict}",
         provider.as_str()
     );
+}
+
+/// Report the optional ancestry surface failing once rather than on every provider observation.
+#[expect(
+    clippy::print_stderr,
+    reason = "the daemon's error stream is the existing operational failure channel for a background provider observation"
+)]
+fn report_process_tree_failure(error: &runtrol_childproc::ProcessTreeError) {
+    static REPORTED: AtomicBool = AtomicBool::new(false);
+    if !REPORTED.swap(true, Ordering::Relaxed) {
+        eprintln!("runtrol: provider process ancestry is unavailable: {error}");
+    }
 }

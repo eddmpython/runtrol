@@ -10,7 +10,7 @@ use super::super::authority::required_scope;
 use super::super::connection::serve_connection;
 use super::super::provider_requests::{
     attachable_native_sessions, method_needs_provider_refresh, model_catalogue,
-    provider_capabilities,
+    provider_capabilities, unambiguous_processes,
 };
 use super::super::session_control::{
     mode_within_manifest_vocabulary, mode_within_provider_vocabulary, reasoning_effort_is_current,
@@ -1329,23 +1329,31 @@ async fn real_owner_only_runtime_initializes_but_reveals_nothing_before_enrollme
                 at_ms: 1,
             }],
         }));
-        let moved = tokio::time::timeout(Duration::from_secs(2), provider_watch.next())
-            .await
-            .expect("a usage change arrives without polling")
-            .expect("typed usage notification");
-        match moved {
-            runtrol_runtime_client::ProviderNotification::UsageChanged(notification) => {
-                assert_eq!(
+        let moved = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let notification = provider_watch
+                    .next()
+                    .await
+                    .expect("typed provider notification");
+                if let runtrol_runtime_client::ProviderNotification::UsageChanged(notification) =
                     notification
-                        .snapshot
-                        .providers
-                        .first()
-                        .and_then(|g| g.tokens_today),
-                    Some(1234)
-                );
+                {
+                    break notification;
+                }
+                // Provider inventory and account probes share this subscription. Another structural update is
+                // allowed to arrive first; the contract here is that usage still arrives within the deadline.
             }
-            other => panic!("expected the usage change, got {other:?}"),
-        }
+        })
+        .await
+        .expect("a usage change arrives without polling");
+        assert_eq!(
+            moved
+                .snapshot
+                .providers
+                .first()
+                .and_then(|g| g.tokens_today),
+            Some(1234)
+        );
 
         {
             let mut session_client = watching_client.sessions();
@@ -1444,4 +1452,33 @@ fn only_live_processes_with_a_safe_route_are_publicly_attachable() {
         attachable_native_sessions(&activity),
         vec!["console".to_owned(), "official".to_owned()]
     );
+}
+
+#[test]
+fn one_terminal_process_is_never_assigned_an_arbitrary_multiplexed_conversation() {
+    use runtrol_provider::{
+        NativeProcessActivity, NativeProcessBinding, NativeSessionId, NativeTerminalAccess,
+    };
+
+    let process = |pid, identity| NativeProcessBinding {
+        pid,
+        native: NativeSessionId::new(identity).expect("a valid native identity"),
+        cwd: Some("C:\\work".to_owned()),
+        terminal_access: NativeTerminalAccess::Unavailable,
+    };
+    let activity = NativeProcessActivity {
+        live: Vec::new(),
+        active: Vec::new(),
+        processes: vec![
+            process(10, "first"),
+            process(10, "second"),
+            process(20, "third"),
+        ],
+    };
+
+    let selected: Vec<(u32, &str)> = unambiguous_processes(&activity)
+        .into_iter()
+        .map(|binding| (binding.pid, binding.native.as_str()))
+        .collect();
+    assert_eq!(selected, vec![(20, "third")]);
 }

@@ -53,9 +53,20 @@ resolution removes Runtrol-owned shim directories from its search path and refus
 program, preventing recursive launch.
 
 A provider may mint its native conversation identity after process start. A cheap provider-owned process roster can
-publish a validated process-to-native binding. Runtime atomically binds that identity to the exact PTY process, and a
-targeted catalogue refresh replaces the project-name placeholder with the provider title in both the sidebar and open
-terminal tabs. Terminal output is never parsed to find the identity or title.
+publish a validated process-to-native binding. Runtime atomically binds that identity to the exact PTY-owned process
+tree, including a provider executable below a package-manager launcher. A targeted catalogue refresh replaces the
+project-name placeholder with the provider title in both the sidebar and open terminal tabs. Terminal output is never
+parsed to find the identity or title.
+
+One roster observation promotes every unambiguous sibling terminal in a workspace as one ownership transaction. This
+matters when two fresh conversations start before either has a native identity: neither still-unnamed sibling can be
+mistaken for a duplicate of the other midway through promotion. One process naming several conversations, one terminal
+tree containing several differently named processes, or one identity reaching several terminal trees stays unresolved
+instead of selecting by iteration order.
+
+The invoking shell receives one view-local terminal title naming the provider identifier and its hosted process ID.
+This keeps simultaneous shell-launched conversations distinct instead of exposing the shared content-named Core
+executable. The title never enters the hosted PTY, shared screen, output ring, another viewer, or provider storage.
 
 ## Live capture ladder
 

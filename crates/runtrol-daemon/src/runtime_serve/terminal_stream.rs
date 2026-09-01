@@ -20,7 +20,7 @@ use crate::Composed;
 use crate::runtime_auth::AuthorizedIntegration;
 use crate::runtime_inventory::RuntimeSessionCatalogue;
 use crate::runtime_native_sessions::NativeCursorCodec;
-use crate::runtime_terminal::{TerminalRuntimeFailure, TerminalView, has_scopes};
+use crate::runtime_terminal::{TerminalRuntimeFailure, TerminalView, has_scopes, run_root_check};
 
 #[cfg(not(windows))]
 use super::authority::current_authority_row;
@@ -555,19 +555,10 @@ async fn check_pinned_terminal_root(
     guard: Arc<tokio::sync::Mutex<runtrol_security::ProjectRootGuard>>,
     stamp: (u64, u64, u64),
 ) -> TerminalRootCheck {
-    let checked = tokio::time::timeout(Duration::from_millis(400), async {
-        let permit = permits.acquire_owned().await.map_err(drop)?;
-        tokio::task::spawn_blocking(move || {
-            let _permit = permit;
-            guard.blocking_lock().validate().is_ok()
-        })
-        .await
-        .map_err(drop)
-    })
-    .await;
+    let checked = run_root_check(permits, move || guard.blocking_lock().validate().is_ok()).await;
     TerminalRootCheck {
         stamp,
-        allowed: matches!(checked, Ok(Ok(true))),
+        allowed: matches!(checked, Ok(true)),
     }
 }
 
@@ -584,19 +575,13 @@ async fn check_terminal_roots(
         row.grant_generation,
         terminal_generation,
     );
-    let checked = tokio::time::timeout(Duration::from_millis(400), async {
-        let permit = permits.acquire_owned().await.map_err(drop)?;
-        tokio::task::spawn_blocking(move || {
-            let _permit = permit;
-            crate::runtime_terminal::validate_workspace_roots(&row, &workspace).is_ok()
-        })
-        .await
-        .map_err(drop)
+    let checked = run_root_check(permits, move || {
+        crate::runtime_terminal::validate_workspace_roots(&row, &workspace).is_ok()
     })
     .await;
     TerminalRootCheck {
         stamp,
-        allowed: matches!(checked, Ok(Ok(true))),
+        allowed: matches!(checked, Ok(true)),
     }
 }
 

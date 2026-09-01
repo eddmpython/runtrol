@@ -245,12 +245,12 @@ async fn prewarm_providers(composed: Arc<Composed>, discovering: Arc<DiscoveryGa
     runtrol_childproc::footprint::release_unused_memory();
 }
 
-/// How long a watcher waits before looking again on its own.
+/// Minimum distance between two provider recovery scans on an idle machine.
 ///
-/// A floor under the operating system's own notification, not a poll: it fires only when nothing has changed
-/// for this long, so an idle machine wakes twice a minute. The Runtime is held to one percent of one CPU while
-/// idle (`tests/audit/idleFootprintRatchet.py`), which a clock fast enough to feel would spend on nothing.
-const LOOK_AGAIN_AFTER: Duration = Duration::from_secs(30);
+/// Operating-system notifications remain immediate. This clock only repairs a notification that was lost, and
+/// one provider-neutral round robin owns it so independently started watchers cannot put several directory scans
+/// into the same CPU-budget window. With the two shipped providers each one is still checked every 30 seconds.
+const RECOVERY_SCAN_SPACING: Duration = Duration::from_secs(15);
 
 /// How long a provider whose directory cannot be watched waits before trying to watch it again.
 ///
@@ -270,14 +270,45 @@ async fn watch_native_sessions(composed: Arc<Composed>, discovering: Arc<Discove
         runtrol_core::locate(manifest).is_ok()
     });
     let mut watching = JoinSet::new();
+    let mut recoveries = Vec::with_capacity(providers.len());
     for provider in providers {
+        let (request_recovery, recovery_requested) = mpsc::channel(1);
+        recoveries.push(request_recovery);
         watching.spawn(watch_one_provider(
             Arc::clone(&composed),
             Arc::clone(&discovering),
             provider,
+            recovery_requested,
         ));
     }
+    if !recoveries.is_empty() {
+        watching.spawn(schedule_native_recovery(Arc::clone(&composed), recoveries));
+    }
     while watching.join_next().await.is_some() {}
+}
+
+/// Ask one installed provider at a time to repair a possibly missed directory notification.
+async fn schedule_native_recovery(composed: Arc<Composed>, providers: Vec<mpsc::Sender<()>>) {
+    if providers.is_empty() {
+        return;
+    }
+    let mut next = 0;
+    loop {
+        tokio::time::sleep(RECOVERY_SCAN_SPACING).await;
+        if composed.draining.load(Ordering::Acquire) {
+            return;
+        }
+        // Capacity one coalesces a pulse with one already waiting behind that provider's current observation.
+        if let Some(request) = providers.get(next) {
+            match request.try_send(()) {
+                Ok(())
+                | Err(
+                    mpsc::error::TrySendError::Full(()) | mpsc::error::TrySendError::Closed(()),
+                ) => {}
+            }
+        }
+        next = (next + 1) % providers.len();
+    }
 }
 
 /// Wait on one provider's own statement that its open conversations changed, and act on each one.
@@ -285,24 +316,41 @@ async fn watch_one_provider(
     composed: Arc<Composed>,
     discovering: Arc<DiscoveryGates>,
     provider: ProviderId,
+    mut recovery_requested: mpsc::Receiver<()>,
 ) {
-    // Sessions already open when this Runtime started are found here, before any change arrives.
-    look_again(&composed, &discovering, provider).await;
     loop {
         // A draining generation is on its way out and opens nothing new; its successor is doing this now.
         if composed.draining.load(std::sync::atomic::Ordering::Acquire) {
             return;
         }
         let Some(mut changes) = watch_of(&composed, provider).await else {
-            tokio::time::sleep(RETRY_WATCH_AFTER).await;
+            // A CLI whose directory does not exist yet still gets an initial observation. A recovery pulse both
+            // observes it again and returns here to install the watch as soon as its first session creates it.
+            look_again(&composed, &discovering, provider).await;
+            tokio::select! {
+                () = tokio::time::sleep(RETRY_WATCH_AFTER) => {}
+                requested = recovery_requested.recv() => {
+                    if requested.is_none() {
+                        return;
+                    }
+                }
+            }
             continue;
         };
+        // Install the watch before the initial observation. Sessions already open at Runtime start are found by
+        // this scan, and a session arriving during it leaves a notification for the receiver below.
+        look_again(&composed, &discovering, provider).await;
         loop {
-            match tokio::time::timeout(LOOK_AGAIN_AFTER, changes.recv()).await {
-                // A change, or the floor under it. Both mean the same act.
-                Ok(Some(())) | Err(_) => look_again(&composed, &discovering, provider).await,
-                // The watch ended. Ask for a new one rather than going blind.
-                Ok(None) => break,
+            tokio::select! {
+                notice = changes.recv() => match notice {
+                    Some(()) => look_again(&composed, &discovering, provider).await,
+                    // The watch ended. Ask for a new one rather than going blind.
+                    None => break,
+                },
+                requested = recovery_requested.recv() => match requested {
+                    Some(()) => look_again(&composed, &discovering, provider).await,
+                    None => return,
+                },
             }
             if composed.draining.load(std::sync::atomic::Ordering::Acquire) {
                 return;

@@ -298,9 +298,9 @@ export function conversations(
     rows.push(hostedRow(terminal, chat, providers, projectlessRoot, working));
     if (conversation !== null) placedNatives.add(conversation);
   }
-  // What runtrol started and the service has not named yet. A placeholder gives way to the row the service
-  // finally wrote for it: same service, same folder, and touched at or after the moment the tab opened. Keeping
-  // both would show one conversation twice, and dropping the placeholder any earlier would empty the list again.
+  // What runtrol started and the service has not named yet. A placeholder gives way only to the row carrying its
+  // exact Runtime generation and terminal id. Keeping both would show one conversation twice, and matching by a
+  // shared provider, folder, or timestamp would let one simultaneous terminal consume another terminal's row.
   const named = namedPlaceholders(rows, started);
   for (const pending of started) {
     if (named.has(pending.id)) continue;
@@ -870,33 +870,24 @@ export function namedPlaceholders(
   rows: readonly Conversation[],
   started: readonly StartedConversation[],
 ): ReadonlyMap<string, string> {
-  const spokenFor = new Map<string, Conversation>();
+  const byTerminal = new Map<string, Conversation>();
   for (const row of rows) {
-    const slot = startedSlot(row.providerId, row.workspace);
-    const best = spokenFor.get(slot);
-    if (best === undefined || (row.updatedAtMs ?? 0) > (best.updatedAtMs ?? 0)) spokenFor.set(slot, row);
+    if (row.hostedTerminal !== null) byTerminal.set(terminalKey(row.hostedTerminal), row);
   }
   const named = new Map<string, string>();
   for (const pending of started) {
-    const row = spokenFor.get(startedSlot(pending.providerId, pending.workspace));
-    if (row === undefined) continue;
-    const terminal = row.hostedTerminal;
     if (
-      terminal === null
-      || terminal === undefined
-      || pending.runtimeGeneration === undefined
+      pending.runtimeGeneration === undefined
       || pending.terminalId === undefined
-      || terminal.runtimeGeneration !== pending.runtimeGeneration
-      || terminal.terminalId !== pending.terminalId
     ) continue;
+    const row = byTerminal.get(terminalKey({
+      runtimeGeneration: pending.runtimeGeneration,
+      terminalId: pending.terminalId,
+    }));
+    if (row === undefined) continue;
     named.set(pending.id, row.key);
   }
   return named;
-}
-
-/// The bucket a started conversation and a service-owned row share when they are the same conversation.
-function startedSlot(providerId: string, workspace: string): string {
-  return `${providerId}|${workspace.trim().toLowerCase()}`;
 }
 
 /// The row for a conversation runtrol opened and the service has not described yet.
@@ -979,7 +970,7 @@ function hostedRow(
   };
 }
 
-function terminalKey(terminal: TerminalDescriptor): string {
+function terminalKey(terminal: Pick<TerminalDescriptor, "runtimeGeneration" | "terminalId">): string {
   return `terminal:${encodeURIComponent(terminal.runtimeGeneration)}:${encodeURIComponent(terminal.terminalId)}`;
 }
 

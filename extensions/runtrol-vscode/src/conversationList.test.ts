@@ -1524,7 +1524,95 @@ test("a conversation runtrol just started stands in the list until its service n
   assert.deepEqual([...namedPlaceholders(unrelated, started)], []);
   // Nothing to hand over while the service has written nothing: the placeholder stands.
   assert.deepEqual([...namedPlaceholders(fresh.filter((row) => false), started)], []);
-  // Another folder's conversation is not this one, however recent it is.
-  const elsewhere = named.map((row) => ({ ...row, workspace: "C:/storage/other" }));
+  // Another terminal's conversation is not this one, whatever folder or timestamp it carries.
+  const elsewhere = named.map((row) => ({
+    ...row,
+    workspace: "C:/storage/other",
+    hostedTerminal: row.hostedTerminal
+      ? { ...row.hostedTerminal, terminalId: "terminal-other", workspace: "C:/storage/other" }
+      : null,
+  }));
   assert.deepEqual([...namedPlaceholders(elsewhere, started)], []);
+});
+
+test("two conversations started in separate terminals are promoted independently", () => {
+  const root = "C:/work/runtrol";
+  const providers = [
+    { providerId: "codex", displayName: "Codex", icon: "codex", installation: { state: "usable" } },
+  ] as unknown as ProviderLine[];
+  const started = [
+    {
+      id: "codex:first",
+      providerId: "codex",
+      workspace: root,
+      title: "New Codex conversation",
+      startedAtMs: 1_700_000_000_000,
+      runtimeGeneration: "generation-1",
+      terminalId: "terminal-first",
+    },
+    {
+      id: "codex:second",
+      providerId: "codex",
+      workspace: root,
+      title: "New Codex conversation",
+      startedAtMs: 1_700_000_000_100,
+      runtimeGeneration: "generation-1",
+      terminalId: "terminal-second",
+    },
+  ];
+  const terminal = (terminalId: string, nativeSessionId: string, openedAtMs: number) => ({
+    terminalId,
+    runtimeGeneration: "generation-1",
+    providerId: "codex",
+    workspace: root,
+    nativeSessionId,
+    processState: "running",
+    openedAtMs,
+    terminalGeneration: 1,
+    geometry: { columns: 120, rows: 40 },
+    memoryBytes: null,
+  }) as TerminalDescriptor;
+  const terminals = [
+    terminal("terminal-first", "native-first", 1_700_000_000_010),
+    terminal("terminal-second", "native-second", 1_700_000_000_110),
+  ];
+  const rows = conversations(
+    [],
+    providers,
+    [
+      nativeChat({
+        providerId: "codex",
+        nativeSessionId: "native-first",
+        title: "Urgent first task",
+        cwd: root,
+      }),
+      nativeChat({
+        providerId: "codex",
+        nativeSessionId: "native-second",
+        title: "Independent second task",
+        cwd: root,
+      }),
+    ],
+    null,
+    root,
+    new Map(),
+    new Map(),
+    new Set(),
+    new Map(),
+    started,
+    new Set(),
+    new Set(),
+    new Set(),
+    terminals,
+  );
+
+  assert.deepEqual(rows.map((row) => row.title).sort(), ["Independent second task", "Urgent first task"]);
+  assert.deepEqual([...namedPlaceholders(rows, started)].sort(), [
+    ["codex:first", "chat:codex:native-first"],
+    ["codex:second", "chat:codex:native-second"],
+  ]);
+  assert.deepEqual(rows.map((row) => row.hostedTerminal?.terminalId).sort(), [
+    "terminal-first",
+    "terminal-second",
+  ]);
 });

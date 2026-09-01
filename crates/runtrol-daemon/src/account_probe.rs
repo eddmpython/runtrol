@@ -1,9 +1,9 @@
 //! Asking each installed coding service where the operator's account stands, on the service's own
 //! status surface, and remembering the answer for the provider and usage projections.
 //!
-//! Runs at daemon start and then on a slow clock. Nothing here reads a credential file or a transcript:
-//! a driver either has a published status surface (`claude auth status --json`, Codex `account/read`)
-//! or says it has none, and the projections repeat exactly that.
+//! Starts on the first account subscriber or provider activity signal, then runs on a slow clock. Nothing here
+//! reads a credential file or a transcript: a driver either has a published status surface (`claude auth status
+//! --json`, Codex `account/read`) or says it has none, and the projections repeat exactly that.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -23,11 +23,6 @@ use crate::Composed;
 /// which takes the sign-in state off the row along with the limits. Nothing waits behind it: the services
 /// are asked at the same time.
 const ACCOUNT_PROBE_DEADLINE: Duration = Duration::from_mins(1);
-/// How long after start the first round runs. Past the moment the window has drawn, and past the point a
-/// footprint measurement calls a fresh daemon "idle": an account round prepares drivers and momentarily is
-/// not idle, so a daemon measured in its first seconds must not be mid-round. It releases its working set at
-/// each round's end, so the steady-state footprint between rounds is unchanged either way.
-const FIRST_ROUND_DELAY: Duration = Duration::from_secs(8);
 /// How often every service is asked with nothing else prompting it: the backstop, not the driver.
 ///
 /// The rounds that matter are the ones a service's own terminal prompts, so this is the slow sweep that
@@ -87,13 +82,6 @@ struct ProbeRequest {
 }
 
 impl ProbeRequest {
-    fn all() -> Self {
-        Self {
-            all: true,
-            providers: BTreeSet::new(),
-        }
-    }
-
     fn is_empty(&self) -> bool {
         !self.all && self.providers.is_empty()
     }
@@ -224,7 +212,10 @@ impl AccountReports {
 
 /// Ask each service where its account stands, when that service's answer has changed.
 ///
-/// Three things prompt a question, in the order they matter.
+/// Four things prompt a question, in the order they matter.
+///
+/// **The first subscriber.** Provider usage and watch requests wake every service. With no subscriber and no
+/// provider activity there is nobody to consume an account report, so daemon startup opens no account process.
 ///
 /// **A conversation went quiet.** A conversation held as its CLI's own terminal publishes no turn boundary,
 /// so the boundary is the CLI writing and then stopping. That is the moment the number moved, and asking
@@ -248,11 +239,7 @@ pub(crate) async fn supervise(
     let mut asked: BTreeMap<ProviderId, WallMs> = BTreeMap::new();
     let mut unread: BTreeSet<ProviderId> = BTreeSet::new();
     let mut pending: BTreeSet<ProviderId> = BTreeSet::new();
-    let started_at = WallMs::now();
-    let first = tokio::select! {
-        () = tokio::time::sleep(FIRST_ROUND_DELAY) => ProbeRequest::all(),
-        request = composed.account_probe_wake.wait() => request,
-    };
+    let first = composed.account_probe_wake.wait().await;
     let mut first = settled_request(&composed.account_probe_wake, first).await;
     // A request which raced the first-round clock belongs to the same round.
     first.merge(composed.account_probe_wake.take().await);
@@ -265,11 +252,9 @@ pub(crate) async fn supervise(
     }
     let first_unread = ask_all(&composed, &providers, &usage, first_ids.clone()).await;
     update_unread(&mut unread, &first_ids, &first_unread);
-    let mut swept_at = if first_ids.len() == usable(&composed).len() {
-        now
-    } else {
-        started_at
-    };
+    // The slow sweep is a maintenance promise made only after somebody first asks for account state. A daemon
+    // with no consumer stays process-free here however long it runs.
+    let mut swept_at = now;
 
     loop {
         let wait = next_check(
