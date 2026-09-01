@@ -97,7 +97,9 @@ pub fn render(response: &Response) -> Vec<String> {
 
         Response::Consult(directions) => render_consult(directions),
 
-        Response::LegacyMcpInventory(entries) => render_legacy_mcp_inventory(entries),
+        Response::LegacyMcpInventory(entries) | Response::LegacyMcpCleanup(entries) => {
+            render_legacy_mcp_inventory(entries)
+        }
 
         Response::Failed(failure) => {
             let mut lines = vec![failure.message.to_string()];
@@ -226,6 +228,7 @@ fn render_legacy_mcp_inventory(entries: &[runtrol_ipc::wire::LegacyMcpLine]) -> 
                 LegacyMcpState::Superseded => "superseded",
                 LegacyMcpState::Foreign => "foreign-preserve",
                 LegacyMcpState::Unreadable => "unreadable-preserve",
+                LegacyMcpState::Removed => "removed",
             };
             let target = entry.target.as_deref().unwrap_or("-");
             let why = entry
@@ -478,6 +481,24 @@ mod tests {
             render(&Response::Consult(Vec::new())),
             vec!["no consult directions"],
             "an empty answer says so rather than printing nothing"
+        );
+    }
+
+    #[test]
+    fn legacy_mcp_cleanup_says_removed_only_for_a_confirmed_removal() {
+        use runtrol_ipc::wire::{LegacyMcpKind, LegacyMcpLine, LegacyMcpState};
+
+        let lines = render(&Response::LegacyMcpCleanup(vec![LegacyMcpLine {
+            kind: LegacyMcpKind::AgentTools,
+            provider: "claude".into(),
+            name: "runtrolTools".into(),
+            target: None,
+            state: LegacyMcpState::Removed,
+            why: None,
+        }]));
+        assert_eq!(
+            lines,
+            vec!["legacy-mcp  agent-tools  claude  runtrolTools  -  removed".to_owned()]
         );
     }
 

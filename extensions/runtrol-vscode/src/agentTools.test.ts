@@ -2,7 +2,12 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import test from "node:test";
 
-import { AgentToolsController, type AgentToolsRunner } from "./agentTools";
+import {
+  AgentToolsController,
+  type AgentToolsRunner,
+  legacyCleanupDue,
+  legacyCleanupStamp,
+} from "./agentTools";
 
 const project = path.resolve("project with spaces");
 
@@ -26,6 +31,43 @@ test("enable passes one exact project word to the selected Core", async () => {
   }]);
   assert.equal(result.workspace, project);
   assert.equal(result.alreadySettled, false);
+});
+
+test("legacy cleanup runs the Core once and forgets every enabled root", async () => {
+  const calls: Array<readonly string[]> = [];
+  const tools = new AgentToolsController(async () => "runtrol", async (_executable, words) => {
+    calls.push(words);
+    return words[1] === "enable"
+      ? { stdout: `Agent Tools enabled for ${project}\n`, stderr: "" }
+      : {
+        stdout: "legacy-mcp  agent-tools  claude  runtrolTools  -  removed\nlegacy-local  none\n",
+        stderr: "",
+      };
+  });
+  await tools.enable(project);
+  assert.equal(tools.enabled(project), true);
+
+  const lines = await tools.cleanupLegacy(project);
+
+  assert.deepEqual(calls[1], ["tools", "cleanup"]);
+  assert.equal(lines.length, 2);
+  assert.equal(tools.enabled(project), false);
+});
+
+test("a cleanup line the Core did not shape as a legacy report is refused", async () => {
+  const tools = new AgentToolsController(
+    async () => "runtrol",
+    async () => ({ stdout: "done\n", stderr: "" }),
+  );
+  await assert.rejects(tools.cleanupLegacy(project), /invalid legacy cleanup line/u);
+});
+
+test("legacy cleanup is due once per Core image and once for an unmanaged Core", () => {
+  assert.equal(legacyCleanupDue(undefined, "abc123"), true);
+  assert.equal(legacyCleanupDue("abc123", "abc123"), false);
+  assert.equal(legacyCleanupDue("abc123", "def456"), true);
+  assert.equal(legacyCleanupDue(undefined, null), true);
+  assert.equal(legacyCleanupDue(legacyCleanupStamp(null), null), false);
 });
 
 test("disable accepts both a complete revocation and an already settled project", async () => {

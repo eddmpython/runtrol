@@ -81,6 +81,7 @@ pub(crate) async fn answer(composed: &Composed, request: &Request) -> Response {
         Request::LegacyMcpInventory => {
             Response::LegacyMcpInventory(legacy_mcp_inventory(composed).await)
         }
+        Request::LegacyMcpCleanup => Response::LegacyMcpCleanup(legacy_mcp_cleanup(composed).await),
         Request::ConsultWire { from, to } => change(composed, from, to, Change::Wire).await,
         Request::ConsultUnwire { from, to } => change(composed, from, to, Change::Unwire).await,
         Request::AgentToolsWire => match wire_agent_tools(composed).await {
@@ -101,6 +102,7 @@ pub(crate) const fn is_consult(request: &Request) -> bool {
         request,
         Request::Consult
             | Request::LegacyMcpInventory
+            | Request::LegacyMcpCleanup
             | Request::ConsultWire { .. }
             | Request::ConsultUnwire { .. }
             | Request::AgentToolsWire
@@ -136,18 +138,37 @@ fn agent_registrars(composed: &Composed) -> Vec<AgentRegistrar> {
     targets
 }
 
+/// One legacy name as read, beside the CLI that answered for it.
+///
+/// The program and registrar are kept so that a later removal acts on exactly the catalogue that was read, not
+/// on a second lookup that could land on a different installed CLI.
+struct LegacyName {
+    line: LegacyMcpLine,
+    program: Option<Program>,
+    registrar: Option<McpRegistrar>,
+}
+
 /// Read every legacy MCP name this build can inspect without changing provider or Runtrol state.
 async fn legacy_mcp_inventory(composed: &Composed) -> Vec<LegacyMcpLine> {
-    let mut lines = agent_tools_inventory(composed).await;
-    lines.extend(cross_consult_inventory(composed).await);
-    lines.sort_by(|left, right| {
+    legacy_mcp_names(composed)
+        .await
+        .into_iter()
+        .map(|named| named.line)
+        .collect()
+}
+
+async fn legacy_mcp_names(composed: &Composed) -> Vec<LegacyName> {
+    let mut names = agent_tools_inventory(composed).await;
+    names.extend(cross_consult_inventory(composed).await);
+    names.sort_by(|left, right| {
+        let (left, right) = (&left.line, &right.line);
         legacy_kind_order(left.kind)
             .cmp(&legacy_kind_order(right.kind))
             .then_with(|| left.provider.cmp(&right.provider))
             .then_with(|| left.name.cmp(&right.name))
             .then_with(|| left.target.cmp(&right.target))
     });
-    lines
+    names
 }
 
 const fn legacy_kind_order(kind: LegacyMcpKind) -> u8 {
@@ -157,10 +178,10 @@ const fn legacy_kind_order(kind: LegacyMcpKind) -> u8 {
     }
 }
 
-async fn agent_tools_inventory(composed: &Composed) -> Vec<LegacyMcpLine> {
+async fn agent_tools_inventory(composed: &Composed) -> Vec<LegacyName> {
     let server_program = this_executable();
     let expected_args = ["mcp"];
-    let mut lines = Vec::new();
+    let mut names = Vec::new();
     for target in agent_registrars(composed) {
         let state = match &server_program {
             Ok(program) => {
@@ -176,19 +197,23 @@ async fn agent_tools_inventory(composed: &Composed) -> Vec<LegacyMcpLine> {
             }
             Err(why) => Err(why.clone()),
         };
-        lines.push(legacy_line(
-            LegacyMcpKind::AgentTools,
-            target.provider,
-            AGENT_TOOLS_NAME.into(),
-            None,
-            state,
-        ));
+        names.push(LegacyName {
+            line: legacy_line(
+                LegacyMcpKind::AgentTools,
+                target.provider,
+                AGENT_TOOLS_NAME.into(),
+                None,
+                state,
+            ),
+            program: Some(target.program),
+            registrar: Some(target.registrar),
+        });
     }
-    lines
+    names
 }
 
-async fn cross_consult_inventory(composed: &Composed) -> Vec<LegacyMcpLine> {
-    let mut lines = Vec::new();
+async fn cross_consult_inventory(composed: &Composed) -> Vec<LegacyName> {
+    let mut names = Vec::new();
     for direction in directions(composed) {
         let Some(from_kind) = composed.driver_for(direction.from.manifest.kind.as_str()) else {
             continue;
@@ -197,38 +222,49 @@ async fn cross_consult_inventory(composed: &Composed) -> Vec<LegacyMcpLine> {
             continue;
         };
         let name = consult_name(direction.to.id());
-        let state = cross_consult_registration(composed, &direction, &registrar, &name).await;
-        lines.push(legacy_line(
-            LegacyMcpKind::CrossConsult,
-            direction.from.id().as_str().into(),
-            name.into(),
-            Some(direction.to.id().as_str().into()),
-            state,
-        ));
+        let from_program = runtrol_core::locate(&direction.from.manifest)
+            .map_err(|error| format!("cannot inspect {name} in {}: {error}", direction.from.id()));
+        let (state, program) = match from_program {
+            Ok(program) => (
+                cross_consult_registration(composed, &direction, &program, &registrar, &name).await,
+                Some(program),
+            ),
+            Err(why) => (Err(why), None),
+        };
+        names.push(LegacyName {
+            line: legacy_line(
+                LegacyMcpKind::CrossConsult,
+                direction.from.id().as_str().into(),
+                name.into(),
+                Some(direction.to.id().as_str().into()),
+                state,
+            ),
+            program,
+            registrar: Some(registrar),
+        });
     }
-    lines
+    names
 }
 
 async fn cross_consult_registration(
     composed: &Composed,
     direction: &Direction<'_>,
+    from_program: &Program,
     registrar: &McpRegistrar,
     name: &str,
 ) -> Result<Option<McpRegistrationState>, String> {
-    let from_program = runtrol_core::locate(&direction.from.manifest)
-        .map_err(|error| format!("cannot inspect {name} in {}: {error}", direction.from.id()))?;
     let Some(to_kind) = composed.driver_for(direction.to.manifest.kind.as_str()) else {
-        return registration_without_expected_shape(composed, &from_program, registrar, name).await;
+        return registration_without_expected_shape(composed, from_program, registrar, name).await;
     };
     let Some(server) = to_kind.consult.server else {
-        return registration_without_expected_shape(composed, &from_program, registrar, name).await;
+        return registration_without_expected_shape(composed, from_program, registrar, name).await;
     };
     let Ok((to_name, _)) = runtrol_core::locate_named(&direction.to.manifest) else {
-        return registration_without_expected_shape(composed, &from_program, registrar, name).await;
+        return registration_without_expected_shape(composed, from_program, registrar, name).await;
     };
     exact_registration(
         composed,
-        &from_program,
+        from_program,
         registrar,
         name,
         to_name,
@@ -290,6 +326,51 @@ fn this_executable() -> Result<Program, String> {
     runtrol_childproc::resolve(executable).map_err(|error| error.to_string())
 }
 
+/// Whether an inventory state is one this build owns outright and may therefore remove.
+///
+/// Exact entries name this executable. Superseded entries name the image this executable replaced in the
+/// directory it runs from. Everything else is somebody's, or cannot be told, and stays.
+const fn owned_outright(state: LegacyMcpState) -> bool {
+    matches!(
+        state,
+        LegacyMcpState::ExactEnabled | LegacyMcpState::ExactDisabled | LegacyMcpState::Superseded
+    )
+}
+
+/// Remove every legacy name this build proves it owns and read each one back, leaving the rest as found.
+///
+/// A removal that the provider does not confirm absent is reported as unreadable with the reason, never as
+/// removed. Running this twice is the same as running it once: the second pass finds every owned name absent.
+async fn legacy_mcp_cleanup(composed: &Composed) -> Vec<LegacyMcpLine> {
+    let mut lines = Vec::new();
+    for named in legacy_mcp_names(composed).await {
+        let LegacyName {
+            mut line,
+            program,
+            registrar,
+        } = named;
+        if owned_outright(line.state)
+            && let (Some(program), Some(registrar)) = (program, registrar)
+        {
+            match remove_registration(composed, &program, &registrar, &line.provider, &line.name)
+                .await
+            {
+                Ok(()) => {
+                    line.state = LegacyMcpState::Removed;
+                    line.why = None;
+                }
+                Err(why) => {
+                    line.state = LegacyMcpState::Unreadable;
+                    line.why =
+                        Some(format!("removal not confirmed, entry preserved: {why}").into());
+                }
+            }
+        }
+        lines.push(line);
+    }
+    lines
+}
+
 /// Remove the Agent Tools registration through each provider's official CLI and verify it is gone.
 async fn unwire_agent_tools(composed: &Composed) -> Result<(), String> {
     let server_program = this_executable()?;
@@ -329,7 +410,15 @@ async fn unwire_agent_tools(composed: &Composed) -> Result<(), String> {
 
     let mut failures = Vec::new();
     for target in owned {
-        if let Err(why) = remove_registration(composed, target, AGENT_TOOLS_NAME).await {
+        if let Err(why) = remove_registration(
+            composed,
+            &target.program,
+            &target.registrar,
+            &target.provider,
+            AGENT_TOOLS_NAME,
+        )
+        .await
+        {
             failures.push(why);
         }
     }
@@ -369,7 +458,14 @@ async fn wire_agent_tools(composed: &Composed) -> Result<(), String> {
             Some(McpRegistrationState::Superseded) => {
                 // Ours, from the image this one replaced. Take it out and let the add below put this
                 // executable in its place, so the project stops opening every conversation with a failure.
-                remove_registration(composed, target, AGENT_TOOLS_NAME).await?;
+                remove_registration(
+                    composed,
+                    &target.program,
+                    &target.registrar,
+                    &target.provider,
+                    AGENT_TOOLS_NAME,
+                )
+                .await?;
                 missing.push(target);
             }
             Some(McpRegistrationState::ExactDisabled) => {
@@ -436,7 +532,15 @@ async fn with_agent_tools_rollback(
 ) -> String {
     let mut rollback_failures = Vec::new();
     for target in added.iter().rev() {
-        if let Err(error) = remove_registration(composed, target, AGENT_TOOLS_NAME).await {
+        if let Err(error) = remove_registration(
+            composed,
+            &target.program,
+            &target.registrar,
+            &target.provider,
+            AGENT_TOOLS_NAME,
+        )
+        .await
+        {
             rollback_failures.push(error);
         }
     }
@@ -450,19 +554,21 @@ async fn with_agent_tools_rollback(
     }
 }
 
+/// Remove one registration through the CLI's own command and read it back until the CLI says it is gone.
 async fn remove_registration(
     composed: &Composed,
-    target: &AgentRegistrar,
+    program: &Program,
+    registrar: &McpRegistrar,
+    provider: &str,
     name: &str,
 ) -> Result<(), String> {
-    let removed = ask(composed, &target.program, target.registrar.remove, &[name]).await?;
-    if registration(composed, &target.program, &target.registrar, name)
+    let removed = ask(composed, program, registrar.remove, &[name]).await?;
+    if registration(composed, program, registrar, name)
         .await?
         .is_some()
     {
         Err(format!(
-            "{} still has {name} registered after removal. it said: {}",
-            target.provider,
+            "{provider} still has {name} registered after removal. it said: {}",
             said(&removed)
         ))
     } else {
@@ -979,6 +1085,28 @@ mod tests {
         let unreadable = line(Err("provider readback changed".to_owned()));
         assert_eq!(unreadable.state, LegacyMcpState::Unreadable);
         assert_eq!(unreadable.why.as_deref(), Some("provider readback changed"));
+    }
+
+    #[test]
+    fn cleanup_removes_only_what_this_build_owns_outright() {
+        for owned in [
+            LegacyMcpState::ExactEnabled,
+            LegacyMcpState::ExactDisabled,
+            LegacyMcpState::Superseded,
+        ] {
+            assert!(owned_outright(owned), "{owned:?} is this build's own entry");
+        }
+        for preserved in [
+            LegacyMcpState::Absent,
+            LegacyMcpState::Foreign,
+            LegacyMcpState::Unreadable,
+            LegacyMcpState::Removed,
+        ] {
+            assert!(
+                !owned_outright(preserved),
+                "{preserved:?} is not proof of ownership and must be left alone"
+            );
+        }
     }
 
     #[test]

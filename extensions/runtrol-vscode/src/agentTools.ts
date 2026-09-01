@@ -20,6 +20,22 @@ export type AgentToolsResult = {
   alreadySettled: boolean;
 };
 
+/// The globalState key remembering which Core image last ran the legacy cleanup.
+export const LEGACY_CLEANUP_KEY = "runtrol.legacyMcpCleanup";
+
+/// What one Core image is remembered as once it has cleaned up after its predecessors.
+///
+/// An extension-managed Core is named by its digest, so every upgrade is a new stamp and runs cleanup once. A
+/// Core the operator configured by path has no digest; it is one stamp for as long as it stays configured.
+export function legacyCleanupStamp(managedDigest: string | null): string {
+  return managedDigest ?? "unmanaged";
+}
+
+/// Whether this Core image still has to clean up after earlier Runtrol builds.
+export function legacyCleanupDue(remembered: string | undefined, managedDigest: string | null): boolean {
+  return remembered !== legacyCleanupStamp(managedDigest);
+}
+
 /// The one VS Code seam for local Agent Tools administration.
 ///
 /// It runs the exact Core already selected by the extension, passes the project as one argv word, and lets Core own
@@ -45,6 +61,33 @@ export class AgentToolsController {
 
   enabled(workspace: string): boolean {
     return this.roots.has(identity(workspace));
+  }
+
+  /// Ask the selected Core to remove every provider registration, Runtime grant, and local credential an earlier
+  /// Runtrol build left behind. Foreign entries stay; the Core says so line by line.
+  cleanupLegacy(workspace: string): Promise<readonly string[]> {
+    const result = this.tail.then(async () => {
+      if (!path.isAbsolute(workspace)) {
+        throw new Error(`Agent Tools needs an absolute project path, got ${JSON.stringify(workspace)}`);
+      }
+      const executable = await this.locateCore();
+      const lines = linesOf(await this.runner(executable, ["tools", "cleanup"], workspace));
+      for (const line of lines) {
+        if (!line.startsWith("legacy-mcp  ") && !line.startsWith("legacy-local  ")) {
+          throw new Error(`the Core returned an invalid legacy cleanup line: ${JSON.stringify(line)}`);
+        }
+      }
+      if (this.roots.size > 0) {
+        this.roots = new Set();
+        this.publish();
+      }
+      return lines;
+    });
+    this.tail = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
   }
 
   onDidChange(listener: () => void): { dispose(): void } {

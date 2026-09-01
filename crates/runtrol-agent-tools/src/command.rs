@@ -3,7 +3,7 @@
 use core::time::Duration;
 use std::path::PathBuf;
 
-use runtrol_ipc::wire::Request;
+use runtrol_ipc::wire::{Request, Response};
 use runtrol_provider::AbsPath;
 use runtrol_runtime_client::{
     ClientOptions, EnrollmentProposal, LocatorState, ReconnectPolicy, RuntimeLocator,
@@ -14,8 +14,13 @@ use sha2::{Digest as _, Sha256};
 use crate::AgentToolsError;
 use crate::credentials::{
     ApprovedCredential, CredentialInventoryLine, CredentialInventoryState, CredentialStore,
-    PreparedCredential, SCOPES,
+    ExactSlot, PreparedCredential, SCOPES,
 };
+
+/// The client name every Agent Tools enrollment connected under; the Runtime keeps it as the grant label.
+const CLIENT_NAME: &str = "runtrol-agent-tools";
+/// The instance name every Agent Tools enrollment was requested under, followed by its public key.
+const ENROLLMENT_PREFIX: &str = "runtrol-agent-tools:";
 
 const PRODUCT_MANIFEST: &[u8] = b"runtrol-agent-tools/1\n\
 tools=runtrol_providers,runtrol_models,runtrol_sessions,runtrol_start,runtrol_send,runtrol_next_event,runtrol_stop\n\
@@ -83,6 +88,14 @@ pub async fn run_command(
             }
             inventory(context).await
         }
+        Some("cleanup") => {
+            if let Some(extra) = words.get(1) {
+                return Err(AgentToolsError::Mcp(format!(
+                    "tools cleanup does not accept extra word {extra:?}"
+                )));
+            }
+            cleanup(context).await
+        }
         Some("list") => {
             if let Some(extra) = words.get(1) {
                 return Err(AgentToolsError::Mcp(format!(
@@ -92,10 +105,10 @@ pub async fn run_command(
             list()
         }
         Some(other) => Err(AgentToolsError::Mcp(format!(
-            "no tools command called {other:?}. try: tools inventory, tools enable [project], tools disable [project], tools status, tools list"
+            "no tools command called {other:?}. try: tools inventory, tools cleanup, tools enable [project], tools disable [project], tools status, tools list"
         ))),
         None => Err(AgentToolsError::Mcp(
-            "tools needs a command. try: tools inventory, tools enable [project], tools disable [project], tools status, tools list"
+            "tools needs a command. try: tools inventory, tools cleanup, tools enable [project], tools disable [project], tools status, tools list"
                 .to_owned(),
         )),
     }
@@ -244,6 +257,111 @@ async fn inventory(context: &CommandContext) -> Result<Vec<String>, AgentToolsEr
     Ok(lines)
 }
 
+/// Remove what an earlier Runtrol build left behind: its provider registrations, its Runtime grants, and its
+/// local credential slots. Whatever is not exactly ours is reported and preserved.
+///
+/// The order is deliberate. Provider registrations go first, because a registration that outlives its grant is
+/// the failure the operator sees (a conversation opening with an MCP server that cannot start). Runtime grants
+/// go before the local slots that hold their credentials, so an interrupted run can never leave authority
+/// standing with no local record of it. A second run finds nothing to do and reports the same shape.
+async fn cleanup(context: &CommandContext) -> Result<Vec<String>, AgentToolsError> {
+    ensure_daemon(context).await?;
+    let response =
+        runtrol_cli::request_running(&context.endpoint, Request::LegacyMcpCleanup).await?;
+    let mut lines = match &response {
+        Response::LegacyMcpCleanup(_) => runtrol_cli::render(&response),
+        Response::Failed(failure) => {
+            return Err(AgentToolsError::Refused(failure.message.to_string()));
+        }
+        other => {
+            return Err(AgentToolsError::Mcp(format!(
+                "the daemon returned {other:?} instead of the legacy MCP cleanup report"
+            )));
+        }
+    };
+
+    let live_grants = live_agent_tools_grants(context).await?;
+    let store = CredentialStore::open()?;
+    let mut local_lines = Vec::new();
+    let mut revoked: Vec<Box<str>> = Vec::new();
+    for slot in store.exact_slots()? {
+        if let Some(integration_id) = slot.integration_id.as_deref()
+            && live_grants
+                .iter()
+                .any(|grant| grant.as_ref() == integration_id)
+        {
+            revoke_grant(context, integration_id).await?;
+            revoked.push(integration_id.into());
+        }
+        CredentialStore::remove_exact(&slot)?;
+        local_lines.push(render_local_removal(&slot));
+    }
+    // A grant whose local slot is already gone is still authority in the Runtime. It is ours by the enrollment
+    // name only this product ever used, and revoking it can take nothing from anybody else.
+    for integration_id in live_grants {
+        if revoked.contains(&integration_id) {
+            continue;
+        }
+        revoke_grant(context, &integration_id).await?;
+        local_lines.push(format!(
+            "legacy-local  revoked  -  {integration_id}  -  (Runtime grant without a local slot)"
+        ));
+    }
+    let preserved = store.inventory()?;
+    local_lines.extend(preserved.iter().map(render_local_inventory));
+    if local_lines.is_empty() {
+        local_lines.push("legacy-local  none".to_owned());
+    }
+    lines.extend(local_lines);
+    Ok(lines)
+}
+
+/// Every unrevoked Runtime grant that carries the Agent Tools enrollment name.
+async fn live_agent_tools_grants(
+    context: &CommandContext,
+) -> Result<Vec<Box<str>>, AgentToolsError> {
+    let response = runtrol_cli::request_running(&context.endpoint, Request::Integrations).await?;
+    match response {
+        Response::Integrations(integrations) => Ok(integrations
+            .into_iter()
+            .filter(|line| !line.revoked && agent_tools_grant(line))
+            .map(|line| line.integration_id)
+            .collect()),
+        Response::Failed(failure) => Err(AgentToolsError::Refused(failure.message.to_string())),
+        other => Err(AgentToolsError::Mcp(format!(
+            "the daemon returned {other:?} instead of the integration list"
+        ))),
+    }
+}
+
+/// Whether one Runtime grant is an Agent Tools enrollment: the client name this crate connects under and the
+/// instance name it enrolls under, both, so a foreign client sharing one of them is not revoked.
+fn agent_tools_grant(line: &runtrol_ipc::wire::IntegrationLine) -> bool {
+    line.label.as_ref() == CLIENT_NAME && line.client_instance_id.starts_with(ENROLLMENT_PREFIX)
+}
+
+async fn revoke_grant(
+    context: &CommandContext,
+    integration_id: &str,
+) -> Result<(), AgentToolsError> {
+    ask_local(
+        context,
+        Request::IntegrationRevoke {
+            integration_id: integration_id.into(),
+        },
+    )
+    .await
+}
+
+fn render_local_removal(slot: &ExactSlot) -> String {
+    format!(
+        "legacy-local  removed  {}  {}  {}",
+        slot.name,
+        slot.integration_id.as_deref().unwrap_or("-"),
+        slot.root.as_deref().unwrap_or("-")
+    )
+}
+
 fn render_local_inventory(line: &CredentialInventoryLine) -> String {
     let state = match line.state {
         CredentialInventoryState::Approved => "approved",
@@ -271,7 +389,7 @@ async fn enroll(
     context: &CommandContext,
 ) -> Result<ApprovedCredential, AgentToolsError> {
     let locator = RuntimeLocator::system().map_err(runtrol_runtime_client::ClientError::Locator)?;
-    let options = ClientOptions::new("runtrol-agent-tools", env!("CARGO_PKG_VERSION"))
+    let options = ClientOptions::new(CLIENT_NAME, env!("CARGO_PKG_VERSION"))
         .with_identity(prepared.identity.clone());
     let mut runtime = locator
         .connect_with_retry(options, ReconnectPolicy::default())
@@ -320,7 +438,7 @@ async fn enroll(
 
 async fn connect(approved: &ApprovedCredential) -> Result<(), AgentToolsError> {
     let locator = RuntimeLocator::system().map_err(runtrol_runtime_client::ClientError::Locator)?;
-    let options = ClientOptions::new("runtrol-agent-tools", env!("CARGO_PKG_VERSION"))
+    let options = ClientOptions::new(CLIENT_NAME, env!("CARGO_PKG_VERSION"))
         .with_credentials(approved.credentials.clone());
     drop(
         locator
@@ -388,6 +506,30 @@ fn current_directory() -> Result<String, AgentToolsError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_grant_is_ours_only_with_both_the_client_name_and_the_enrollment_instance() {
+        let line = |label: &str, instance: &str| runtrol_ipc::wire::IntegrationLine {
+            integration_id: "int_1".into(),
+            label: label.into(),
+            client_instance_id: instance.into(),
+            scopes: Vec::new(),
+            available_scopes: Vec::new(),
+            roots: Vec::new(),
+            key_generation: 1,
+            grant_generation: 1,
+            revoked: false,
+        };
+        assert!(agent_tools_grant(&line(
+            CLIENT_NAME,
+            "runtrol-agent-tools:key"
+        )));
+        assert!(!agent_tools_grant(&line(
+            "Runtrol Studio",
+            "runtrol-agent-tools:key"
+        )));
+        assert!(!agent_tools_grant(&line(CLIENT_NAME, "someone-else")));
+    }
 
     #[test]
     fn the_closed_manifest_names_every_tool_and_excludes_approvals() {

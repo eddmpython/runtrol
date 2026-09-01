@@ -2,7 +2,13 @@ import path from "node:path";
 
 import * as vscode from "vscode";
 
-import { AgentToolsController, type AgentToolsAction } from "./agentTools";
+import {
+  AgentToolsController,
+  type AgentToolsAction,
+  LEGACY_CLEANUP_KEY,
+  legacyCleanupDue,
+  legacyCleanupStamp,
+} from "./agentTools";
 import { conversations as conversationRows, namedPlaceholders } from "./conversationList";
 import { ActivityWatcher } from "./activityWatch";
 import { WatchLifecycleGate } from "./watchLifecycleGate";
@@ -750,11 +756,18 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     await lifecycle;
     await configureRemoteConnection(client);
   });
+  const workingDirectory = vscode.workspace.workspaceFolders
+    ?.find((folder) => folder.uri.scheme === "file")
+    ?.uri.fsPath ?? vscode.env.appRoot;
   void run(async () => {
     await lifecycle;
-    const workingDirectory = vscode.workspace.workspaceFolders
-      ?.find((folder) => folder.uri.scheme === "file")
-      ?.uri.fsPath ?? vscode.env.appRoot;
+    // A Core image cleans up after its predecessors exactly once: the provider registrations, Runtime grants,
+    // and local credentials that earlier Runtrol builds left behind. An entry that is not exactly ours stays.
+    const managedDigest = await locator.managedDigest();
+    if (legacyCleanupDue(context.globalState.get<string>(LEGACY_CLEANUP_KEY), managedDigest)) {
+      await agentTools.cleanupLegacy(workingDirectory);
+      await context.globalState.update(LEGACY_CLEANUP_KEY, legacyCleanupStamp(managedDigest));
+    }
     await agentTools.refresh(workingDirectory);
   });
   return {

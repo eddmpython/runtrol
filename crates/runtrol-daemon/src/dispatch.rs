@@ -174,6 +174,8 @@ pub(crate) enum ConsultAsked {
     Status,
     /// Read-only inventory of legacy Runtrol MCP registration names.
     LegacyMcpInventory,
+    /// Removal of every legacy Runtrol MCP registration this build owns outright.
+    LegacyMcpCleanup,
     /// One direction being wired.
     Wire {
         /// The registering provider.
@@ -200,6 +202,7 @@ impl ConsultAsked {
         match request {
             Request::Consult => Some(Self::Status),
             Request::LegacyMcpInventory => Some(Self::LegacyMcpInventory),
+            Request::LegacyMcpCleanup => Some(Self::LegacyMcpCleanup),
             Request::ConsultWire { from, to } => Some(Self::Wire {
                 from: from.clone(),
                 to: to.clone(),
@@ -1456,6 +1459,7 @@ pub(crate) async fn answer_prepared(
         // answer must be the one computed for this exact request, the rule every prepared result follows.
         consult @ (Request::Consult
         | Request::LegacyMcpInventory
+        | Request::LegacyMcpCleanup
         | Request::ConsultWire { .. }
         | Request::ConsultUnwire { .. }
         | Request::AgentToolsWire

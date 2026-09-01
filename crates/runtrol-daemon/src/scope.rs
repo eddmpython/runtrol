@@ -86,9 +86,10 @@ pub fn needed(request: &Request) -> Needed {
         | Request::Consult => Needed::Scope(DeviceScope::ConfigRead),
         Request::LegacyMcpInventory => Needed::AtTheMachine(LocalScope::IntegrationAdmin),
         Request::ProviderUpdate { .. } => Needed::AtTheMachine(LocalScope::ProviderUpdate),
-        Request::RemoteConfigure { .. } | Request::AgentToolsWire | Request::AgentToolsUnwire => {
-            Needed::AtTheMachine(LocalScope::ConfigWrite)
-        }
+        Request::RemoteConfigure { .. }
+        | Request::AgentToolsWire
+        | Request::AgentToolsUnwire
+        | Request::LegacyMcpCleanup => Needed::AtTheMachine(LocalScope::ConfigWrite),
         Request::PairingBegin
         | Request::PairingProposals
         | Request::PairingApprovalBegin { .. }
@@ -435,6 +436,7 @@ mod tests {
             },
             Request::Consult,
             Request::LegacyMcpInventory,
+            Request::LegacyMcpCleanup,
             Request::ConsultWire {
                 from: "claude".into(),
                 to: "codex".into(),

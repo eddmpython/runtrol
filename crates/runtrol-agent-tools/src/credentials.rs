@@ -51,6 +51,16 @@ pub(crate) struct ApprovedCredential {
     pub(crate) credentials: IntegrationCredentials,
 }
 
+/// One exact Runtrol slot that cleanup may remove: approved, orphaned, or left partial by an interrupted command.
+///
+/// Invalid, unrecognized, and overflow entries are not exact slots and never appear here.
+pub(crate) struct ExactSlot {
+    pub(crate) name: Box<str>,
+    pub(crate) root: Option<Box<str>>,
+    pub(crate) integration_id: Option<Box<str>>,
+    slot: AgentToolSlot,
+}
+
 /// One exact project slot already present on disk, including a partial slot left by an interrupted command.
 pub(crate) struct StoredCredential {
     pub(crate) root: AbsPath,
@@ -299,24 +309,54 @@ impl CredentialStore {
     }
 
     pub(crate) fn remove(stored: &StoredCredential) -> Result<(), AgentToolsError> {
-        match std::fs::remove_file(stored.slot.grant().as_std_path()) {
+        Self::remove_slot(&stored.slot)
+    }
+
+    /// Every exact Runtrol slot on disk, whatever its completeness, as the inventory classifies it.
+    pub(crate) fn exact_slots(&self) -> Result<Vec<ExactSlot>, AgentToolsError> {
+        let mut slots = Vec::new();
+        for line in self.inventory()? {
+            if !matches!(
+                line.state,
+                CredentialInventoryState::Approved
+                    | CredentialInventoryState::OrphanGrant
+                    | CredentialInventoryState::Partial
+            ) {
+                continue;
+            }
+            slots.push(ExactSlot {
+                slot: self.home.paths().agent_tool_slot(&line.slot)?,
+                name: line.slot,
+                root: line.root,
+                integration_id: line.integration_id,
+            });
+        }
+        Ok(slots)
+    }
+
+    pub(crate) fn remove_exact(slot: &ExactSlot) -> Result<(), AgentToolsError> {
+        Self::remove_slot(&slot.slot)
+    }
+
+    fn remove_slot(slot: &AgentToolSlot) -> Result<(), AgentToolsError> {
+        match std::fs::remove_file(slot.grant().as_std_path()) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => {
                 return Err(AgentToolsError::io(
                     "removing an approved project grant",
-                    stored.slot.grant().as_std_path(),
+                    slot.grant().as_std_path(),
                     &error,
                 ));
             }
         }
-        runtrol_vault::ProtectedSecret::delete(stored.slot.identity())?;
-        match std::fs::remove_dir(stored.slot.directory().as_std_path()) {
+        runtrol_vault::ProtectedSecret::delete(slot.identity())?;
+        match std::fs::remove_dir(slot.directory().as_std_path()) {
             Ok(()) => Ok(()),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
             Err(error) => Err(AgentToolsError::io(
                 "removing the empty project credential directory",
-                stored.slot.directory().as_std_path(),
+                slot.directory().as_std_path(),
                 &error,
             )),
         }

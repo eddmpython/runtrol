@@ -467,6 +467,12 @@ pub enum Request {
     /// or removes an MCP entry.
     LegacyMcpInventory,
 
+    /// Remove every legacy Runtrol MCP registration this build proves it owns, through the provider's own removal
+    /// command, and read each name back afterwards.
+    ///
+    /// Exact and superseded entries are removed. A foreign, unreadable, or absent name is left exactly as found.
+    LegacyMcpCleanup,
+
     /// Register `to` as a consultable MCP server inside `from`, using `from`'s own official command.
     ConsultWire {
         /// The CLI that gains a consultant.
@@ -746,6 +752,10 @@ pub enum Response {
     /// Read-only legacy MCP registration inventory.
     LegacyMcpInventory(Vec<LegacyMcpLine>),
 
+    /// Every legacy name after cleanup: `removed` for the entries this build removed and then proved absent,
+    /// otherwise the preserved state exactly as the inventory reports it.
+    LegacyMcpCleanup(Vec<LegacyMcpLine>),
+
     /// It did not work.
     Failed(WireError),
 }
@@ -983,6 +993,8 @@ pub enum LegacyMcpState {
     Foreign,
     /// The provider answer, installed program, or expected command shape could not prove ownership.
     Unreadable,
+    /// This build removed its own exact or superseded entry and the provider then proved the name absent.
+    Removed,
 }
 
 /// Where one cross-consult direction stands.
@@ -1797,6 +1809,7 @@ mod tests {
                 to: "codex".into(),
             },
             Request::LegacyMcpInventory,
+            Request::LegacyMcpCleanup,
             Request::AgentToolsWire,
             Request::AgentToolsUnwire,
         ] {

@@ -10,6 +10,13 @@ and refactoring that no user can observe do not belong here.
 
 ## [Unreleased]
 
+### Changed
+
+- The first activation of each new Studio Core image removes the MCP registrations, Runtime grants, and local
+  credentials that earlier Runtrol builds registered for Agent Tools and cross consult, through each provider's own
+  removal command. An entry with the same name that Runtrol cannot prove it owns is reported and left untouched.
+  `runtrol tools cleanup` runs the same pass by hand.
+
 ## [0.1.44] - 2026-09-01
 
 ### Changed
