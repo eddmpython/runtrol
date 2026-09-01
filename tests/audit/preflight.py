@@ -415,28 +415,6 @@ GATES: dict[str, tuple[str, list[str]]] = {
         "세션 시작·목록·닫기·재개 (실물 CLI)",
         [*PY, f"{HOOKS}/sessionLifecycleSmoke.py", "--providers=claude,codex"],
     ),
-    # 북극성 `AI 끼리 서로 자문` 축의 게이트. 토글이 실물 두 CLI 의 공식 명령으로 등록·검증·원상복구를
-    # 해내는지 격리 홈에서 몰아본다. tools/list 검증까지 포함해 토큰을 쓰지 않는다. 턴 중 실수신은 실물
-    # 턴 비용이라 게이트가 아니라 수기 실측이고, 게이트 출력이 그 사실을 밝힌다.
-    "crossConsultSmokeSelftest": (
-        "자문 배선 게이트 자체 검증",
-        [*PY, f"{HOOKS}/crossConsultSmoke.py", "--selftest"],
-    ),
-    "crossConsultSmoke": (
-        "자문 토글 배선·검증·원상복구 (실물 CLI)",
-        [*PY, f"{HOOKS}/crossConsultSmoke.py"],
-    ),
-    # Agent Tools is the coding-agent-facing orchestration surface. This gate spends no model turn: it uses real CLI
-    # registration commands, collision and replacement probes, raw MCP discovery, and read-only Runtime inventory
-    # inside isolated homes, then proves disable removed both authority and credentials.
-    "agentToolsSmokeSelftest": (
-        "Agent Tools 생명주기 게이트 자체 검증",
-        [*PY, f"{HOOKS}/agentToolsSmoke.py", "--selftest"],
-    ),
-    "agentToolsSmoke": (
-        "Agent Tools 충돌 방어, root 격리, MCP 호출, 완전 회수 (실물 CLI)",
-        [*PY, f"{HOOKS}/agentToolsSmoke.py"],
-    ),
     "modelDetectionSmokeSelftest": (
         "모델 자동 인식 게이트 자체 검증",
         [*PY, f"{HOOKS}/modelDetectionSmoke.py", "--selftest"],
@@ -574,7 +552,6 @@ CARGO_GATES = frozenset(
         "genericAcpSmoke",
         "externalAcpSmokeSelftest",
         "externalAcpSmoke",
-        "agentToolsSmoke",
         "claudeApprovalSmokeSelftest",
         "claudeApprovalSmoke",
         "phoneDrivesPcSmoke",

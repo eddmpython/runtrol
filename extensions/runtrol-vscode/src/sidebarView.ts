@@ -59,11 +59,6 @@ export type ProjectsPort = {
   reorder(keys: readonly string[]): Promise<void>;
 };
 
-export type AgentToolsPort = {
-  enabled(workspace: string): boolean;
-  onDidChange(listener: () => void): { dispose(): void };
-};
-
 /// The uncommitted and unpushed work per project folder, measured by `GitChangesWatch` on its own triggers.
 export type GitChangesPort = {
   get(workspace: string): GitChanges | null | undefined;
@@ -131,7 +126,6 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
     private readonly context: vscode.ExtensionContext,
     private readonly state: RuntimeState,
     private readonly projectRecords: ProjectsPort,
-    private readonly agentTools: AgentToolsPort,
     private readonly changes: GitChangesPort,
     private readonly releases: ProviderReleasePort,
     private readonly help: ProviderHelpPort,
@@ -147,7 +141,6 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
         this.render();
       }),
       projectRecords.onDidChange(() => this.render()),
-      agentTools.onDidChange(() => this.render()),
       changes.onDidChange(() => this.render()),
       releases.onDidChange(() => this.render()),
       help.onDidChange(() => this.render()),
@@ -281,7 +274,7 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
     if (typeof key !== "string") return undefined;
     if (kind === "project") {
       const group = this.groups.find((candidate) => candidate.key === key);
-      return group ? new ProjectItem(group, this.agentTools.enabled(group.workspace)) : undefined;
+      return group ? new ProjectItem(group) : undefined;
     }
     if (kind === "conversation") {
       const row = this.state.conversations.find((candidate) => candidate.key === key);
@@ -367,7 +360,6 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
       collapsed: this.collapsed.has(group.key),
       attention: group.attention,
       live: group.live,
-      agentTools: this.agentTools.enabled(group.workspace),
       branch: this.branches.get(group.key) ?? null,
       changes: this.changes.get(group.workspace) ?? null,
       ...this.rowsOf(group),

@@ -12,7 +12,7 @@ export class ConversationItem {
 }
 
 export class ProjectItem {
-  constructor(readonly group: ProjectGroup, readonly agentToolsEnabled: boolean) {}
+  constructor(readonly group: ProjectGroup) {}
 }
 
 export class ServiceChoiceItem {

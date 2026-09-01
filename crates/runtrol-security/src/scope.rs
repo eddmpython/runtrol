@@ -266,12 +266,6 @@ pub enum LocalScope {
     /// The provider's own prompt is the last thing standing between an agent and the operator's
     /// disk. Removing it is a decision that has to be taken in front of the disk in question.
     ModeDangerous,
-    /// Wire one CLI into another as a consultable MCP server, or unwire it.
-    ///
-    /// Wiring expands what an agent can reach mid-turn and edits the CLIs' own configuration
-    /// through their official commands. Both are capability growth, and a remote caller may
-    /// shrink its authority and never grow it.
-    ConsultWire,
     /// Start another writer in a working tree that is already reserved.
     ///
     /// Concurrent writers can overwrite each other's repository changes. Accepting that collision is a per-action
@@ -313,7 +307,6 @@ impl LocalScope {
         Self::ConfigWrite,
         Self::ApprovalAuto,
         Self::ModeDangerous,
-        Self::ConsultWire,
         Self::WorkspaceShare,
         Self::ProviderUpdate,
         Self::ProviderRollback,
@@ -330,7 +323,6 @@ impl LocalScope {
             Self::ConfigWrite => "config.write",
             Self::ApprovalAuto => "approval.auto",
             Self::ModeDangerous => "mode.dangerous",
-            Self::ConsultWire => "consult.wire",
             Self::WorkspaceShare => "workspace.share",
             Self::ProviderUpdate => "provider.update",
             Self::ProviderRollback => "provider.rollback",

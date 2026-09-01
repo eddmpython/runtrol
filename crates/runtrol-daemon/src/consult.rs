@@ -1,36 +1,29 @@
-//! Wiring one CLI into another as a consultant, through the CLIs' own commands and nothing else.
+//! What is left of the MCP registrations Runtrol once made, read and removed through the CLIs' own commands.
 //!
-//! One toggle stands between an operator and "my agent can ask the other vendor's agent mid-turn". What the
-//! toggle actually does is small on purpose: it runs the registering CLI's own official add or remove
-//! command, and it asks the CLIs' own answers for every judgement it makes. runtrol never writes a provider's
-//! configuration file, never holds the wired state anywhere of its own, and never sees a word of the
-//! consultation, which travels on a stdio pipe between the two CLIs.
+//! Earlier builds registered this executable as an Agent Tools server and registered one CLI inside another
+//! as a consultant. Neither surface exists in the product any more. What remains here is the read-only
+//! inventory of those names, their removal, and the status and unwire half of the old consult toggle, all of it
+//! through each CLI's own official commands. runtrol never writes a provider's configuration file, never holds
+//! the registered state anywhere of its own, and registers nothing.
 //!
 //! # Where the truth lives
 //!
 //! In the registering CLI's configuration, asked for fresh with its own `get` command every time. The driver
 //! reads back the command, arguments, environment, working directory, and enabled state that the CLI exposes,
-//! so a matching name never becomes permission to overwrite or remove somebody else's entry. A copy held here
-//! would be a second place for the state to live, and the operator can change the first place without runtrol in
-//! the room.
+//! so a matching name never becomes permission to remove somebody else's entry. A copy held here would be a
+//! second place for the state to live, and the operator can change the first place without runtrol in the room.
 //!
 //! # Why every judgement runs against a control name
 //!
 //! Measured: one CLI answers a subcommand it does not have by printing its parent help and exiting zero. An
 //! exit code alone therefore proves nothing. Every `get` is judged beside the same command run with an
 //! invented name that must not exist. Only "the real name succeeds, the invented one fails, and the real
-//! command reads back exactly" counts as wired. A CLI that answers both names the same way or changes its
+//! command reads back exactly" counts as ours. A CLI that answers both names the same way or changes its
 //! readback shape is reported as unreadable rather than guessed about.
-//!
-//! # Why the server is asked for its tool list before anything is registered
-//!
-//! The direction's whole point is a named tool on the counterpart's own MCP server. The name is declared by
-//! the driver and verified against a fresh `tools/list` handshake at wire time, so a vendor rename becomes a
-//! refusal at the toggle instead of a turn that fails somewhere an operator cannot see the cause.
 
 use core::time::Duration;
 
-use runtrol_childproc::{Output, Program, capture, capture_with_input};
+use runtrol_childproc::{Output, Program, capture};
 use runtrol_drivers::{ConsultTool, McpConsultServer, McpRegistrar, McpRegistrationState};
 use runtrol_ipc::wire::{
     ConsultLine, ConsultState, LegacyMcpKind, LegacyMcpLine, LegacyMcpState, Request, Response,
@@ -55,14 +48,6 @@ const CONTROL_NAME: &str = "runtrolConsultAbsentControl";
 /// The stable entry coding agents see in their provider's MCP catalogue.
 const AGENT_TOOLS_NAME: &str = "runtrolTools";
 
-/// The `tools/list` question, written whole and closed, the shape [`capture_with_input`] exists for.
-///
-/// Measured: both handshake answers arrive and the server exits cleanly on end of input.
-const TOOLS_LIST_HANDSHAKE: &[u8] = br#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"runtrol","version":"0"}}}
-{"jsonrpc":"2.0","method":"notifications/initialized"}
-{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}
-"#;
-
 /// The name one CLI is registered under inside another.
 ///
 /// Derived from the provider being served, so the operator and their agent both read what it gives them:
@@ -82,12 +67,7 @@ pub(crate) async fn answer(composed: &Composed, request: &Request) -> Response {
             Response::LegacyMcpInventory(legacy_mcp_inventory(composed).await)
         }
         Request::LegacyMcpCleanup => Response::LegacyMcpCleanup(legacy_mcp_cleanup(composed).await),
-        Request::ConsultWire { from, to } => change(composed, from, to, Change::Wire).await,
-        Request::ConsultUnwire { from, to } => change(composed, from, to, Change::Unwire).await,
-        Request::AgentToolsWire => match wire_agent_tools(composed).await {
-            Ok(()) => Response::Done,
-            Err(why) => refuse(&why),
-        },
+        Request::ConsultUnwire { from, to } => unwire_direction(composed, from, to).await,
         Request::AgentToolsUnwire => match unwire_agent_tools(composed).await {
             Ok(()) => Response::Done,
             Err(why) => refuse(&why),
@@ -103,9 +83,7 @@ pub(crate) const fn is_consult(request: &Request) -> bool {
         Request::Consult
             | Request::LegacyMcpInventory
             | Request::LegacyMcpCleanup
-            | Request::ConsultWire { .. }
             | Request::ConsultUnwire { .. }
-            | Request::AgentToolsWire
             | Request::AgentToolsUnwire
     )
 }
@@ -429,131 +407,6 @@ async fn unwire_agent_tools(composed: &Composed) -> Result<(), String> {
     }
 }
 
-async fn wire_agent_tools(composed: &Composed) -> Result<(), String> {
-    let server_program = this_executable()?;
-    verify_agent_tools(composed, &server_program).await?;
-    let targets = agent_registrars(composed);
-    if targets.is_empty() {
-        return Err(
-            "no installed provider CLI exposes an official MCP registration command in this build"
-                .to_owned(),
-        );
-    }
-
-    let expected_args = ["mcp"];
-    let mut missing = Vec::new();
-    for target in &targets {
-        match exact_registration(
-            composed,
-            &target.program,
-            &target.registrar,
-            AGENT_TOOLS_NAME,
-            server_program.path().as_str(),
-            &expected_args,
-        )
-        .await?
-        {
-            None => missing.push(target),
-            Some(McpRegistrationState::ExactEnabled) => {}
-            Some(McpRegistrationState::Superseded) => {
-                // Ours, from the image this one replaced. Take it out and let the add below put this
-                // executable in its place, so the project stops opening every conversation with a failure.
-                remove_registration(
-                    composed,
-                    &target.program,
-                    &target.registrar,
-                    &target.provider,
-                    AGENT_TOOLS_NAME,
-                )
-                .await?;
-                missing.push(target);
-            }
-            Some(McpRegistrationState::ExactDisabled) => {
-                return Err(format!(
-                    "{} has this exact {AGENT_TOOLS_NAME} entry disabled. enable or remove it in that CLI before retrying",
-                    target.provider
-                ));
-            }
-            Some(McpRegistrationState::Different) => {
-                return Err(format!(
-                    "{} already has an MCP entry named {AGENT_TOOLS_NAME} that points somewhere else. runtrol will not overwrite it",
-                    target.provider
-                ));
-            }
-        }
-    }
-
-    let mut added: Vec<&AgentRegistrar> = Vec::new();
-    for target in missing {
-        let mut add: Vec<&str> = target.registrar.add.to_vec();
-        add.extend([
-            AGENT_TOOLS_NAME,
-            "--",
-            server_program.path().as_str(),
-            "mcp",
-        ]);
-        let add_output = match ask(composed, &target.program, &add, &[]).await {
-            Ok(output) => output,
-            Err(why) => {
-                return Err(with_agent_tools_rollback(composed, &added, why).await);
-            }
-        };
-        match exact_registration(
-            composed,
-            &target.program,
-            &target.registrar,
-            AGENT_TOOLS_NAME,
-            server_program.path().as_str(),
-            &expected_args,
-        )
-        .await
-        {
-            Ok(Some(McpRegistrationState::ExactEnabled)) => added.push(target),
-            Ok(state) => {
-                let why = format!(
-                    "{} did not register the exact enabled Agent Tools entry ({state:?}). it said: {}",
-                    target.provider,
-                    said(&add_output)
-                );
-                return Err(with_agent_tools_rollback(composed, &added, why).await);
-            }
-            Err(why) => {
-                return Err(with_agent_tools_rollback(composed, &added, why).await);
-            }
-        }
-    }
-    Ok(())
-}
-
-async fn with_agent_tools_rollback(
-    composed: &Composed,
-    added: &[&AgentRegistrar],
-    why: String,
-) -> String {
-    let mut rollback_failures = Vec::new();
-    for target in added.iter().rev() {
-        if let Err(error) = remove_registration(
-            composed,
-            &target.program,
-            &target.registrar,
-            &target.provider,
-            AGENT_TOOLS_NAME,
-        )
-        .await
-        {
-            rollback_failures.push(error);
-        }
-    }
-    if rollback_failures.is_empty() {
-        why
-    } else {
-        format!(
-            "{why}; rollback also failed: {}",
-            rollback_failures.join("; ")
-        )
-    }
-}
-
 /// Remove one registration through the CLI's own command and read it back until the CLI says it is gone.
 async fn remove_registration(
     composed: &Composed,
@@ -576,36 +429,6 @@ async fn remove_registration(
     }
 }
 
-/// Ask the exact local MCP server for its catalogue before any provider configuration changes.
-async fn verify_agent_tools(composed: &Composed, program: &Program) -> Result<(), String> {
-    let output = capture_with_input(
-        program,
-        &["mcp".to_owned()],
-        TOOLS_LIST_HANDSHAKE,
-        CONSULT_DEADLINE,
-        &composed.containment,
-    )
-    .await
-    .map_err(|error| error.to_string())?;
-    let names = tools_named(&output.stdout);
-    if names.iter().any(|name| name == "runtrol_start")
-        && names.iter().any(|name| name == "runtrol_send")
-    {
-        return Ok(());
-    }
-    Err(format!(
-        "this runtrol executable did not expose the required Agent Tools catalogue. it said: {}",
-        said(&output)
-    ))
-}
-
-/// Which way a toggle is being flipped.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Change {
-    Wire,
-    Unwire,
-}
-
 /// One direction that could in principle exist: an ordered pair of two declared providers.
 struct Direction<'registry> {
     from: &'registry runtrol_core::Provider,
@@ -625,11 +448,10 @@ fn directions(composed: &Composed) -> Vec<Direction<'_>> {
     pairs
 }
 
-/// What one direction needs before it can be wired, or the sentence saying why it never can be.
+/// What one direction needs before its registration can be read or removed, or why it never could be wired.
 struct Wireable {
     registrar: McpRegistrar,
     server: McpConsultServer,
-    tool: &'static str,
 }
 
 /// Classify one direction against what its two drivers declare.
@@ -653,15 +475,10 @@ fn wireable(composed: &Composed, direction: &Direction<'_>) -> Result<Wireable, 
             direction.to.id()
         )
     })?;
-    let tool = match server.tool {
-        ConsultTool::Named(tool) => tool,
-        ConsultTool::Absent { why } => return Err(why.to_owned()),
-    };
-    Ok(Wireable {
-        registrar,
-        server,
-        tool,
-    })
+    if let ConsultTool::Absent { why } = server.tool {
+        return Err(why.to_owned());
+    }
+    Ok(Wireable { registrar, server })
 }
 
 /// The current state of every direction, asked from the CLIs' own configuration.
@@ -797,8 +614,8 @@ async fn exact_registration(
         })
 }
 
-/// Flip one direction, then answer with the same full status a status request gets.
-async fn change(composed: &Composed, from: &str, to: &str, how: Change) -> Response {
+/// Remove one direction's registration, then answer with the same full status a status request gets.
+async fn unwire_direction(composed: &Composed, from: &str, to: &str) -> Response {
     let (Ok(from_id), Ok(to_id)) = (ProviderId::parse(from), ProviderId::parse(to)) else {
         return refuse(&format!(
             "{from:?} -> {to:?} does not name two providers runtrol accepts"
@@ -820,7 +637,7 @@ async fn change(composed: &Composed, from: &str, to: &str, how: Change) -> Respo
         Ok(program) => program,
         Err(error) => return refuse(&error.to_string()),
     };
-    let (to_name, to_program) = match runtrol_core::locate_named(&direction.to.manifest) {
+    let (to_name, _) = match runtrol_core::locate_named(&direction.to.manifest) {
         Ok(located) => located,
         Err(error) => return refuse(&error.to_string()),
     };
@@ -838,88 +655,25 @@ async fn change(composed: &Composed, from: &str, to: &str, how: Change) -> Respo
         Ok(state) => state,
         Err(why) => return refuse(&why),
     };
-    let already = match state {
-        Some(McpRegistrationState::ExactEnabled) => true,
-        // Nothing registered, or one naming the image this build replaced: both are treated as absent so the
-        // wiring below writes this executable in its place.
-        None | Some(McpRegistrationState::Superseded) => false,
-        Some(McpRegistrationState::ExactDisabled) => {
-            return refuse(&format!(
-                "the {name} registration is exact but disabled in {from}"
-            ));
-        }
+    let outcome = match state {
+        // Nothing of ours is registered. The operator asked for a state, not for a transition, and that state
+        // already holds.
+        None => Ok(()),
+        // Exact, disabled, or naming the image this build replaced: all three are this product's own entry.
+        Some(
+            McpRegistrationState::ExactEnabled
+            | McpRegistrationState::ExactDisabled
+            | McpRegistrationState::Superseded,
+        ) => unwire(composed, &wireable, &from_program, &name).await,
         Some(McpRegistrationState::Different) => {
             return refuse(&format!(
                 "{from} already has a different MCP entry named {name}; runtrol will not overwrite or remove it"
             ));
         }
     };
-
-    let outcome = match how {
-        // Flipping to where it already stands is success, not an error: the operator asked for a state, not
-        // for a transition, and refusing would make the toggle order-sensitive for no one's benefit.
-        Change::Wire if already => Ok(()),
-        Change::Unwire if !already => Ok(()),
-        Change::Wire => {
-            wire(
-                composed,
-                direction,
-                &wireable,
-                &from_program,
-                &name,
-                to_name,
-                &to_program,
-            )
-            .await
-        }
-        Change::Unwire => unwire(composed, &wireable, &from_program, &name).await,
-    };
     match outcome {
         Ok(()) => Response::Consult(status(composed).await),
         Err(why) => refuse(&why),
-    }
-}
-
-/// Register `direction.to` inside `direction.from`, verifying the consult tool first and the result after.
-async fn wire(
-    composed: &Composed,
-    direction: &Direction<'_>,
-    wireable: &Wireable,
-    from_program: &Program,
-    name: &str,
-    to_name: &str,
-    to_program: &Program,
-) -> Result<(), String> {
-    // The counterpart's server command, as it will be written into the registering CLI's configuration: the
-    // candidate name rather than a resolved path, because a path goes stale on the counterpart's next update
-    // while the name keeps meaning "whatever is installed".
-    verify_consult_tool(composed, to_program, &wireable.server, wireable.tool).await?;
-
-    let mut add: Vec<&str> = wireable.registrar.add.to_vec();
-    add.push(name);
-    add.push("--");
-    add.push(to_name);
-    add.extend_from_slice(wireable.server.serve);
-    let added = ask(composed, from_program, &add, &[]).await?;
-
-    // The add's own exit code is not the judgement, because the CLI that answers absent subcommands with
-    // help also exits zero for them. The get that follows is.
-    match exact_registration(
-        composed,
-        from_program,
-        &wireable.registrar,
-        name,
-        to_name,
-        wireable.server.serve,
-    )
-    .await?
-    {
-        Some(McpRegistrationState::ExactEnabled) => Ok(()),
-        state => Err(format!(
-            "{} did not register the exact enabled {name} entry ({state:?}). it said: {}",
-            direction.from.id(),
-            said(&added)
-        )),
     }
 }
 
@@ -942,69 +696,6 @@ async fn unwire(
     } else {
         Ok(())
     }
-}
-
-/// Ask the counterpart's own server for its tool list and confirm the declared consult tool is in it.
-async fn verify_consult_tool(
-    composed: &Composed,
-    to_program: &Program,
-    server: &McpConsultServer,
-    tool: &str,
-) -> Result<(), String> {
-    let args: Vec<String> = server.serve.iter().map(ToString::to_string).collect();
-    let output = capture_with_input(
-        to_program,
-        &args,
-        TOOLS_LIST_HANDSHAKE,
-        CONSULT_DEADLINE,
-        &composed.containment,
-    )
-    .await
-    .map_err(|error| error.to_string())?;
-
-    if tools_named(&output.stdout).iter().any(|name| name == tool) {
-        return Ok(());
-    }
-    Err(format!(
-        "{} no longer offers a tool called {tool:?} on its own server, so wiring it would fail mid-turn. \
-         it said: {}",
-        to_program.path(),
-        said(&output)
-    ))
-}
-
-/// Every tool name in a `tools/list` answer.
-///
-/// Reads the server's own structured protocol answer and takes names only, the same rule the probe applies
-/// to help text: names are stable and descriptions are prose. A line that is not the answer is skipped, so a
-/// server that logs on standard output does not break the reading.
-#[expect(
-    clippy::manual_ok_err,
-    reason = "the equivalent Result::ok is forbidden because dropped errors must stay visible: a line that \
-              does not parse is a server's log noise, and the caller reports the raw output when no answer \
-              is found"
-)]
-fn tools_named(stdout: &[u8]) -> Vec<String> {
-    String::from_utf8_lossy(stdout)
-        .lines()
-        .filter_map(
-            |line| match serde_json::from_str::<serde_json::Value>(line.trim()) {
-                Ok(answer) => Some(answer),
-                Err(_) => None,
-            },
-        )
-        .filter(|answer| answer.get("id").and_then(serde_json::Value::as_u64) == Some(2))
-        .filter_map(|answer| {
-            let tools = answer.get("result")?.get("tools")?.as_array()?.clone();
-            Some(tools)
-        })
-        .flatten()
-        .filter_map(|tool| {
-            tool.get("name")
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_owned)
-        })
-        .collect()
 }
 
 /// Run one of the registering CLI's own commands under the consult deadline.
@@ -1135,41 +826,6 @@ mod tests {
         assert!(
             !startup.contains("repair_agent_tools"),
             "daemon startup must not repair a legacy MCP registration"
-        );
-    }
-
-    #[test]
-    fn tool_names_are_read_from_the_answer_and_log_noise_is_skipped() {
-        let stdout = b"warning: something on stdout\n\
-            {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"serverInfo\":{\"name\":\"x\"}}}\n\
-            {\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"tools\":[{\"name\":\"codex\",\"description\":\"prose\"},{\"name\":\"codex-reply\"}]}}\n";
-        let names = tools_named(stdout);
-        assert_eq!(names, vec!["codex".to_owned(), "codex-reply".to_owned()]);
-    }
-
-    #[test]
-    fn an_answer_that_is_not_a_tool_list_yields_no_names_rather_than_a_panic() {
-        for stdout in [
-            &b""[..],
-            b"not json at all",
-            br#"{"jsonrpc":"2.0","id":2,"error":{"code":-1,"message":"no"}}"#,
-            br#"{"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"wrong-id"}]}}"#,
-        ] {
-            assert!(tools_named(stdout).is_empty(), "{stdout:?}");
-        }
-    }
-
-    #[test]
-    fn the_handshake_asks_for_the_tool_list_and_nothing_that_starts_work() {
-        // The handshake reaches a real CLI's server. Three requests, none of which is `tools/call`: a wiring
-        // check that started a turn would cost the operator money for a question about configuration.
-        let text = core::str::from_utf8(TOOLS_LIST_HANDSHAKE).expect("the handshake is UTF-8");
-        assert!(text.contains("\"initialize\""));
-        assert!(text.contains("\"tools/list\""));
-        assert!(!text.contains("tools/call"), "{text}");
-        assert!(
-            text.ends_with('\n'),
-            "the last line must be complete, or the server waits for its end"
         );
     }
 

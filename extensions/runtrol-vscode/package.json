@@ -94,8 +94,6 @@
     "onCommand:runtrol.deleteConversation",
     "onCommand:runtrol.pinConversation",
     "onCommand:runtrol.unpinConversation",
-    "onCommand:runtrol.enableAgentTools",
-    "onCommand:runtrol.disableAgentTools",
     "onCommand:runtrol.moveProjectUp",
     "onCommand:runtrol.moveProjectDown"
   ],
@@ -317,18 +315,6 @@
         "title": "Unpin Project",
         "icon": "$(pinned)",
         "category": "Runtrol"
-      },
-      {
-        "command": "runtrol.enableAgentTools",
-        "title": "Enable Agent Tools for This Project",
-        "category": "Runtrol",
-        "icon": "$(sparkle)"
-      },
-      {
-        "command": "runtrol.disableAgentTools",
-        "title": "Disable Agent Tools for This Project",
-        "category": "Runtrol",
-        "icon": "$(circle-slash)"
       },
       {
         "command": "runtrol.renameProject",

@@ -10,6 +10,12 @@ and refactoring that no user can observe do not belong here.
 
 ## [Unreleased]
 
+### Removed
+
+- The project actions and commands that turned Agent Tools on or off, the `tools enable` command, the `consult wire`
+  command, and every Core request that could register an MCP entry in a provider's configuration. Runtrol no longer
+  registers itself or one CLI inside another; only inventory, cleanup, and removal of earlier registrations remain.
+
 ### Changed
 
 - The first activation of each new Studio Core image removes the MCP registrations, Runtime grants, and local

@@ -86,10 +86,9 @@ pub fn needed(request: &Request) -> Needed {
         | Request::Consult => Needed::Scope(DeviceScope::ConfigRead),
         Request::LegacyMcpInventory => Needed::AtTheMachine(LocalScope::IntegrationAdmin),
         Request::ProviderUpdate { .. } => Needed::AtTheMachine(LocalScope::ProviderUpdate),
-        Request::RemoteConfigure { .. }
-        | Request::AgentToolsWire
-        | Request::AgentToolsUnwire
-        | Request::LegacyMcpCleanup => Needed::AtTheMachine(LocalScope::ConfigWrite),
+        Request::RemoteConfigure { .. } | Request::AgentToolsUnwire | Request::LegacyMcpCleanup => {
+            Needed::AtTheMachine(LocalScope::ConfigWrite)
+        }
         Request::PairingBegin
         | Request::PairingProposals
         | Request::PairingApprovalBegin { .. }
@@ -174,11 +173,9 @@ pub fn needed(request: &Request) -> Needed {
              worst it achieves is that work stops",
         ),
 
-        // Wiring expands what an agent can reach mid-turn and edits the CLIs' own configuration. Capability
-        // growth is answered at the keyboard or not at all, so no grant can carry it.
-        Request::ConsultWire { .. } | Request::ConsultUnwire { .. } => {
-            Needed::AtTheMachine(LocalScope::ConsultWire)
-        }
+        // Unwiring edits the CLIs' own configuration. A configuration write is answered at the keyboard or not
+        // at all, so no grant can carry it.
+        Request::ConsultUnwire { .. } => Needed::AtTheMachine(LocalScope::ConfigWrite),
 
         _ => Needed::Unknown,
     }
@@ -437,15 +434,10 @@ mod tests {
             Request::Consult,
             Request::LegacyMcpInventory,
             Request::LegacyMcpCleanup,
-            Request::ConsultWire {
-                from: "claude".into(),
-                to: "codex".into(),
-            },
             Request::ConsultUnwire {
                 from: "claude".into(),
                 to: "codex".into(),
             },
-            Request::AgentToolsWire,
             Request::AgentToolsUnwire,
         ]
     }
@@ -488,42 +480,27 @@ mod tests {
     }
 
     #[test]
-    fn consult_wiring_is_refused_to_every_device_no_matter_what_it_holds() {
-        // Capability growth is answered at the keyboard or not at all. "No matter what it holds" is total by
-        // construction rather than by enumeration: the check is presence, the ledger is never consulted, and
-        // there is no conversion from `LocalScope` into anything the grant ledger accepts. The refusal names
+    fn consult_unwiring_is_refused_to_every_device_no_matter_what_it_holds() {
+        // A provider configuration write is answered at the keyboard or not at all. "No matter what it holds" is
+        // total by construction rather than by enumeration: the check is presence, the ledger is never consulted,
+        // and there is no conversion from `LocalScope` into anything the grant ledger accepts. The refusal names
         // the keyboard rather than a permission, because there is none to ask for.
         let ledger = GrantLedger::new();
         let caller = Caller::Device {
             device: DeviceId::now(),
         };
-        for request in [
-            Request::ConsultWire {
-                from: "claude".into(),
-                to: "codex".into(),
-            },
-            Request::ConsultUnwire {
-                from: "claude".into(),
-                to: "codex".into(),
-            },
-        ] {
-            match allowed(&caller, &request, &ledger) {
-                Err(WallRefusal::NeverRemote { capability }) => {
-                    assert_eq!(capability.name(), "consult.wire");
-                }
-                other => panic!("{request:?} was not refused as never-remote: {other:?}"),
+        let request = Request::ConsultUnwire {
+            from: "claude".into(),
+            to: "codex".into(),
+        };
+        match allowed(&caller, &request, &ledger) {
+            Err(WallRefusal::NeverRemote { capability }) => {
+                assert_eq!(capability.name(), "config.write");
             }
+            other => panic!("{request:?} was not refused as never-remote: {other:?}"),
         }
         assert!(
-            allowed(
-                &Caller::AtTheMachine,
-                &Request::ConsultWire {
-                    from: "claude".into(),
-                    to: "codex".into()
-                },
-                &ledger
-            )
-            .is_ok(),
+            allowed(&Caller::AtTheMachine, &request, &ledger).is_ok(),
             "presence is the one thing that opens it"
         );
     }

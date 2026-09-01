@@ -1,8 +1,8 @@
 //! Project-scoped Runtime credentials owned by Agent Tools.
 
 use std::cmp::Reverse;
-use std::fs::{File, OpenOptions};
-use std::io::{Read as _, Write as _};
+use std::fs::File;
+use std::io::Read as _;
 
 use runtrol_core::{AgentToolSlot, RuntrolHome};
 use runtrol_provider::AbsPath;
@@ -35,13 +35,6 @@ struct GrantRecord {
     schema: u8,
     root: String,
     grant: IntegrationGrant,
-}
-
-/// A prepared project identity, before or after Runtime approval.
-pub(crate) struct PreparedCredential {
-    pub(crate) root: AbsPath,
-    pub(crate) identity: IntegrationIdentity,
-    slot: AgentToolSlot,
 }
 
 /// One approved credential selected for an MCP process.
@@ -104,47 +97,6 @@ impl CredentialStore {
     pub(crate) fn open() -> Result<Self, AgentToolsError> {
         Ok(Self {
             home: RuntrolHome::open()?,
-        })
-    }
-
-    pub(crate) fn prepare(&self, root: &str) -> Result<PreparedCredential, AgentToolsError> {
-        let root = AbsPath::canonicalize(root)?;
-        if !root.as_std_path().is_dir() {
-            return Err(AgentToolsError::Authority(format!(
-                "Agent Tools root {} is not a directory",
-                root.as_str()
-            )));
-        }
-        let slot = self.slot(&root)?;
-        match std::fs::create_dir(slot.directory().as_std_path()) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                if !slot.directory().as_std_path().is_dir() {
-                    return Err(AgentToolsError::io(
-                        "opening the project credential directory",
-                        slot.directory().as_std_path(),
-                        &error,
-                    ));
-                }
-            }
-            Err(error) => {
-                return Err(AgentToolsError::io(
-                    "creating the project credential directory",
-                    slot.directory().as_std_path(),
-                    &error,
-                ));
-            }
-        }
-        let secret = if slot.grant().as_std_path().exists() {
-            runtrol_vault::ProtectedSecret::load(slot.identity())?
-        } else {
-            runtrol_vault::ProtectedSecret::load_or_create(slot.identity())?
-        };
-        let identity = IntegrationIdentity::from_secret_bytes(*secret.as_bytes());
-        Ok(PreparedCredential {
-            root,
-            identity,
-            slot,
         })
     }
 
@@ -362,37 +314,6 @@ impl CredentialStore {
         }
     }
 
-    pub(crate) fn approved(
-        prepared: &PreparedCredential,
-    ) -> Result<Option<ApprovedCredential>, AgentToolsError> {
-        if !prepared.slot.grant().as_std_path().exists() {
-            return Ok(None);
-        }
-        let record = read_record(prepared.slot.grant())?;
-        validate_record(&record, &prepared.root, prepared.slot.grant())?;
-        Ok(Some(ApprovedCredential {
-            root: prepared.root.clone(),
-            credentials: IntegrationCredentials::new(prepared.identity.clone(), record.grant),
-        }))
-    }
-
-    pub(crate) fn persist(
-        prepared: &PreparedCredential,
-        grant: IntegrationGrant,
-    ) -> Result<ApprovedCredential, AgentToolsError> {
-        let record = GrantRecord {
-            schema: RECORD_SCHEMA,
-            root: prepared.root.as_str().to_owned(),
-            grant,
-        };
-        validate_record(&record, &prepared.root, prepared.slot.grant())?;
-        persist_new(prepared.slot.grant(), &record)?;
-        Ok(ApprovedCredential {
-            root: prepared.root.clone(),
-            credentials: IntegrationCredentials::new(prepared.identity.clone(), record.grant),
-        })
-    }
-
     pub(crate) fn select_for_current_directory(
         &self,
     ) -> Result<ApprovedCredential, AgentToolsError> {
@@ -571,47 +492,6 @@ fn read_record(path: &AbsPath) -> Result<GrantRecord, AgentToolsError> {
         path: path.as_str().to_owned(),
         why: format!("it is not the closed grant record: {error}"),
     })
-}
-
-fn persist_new(path: &AbsPath, record: &GrantRecord) -> Result<(), AgentToolsError> {
-    let bytes = serde_json::to_vec(record).map_err(|error| AgentToolsError::Credential {
-        path: path.as_str().to_owned(),
-        why: format!("the approved grant cannot be encoded: {error}"),
-    })?;
-    let mut suffix = [0_u8; 8];
-    getrandom::fill(&mut suffix).map_err(|error| AgentToolsError::Credential {
-        path: path.as_str().to_owned(),
-        why: format!("a unique temporary name cannot be generated: {error}"),
-    })?;
-    let temporary = path
-        .as_std_path()
-        .with_file_name(format!("grant.json.new-{}", hex(&suffix)));
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&temporary)
-        .map_err(|error| {
-            AgentToolsError::io("creating a new approved grant", &temporary, &error)
-        })?;
-    file.write_all(&bytes)
-        .and_then(|()| file.sync_all())
-        .map_err(|error| AgentToolsError::io("writing a new approved grant", &temporary, &error))?;
-    drop(file);
-    std::fs::rename(&temporary, path.as_std_path())
-        .map_err(|error| AgentToolsError::io("installing a new approved grant", &temporary, &error))
-}
-
-fn hex(bytes: &[u8]) -> String {
-    let mut output = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        if let Some(high) = char::from_digit(u32::from(byte >> 4), 16) {
-            output.push(high);
-        }
-        if let Some(low) = char::from_digit(u32::from(byte & 0x0f), 16) {
-            output.push(low);
-        }
-    }
-    output
 }
 
 #[cfg(test)]

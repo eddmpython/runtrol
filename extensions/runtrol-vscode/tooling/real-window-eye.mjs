@@ -76,13 +76,6 @@ const workspaceFile = path.join(temporary, "runtrol-eye.code-workspace");
 const titleMatch = "runtrol-eye (Workspace)";
 
 const environment = { ...runtimeState.environment };
-if (eyeEntry === "agentToolsEye") {
-  // Agent Tools intentionally changes provider MCP configuration. The focused eye pass receives clean provider
-  // homes inside this harness's owned temporary directory, so proving the shipped command can never mutate the
-  // operator's own Claude or Codex configuration.
-  environment.CLAUDE_CONFIG_DIR = path.join(temporary, "claude");
-  environment.CODEX_HOME = path.join(temporary, "codex");
-}
 if (eyeEntry === "conversationManagementEye") {
   // A throwaway Claude conversation this pass starts is what it names, pins and deletes, so it reads the
   // operator's real Claude store (its own conversation among them) and never touches one the operator would
@@ -118,12 +111,6 @@ try {
   await mkdir(path.join(userData, "User"), { recursive: true });
   await mkdir(extensions, { recursive: true });
   await mkdir(runtrolHome, { recursive: true });
-  if (eyeEntry === "agentToolsEye") {
-    await Promise.all([
-      mkdir(environment.CLAUDE_CONFIG_DIR, { recursive: true }),
-      mkdir(environment.CODEX_HOME, { recursive: true }),
-    ]);
-  }
   if (eyeEntry === "conversationManagementEye") {
     await mkdir(environment.CODEX_HOME, { recursive: true });
   }

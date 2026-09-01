@@ -52,7 +52,6 @@ export type SidebarProjectRow = {
   readonly collapsed: boolean;
   readonly attention: number;
   readonly live: number;
-  readonly agentTools: boolean;
   readonly rows: readonly SidebarConversationRow[];
   /// How many of this project's conversations are waiting behind "Show all".
   readonly hidden: number;
@@ -202,13 +201,11 @@ function projectHtml(project: SidebarProjectRow, assets: SidebarAssets): string 
     project.live > 0 ? `<span class="badge live" title="${project.live} running">${project.live}</span>` : "",
     project.branch ? `<span class="badge branch" title="On branch ${escapeHtml(project.branch)}"><i class="ci ci-git-branch" aria-hidden="true"></i><span class="what">${escapeHtml(project.branch)}</span></span>` : "",
     changesMarkup(project.changes),
-    project.agentTools ? `<span class="badge tools" title="Agent Tools are on for this project">tools</span>` : "",
   ].join("");
   const actions = project.kind === "created"
     ? `<span class="actions">
 ${action("runtrol.newConversationInProject", "New conversation here", "add")}
 ${action("runtrol.renameProject", "Rename", "edit")}
-${action(project.agentTools ? "runtrol.disableAgentTools" : "runtrol.enableAgentTools", project.agentTools ? "Turn Agent Tools off for this project" : "Turn Agent Tools on for this project", project.agentTools ? "sparkle-filled" : "sparkle")}
 ${action(project.pinned ? "runtrol.unpinProject" : "runtrol.pinProject", project.pinned ? "Unpin" : "Pin to the top", project.pinned ? "pinned" : "pin")}
 ${action("runtrol.openProjectWorkspace", "Open this folder in a window", "link-external")}
 ${action("runtrol.removeProject", "Remove from the sidebar (the folder stays)", "close")}
@@ -406,7 +403,6 @@ button { font: inherit; color: inherit; }
 .badge.changes .del { color: var(--vscode-gitDecoration-deletedResourceForeground); }
 .badge.changes .new { color: var(--vscode-gitDecoration-untrackedResourceForeground); }
 .badge.changes .ahead { opacity: 0.7; font-weight: 400; }
-.badge.tools { background: transparent; border: 1px solid var(--vscode-widget-border); font-weight: 400; opacity: 0.8; }
 .conv .glyph-slot { position: relative; flex: none; display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; }
 .conv .glyph { flex: none; width: 14px; height: 14px; filter: grayscale(1); opacity: 0.64; }
 /* An open tab and its sidebar row use the same accented provider SVG. Work adds only compositor rotation, so

@@ -72,7 +72,7 @@ Code-hot workspace는 bounded 상태를 유지한다. streaming과 background �
 - **사람이 항상 우선이다.** 긴 streaming, 여러 agent, build, test 중에도 사용자의 입력, 스크롤, 편집기와 파일 탐색이 먼저 반응한다.
 - **얇은 경계는 바뀌지 않는다.** provider 계정 credential, transcript, 모델 API key, conversation copy를 소유하지 않는다.
 
-현재 총점은 **74/140, 평균 5.3/10** 이다. 활성 CI 게이트가 선 축은 열셋이다.
+현재 총점은 **71/140, 평균 5.1/10** 이다. 활성 CI 게이트가 선 축은 열셋이다.
 10 점은 실제 환경에서 완결 여정이 반복 검증된 상태다.
 **3 점을 넘는 점수의 근거는 CI 에서 실제로 도는 게이트다. 자동으로 실행되지 않는 경로는 구현돼 있어도 manual 층을 넘지 않는다.**
 
@@ -90,7 +90,7 @@ Code-hot workspace는 bounded 상태를 유지한다. streaming과 background �
 | 알아서 최신 | 5/10 | `vscodeUpgradeRollback` 이 세 운영체제에서 VSIX와 Core 교체 중 세션 생존을 검증한다. `cliUpdateRehearsal` 은 확증된 provider 갱신의 실패, 정확한 원복, 진동 방지를 결정론 fixture로 검증한다. 실계정 provider 설치를 CI에서 바꾸지는 않으므로 mock 층이다. | 앱과 설치된 에이전트 CLI 가 알아서 최신이고, 업데이트가 세션을 깨면 사용자가 손대기 전에 되돌아가 있다. 사용자가 버전을 신경 쓰는 순간이 없다. |
 | 모델 자동 인식 | 6/10 | hosted `modelDetectionSmoke --require-all` 은 자격증명 없이 최신 실물 CLI 를 설치해 Codex `model/list` 와 격리된 provider-owned option cache sentinel 을 포함한 Claude partial catalogue 를 검사하고, 관측한 identifier 가 production source 에 하드코딩되지 않았음을 확인한다. 특정 계정의 실제 사용 가능 여부는 주장하지 않아 live 한 종류의 천장 6 이다. | 지금 이 계정으로 쓸 수 있는 모델이 목록에 그대로 뜨고, 새 모델이 나와도 runtrol 을 고치지 않아도 뜬다. |
 | 세션끼리 안 밟기 | 5/10 | 실제 Git metadata와 production Core admission이 겹치는 writer를 원자적으로 거부한다. 제품은 일반 다중 서비스 채팅마다 Core 소유 linked worktree를 자동 생성하고 재시작 뒤 결박을 복원하며 clean-only로 정리한다. 정확한 설치 VSIX에서 실계정 Claude Code와 Codex의 분리 실행, 원본 무변경, 정확한 정리를 실측했지만, 활성 hosted 게이트의 provider는 fixture이므로 점수는 mock 층에 머문다. | 어느 세션이 어느 폴더에서 무엇을 고치는지 항상 구분되고, 두 세션이 같은 폴더를 만지게 되면 시작 전에 경고받으며, 공급자가 격리 수단 (워크트리) 을 내주면 시작 화면에서 그대로 쓴다. |
-| AI 끼리 서로 자문 | 3/10 | 토글이 실물 두 CLI 를 각자의 공식 명령으로 배선·검증·원상복구하고, 실제 턴 중 자문 수신까지 수기 실측했다 (2026-08-03). `crossConsultSmoke` 는 실물 구독 CLI 를 몰므로 운영자 기계에서 돌고, hosted CI 게이트가 없어 manual 층이다. | 토글 하나로 두 CLI 가 서로를 공식 표면 (MCP) 으로 등록해, 한 AI 가 턴 중에 다른 AI 의 의견을 직접 받아온다. 배선은 CLI 자신의 공식 명령으로만 만들고 (설정 파일을 직접 쓰지 않는다), 대화 본문은 여전히 runtrol 을 지나지 않는다. 사용자가 MCP 라는 개념을 몰라도 된다. |
+| AI 끼리 서로 자문 | 0/10 | 표면을 걷어냈다 (2026-09-02). 얇은 터미널 감독 경계는 provider 설정에 MCP 항목을 등록하지 않으므로 토글과 `crossConsultSmoke` 를 제거했다. 이 축을 단언하는 게이트가 없다. | 토글 하나로 두 CLI 가 서로를 공식 표면 (MCP) 으로 등록해, 한 AI 가 턴 중에 다른 AI 의 의견을 직접 받아온다. 배선은 CLI 자신의 공식 명령으로만 만들고 (설정 파일을 직접 쓰지 않는다), 대화 본문은 여전히 runtrol 을 지나지 않는다. 사용자가 MCP 라는 개념을 몰라도 된다. |
 | 떠날 자유 | 5/10 | `uninstallLeavesNoTrace` 가 공급자 상태를 runtrol 홈 밖에 둔 채 실제 데몬과 자식 프로세스로 턴을 끝내고, 홈 전체를 삭제한 뒤 새 데몬에서 같은 원생 세션을 불러와 두 번째 턴을 끝낸다. 상대가 ACP fixture 이므로 mock 층이다. | runtrol 을 지워도 세션과 기록은 각 CLI 의 것으로 그대로 남아 원래 방식으로 이어진다. runtrol 이 인질로 잡는 데이터가 없다. |
 
 축마다 어떤 게이트가 그 점수를 떠받치는지는 [docs/northStarEvidence.md](docs/northStarEvidence.md) 가 정본이다.

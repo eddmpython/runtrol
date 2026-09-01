@@ -61,7 +61,7 @@ streaming と background 作業が入力、スクロール、セッション切�
 - **人間が常に最優先である。** 長い streaming、複数 agent、build、test の最中でも入力、スクロール、editor、ファイル移動が先に反応する。
 - **薄い境界は変わらない。** provider account credential、transcript、model API key、conversation copy を所有しない。
 
-現在の合計は **74/140、平均 5.3/10** である。有効な CI ゲートが立つ軸は十三である。
+現在の合計は **71/140、平均 5.1/10** である。有効な CI ゲートが立つ軸は十三である。
 10 点は、実際の環境で完結した道筋が繰り返し検証された状態を指す。
 **manual 層を超えるスコアの根拠は CI で実際に動くゲートである。自動実行されない経路は、どれほど実装済みに見えても 3 点を超えない。**
 
@@ -79,7 +79,7 @@ streaming と background 作業が入力、スクロール、セッション切�
 | 勝手に最新 | 5/10 | `vscodeUpgradeRollback` は三つの OS で VSIX と Core 置換中の session continuity を検証する。`cliUpdateRehearsal` は決定的 fixture により、確認済み provider 更新の失敗、正確な復元、振動防止を検証する。hosted CI は実アカウントの provider installation を変更しないため、証拠は mock 層のままである。 | アプリとインストール済みのエージェント CLI が自動で最新を保ち、更新がセッションを壊したらユーザーが手を触れる前に戻っている。ユーザーがバージョンを気にする瞬間が存在しない。 |
 | モデル自動認識 | 6/10 | hosted `modelDetectionSmoke --require-all` は資格情報なしで最新の実物 CLI を導入し、Codex の `model/list` と隔離した provider-owned option cache sentinel を含む Claude partial catalogue を検査し、観測した identifier が production source にハードコードされていないことを確認する。特定アカウントでの利用可否までは証明しないため、live gate 一種類の上限 6 である。 | いまこのアカウントで実際に使えるモデルがそのまま一覧に出て、新しいモデルが出ても runtrol を直さずに現れる。 |
 | セッション同士が踏まない | 5/10 | 実際の Git metadata と production Core admission が同じ worktree の下位フォルダを一つの writer として扱い、opening、live、closing の重複予約を原子的に拒否する。linked worktree と運用者が明示した共有開始は区別する。provider は fixture なので mock 層である。 | どのセッションがどのフォルダで何を変えているかが常に区別でき、二つ目のセッションが同じフォルダに触れそうなときは開始前に警告され、プロバイダーが隔離手段（ワークツリー）を出しているなら開始画面でそのまま使える。 |
-| AI 同士が相談し合う | 3/10 | トグルが実物の二つの CLI を各自の公式コマンドで配線・検証・復元し、実際のターン中の相談受信まで手動で実測した（2026-08-03）。`crossConsultSmoke` は実物のサブスクリプション CLI を動かすため運用者のマシンで走り、hosted CI ゲートがないので manual 層。 | トグル一つで二つの CLI が互いを公式表面（MCP）で登録し、一方の AI がターン中にもう一方の意見を直接受け取る。配線は各 CLI 自身の公式コマンドだけで作り（設定ファイルを直接書かない）、会話本文は依然として runtrol を通らない。ユーザーは MCP という概念を知らなくていい。 |
+| AI 同士が相談し合う | 0/10 | 表面を取り除いた (2026-09-02)。薄いターミナル監督の境界は provider 設定に MCP 項目を登録しないため、トグルと `crossConsultSmoke` を削除した。この軸を断言するゲートはない。 | トグル一つで二つの CLI が互いを公式表面（MCP）で登録し、一方の AI がターン中にもう一方の意見を直接受け取る。配線は各 CLI 自身の公式コマンドだけで作り（設定ファイルを直接書かない）、会話本文は依然として runtrol を通らない。ユーザーは MCP という概念を知らなくていい。 |
 | 去る自由 | 5/10 | `uninstallLeavesNoTrace` は runtrol home の外にプロバイダー状態を置いて一つのターンを終え、home 全体を削除した後、新しい daemon で同じ native session を読み込み二つ目のターンを終える。相手は ACP fixture なので mock 層である。 | runtrol を消してもセッションと記録は各 CLI のものとしてそのまま残り、元のやり方で続けられる。runtrol が人質に取るデータがない。 |
 
 どのゲートがどの軸を支えるかは [docs/northStarEvidence.md](docs/northStarEvidence.md) が正本である。

@@ -176,13 +176,6 @@ pub(crate) enum ConsultAsked {
     LegacyMcpInventory,
     /// Removal of every legacy Runtrol MCP registration this build owns outright.
     LegacyMcpCleanup,
-    /// One direction being wired.
-    Wire {
-        /// The registering provider.
-        from: Box<str>,
-        /// The provider being served.
-        to: Box<str>,
-    },
     /// One direction being unwired.
     Unwire {
         /// The registering provider.
@@ -190,8 +183,6 @@ pub(crate) enum ConsultAsked {
         /// The provider being unregistered.
         to: Box<str>,
     },
-    /// This executable being registered as Agent Tools in every usable provider CLI.
-    AgentToolsWire,
     /// This executable's Agent Tools registration being removed from every usable provider CLI.
     AgentToolsUnwire,
 }
@@ -203,15 +194,10 @@ impl ConsultAsked {
             Request::Consult => Some(Self::Status),
             Request::LegacyMcpInventory => Some(Self::LegacyMcpInventory),
             Request::LegacyMcpCleanup => Some(Self::LegacyMcpCleanup),
-            Request::ConsultWire { from, to } => Some(Self::Wire {
-                from: from.clone(),
-                to: to.clone(),
-            }),
             Request::ConsultUnwire { from, to } => Some(Self::Unwire {
                 from: from.clone(),
                 to: to.clone(),
             }),
-            Request::AgentToolsWire => Some(Self::AgentToolsWire),
             Request::AgentToolsUnwire => Some(Self::AgentToolsUnwire),
             _ => None,
         }
@@ -1460,9 +1446,7 @@ pub(crate) async fn answer_prepared(
         consult @ (Request::Consult
         | Request::LegacyMcpInventory
         | Request::LegacyMcpCleanup
-        | Request::ConsultWire { .. }
         | Request::ConsultUnwire { .. }
-        | Request::AgentToolsWire
         | Request::AgentToolsUnwire) => match prepared {
             Prepared::Consult { asked, response }
                 if ConsultAsked::of(&consult).as_ref() == Some(&asked) =>

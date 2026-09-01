@@ -162,14 +162,13 @@ gate = [{ name = "sessionOverlapGuard", kind = "smoke" }]
 
 [[axis]]
 key = "agentsConsultEachOther"
-# The toggle wires the two real CLIs through their own commands and was run whole by hand on
-# 2026-08-03, including one real mid-turn reception. The gate drives the real subscription CLIs, so
-# like the session lifecycle gate it runs on the operator's machine and cannot back a score from
-# hosted CI. The tier is manual until a CI-runnable counterpart exists.
-tier = "manual"
+# The MCP cross-consult toggle was removed on 2026-09-02: the thin terminal-supervision boundary registers
+# no MCP entry in any provider's configuration, so the surface and its operator gate are gone. No gate
+# asserts this axis until a dialogue path that obeys that boundary (the opaque courier) is built and gated.
+tier = "none"
 additives = []
 name = { ko = "AI 끼리 서로 자문", en = "Agents consult each other", zh = "AI 互相咨询", ja = "AI 同士が相談し合う" }
-gate = [{ name = "crossConsultSmoke", kind = "operator" }]
+gate = []
 
 [[axis]]
 key = "freedomToLeave"

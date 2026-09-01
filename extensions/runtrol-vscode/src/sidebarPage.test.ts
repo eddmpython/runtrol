@@ -50,7 +50,6 @@ function project(overrides: Partial<SidebarProjectRow>): SidebarProjectRow {
     hidden: 0,
     branch: null,
     changes: null,
-    agentTools: false,
     rows: [conversation({})],
     ...overrides,
   };
@@ -133,9 +132,10 @@ test("row actions are buttons that name their command, and only the actions a ro
     assert.ok(html.includes(`data-command="${command}"`), command);
   }
   assert.ok(!html.includes('data-command="runtrol.deleteConversation"'), "a service without deletion offers none");
-  for (const command of ["runtrol.newConversationInProject", "runtrol.enableAgentTools", "runtrol.pinProject", "runtrol.removeProject"]) {
+  for (const command of ["runtrol.newConversationInProject", "runtrol.pinProject", "runtrol.removeProject"]) {
     assert.ok(html.includes(`data-command="${command}"`), command);
   }
+  assert.ok(!html.includes("AgentTools"), "the retired Agent Tools surface offers no action or badge");
 });
 
 test("the service choice withdraws on a click elsewhere, on Escape, and when focus leaves the panel", () => {

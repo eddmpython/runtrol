@@ -201,26 +201,25 @@ pub fn understand(words: &[String], here: &str) -> Result<Request, Misunderstood
     }
 }
 
-/// The consult command: bare for status, `wire`/`unwire` with both ends named to flip a direction.
+/// The consult command: bare for status, `unwire` with both ends named to remove one direction.
+///
+/// There is no `wire`. Registering one CLI inside another is a retired surface, and a word that still did it
+/// would be the one registration path left in the product.
 fn consult_of(rest: &[String]) -> Result<Request, Misunderstood> {
     match rest.first().map(String::as_str) {
         // Bare, it asks where every direction stands. The state lives in the CLIs' own configuration, so
         // there is nothing to name.
         None => Ok(Request::Consult),
-        Some(flip @ ("wire" | "unwire")) => {
+        Some("unwire") => {
             if let Some(typed) = rest.get(3) {
                 return Err(Misunderstood::Extra {
                     command: "consult",
                     typed: typed.clone(),
                 });
             }
-            let from = word(rest, 1, "consult", "which provider registers")?.into();
-            let to = word(rest, 2, "consult", "which provider is consulted")?.into();
-            if flip == "wire" {
-                Ok(Request::ConsultWire { from, to })
-            } else {
-                Ok(Request::ConsultUnwire { from, to })
-            }
+            let from = word(rest, 1, "consult", "which provider holds the registration")?.into();
+            let to = word(rest, 2, "consult", "which provider is unregistered")?.into();
+            Ok(Request::ConsultUnwire { from, to })
         }
         Some(typed) => Err(Misunderstood::Extra {
             command: "consult",
@@ -522,18 +521,11 @@ mod tests {
     }
 
     #[test]
-    fn consult_asks_for_status_bare_and_names_both_ends_to_flip() {
+    fn consult_asks_for_status_bare_and_names_both_ends_to_unwire() {
         assert!(matches!(
             understand(&typed("consult"), here()).expect("understandable"),
             Request::Consult
         ));
-        match understand(&typed("consult wire claude codex"), here()).expect("understandable") {
-            Request::ConsultWire { from, to } => {
-                assert_eq!(&*from, "claude");
-                assert_eq!(&*to, "codex");
-            }
-            other => panic!("expected a wire, got {other:?}"),
-        }
         match understand(&typed("consult unwire claude codex"), here()).expect("understandable") {
             Request::ConsultUnwire { from, to } => {
                 assert_eq!(&*from, "claude");
@@ -544,13 +536,15 @@ mod tests {
     }
 
     #[test]
-    fn a_consult_flip_missing_an_end_or_carrying_extras_is_refused() {
-        // Wiring edits another program's configuration. A guessed direction would edit one nobody named.
+    fn a_consult_wire_or_an_unwire_missing_an_end_or_carrying_extras_is_refused() {
+        // Unwiring edits another program's configuration. A guessed direction would edit one nobody named, and
+        // `wire` is not a word at all: nothing in the product registers one CLI inside another any more.
         for line in [
             "consult wire",
-            "consult wire claude",
+            "consult wire claude codex",
+            "consult unwire",
             "consult unwire claude",
-            "consult wire claude codex extra",
+            "consult unwire claude codex extra",
             "consult status",
         ] {
             assert!(

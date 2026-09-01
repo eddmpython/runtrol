@@ -473,27 +473,13 @@ pub enum Request {
     /// Exact and superseded entries are removed. A foreign, unreadable, or absent name is left exactly as found.
     LegacyMcpCleanup,
 
-    /// Register `to` as a consultable MCP server inside `from`, using `from`'s own official command.
-    ConsultWire {
-        /// The CLI that gains a consultant.
-        from: Box<str>,
-        /// The CLI whose opinion becomes reachable mid-turn.
-        to: Box<str>,
-    },
-
-    /// Undo [`Request::ConsultWire`] with `from`'s own removal command, restoring its configuration.
+    /// Remove the consultant `to` from `from` with `from`'s own removal command, restoring its configuration.
     ConsultUnwire {
         /// The CLI that loses its consultant.
         from: Box<str>,
         /// The CLI being unregistered.
         to: Box<str>,
     },
-
-    /// Register this exact runtrol executable as an Agent Tools MCP server in every usable provider CLI.
-    ///
-    /// Each provider's own official registration command performs the change. No provider configuration file
-    /// is read or written by runtrol.
-    AgentToolsWire,
 
     /// Remove this exact runtrol Agent Tools MCP registration through every usable provider CLI.
     AgentToolsUnwire,
@@ -1800,17 +1786,12 @@ mod tests {
             },
             Request::StopEverything,
             Request::Consult,
-            Request::ConsultWire {
-                from: "claude".into(),
-                to: "codex".into(),
-            },
             Request::ConsultUnwire {
                 from: "claude".into(),
                 to: "codex".into(),
             },
             Request::LegacyMcpInventory,
             Request::LegacyMcpCleanup,
-            Request::AgentToolsWire,
             Request::AgentToolsUnwire,
         ] {
             let back = round_trip_request(&request);

@@ -2,13 +2,7 @@ import path from "node:path";
 
 import * as vscode from "vscode";
 
-import {
-  AgentToolsController,
-  type AgentToolsAction,
-  LEGACY_CLEANUP_KEY,
-  legacyCleanupDue,
-  legacyCleanupStamp,
-} from "./agentTools";
+import { LEGACY_CLEANUP_KEY, LegacyCleanup, legacyCleanupDue, legacyCleanupStamp } from "./legacyCleanup";
 import { conversations as conversationRows, namedPlaceholders } from "./conversationList";
 import { ActivityWatcher } from "./activityWatch";
 import { WatchLifecycleGate } from "./watchLifecycleGate";
@@ -109,7 +103,7 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
   // provider executable and never recurses through its own shim.
   context.environmentVariableCollection.prepend("PATH", `${providerShimDirectory}${path.delimiter}`);
   context.environmentVariableCollection.replace("RUNTROL_PROVIDER_SHIM_PATH", providerShimDirectory);
-  const agentTools = new AgentToolsController(() => locator.runtimeExecutable());
+  const legacyCleanup = new LegacyCleanup(() => locator.runtimeExecutable());
   let initializationStage = "core:currency";
   runtime = new StudioRuntimeClient(
     context,
@@ -252,7 +246,7 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
   // Each service's private help line (its sign-out command), asked once per set of usable services.
   const help = new ProviderHelpCache((providerId) => controller.providerHelpLine(providerId, sideChannel));
   context.subscriptions.push(releases, help, sideChannel);
-  const sidebar = new SidebarView(context, state, projectStore, agentTools, changes, releases, help, {
+  const sidebar = new SidebarView(context, state, projectStore, changes, releases, help, {
     signIn: (providerId) => afterReady(async () => {
       await controller.signInProvider(providerNamed(providerId));
     }),
@@ -289,7 +283,6 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
   context.subscriptions.push(
     state,
     controller,
-    agentTools,
     sidebar,
     vscode.window.registerWebviewViewProvider(SIDEBAR_VIEW_ID, sidebar, {
       webviewOptions: { retainContextWhenHidden: true },
@@ -430,18 +423,6 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
         if (!(item instanceof ProjectItem)) return;
         await projectStore.setPinned(item.group.workspace, false);
       }),
-    ),
-    vscode.commands.registerCommand(
-      "runtrol.enableAgentTools",
-      (item?: unknown) => run(() => afterReady(
-        () => changeAgentTools(agentTools, "enable", item instanceof ProjectItem ? item : undefined),
-      )),
-    ),
-    vscode.commands.registerCommand(
-      "runtrol.disableAgentTools",
-      (item?: unknown) => run(() => afterReady(
-        () => changeAgentTools(agentTools, "disable", item instanceof ProjectItem ? item : undefined),
-      )),
     ),
     vscode.commands.registerCommand(
       "runtrol.renameProject",
@@ -619,10 +600,6 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
             ? [
                 { label: "$(edit) Rename project", command: "runtrol.renameProject" },
                 {
-                  label: item.agentToolsEnabled ? "$(sparkle-filled) Turn Agent Tools off" : "$(sparkle) Turn Agent Tools on",
-                  command: item.agentToolsEnabled ? "runtrol.disableAgentTools" : "runtrol.enableAgentTools",
-                },
-                {
                   label: item.group.pinned ? "$(pinned) Unpin" : "$(pin) Pin to the top",
                   command: item.group.pinned ? "runtrol.unpinProject" : "runtrol.pinProject",
                 },
@@ -765,10 +742,9 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     // and local credentials that earlier Runtrol builds left behind. An entry that is not exactly ours stays.
     const managedDigest = await locator.managedDigest();
     if (legacyCleanupDue(context.globalState.get<string>(LEGACY_CLEANUP_KEY), managedDigest)) {
-      await agentTools.cleanupLegacy(workingDirectory);
+      await legacyCleanup.run(workingDirectory);
       await context.globalState.update(LEGACY_CLEANUP_KEY, legacyCleanupStamp(managedDigest));
     }
-    await agentTools.refresh(workingDirectory);
   });
   return {
     get ready() {
@@ -974,61 +950,6 @@ function testIntegrationRoots(context: vscode.ExtensionContext): readonly string
     throw new Error("RUNTROL_TEST_INTEGRATION_ROOTS must contain at most 32 absolute paths");
   }
   return [...new Set(value)];
-}
-
-async function changeAgentTools(
-  controller: AgentToolsController,
-  action: AgentToolsAction,
-  item?: ProjectItem,
-): Promise<void> {
-  const workspace = item?.group.workspace ?? await chooseAgentToolsProject();
-  if (!workspace) return;
-  const name = path.basename(workspace) || workspace;
-  const changing = action === "enable" ? "Enabling" : "Disabling";
-  const result = await vscode.window.withProgress(
-    {
-      location: vscode.ProgressLocation.Notification,
-      title: `${changing} Agent Tools for ${name}`,
-      cancellable: false,
-    },
-    () => action === "enable" ? controller.enable(workspace) : controller.disable(workspace),
-  );
-  const warning = result.lines.find((line) => line.startsWith("warning:"));
-  if (warning) void vscode.window.showWarningMessage(warning);
-  if (action === "enable") {
-    void vscode.window.showInformationMessage(
-      `Agent Tools are ready for ${name}. Coding agents can now delegate through Runtrol; approvals stay with you.`,
-    );
-  } else {
-    void vscode.window.showInformationMessage(
-      result.alreadySettled
-        ? `Agent Tools were already off for ${name}.`
-        : `Agent Tools are off for ${name}. Runtime authority and local credentials were removed.`,
-    );
-  }
-}
-
-async function chooseAgentToolsProject(): Promise<string | null> {
-  const folders = (vscode.workspace.workspaceFolders ?? [])
-    .filter((folder) => folder.uri.scheme === "file");
-  if (folders.length === 0) {
-    await vscode.window.showWarningMessage("Open a local project folder before enabling Agent Tools.");
-    return null;
-  }
-  if (folders.length === 1) return folders[0]?.uri.fsPath ?? null;
-  const picked = await vscode.window.showQuickPick(
-    folders.map((folder) => ({
-      label: folder.name,
-      detail: folder.uri.fsPath,
-      workspace: folder.uri.fsPath,
-    })),
-    {
-      title: "Project for Agent Tools",
-      placeHolder: "Choose the one project root coding agents may orchestrate",
-      matchOnDetail: true,
-    },
-  );
-  return picked?.workspace ?? null;
 }
 
 export function deactivate(): void {}
