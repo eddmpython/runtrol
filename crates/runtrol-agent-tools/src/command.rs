@@ -12,7 +12,10 @@ use runtrol_runtime_protocol::EnrollmentDecision;
 use sha2::{Digest as _, Sha256};
 
 use crate::AgentToolsError;
-use crate::credentials::{ApprovedCredential, CredentialStore, PreparedCredential, SCOPES};
+use crate::credentials::{
+    ApprovedCredential, CredentialInventoryLine, CredentialInventoryState, CredentialStore,
+    PreparedCredential, SCOPES,
+};
 
 const PRODUCT_MANIFEST: &[u8] = b"runtrol-agent-tools/1\n\
 tools=runtrol_providers,runtrol_models,runtrol_sessions,runtrol_start,runtrol_send,runtrol_next_event,runtrol_stop\n\
@@ -72,6 +75,14 @@ pub async fn run_command(
             }
             status().await
         }
+        Some("inventory") => {
+            if let Some(extra) = words.get(1) {
+                return Err(AgentToolsError::Mcp(format!(
+                    "tools inventory does not accept extra word {extra:?}"
+                )));
+            }
+            inventory(context).await
+        }
         Some("list") => {
             if let Some(extra) = words.get(1) {
                 return Err(AgentToolsError::Mcp(format!(
@@ -81,10 +92,10 @@ pub async fn run_command(
             list()
         }
         Some(other) => Err(AgentToolsError::Mcp(format!(
-            "no tools command called {other:?}. try: tools enable [project], tools disable [project], tools status, tools list"
+            "no tools command called {other:?}. try: tools inventory, tools enable [project], tools disable [project], tools status, tools list"
         ))),
         None => Err(AgentToolsError::Mcp(
-            "tools needs a command. try: tools enable [project], tools disable [project], tools status, tools list"
+            "tools needs a command. try: tools inventory, tools enable [project], tools disable [project], tools status, tools list"
                 .to_owned(),
         )),
     }
@@ -208,6 +219,51 @@ fn list() -> Result<Vec<String>, AgentToolsError> {
         .into_iter()
         .map(|root| format!("enabled  {}", root.as_str()))
         .collect())
+}
+
+async fn inventory(context: &CommandContext) -> Result<Vec<String>, AgentToolsError> {
+    let response =
+        runtrol_cli::request_running(&context.endpoint, Request::LegacyMcpInventory).await?;
+    let mut lines = match &response {
+        runtrol_ipc::wire::Response::LegacyMcpInventory(_) => runtrol_cli::render(&response),
+        runtrol_ipc::wire::Response::Failed(failure) => {
+            return Err(AgentToolsError::Refused(failure.message.to_string()));
+        }
+        other => {
+            return Err(AgentToolsError::Mcp(format!(
+                "the daemon returned {other:?} instead of the legacy MCP inventory"
+            )));
+        }
+    };
+    let local = CredentialStore::open()?.inventory()?;
+    if local.is_empty() {
+        lines.push("legacy-local  none".to_owned());
+    } else {
+        lines.extend(local.iter().map(render_local_inventory));
+    }
+    Ok(lines)
+}
+
+fn render_local_inventory(line: &CredentialInventoryLine) -> String {
+    let state = match line.state {
+        CredentialInventoryState::Approved => "approved",
+        CredentialInventoryState::OrphanGrant => "orphan-grant",
+        CredentialInventoryState::Partial => "partial",
+        CredentialInventoryState::Invalid => "invalid-preserve",
+        CredentialInventoryState::Unrecognized => "unrecognized-preserve",
+        CredentialInventoryState::Overflow => "overflow-preserve",
+    };
+    let integration_id = line.integration_id.as_deref().unwrap_or("-");
+    let root = line.root.as_deref().unwrap_or("-");
+    let detail = line
+        .detail
+        .as_deref()
+        .map(|detail| format!("  ({detail})"))
+        .unwrap_or_default();
+    format!(
+        "legacy-local  {state}  {}  {integration_id}  {root}{detail}",
+        line.slot
+    )
 }
 
 async fn enroll(
@@ -361,5 +417,18 @@ mod tests {
         assert!(!selected.contains(&AppScope::SessionDelete));
         assert!(!selected.contains(&AppScope::SessionResume));
         assert!(!selected.contains(&AppScope::SessionNativeDiscover));
+    }
+
+    #[test]
+    fn local_inventory_keeps_unproven_state_visibly_preserved() {
+        let line = render_local_inventory(&CredentialInventoryLine {
+            slot: "slot".into(),
+            root: None,
+            integration_id: None,
+            state: CredentialInventoryState::Unrecognized,
+            detail: Some("not ours".into()),
+        });
+        assert!(line.contains("unrecognized-preserve"), "{line}");
+        assert!(line.contains("not ours"), "{line}");
     }
 }

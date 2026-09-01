@@ -30,8 +30,8 @@ pub mod link;
 pub mod words;
 
 pub use administration::{AdministrationFailure, administer, is_administration};
-pub use ask::{Failed, Outcome, ask, request};
+pub use ask::{Failed, Outcome, ask, request, request_running};
 pub use bridge::{BridgeFailure, BridgeProvider, bridge, bridge_providers};
 pub use lines::{NOT_NAMED_YET, render};
-pub use link::{DAEMON_ARGUMENT, Unreachable, reach};
+pub use link::{DAEMON_ARGUMENT, Unreachable, reach, reach_running};
 pub use words::{Misunderstood, understand};

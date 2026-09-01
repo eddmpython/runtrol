@@ -32,7 +32,9 @@ use core::time::Duration;
 
 use runtrol_childproc::{Output, Program, capture, capture_with_input};
 use runtrol_drivers::{ConsultTool, McpConsultServer, McpRegistrar, McpRegistrationState};
-use runtrol_ipc::wire::{ConsultLine, ConsultState, Request, Response};
+use runtrol_ipc::wire::{
+    ConsultLine, ConsultState, LegacyMcpKind, LegacyMcpLine, LegacyMcpState, Request, Response,
+};
 use runtrol_provider::ProviderId;
 
 use crate::compose::Composed;
@@ -76,6 +78,9 @@ pub(crate) fn consult_name(to: ProviderId) -> String {
 pub(crate) async fn answer(composed: &Composed, request: &Request) -> Response {
     match request {
         Request::Consult => Response::Consult(status(composed).await),
+        Request::LegacyMcpInventory => {
+            Response::LegacyMcpInventory(legacy_mcp_inventory(composed).await)
+        }
         Request::ConsultWire { from, to } => change(composed, from, to, Change::Wire).await,
         Request::ConsultUnwire { from, to } => change(composed, from, to, Change::Unwire).await,
         Request::AgentToolsWire => match wire_agent_tools(composed).await {
@@ -95,6 +100,7 @@ pub(crate) const fn is_consult(request: &Request) -> bool {
     matches!(
         request,
         Request::Consult
+            | Request::LegacyMcpInventory
             | Request::ConsultWire { .. }
             | Request::ConsultUnwire { .. }
             | Request::AgentToolsWire
@@ -128,6 +134,151 @@ fn agent_registrars(composed: &Composed) -> Vec<AgentRegistrar> {
         });
     }
     targets
+}
+
+/// Read every legacy MCP name this build can inspect without changing provider or Runtrol state.
+async fn legacy_mcp_inventory(composed: &Composed) -> Vec<LegacyMcpLine> {
+    let mut lines = agent_tools_inventory(composed).await;
+    lines.extend(cross_consult_inventory(composed).await);
+    lines.sort_by(|left, right| {
+        legacy_kind_order(left.kind)
+            .cmp(&legacy_kind_order(right.kind))
+            .then_with(|| left.provider.cmp(&right.provider))
+            .then_with(|| left.name.cmp(&right.name))
+            .then_with(|| left.target.cmp(&right.target))
+    });
+    lines
+}
+
+const fn legacy_kind_order(kind: LegacyMcpKind) -> u8 {
+    match kind {
+        LegacyMcpKind::AgentTools => 0,
+        LegacyMcpKind::CrossConsult => 1,
+    }
+}
+
+async fn agent_tools_inventory(composed: &Composed) -> Vec<LegacyMcpLine> {
+    let server_program = this_executable();
+    let expected_args = ["mcp"];
+    let mut lines = Vec::new();
+    for target in agent_registrars(composed) {
+        let state = match &server_program {
+            Ok(program) => {
+                exact_registration(
+                    composed,
+                    &target.program,
+                    &target.registrar,
+                    AGENT_TOOLS_NAME,
+                    program.path().as_str(),
+                    &expected_args,
+                )
+                .await
+            }
+            Err(why) => Err(why.clone()),
+        };
+        lines.push(legacy_line(
+            LegacyMcpKind::AgentTools,
+            target.provider,
+            AGENT_TOOLS_NAME.into(),
+            None,
+            state,
+        ));
+    }
+    lines
+}
+
+async fn cross_consult_inventory(composed: &Composed) -> Vec<LegacyMcpLine> {
+    let mut lines = Vec::new();
+    for direction in directions(composed) {
+        let Some(from_kind) = composed.driver_for(direction.from.manifest.kind.as_str()) else {
+            continue;
+        };
+        let Some(registrar) = from_kind.consult.registrar else {
+            continue;
+        };
+        let name = consult_name(direction.to.id());
+        let state = cross_consult_registration(composed, &direction, &registrar, &name).await;
+        lines.push(legacy_line(
+            LegacyMcpKind::CrossConsult,
+            direction.from.id().as_str().into(),
+            name.into(),
+            Some(direction.to.id().as_str().into()),
+            state,
+        ));
+    }
+    lines
+}
+
+async fn cross_consult_registration(
+    composed: &Composed,
+    direction: &Direction<'_>,
+    registrar: &McpRegistrar,
+    name: &str,
+) -> Result<Option<McpRegistrationState>, String> {
+    let from_program = runtrol_core::locate(&direction.from.manifest)
+        .map_err(|error| format!("cannot inspect {name} in {}: {error}", direction.from.id()))?;
+    let Some(to_kind) = composed.driver_for(direction.to.manifest.kind.as_str()) else {
+        return registration_without_expected_shape(composed, &from_program, registrar, name).await;
+    };
+    let Some(server) = to_kind.consult.server else {
+        return registration_without_expected_shape(composed, &from_program, registrar, name).await;
+    };
+    let Ok((to_name, _)) = runtrol_core::locate_named(&direction.to.manifest) else {
+        return registration_without_expected_shape(composed, &from_program, registrar, name).await;
+    };
+    exact_registration(
+        composed,
+        &from_program,
+        registrar,
+        name,
+        to_name,
+        server.serve,
+    )
+    .await
+}
+
+async fn registration_without_expected_shape(
+    composed: &Composed,
+    program: &Program,
+    registrar: &McpRegistrar,
+    name: &str,
+) -> Result<Option<McpRegistrationState>, String> {
+    match registration(composed, program, registrar, name).await? {
+        None => Ok(None),
+        Some(_) => Err(format!(
+            "{name} exists, but this build cannot derive its exact expected command shape"
+        )),
+    }
+}
+
+fn legacy_line(
+    kind: LegacyMcpKind,
+    provider: Box<str>,
+    name: Box<str>,
+    target: Option<Box<str>>,
+    result: Result<Option<McpRegistrationState>, String>,
+) -> LegacyMcpLine {
+    let (state, why) = match result {
+        Ok(None) => (LegacyMcpState::Absent, None),
+        Ok(Some(McpRegistrationState::ExactEnabled)) => (LegacyMcpState::ExactEnabled, None),
+        Ok(Some(McpRegistrationState::ExactDisabled)) => (LegacyMcpState::ExactDisabled, None),
+        Ok(Some(McpRegistrationState::Superseded)) => (LegacyMcpState::Superseded, None),
+        Ok(Some(McpRegistrationState::Different)) => (
+            LegacyMcpState::Foreign,
+            Some(
+                "the reserved name exists with a command shape Runtrol cannot prove it owns".into(),
+            ),
+        ),
+        Err(why) => (LegacyMcpState::Unreadable, Some(why.into())),
+    };
+    LegacyMcpLine {
+        kind,
+        provider,
+        name,
+        target,
+        state,
+        why,
+    }
 }
 
 fn this_executable() -> Result<Program, String> {
@@ -187,70 +338,6 @@ async fn unwire_agent_tools(composed: &Composed) -> Result<(), String> {
     } else {
         Err(failures.join("; "))
     }
-}
-
-/// Register this exact executable's bounded Agent Tools server in every usable CLI registrar.
-/// Point a registration that is ours, and stale, back at the image now running.
-///
-/// # Why this runs on its own
-///
-/// The extension installs the Core under a name made from its digest, so every update puts this program at a
-/// new path and deletes the one it replaced. The registration written at wiring time still names the old path,
-/// and from then on every conversation in that project opens with `MCP client for runtrolTools failed to
-/// start` and the file-not-found the operating system gives for a program that is gone (operator's window,
-/// 2026-08-28: measured, the registered image was absent from the folder the current one runs from). Nothing
-/// asked for that, and nothing was going to fix it: wiring only happens when a person presses the toggle, and
-/// they already pressed it.
-///
-/// # What it will not do
-///
-/// It repairs and never creates. A provider with no entry keeps none, because an entry is a person's decision.
-/// Anything but [`McpRegistrationState::Superseded`] is left exactly as it stands, which is the same ownership
-/// rule the toggle holds: the file has to be gone, and it has to have stood where this executable stands.
-pub(crate) async fn repair_agent_tools(composed: &Composed) -> Vec<String> {
-    let server_program = match this_executable() {
-        Ok(program) => program,
-        Err(why) => return vec![format!("the running Core could not name itself: {why}")],
-    };
-    let expected_args = ["mcp"];
-    let mut trouble = Vec::new();
-    for target in agent_registrars(composed) {
-        let state = exact_registration(
-            composed,
-            &target.program,
-            &target.registrar,
-            AGENT_TOOLS_NAME,
-            server_program.path().as_str(),
-            &expected_args,
-        )
-        .await;
-        match state {
-            Ok(Some(McpRegistrationState::Superseded)) => {}
-            Ok(_) => continue,
-            Err(why) => {
-                trouble.push(format!("{}: {why}", target.provider));
-                continue;
-            }
-        }
-        if let Err(why) = remove_registration(composed, &target, AGENT_TOOLS_NAME).await {
-            trouble.push(format!("{}: {why}", target.provider));
-            continue;
-        }
-        let mut add: Vec<&str> = target.registrar.add.to_vec();
-        add.extend([
-            AGENT_TOOLS_NAME,
-            "--",
-            server_program.path().as_str(),
-            "mcp",
-        ]);
-        if let Err(why) = ask(composed, &target.program, &add, &[]).await {
-            trouble.push(format!(
-                "{}: the stale entry was removed and the new one could not be added: {why}",
-                target.provider
-            ));
-        }
-    }
-    trouble
 }
 
 async fn wire_agent_tools(composed: &Composed) -> Result<(), String> {
@@ -852,36 +939,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_repair_only_ever_touches_a_registration_that_is_ours_and_gone() {
-        // Read as source, because what has to hold here is which states act and which are left alone: a
-        // repair that created an entry would be runtrol deciding something a person decides, and a repair
-        // that took over a `Different` entry would be runtrol overwriting somebody else's.
-        let source = include_str!("consult.rs");
-        let body = source
-            .split("pub(crate) async fn repair_agent_tools")
-            .nth(1)
-            .expect("the repair exists")
-            .split(
-                "
-async fn wire_agent_tools",
-            )
-            .next()
-            .expect("the repair ends before the toggle");
-        assert!(
-            body.contains("Ok(Some(McpRegistrationState::Superseded)) => {}"),
-            "only a superseded entry is repaired"
-        );
-        assert!(
-            body.contains("Ok(_) => continue,"),
-            "every other state is left exactly as it stands"
-        );
-        assert!(
-            !body.contains("None =>"),
-            "an absent entry stays absent: an entry is a person's decision"
-        );
-    }
-
-    #[test]
     fn the_registration_name_says_what_it_gives_the_agent_that_reads_it() {
         // The agent sees this name in its own tool list. `codexConsult` reads as "consult codex", which is
         // the entire user-facing vocabulary of this feature: no operator ever types it.
@@ -897,6 +954,60 @@ async fn wire_agent_tools",
             let id = ProviderId::parse(id).expect("valid");
             assert_ne!(consult_name(id), CONTROL_NAME);
         }
+    }
+
+    #[test]
+    fn the_inventory_tells_exact_foreign_absent_and_unreadable_apart() {
+        let line = |result| {
+            legacy_line(
+                LegacyMcpKind::AgentTools,
+                "fixture".into(),
+                AGENT_TOOLS_NAME.into(),
+                None,
+                result,
+            )
+        };
+        assert_eq!(
+            line(Ok(Some(McpRegistrationState::ExactEnabled))).state,
+            LegacyMcpState::ExactEnabled
+        );
+        assert_eq!(
+            line(Ok(Some(McpRegistrationState::Different))).state,
+            LegacyMcpState::Foreign
+        );
+        assert_eq!(line(Ok(None)).state, LegacyMcpState::Absent);
+        let unreadable = line(Err("provider readback changed".to_owned()));
+        assert_eq!(unreadable.state, LegacyMcpState::Unreadable);
+        assert_eq!(unreadable.why.as_deref(), Some("provider readback changed"));
+    }
+
+    #[test]
+    fn inventory_and_daemon_startup_have_no_legacy_mcp_mutation_path() {
+        let source = include_str!("consult.rs");
+        let inventory = source
+            .split("async fn legacy_mcp_inventory")
+            .nth(1)
+            .expect("inventory exists")
+            .split("fn this_executable")
+            .next()
+            .expect("inventory helpers end before executable resolution");
+        for forbidden in [
+            "remove_registration",
+            "wire_agent_tools",
+            "unwire_agent_tools",
+            "registrar.add",
+            "registrar.remove",
+        ] {
+            assert!(
+                !inventory.contains(forbidden),
+                "read-only inventory contains mutating helper {forbidden}"
+            );
+        }
+        let startup = include_str!("serve.rs");
+        assert!(
+            !startup.contains("repair_agent_tools"),
+            "daemon startup must not repair a legacy MCP registration"
+        );
     }
 
     #[test]

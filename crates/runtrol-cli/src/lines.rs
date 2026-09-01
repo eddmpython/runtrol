@@ -97,6 +97,8 @@ pub fn render(response: &Response) -> Vec<String> {
 
         Response::Consult(directions) => render_consult(directions),
 
+        Response::LegacyMcpInventory(entries) => render_legacy_mcp_inventory(entries),
+
         Response::Failed(failure) => {
             let mut lines = vec![failure.message.to_string()];
             if failure.needs_the_operator {
@@ -200,6 +202,41 @@ fn render_consult(directions: &[runtrol_ipc::wire::ConsultLine]) -> Vec<String> 
                 .map(|why| format!("  ({why})"))
                 .unwrap_or_default();
             format!("consult  {}  {}  {state}{why}", one.from, one.to)
+        })
+        .collect()
+}
+
+fn render_legacy_mcp_inventory(entries: &[runtrol_ipc::wire::LegacyMcpLine]) -> Vec<String> {
+    if entries.is_empty() {
+        return vec!["no inspectable legacy MCP names".to_owned()];
+    }
+    entries
+        .iter()
+        .map(|entry| {
+            use runtrol_ipc::wire::{LegacyMcpKind, LegacyMcpState};
+
+            let kind = match entry.kind {
+                LegacyMcpKind::AgentTools => "agent-tools",
+                LegacyMcpKind::CrossConsult => "cross-consult",
+            };
+            let state = match entry.state {
+                LegacyMcpState::Absent => "absent",
+                LegacyMcpState::ExactEnabled => "exact-enabled",
+                LegacyMcpState::ExactDisabled => "exact-disabled",
+                LegacyMcpState::Superseded => "superseded",
+                LegacyMcpState::Foreign => "foreign-preserve",
+                LegacyMcpState::Unreadable => "unreadable-preserve",
+            };
+            let target = entry.target.as_deref().unwrap_or("-");
+            let why = entry
+                .why
+                .as_deref()
+                .map(|why| format!("  ({why})"))
+                .unwrap_or_default();
+            format!(
+                "legacy-mcp  {kind}  {}  {}  {target}  {state}{why}",
+                entry.provider, entry.name
+            )
         })
         .collect()
 }
@@ -442,6 +479,33 @@ mod tests {
             vec!["no consult directions"],
             "an empty answer says so rather than printing nothing"
         );
+    }
+
+    #[test]
+    fn legacy_mcp_inventory_marks_foreign_names_for_preservation() {
+        use runtrol_ipc::wire::{LegacyMcpKind, LegacyMcpLine, LegacyMcpState};
+
+        let lines = render(&Response::LegacyMcpInventory(vec![LegacyMcpLine {
+            kind: LegacyMcpKind::AgentTools,
+            provider: "claude".into(),
+            name: "runtrolTools".into(),
+            target: None,
+            state: LegacyMcpState::Foreign,
+            why: Some("different command".into()),
+        }]));
+        let line = lines.first().expect("one inventory line");
+        assert_eq!(
+            line.split_whitespace().take(6).collect::<Vec<_>>(),
+            vec![
+                "legacy-mcp",
+                "agent-tools",
+                "claude",
+                "runtrolTools",
+                "-",
+                "foreign-preserve"
+            ]
+        );
+        assert!(line.contains("different command"), "{line}");
     }
 
     #[test]

@@ -172,6 +172,8 @@ pub(crate) struct Opened {
 pub(crate) enum ConsultAsked {
     /// The status of every direction.
     Status,
+    /// Read-only inventory of legacy Runtrol MCP registration names.
+    LegacyMcpInventory,
     /// One direction being wired.
     Wire {
         /// The registering provider.
@@ -197,6 +199,7 @@ impl ConsultAsked {
     fn of(request: &Request) -> Option<Self> {
         match request {
             Request::Consult => Some(Self::Status),
+            Request::LegacyMcpInventory => Some(Self::LegacyMcpInventory),
             Request::ConsultWire { from, to } => Some(Self::Wire {
                 from: from.clone(),
                 to: to.clone(),
@@ -671,6 +674,7 @@ pub(crate) const fn is_integration_admin(request: &Request) -> bool {
     matches!(
         request,
         Request::IntegrationEnrollments
+            | Request::LegacyMcpInventory
             | Request::IntegrationApprovalBegin { .. }
             | Request::IntegrationApprovalFinish { .. }
             | Request::IntegrationSelfApprove { .. }
@@ -1451,6 +1455,7 @@ pub(crate) async fn answer_prepared(
         // The exchange already happened in the connection task. What is verified here is the binding: the
         // answer must be the one computed for this exact request, the rule every prepared result follows.
         consult @ (Request::Consult
+        | Request::LegacyMcpInventory
         | Request::ConsultWire { .. }
         | Request::ConsultUnwire { .. }
         | Request::AgentToolsWire

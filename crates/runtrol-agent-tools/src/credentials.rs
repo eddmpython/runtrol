@@ -58,6 +58,33 @@ pub(crate) struct StoredCredential {
     slot: AgentToolSlot,
 }
 
+/// One bounded read-only observation inside the Runtrol-owned Agent Tools credential directory.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct CredentialInventoryLine {
+    pub(crate) slot: Box<str>,
+    pub(crate) root: Option<Box<str>>,
+    pub(crate) integration_id: Option<Box<str>>,
+    pub(crate) state: CredentialInventoryState,
+    pub(crate) detail: Option<Box<str>>,
+}
+
+/// Structural state of one local Agent Tools credential slot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CredentialInventoryState {
+    /// A closed grant and its protected identity are both present.
+    Approved,
+    /// A valid grant remains but the protected identity is absent.
+    OrphanGrant,
+    /// The slot exists without an approved grant.
+    Partial,
+    /// A grant file exists but does not match the closed Runtrol-owned record shape.
+    Invalid,
+    /// An entry exists in the owned directory but is not an exact Runtrol slot.
+    Unrecognized,
+    /// More entries exist than the bounded inventory will inspect.
+    Overflow,
+}
+
 /// The bounded Agent Tools area inside one Runtrol home.
 pub(crate) struct CredentialStore {
     home: RuntrolHome,
@@ -148,6 +175,127 @@ impl CredentialStore {
             .collect::<Vec<_>>();
         roots.sort_by(|left, right| left.as_str().cmp(right.as_str()));
         Ok(roots)
+    }
+
+    /// Inspect local Agent Tools slots without creating, changing, or removing any file.
+    pub(crate) fn inventory(&self) -> Result<Vec<CredentialInventoryLine>, AgentToolsError> {
+        let directory = self.home.paths().agent_tools();
+        let entries = std::fs::read_dir(directory.as_std_path()).map_err(|error| {
+            AgentToolsError::io(
+                "listing Agent Tools local state",
+                directory.as_std_path(),
+                &error,
+            )
+        })?;
+        let mut lines = Vec::new();
+        for (index, entry) in entries.enumerate() {
+            if index == MAX_SLOTS {
+                lines.push(inventory_line(
+                    "*",
+                    CredentialInventoryState::Overflow,
+                    None,
+                    None,
+                    Some(format!("more than {MAX_SLOTS} local entries exist")),
+                ));
+                break;
+            }
+            let entry = entry.map_err(|error| {
+                AgentToolsError::io(
+                    "reading Agent Tools local state",
+                    directory.as_std_path(),
+                    &error,
+                )
+            })?;
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let file_type = entry.file_type().map_err(|error| {
+                AgentToolsError::io("classifying Agent Tools local state", &entry.path(), &error)
+            })?;
+            if !valid_slot_name(&name) || !file_type.is_dir() {
+                lines.push(inventory_line(
+                    &name,
+                    CredentialInventoryState::Unrecognized,
+                    None,
+                    None,
+                    Some("not an exact Runtrol credential slot; preserve it".to_owned()),
+                ));
+                continue;
+            }
+            lines.push(self.inventory_slot(&name)?);
+        }
+        lines.sort_by(|left, right| left.slot.cmp(&right.slot));
+        Ok(lines)
+    }
+
+    fn inventory_slot(&self, name: &str) -> Result<CredentialInventoryLine, AgentToolsError> {
+        let slot = self.home.paths().agent_tool_slot(name)?;
+        let identity_present = slot.identity().as_std_path().is_file();
+        if !slot.grant().as_std_path().exists() {
+            let detail = if identity_present {
+                "protected identity present, approved grant absent"
+            } else {
+                "protected identity and approved grant absent"
+            };
+            return Ok(inventory_line(
+                name,
+                CredentialInventoryState::Partial,
+                None,
+                None,
+                Some(detail.to_owned()),
+            ));
+        }
+        let record = match read_record(slot.grant()) {
+            Ok(record) => record,
+            Err(error) => {
+                return Ok(inventory_line(
+                    name,
+                    CredentialInventoryState::Invalid,
+                    None,
+                    None,
+                    Some(error.to_string()),
+                ));
+            }
+        };
+        let root = match AbsPath::new(&record.root) {
+            Ok(root) => root,
+            Err(error) => {
+                return Ok(inventory_line(
+                    name,
+                    CredentialInventoryState::Invalid,
+                    None,
+                    None,
+                    Some(error.to_string()),
+                ));
+            }
+        };
+        if let Err(error) = validate_record(&record, &root, slot.grant()) {
+            return Ok(inventory_line(
+                name,
+                CredentialInventoryState::Invalid,
+                Some(root.as_str()),
+                None,
+                Some(error.to_string()),
+            ));
+        }
+        if slot_hash(&root) != name {
+            return Ok(inventory_line(
+                name,
+                CredentialInventoryState::Invalid,
+                Some(root.as_str()),
+                None,
+                Some("the project root does not match its credential slot".to_owned()),
+            ));
+        }
+        Ok(inventory_line(
+            name,
+            if identity_present {
+                CredentialInventoryState::Approved
+            } else {
+                CredentialInventoryState::OrphanGrant
+            },
+            Some(root.as_str()),
+            Some(&record.grant.integration_id.to_string()),
+            (!identity_present).then(|| "protected identity absent".to_owned()),
+        ))
     }
 
     pub(crate) fn remove(stored: &StoredCredential) -> Result<(), AgentToolsError> {
@@ -288,6 +436,22 @@ impl CredentialStore {
 
     fn slot(&self, root: &AbsPath) -> Result<AgentToolSlot, AgentToolsError> {
         Ok(self.home.paths().agent_tool_slot(&slot_hash(root))?)
+    }
+}
+
+fn inventory_line(
+    slot: &str,
+    state: CredentialInventoryState,
+    root: Option<&str>,
+    integration_id: Option<&str>,
+    detail: Option<String>,
+) -> CredentialInventoryLine {
+    CredentialInventoryLine {
+        slot: slot.into(),
+        root: root.map(Into::into),
+        integration_id: integration_id.map(Into::into),
+        state,
+        detail: detail.map(Into::into),
     }
 }
 

@@ -191,21 +191,6 @@ impl DiscoveryGates {
 /// the time a request arrives; a racing request queues on its provider's lane and continues the moment
 /// the same preparation completes, never duplicating it. Composing stays probe-free: this runs after the
 /// listener is up, so it delays nothing.
-/// Re-point this home's Agent Tools entry at the image now running, and say so if it cannot.
-///
-/// Failure here is never fatal: a provider CLI that is mid-update or absent leaves the entry exactly as it
-/// was, which is the state the operator already had. It is written to the daemon's own error stream because
-/// a repair that quietly did not happen is the failure the operator is left looking at.
-#[expect(
-    clippy::print_stderr,
-    reason = "the daemon's error stream is the only surface a background chore has, and a silent skip here is what left the failing entry in place"
-)]
-async fn repair_own_agent_tools(composed: Arc<Composed>) {
-    for trouble in crate::consult::repair_agent_tools(&composed).await {
-        eprintln!("runtrol: the Agent Tools entry could not be re-pointed at this Core: {trouble}");
-    }
-}
-
 async fn prewarm_providers(composed: Arc<Composed>, discovering: Arc<DiscoveryGates>) {
     // Windows can return only the complete working set. Do that after daemon assembly but before the deliberate
     // warm-up, so discarded startup pages stay out while the provider paths this task exists to warm remain hot.
@@ -1150,11 +1135,6 @@ async fn serve_surfaces(
         Arc::clone(&composed),
         Arc::clone(&discovering),
     )));
-    // An update moves this program to a new path and takes the old image away, which leaves the MCP entry a
-    // person once switched on naming a program that is gone. Every conversation in that project then opens
-    // with a failure nobody asked for. This is the first moment the new image is serving and can say where it
-    // now lives, so it repairs its own entry here. It repairs and never creates.
-    background.push(connections.spawn(repair_own_agent_tools(Arc::clone(&composed))));
     background.push(connections.spawn(automatic_provider_updates(
         Arc::clone(&composed),
         Arc::clone(&discovering),

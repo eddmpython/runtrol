@@ -119,6 +119,31 @@ pub async fn request(
     exchange(&mut connection, &request).await
 }
 
+/// Ask one private local command only when the daemon is already running.
+///
+/// This is the read-only diagnostic seam. It never starts a daemon, so a query cannot trigger startup repair,
+/// provider warm-up, or another background mutation before the answer is captured.
+///
+/// # Errors
+///
+/// [`Failed`] when no daemon is running, the wire cannot be agreed, or no readable answer arrives.
+pub async fn request_running(address: &str, request: Request) -> Result<Response, Failed> {
+    let mut connection = crate::link::reach_running(address).await?;
+    let welcome = exchange(
+        &mut connection,
+        &Request::Hello {
+            wire: runtrol_ipc::WIRE_VERSION,
+        },
+    )
+    .await?;
+    if let Response::Failed(said) = welcome {
+        return Err(Failed::DifferentBuilds {
+            said: said.message.to_string(),
+        });
+    }
+    exchange(&mut connection, &request).await
+}
+
 /// Ask a daemon one thing, and hand back what a person reads.
 ///
 /// `runtrol` is the executable a daemon is started from when none is running. Named by the caller and never inferred:

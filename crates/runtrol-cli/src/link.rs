@@ -109,6 +109,21 @@ pub async fn reach(address: &str, runtrol: &Path) -> Result<Connection, Unreacha
     wait_for_it(address, &mut daemon).await
 }
 
+/// Reach only an already running daemon.
+///
+/// Unlike [`reach`], this function never starts a process. Read-only diagnostics use it so observing state cannot
+/// trigger daemon startup work or any background repair owned by daemon startup.
+///
+/// # Errors
+///
+/// [`Unreachable::Transport`] when no daemon is listening or the existing endpoint cannot be reached.
+pub async fn reach_running(address: &str) -> Result<Connection, Unreachable> {
+    trace("cli: connecting without startup");
+    runtrol_ipc::transport::connect(address)
+        .await
+        .map_err(Unreachable::Transport)
+}
+
 /// One step of reaching the daemon, on stderr, only when `RUNTROL_CLOSE_TRACE=1` asks for it.
 ///
 /// The CI harness is the audience: a command that hangs to its timeout with no output cannot say whether it

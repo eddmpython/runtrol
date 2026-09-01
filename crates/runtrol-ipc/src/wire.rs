@@ -461,6 +461,12 @@ pub enum Request {
     /// place for it to go stale.
     Consult,
 
+    /// Read every legacy Runtrol MCP registration this build can prove or safely identify by its reserved name.
+    ///
+    /// This request runs only provider-owned read commands. It never starts, repairs, registers, enables, disables,
+    /// or removes an MCP entry.
+    LegacyMcpInventory,
+
     /// Register `to` as a consultable MCP server inside `from`, using `from`'s own official command.
     ConsultWire {
         /// The CLI that gains a consultant.
@@ -737,6 +743,9 @@ pub enum Response {
     /// derives state on its own.
     Consult(Vec<ConsultLine>),
 
+    /// Read-only legacy MCP registration inventory.
+    LegacyMcpInventory(Vec<LegacyMcpLine>),
+
     /// It did not work.
     Failed(WireError),
 }
@@ -929,6 +938,51 @@ pub struct ConsultLine {
     /// Why, when the state needs a sentence: the measured absence for an unsupported direction, or the
     /// CLI's own words when its answer could not be trusted.
     pub why: Option<Box<str>>,
+}
+
+/// One provider-owned MCP name that an earlier Runtrol feature may have registered.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub struct LegacyMcpLine {
+    /// Which retired Runtrol surface reserved this name.
+    pub kind: LegacyMcpKind,
+    /// The provider CLI whose MCP catalogue was read.
+    pub provider: Box<str>,
+    /// Exact registration name that was inspected.
+    pub name: Box<str>,
+    /// Provider served by a cross-consult entry, absent for Agent Tools.
+    pub target: Option<Box<str>>,
+    /// What the provider's official read command proved.
+    pub state: LegacyMcpState,
+    /// Safe structural reason when ownership could not be proved.
+    pub why: Option<Box<str>>,
+}
+
+/// Retired Runtrol surface that may own one MCP registration name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum LegacyMcpKind {
+    /// The project-scoped Agent Tools server named `runtrolTools`.
+    AgentTools,
+    /// One provider registered as a consultant inside another provider.
+    CrossConsult,
+}
+
+/// Read-only ownership classification for one legacy MCP registration name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum LegacyMcpState {
+    /// The official provider command proved that the name is absent.
+    Absent,
+    /// The name has the exact enabled Runtrol command shape.
+    ExactEnabled,
+    /// The name has the exact Runtrol command shape but the provider disabled it.
+    ExactDisabled,
+    /// The name points to a vanished earlier Runtrol image in the managed image directory.
+    Superseded,
+    /// The name exists but does not have the exact Runtrol-owned shape.
+    Foreign,
+    /// The provider answer, installed program, or expected command shape could not prove ownership.
+    Unreadable,
 }
 
 /// Where one cross-consult direction stands.
@@ -1742,6 +1796,7 @@ mod tests {
                 from: "claude".into(),
                 to: "codex".into(),
             },
+            Request::LegacyMcpInventory,
             Request::AgentToolsWire,
             Request::AgentToolsUnwire,
         ] {
@@ -1984,6 +2039,56 @@ mod tests {
                 assert!(unsupported.why.is_some(), "and it says why");
             }
             other => panic!("expected a consult answer, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_legacy_mcp_inventory_preserves_exact_foreign_and_absent_states() {
+        let response = Response::LegacyMcpInventory(vec![
+            LegacyMcpLine {
+                kind: LegacyMcpKind::AgentTools,
+                provider: "claude".into(),
+                name: "runtrolTools".into(),
+                target: None,
+                state: LegacyMcpState::ExactEnabled,
+                why: None,
+            },
+            LegacyMcpLine {
+                kind: LegacyMcpKind::AgentTools,
+                provider: "codex".into(),
+                name: "runtrolTools".into(),
+                target: None,
+                state: LegacyMcpState::Foreign,
+                why: Some("same name, different command".into()),
+            },
+            LegacyMcpLine {
+                kind: LegacyMcpKind::CrossConsult,
+                provider: "claude".into(),
+                name: "codexConsult".into(),
+                target: Some("codex".into()),
+                state: LegacyMcpState::Absent,
+                why: None,
+            },
+        ]);
+        let encoded = serde_json::to_string(&response).expect("writable");
+        assert!(encoded.contains("exactEnabled"), "{encoded}");
+        assert!(encoded.contains("foreign"), "{encoded}");
+        assert!(encoded.contains("absent"), "{encoded}");
+        match serde_json::from_str::<Response>(&encoded).expect("readable") {
+            Response::LegacyMcpInventory(lines) => {
+                assert_eq!(lines.len(), 3);
+                let foreign = lines
+                    .iter()
+                    .find(|line| line.state == LegacyMcpState::Foreign)
+                    .expect("foreign entry");
+                assert_eq!(foreign.provider.as_ref(), "codex");
+                let cross_consult = lines
+                    .iter()
+                    .find(|line| line.kind == LegacyMcpKind::CrossConsult)
+                    .expect("cross-consult entry");
+                assert_eq!(cross_consult.target.as_deref(), Some("codex"));
+            }
+            other => panic!("expected legacy MCP inventory, got {other:?}"),
         }
     }
 

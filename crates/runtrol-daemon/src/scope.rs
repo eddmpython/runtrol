@@ -84,6 +84,7 @@ pub fn needed(request: &Request) -> Needed {
         | Request::ProviderUpdateStatus
         | Request::RemoteConnection
         | Request::Consult => Needed::Scope(DeviceScope::ConfigRead),
+        Request::LegacyMcpInventory => Needed::AtTheMachine(LocalScope::IntegrationAdmin),
         Request::ProviderUpdate { .. } => Needed::AtTheMachine(LocalScope::ProviderUpdate),
         Request::RemoteConfigure { .. } | Request::AgentToolsWire | Request::AgentToolsUnwire => {
             Needed::AtTheMachine(LocalScope::ConfigWrite)
@@ -433,6 +434,7 @@ mod tests {
                 claims: Vec::new(),
             },
             Request::Consult,
+            Request::LegacyMcpInventory,
             Request::ConsultWire {
                 from: "claude".into(),
                 to: "codex".into(),
@@ -441,6 +443,8 @@ mod tests {
                 from: "claude".into(),
                 to: "codex".into(),
             },
+            Request::AgentToolsWire,
+            Request::AgentToolsUnwire,
         ]
     }
 
