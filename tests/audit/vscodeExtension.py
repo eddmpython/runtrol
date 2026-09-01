@@ -2,7 +2,7 @@
 
 The gate deliberately checks the source contract before invoking the toolchain. A bundle that compiles can still
 poll, persist conversation data, keep hidden renderers alive, or ship runtime Node dependencies. Product disk writes
-are limited to the bounded selected-session scalar, reviewed Receipt Landing modules, and atomic Core installer.
+are limited to the bounded selected-session scalar and atomic Core installer.
 
 Usage::
 
@@ -151,8 +151,8 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
         for relative, source in sources.items()
         if "handle.write(" in source or re.search(r"\bopen\([^,\n]+,\s*[\"'][wax]", source)
     ]
-    # No source may open a write handle. The one that did (Mission landing) is gone; the extension writes
-    # nothing of its own, and a new writer has to argue for itself here first.
+    # No source may open a write handle. The extension writes nothing of its own, and a new writer has to argue
+    # for itself here first.
     if handleWriters:
         found.append(
             "no extension source may open a write-capable file handle, found "
@@ -377,9 +377,6 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             "return undefined",
             "sessions: () => [...state.sessions]",
         ],
-        "protocol.ts": [
-            "replaces_schedule_id",
-        ],
     }
     for relative, tokens in required.items():
         source = sources.get(relative, "")
@@ -485,7 +482,7 @@ def selftest() -> int:
         ),
         "extension.ts": (
             "afterReady selfApproveIntegration(client, pendingId, signature) "
-            'initializationStage = "core:currency" missionController.startAutoFlights() '
+            'initializationStage = "core:currency" '
             'executeCommand("runtrol.sidebar.focus") '
             '"runtrol.setUpServices" registerWebviewViewProvider(SIDEBAR_VIEW_ID, sidebar '
             "await controller.signInProvider(provider) await controller.fixService(provider)"
@@ -577,11 +574,7 @@ def selftest() -> int:
             'extensionMode !== vscode.ExtensionMode.Test '
             'process.env.RUNTROL_VSCODE_REAL_PROVIDER_JOURNEY !== "1" return undefined '
             'sessions: () => [...state.sessions] '
-            'controller.startResolvedSession(provider, workspace, model, reasoningEffort, "exclusive", false, permission) '
-            "missions.scheduleMissionForJourney(missionId, dueUnixMs, operatorChoiceProvider)"
-        ),
-        "protocol.ts": (
-            'MissionScheduleLine ask: "missionSchedule" replaces_schedule_id ask: "missionScheduleCancel"'
+            'controller.startResolvedSession(provider, workspace, model, reasoningEffort, "exclusive", false, permission)'
         ),
     }
     rejected = sourceViolations(package, sources)
@@ -662,13 +655,6 @@ def selftest() -> int:
         (package, {**sources, "controller.ts": sources["controller.ts"] + " writeFile("}),
         (package, {**sources, "controller.ts": sources["controller.ts"] + ' open(file, "w")'}),
         (package, {**sources, "controller.ts": sources["controller.ts"] + " copyFile("}),
-        (
-            package,
-            {
-                **sources,
-                "protocol.ts": sources["protocol.ts"].replace("replaces_schedule_id", ""),
-            },
-        ),
         (package, {**sources, "selectionStore.ts": sources["selectionStore.ts"] + " prompt"}),
         (package, {**sources, "selectionStore.ts": sources["selectionStore.ts"].replace("retryTransientWrite", "")}),
         (package, {**sources, "journeyApi.ts": "return undefined sessions: () => [...state.sessions]"}),
@@ -772,31 +758,8 @@ def run() -> int:
             print(f"[vscodeExtension] FAIL. npm run {script} returned {result.returncode}.", file=sys.stderr)
             return 2
 
-    # The ceiling is a bloat tripwire, not a target. Raised 256 -> 272 KiB on 2026-08-19 when the minified
-    # extension bundle crossed it with deliberate features (operator-created projects, the usage strip, and the
-    # mid-conversation model switch), each reviewed at the crossing. Raised 272 -> 288 KiB on 2026-08-20 when
-    # the nativeParity sweep crossed it with deliberate features again (the service remedy surface, the effort
-    # chip and requested-suffix, message queueing, @file mentions, per-project start defaults, and the fan-out
-    # gate picker), each reviewed at the crossing. Raised 288 -> 304 KiB on 2026-08-20 when the GUI identity
-    # build crossed it with the draft conversation tab (project, service, model, effort and mode chips as
-    # pickers), image attachments through sessions/submitBlocks, and the branch chip read off the folder's own
-    # repository, each reviewed at the crossing. Raised 304 -> 320 KiB on 2026-08-21 when the places build
-    # crossed it: a conversation surface contract (tab, bottom panel, secondary side bar) with two workbench
-    # view providers, the one-command editor grid, and the per-place memory, each reviewed at the crossing.
-    # Raised 320 -> 336 KiB on 2026-08-21 (evening) when the "know without opening, answer without opening" build
-    # crossed it: the activity watch and its row word, sign-in and approval from the row, the back key and the
-    # keyboard project switch, one prompt to N services, each reviewed at the crossing.
-    # Raised 336 -> 352 KiB on 2026-08-22 when Fleet Compare crossed it: reviewed choose-one Missions, parallel
-    # isolated launch, the conversation grid, native result diffs, and selected-Receipt completion, reviewed in
-    # the real Extension Host at the crossing.
-    # Raised 352 -> 368 KiB on 2026-08-22 when Mission Auto Flight crossed it at 374114 bytes: bounded local
-    # authority, event-driven DAG waves, durable lifecycle-generation proof, immediate disarm, and explicit
-    # Receipt Landing, reviewed in the real Extension Host at the crossing.
-    # Raised 368 -> 384 KiB on 2026-08-22 when Receipt Landing apply crossed it at 382764 bytes: exact reviewed
-    # Artifact writes, pre-apply drift and symlink defenses, bounded rollback, and one-action Gate completion.
-    # Raised 384 -> 400 KiB in the same review when the proof found and closed missing Receipt digests, unbounded
-    # pre-reads, non-atomic replacement, cross-window writer races, dirty non-text tabs, and Gate mutation races.
-    # A dependency slipping in still trips it.
+    # The current Studio surface fits inside 320 KiB. This is a bloat tripwire, not a target; a reviewed feature may
+    # move it deliberately, while deleted surfaces cannot leave their former budget behind.
     bundles = [
         EXTENSION / "dist" / name
         for name in (
@@ -805,8 +768,8 @@ def run() -> int:
         )
     ]
     for bundle in bundles:
-        if not bundle.is_file() or bundle.stat().st_size > 400 * 1024:
-            failures.append(f"{bundle.relative_to(ROOT)} is missing or exceeds 400 KiB")
+        if not bundle.is_file() or bundle.stat().st_size > 320 * 1024:
+            failures.append(f"{bundle.relative_to(ROOT)} is missing or exceeds 320 KiB")
     qr_bundle = EXTENSION / "dist" / "pairingQrVendor.js"
     if qr_bundle.is_file() and qr_bundle.stat().st_size > 32 * 1024:
         failures.append(f"{qr_bundle.relative_to(ROOT)} exceeds its pairing-only 32 KiB budget")

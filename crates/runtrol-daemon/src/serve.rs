@@ -505,10 +505,6 @@ pub enum ServeError {
     /// Runtime instance identity or atomic locator publication failed.
     #[error("Runtime public bootstrap failed: {0}")]
     RuntimeBootstrap(String),
-
-    /// A structural Mission wake destination could not be resolved without ambiguity.
-    #[error("Mission Flight Signal routing failed: {0}")]
-    MissionFlightSignal(String),
 }
 
 struct PhonePlane {
@@ -1051,8 +1047,8 @@ async fn serve_surfaces(
     // the successor, nothing new is opened here, and this loop ends when no turn is running.
     let mut draining = false;
     let mut runtime_audit_closing = false;
-    // Everything a draining generation stops doing: warming providers, updating them, probing accounts,
-    // scheduling missions, and holding the relay, all of which the successor now does for this home.
+    // Everything a draining generation stops doing: warming providers, updating them, probing accounts, and
+    // holding the relay, all of which the successor now does for this home.
     let mut background: Vec<tokio::task::AbortHandle> = Vec::new();
     // Both owner queues preserve the 64-request admission contract without preallocating 64 copies of their large
     // request envelopes while no client exists. Each active caller owns exactly one envelope allocation.

@@ -3,8 +3,8 @@
 The rule is enforced as a closed list of production files that may mutate the filesystem. A path
 cannot be proven safe from a string search after it has been assembled at runtime, so the gate
 controls the capability instead: storage, runtrol home creation, the probe cache, the provider
-update safety journal, local endpoint cleanup, Mission worktree ownership, reviewed project capability trees, and Unix process
-guards are the only existing disk writers. Provider drivers have no direct filesystem mutation API available in their source.
+update safety journal, local endpoint cleanup, isolated worktree ownership, and Unix process guards are the only existing disk
+writers. Provider drivers have no direct filesystem mutation API available in their source.
 
 Official provider commands are still allowed. They are child processes and own their configuration;
 runtrol does not recreate their file format or write around them.
@@ -52,8 +52,6 @@ MAY_MUTATE_DISK = {
     "only its own entry, under the home's advisory lock, by atomic rename",
     "crates/runtrol-daemon/src/isolated_workspace.rs": "owns the bounded ordinary-chat worktree registry "
     "inside runtrol home and asks Git to create or remove only exact Core-owned linked worktrees",
-    "crates/runtrol-daemon/src/mission/mod.rs": "owns the bounded local Gate registry in runtrol home "
-    "and asks Git to create isolated Task worktrees under runtrol-owned Mission state",
     "crates/runtrol-daemon/src/provider_update.rs": "owns the bounded provider update version floor "
     "and rollback pin journal inside the runtrol home; provider package changes still go through npm",
     "crates/runtrol-daemon/src/runtime_locator.rs": "atomically owns the public Runtime instance and "

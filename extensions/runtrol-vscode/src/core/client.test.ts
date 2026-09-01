@@ -42,8 +42,8 @@ test("a read-only command reconnects once when the Core closes before greeting",
               push_public_key: null,
             },
           }))));
-        } else if (request.ask === "missionList" && connection === 2) {
-          socket.write(encodeFrame(Buffer.from(JSON.stringify({ say: "missions", with: [] }))));
+        } else if (request.ask === "providerUpdates" && connection === 2) {
+          socket.write(encodeFrame(Buffer.from(JSON.stringify({ say: "providerUpdates", with: [] }))));
         }
       }
     });
@@ -61,8 +61,8 @@ test("a read-only command reconnects once when the Core closes before greeting",
         relocated += 1;
       },
     } as unknown as CoreLocator);
-    const { response } = await client.read({ ask: "missionList" });
-    assert.equal(response.say, "missions");
+    const { response } = await client.read({ ask: "providerUpdates" });
+    assert.equal(response.say, "providerUpdates");
     assert.equal(connections, 2);
     // The lost connection told the locator to look again: the generation behind an endpoint may be gone.
     assert.equal(relocated, 1);

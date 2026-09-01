@@ -2,14 +2,14 @@ import * as vscode from "vscode";
 
 import type { DeclaredDiff } from "./events/toolDiff";
 
-/// The most review sides held for the editor at once: one 1,024-Artifact Mission Landing, two sides.
+/// The most declared change sides held for the editor at once: 1,024 changes, two sides each.
 /// The shared text ceiling below also prevents declared changes from becoming another transcript store.
 const MAX_HELD = 2_048;
 export const MAX_DIFF_TEXT = 8 * 1_024 * 1_024;
 
-/// A declared change or reviewed Mission Artifact, opened in VS Code's own diff editor instead of drawn in the page.
+/// A declared change opened in VS Code's own diff editor instead of drawn in the page.
 ///
-/// Declared `oldText`/`newText` and exact Landing sides become read-only virtual documents that VS Code draws;
+/// Declared `oldText`/`newText` sides become read-only virtual documents that VS Code draws;
 /// a unified patch opens as a read-only `.diff` document the editor highlights itself. Runtrol colours
 /// nothing and keeps nothing on disk: the texts live in this map, bounded, for as long as the editor may
 /// ask for them, and they are the service's own words relayed into the place VS Code reads a change.

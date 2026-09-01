@@ -58,20 +58,6 @@ if (bundled.status !== 0) {
 }
 
 const temporary = await mkdtemp(path.join(os.tmpdir(), "rve-"));
-const mutatingProjectEntries = new Set([
-  "fleetEye",
-  "missionAutoFlightEye",
-  "missionFlightDeckEye",
-  "missionMomentumEye",
-  "missionRecoveryEye",
-  "missionScheduleEye",
-]);
-// Focused Mission eyes build and commit their own fixture repository. Their default must live inside this harness's
-// owned temporary root, while an explicitly requested folder remains exact and ordinary read-only eyes keep the
-// repository default documented above.
-const eyeFolder = !process.env.RUNTROL_EYE_FOLDER && mutatingProjectEntries.has(eyeEntry)
-  ? path.join(temporary, "project")
-  : folder;
 const extensionUnderTestRoot = path.join(temporary, "extension");
 const testEntry = path.join(temporary, "realWindowEye.test.cjs");
 const resultPath = path.join(temporary, "result.json");
@@ -118,7 +104,7 @@ function launchRuntimeDaemon() {
   return child;
 }
 try {
-  await mkdir(eyeFolder, { recursive: true });
+  await mkdir(folder, { recursive: true });
   await mkdir(extensionUnderTestRoot, { recursive: true });
   await Promise.all([
     writeFile(
@@ -141,7 +127,7 @@ try {
   if (eyeEntry === "conversationManagementEye") {
     await mkdir(environment.CODEX_HOME, { recursive: true });
   }
-  await writeFile(workspaceFile, JSON.stringify({ folders: [{ path: eyeFolder }] }), "utf8");
+  await writeFile(workspaceFile, JSON.stringify({ folders: [{ path: folder }] }), "utf8");
   await writeFile(
     path.join(userData, "User", "settings.json"),
     JSON.stringify({
@@ -182,7 +168,7 @@ try {
     RUNTROL_TEST_EXTENSION_ID: extensionIdentifier,
     RUNTROL_VSCODE_REAL_PROVIDER_JOURNEY: "1",
     RUNTROL_VSCODE_RESULT: resultPath,
-    RUNTROL_EYE_FOLDER: eyeFolder,
+    RUNTROL_EYE_FOLDER: folder,
     RUNTROL_EYE_PROVIDER: providerId,
     RUNTROL_EYE_NODE: process.execPath,
     ...(process.env.RUNTROL_EYE_PROMPT ? { RUNTROL_EYE_PROMPT: process.env.RUNTROL_EYE_PROMPT } : {}),
@@ -192,12 +178,12 @@ try {
     ...(process.env.RUNTROL_EYE_TERMINAL_SETTLE_MS ? { RUNTROL_EYE_TERMINAL_SETTLE_MS: process.env.RUNTROL_EYE_TERMINAL_SETTLE_MS } : {}),
   };
 
-  const runEyeWindow = async (extraEnvironment = {}) => Promise.all([
+  const runEyeWindow = async () => Promise.all([
     runTests({
       cachePath: path.join(os.tmpdir(), "runtrol-vscode-test-cache"),
       extensionDevelopmentPath: extensionUnderTestRoot,
       extensionTestsPath: testEntry,
-      extensionTestsEnv: { ...testEnvironment, ...extraEnvironment },
+      extensionTestsEnv: testEnvironment,
       launchArgs: [
         workspaceFile,
         ...isolatedLaunchArguments,
@@ -210,7 +196,6 @@ try {
       vscodeExecutablePath: process.env.RUNTROL_TEST_VSCODE_EXECUTABLE || undefined,
     }),
     photograph(),
-    restartRuntimeWhenRequested(),
   ]);
   if (process.env.RUNTROL_EYE_SHELL_ONLY === "1") {
     const back = await backProof(testEnvironment);
@@ -219,33 +204,7 @@ try {
     }
     process.stdout.write(`RUNTROL_EYE ${JSON.stringify({ stage: "complete", back, outDir })}\n`);
   } else {
-    if (eyeEntry === "missionScheduleEye") {
-      await runEyeWindow({ RUNTROL_MISSION_SCHEDULE_PHASE: "schedule" });
-      const scheduled = JSON.parse(await readFile(resultPath, "utf8"));
-      if (scheduled.stage !== "complete" || scheduled.phase !== "scheduled") {
-        throw new Error(`the first Studio window did not freeze a schedule: ${JSON.stringify(scheduled)}`);
-      }
-      const studioClosedUnixMs = Date.now();
-      if (!(studioClosedUnixMs < scheduled.dueUnixMs)) {
-        throw new Error("the first Studio window did not close before the reviewed due instant");
-      }
-      process.stdout.write(
-        `closed first Studio window at ${studioClosedUnixMs}, before due ${scheduled.dueUnixMs}\n`,
-      );
-      await delay(Math.max(0, scheduled.dueUnixMs - Date.now()) + 6_000);
-      if (!daemon || daemon.exitCode !== null) {
-        throw new Error("the isolated Runtime stopped while Studio was closed");
-      }
-      await writeFile(resultPath, JSON.stringify({ stage: "launching-observer" }), "utf8");
-      await runEyeWindow({
-        RUNTROL_MISSION_SCHEDULE_PHASE: "observe",
-        RUNTROL_MISSION_SCHEDULE_ID: scheduled.missionId,
-        RUNTROL_MISSION_SCHEDULE_DUE: String(scheduled.dueUnixMs),
-        RUNTROL_MISSION_STUDIO_CLOSED: String(studioClosedUnixMs),
-      });
-    } else {
-      await runEyeWindow();
-    }
+    await runEyeWindow();
     const result = JSON.parse(await readFile(resultPath, "utf8"));
     // The window switch and the back key, proved with real windows from outside: a switch reloads the extension
     // host, so nothing inside the test runner survives to press the next key. A plain (non-test) isolated window
@@ -467,62 +426,12 @@ async function photograph() {
           throw new Error(`the ${pose} capture failed:\n${shot.stdout}${shot.stderr}`);
         }
         process.stdout.write(`captured ${pose} -> ${outPath} ${JSON.stringify(progress)}\n`);
-        if (eyeEntry === "missionRecoveryEye" && pose === "recoveryCancellation") {
-          press(titleMatch, "{ESC}", userData);
-        }
-        if (eyeEntry === "missionRecoveryEye" && pose === "recoveryConfirmation") {
-          // This is the real focused Quick Pick. Press its selected recovery action from outside the Extension Host,
-          // the same input boundary the screenshot captured, rather than calling a test-only product method.
-          press(titleMatch, "{ENTER}", userData);
-        }
         await writeFile(`${resultPath}.captured.${pose}`, "1", "utf8");
       }
     }
     await delay(300);
   }
   throw new Error("the eye pass never completed");
-}
-
-/// One focused fault pose kills only this harness's exact Runtime child and starts its successor over the same home.
-async function restartRuntimeWhenRequested() {
-  if (eyeEntry !== "missionRecoveryEye") return;
-  const deadline = Date.now() + 10 * 60_000;
-  while (Date.now() < deadline) {
-    const progress = await readFile(resultPath, "utf8").then((text) => JSON.parse(text)).catch(() => null);
-    if (progress && (typeof progress.failure === "string" || progress.stage === "complete")) return;
-    if (progress?.stage !== "fault:restartCore") {
-      await delay(200);
-      continue;
-    }
-    const previous = daemon;
-    if (!previous || previous.exitCode !== null) {
-      throw new Error("the isolated Runtime was not alive at the requested restart boundary");
-    }
-    const exited = new Promise((resolve) => previous.once("close", resolve));
-    previous.kill();
-    await Promise.race([
-      exited,
-      delay(5_000).then(() => Promise.reject(new Error("the faulted Runtime did not exit within 5 seconds"))),
-    ]);
-    daemon = launchRuntimeDaemon();
-    await delay(500);
-    if (daemon.exitCode !== null) throw new Error(`the successor Runtime stopped during startup:\n${daemonStderr}`);
-    const reached = spawnSync(core, ["endpoint"], {
-      env: environment,
-      encoding: "utf8",
-      timeout: 15_000,
-      windowsHide: true,
-    });
-    if (reached.status !== 0 || !reached.stdout.trim()) {
-      throw new Error(`the successor Runtime exposed no endpoint:\n${reached.stdout}${reached.stderr}`);
-    }
-    process.stdout.write(
-      `restarted isolated Runtime from pid ${previous.pid} to pid ${daemon.pid} at ${reached.stdout.trim()}\n`,
-    );
-    await writeFile(`${resultPath}.restarted`, JSON.stringify({ before: previous.pid, after: daemon.pid }), "utf8");
-    return;
-  }
-  throw new Error(`the ${eyeEntry} eye never requested its Core restart fault`);
 }
 
 function delay(milliseconds) {

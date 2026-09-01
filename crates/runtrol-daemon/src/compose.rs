@@ -59,10 +59,6 @@ pub enum ComposeError {
     #[error(transparent)]
     Store(#[from] runtrol_store::StoreError),
 
-    /// The local exact-digest capability trust index could not be restored safely.
-    #[error("cannot restore the capability trust index: {0}")]
-    CapabilityTrust(String),
-
     /// Core-owned ordinary-chat worktree ownership could not be restored safely.
     #[error("cannot restore isolated workspace ownership: {0}")]
     IsolatedWorkspaces(String),

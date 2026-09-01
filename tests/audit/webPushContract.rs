@@ -81,7 +81,6 @@ fn the_production_wake_path_has_an_empty_request_and_a_generic_notification() {
         "workspace",
         "approval",
         "prompt",
-        "mission",
         "instruction",
         "path",
         "output",

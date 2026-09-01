@@ -73,95 +73,6 @@ export type RuntimeSharedOpenLine = {
   expires_at_ms: number;
 };
 
-export type MissionLine = {
-  mission_id: string;
-  name: string;
-  project: string;
-  state: string;
-  completion_policy: "allTasks" | "chooseOne" | "unavailableAfterRestart";
-  passed_tasks: number;
-  total_tasks: number;
-  awaiting_input: number;
-  schedule?: MissionScheduleLine | null;
-};
-
-export type MissionScheduleProviderLine = {
-  task_id: string;
-  provider_runtime_id: string;
-};
-
-export type MissionScheduleLine = {
-  schedule_id: string;
-  due_unix_ms: number;
-  state: "pending" | "launching" | "started" | "cancelled" | "refused" | "attention";
-  providers: MissionScheduleProviderLine[];
-  failure: string | null;
-};
-
-export type GateLine = {
-  gate_id: string;
-  program: string;
-  timeout_ms: number;
-};
-
-export type MissionTaskLine = {
-  task_id: string;
-  key: string;
-  state: string;
-  instruction_ref: string;
-  instruction_sha256: string;
-  workspace_mode: "readOnlyBase" | "isolatedWorktree" | "unavailableAfterRestart";
-  provider_selector: string;
-  output_roots: string[];
-  artifact_paths: string[];
-  artifacts?: Array<{ path: string; size: number; sha256: string }>;
-  gate_refs: string[];
-  capability_versions: Array<{ capability_id: string; version_sha256: string }>;
-  session_id: string | null;
-  workspace: string | null;
-  base_commit: string | null;
-  receipt_id: string | null;
-  run_id: string | null;
-  passed_gates: number;
-  failed_gates: number;
-};
-
-export type MissionSnapshot = {
-  mission: MissionLine;
-  mission_sha256: string;
-  mission_ref: string;
-  policy_sha256: string;
-  approval_expires_unix_ms: number;
-  integration?: {
-    selected_task_id: string | null;
-    selected_receipt_id: string | null;
-  } | null;
-  tasks: MissionTaskLine[];
-};
-
-export type MissionFlightSignalKind = "person" | "stopped" | "landing";
-
-export type MissionFlightSignalLine = {
-  signal_id: string;
-  mission_id: string;
-  mission_sha256: string;
-  kind: MissionFlightSignalKind;
-  session_id: string | null;
-};
-
-export type MissionFlightSignalPage = {
-  signals: MissionFlightSignalLine[];
-  next_cursor: string | null;
-  gap: boolean;
-};
-
-export type MissionWorkspace = {
-  mission_id: string;
-  task_id: string;
-  workspace: string;
-  base_commit: string;
-};
-
 export type IsolatedWorkspaceLine = {
   workspace_id: string;
   project: string;
@@ -175,33 +86,6 @@ export type IsolatedWorkspaceReleaseLine = {
   workspace_id: string;
   workspace: string;
   outcome: "removed" | "preservedDirty" | "alreadyRemoved";
-};
-
-export type MissionInstruction = {
-  mission_id: string;
-  task_id: string;
-  session_id: string;
-  instruction: string;
-  instruction_sha256: string;
-};
-
-export type CapabilityLine = {
-  project: string;
-  capability_id: string;
-  kind: "skill" | "gateRecipe" | "playbook";
-  state: string;
-  version_sha256: string;
-  source_ref: string;
-  source_receipt_id: string;
-  verification_receipt_id: string | null;
-  verification_gates: Array<{
-    gate_id: string;
-    definition_sha256: string;
-    outcome: string;
-    duration_ms: number;
-  }>;
-  active_version_sha256: string | null;
-  approved_versions: string[];
 };
 
 export type WireError = {
@@ -287,76 +171,6 @@ export type Request =
   | { ask: "runtimeKeyRotationConfirm"; with: { confirmation_id: string } }
   | { ask: "runtimeSharedOpenRequests" }
   | { ask: "runtimeSharedOpenConfirm"; with: { confirmation_id: string } }
-  | {
-      ask: "missionRegisterGate";
-      with: { gate_id: string; program: string; arguments: string[]; timeout_ms: number };
-    }
-  | { ask: "missionListGates" }
-  | { ask: "missionValidate"; with: { project: string; mission_ref: string } }
-  | { ask: "missionList" }
-  | { ask: "missionGet"; with: { mission_id: string } }
-  | { ask: "missionFlightSignals"; with: { after: string | null } }
-  | {
-      ask: "missionFlightSignal";
-      with: { signal_id: string; mission_id: string; mission_sha256: string; kind: "stopped" | "landing" };
-    }
-  | { ask: "missionFlightSignalClear"; with: { mission_id: string; mission_sha256: string } }
-  | { ask: "missionStart"; with: { mission_id: string; mission_sha256: string } }
-  | {
-    ask: "missionSchedule";
-    with: {
-      schedule_id: string;
-      replaces_schedule_id: string | null;
-      mission_id: string;
-      mission_sha256: string;
-      due_unix_ms: number;
-      providers: MissionScheduleProviderLine[];
-    };
-  }
-  | {
-    ask: "missionScheduleCancel";
-    with: { mission_id: string; mission_sha256: string; schedule_id: string };
-  }
-  | { ask: "missionPrepareTask"; with: { mission_id: string; task_id: string } }
-  | { ask: "missionPause"; with: { mission_id: string } }
-  | { ask: "missionResumeSafe"; with: { mission_id: string } }
-  | { ask: "missionCancel"; with: { mission_id: string } }
-  | {
-      ask: "missionBindSession";
-      with: {
-        mission_id: string;
-        task_id: string;
-        session_id: string;
-        provider_runtime_id: string;
-        native_session_id: string | null;
-        workspace: string;
-      };
-    }
-  | {
-      ask: "missionSendTaskInstruction";
-      with: { mission_id: string; task_id: string; instruction_sha256: string };
-    }
-  | { ask: "missionVerifyTask"; with: { mission_id: string; task_id: string } }
-  | { ask: "missionRetryTask"; with: { mission_id: string; task_id: string } }
-  | { ask: "missionCompleteIntegration"; with: { mission_id: string; task_id: string | null } }
-  | { ask: "missionArchive"; with: { mission_id: string } }
-  | { ask: "capabilityPropose"; with: { project: string; candidate_ref: string } }
-  | { ask: "capabilityList" }
-  | {
-      ask: "capabilityVerify";
-      with: { project: string; capability_id: string; version_sha256: string };
-    }
-  | {
-      ask: "capabilityApprove";
-      with: { project: string; capability_id: string; version_sha256: string };
-    }
-  | { ask: "capabilityReject"; with: { project: string; capability_id: string } }
-  | { ask: "capabilityQuarantine"; with: { project: string; capability_id: string } }
-  | {
-      ask: "capabilityRollback";
-      with: { project: string; capability_id: string; version_sha256: string };
-    }
-  | { ask: "capabilityArchive"; with: { project: string; capability_id: string } }
   | { ask: "workspaceIsolatePrepare"; with: { request_id: string; project: string } }
   | { ask: "workspaceIsolateList" }
   | {
@@ -431,17 +245,9 @@ export type Response =
   | { say: "runtimeForgetRequests"; with: RuntimeForgetLine[] }
   | { say: "runtimeKeyRotationRequests"; with: RuntimeKeyRotationLine[] }
   | { say: "runtimeSharedOpenRequests"; with: RuntimeSharedOpenLine[] }
-  | { say: "missions"; with: MissionLine[] }
-  | { say: "missionGates"; with: GateLine[] }
-  | { say: "mission"; with: MissionSnapshot }
-  | { say: "missionFlightSignals"; with: MissionFlightSignalPage }
-  | { say: "missionFlightSignalRecorded"; with: { inserted: boolean } }
-  | { say: "missionWorkspace"; with: MissionWorkspace }
   | { say: "isolatedWorkspace"; with: IsolatedWorkspaceLine }
   | { say: "isolatedWorkspaces"; with: IsolatedWorkspaceLine[] }
   | { say: "isolatedWorkspaceReleased"; with: IsolatedWorkspaceReleaseLine }
-  | { say: "missionInstruction"; with: MissionInstruction }
-  | { say: "capabilities"; with: CapabilityLine[] }
   | { say: "done" }
   | { say: "failed"; with: WireError };
 

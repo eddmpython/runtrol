@@ -1,7 +1,6 @@
 """One loopback Anthropic-compatible endpoint for gates that need a real CLI to answer without a network.
 
-Lifted out of the Mission live journey when that gate was deleted (2026-08-26): the fixture was never about
-Missions. It counts requests and returns one fixed terminal stream, and it retains nothing else.
+It counts requests and returns one fixed terminal stream, and it retains nothing else.
 """
 
 from __future__ import annotations
@@ -89,7 +88,7 @@ class RunningClaudeModel:
 
     def __init__(self) -> None:
         self.server = ClaudeModelServer()
-        self.thread = threading.Thread(target=self.server.serve_forever, name="mission-claude-model", daemon=True)
+        self.thread = threading.Thread(target=self.server.serve_forever, name="runtrol-claude-model", daemon=True)
 
     @property
     def base_url(self) -> str:
@@ -110,4 +109,4 @@ class RunningClaudeModel:
         self.server.server_close()
         self.thread.join(timeout=5.0)
         if self.thread.is_alive():
-            raise Failed("the Claude loopback endpoint did not stop")
+            raise RuntimeError("the Claude loopback endpoint did not stop")
