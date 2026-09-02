@@ -550,6 +550,13 @@ fn rendered_rows(bytes: &[u8]) -> Vec<String> {
         .collect()
 }
 
+/// Where the cursor stands on that same rendered screen, zero-based `(row, col)`.
+fn rendered_cursor(bytes: &[u8]) -> (u16, u16) {
+    let mut parser = vt100::Parser::new(GEOMETRY.rows, GEOMETRY.columns, 0);
+    parser.process(bytes);
+    parser.screen().cursor_position()
+}
+
 fn settle_of(settle: &str) -> Result<Duration, String> {
     settle
         .parse::<u64>()
@@ -609,6 +616,7 @@ async fn screen(
         "mouseModeSeen": mentions_mouse_mode(&bytes),
         "exited": exited,
         "rows": rendered_rows(&bytes),
+        "cursor": rendered_cursor(&bytes),
     })
     .to_string())
 }
@@ -777,8 +785,10 @@ fn capture_direct(
             .min(Duration::from_millis(200));
         match receiver.recv_timeout(remaining) {
             Ok(chunk) => {
-                parser.process(&chunk);
-                let answers = queries.answers(&chunk, parser.screen().cursor_position());
+                let answers = queries.answer_in_order(&chunk, |bytes| {
+                    parser.process(bytes);
+                    parser.screen().cursor_position()
+                });
                 if !answers.is_empty() {
                     writer
                         .write_all(&answers)
@@ -802,6 +812,7 @@ fn capture_direct(
         "mouseModeSeen": mentions_mouse_mode(&bytes),
         "exited": exited,
         "rows": rendered_rows(&bytes),
+        "cursor": rendered_cursor(&bytes),
     })
     .to_string())
 }

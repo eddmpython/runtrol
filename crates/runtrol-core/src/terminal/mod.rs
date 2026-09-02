@@ -699,9 +699,15 @@ impl Shared {
             // The raw lane carries the CLI's bytes exactly as the host read them. Nothing is rewritten here:
             // a viewer that must keep its own mouse filters that one control family at its own edge.
             let size = unpack_size(self.geometry.load(Ordering::Acquire));
-            process_screen_or_reset(&mut state.screen, size, &chunk);
-            let cursor = state.screen.screen().cursor_position();
-            let answers = state.queries.answers(&chunk, cursor);
+            let State {
+                screen, queries, ..
+            } = &mut *state;
+            // The control lane answers each of the CLI's questions where it stands: the bytes before a question
+            // reach the screen model first, and the answer observes the cursor they leave.
+            let answers = queries.answer_in_order(&chunk, |bytes| {
+                process_screen_or_reset(screen, size, bytes);
+                screen.screen().cursor_position()
+            });
             self.wrote_at
                 .store(WallMs::now().as_millis(), Ordering::Relaxed);
             // Snapshot creation subscribes while holding this same state lock. Sending before releasing it makes the
