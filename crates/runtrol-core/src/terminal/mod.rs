@@ -12,6 +12,12 @@
 //! Memory is bounded by construction: the output fan-out is a fixed ring of chunks and the screen model has
 //! no scrollback. A viewer that falls behind is told so and re-attached from the screen rather than fed
 //! from an ever-growing buffer.
+//!
+//! Three lanes, one ring (`terminalTransportIntegrity`): the raw lane publishes each chunk the host read,
+//! exactly and first; the passive checkpoint lane (the projector) reads that same ring afterwards to keep
+//! the screen a late viewer starts from; the control lane answers the CLI's terminal questions from that
+//! screen. The projector can neither delay nor change what a viewer receives, and its failure leaves the
+//! CLI and every viewer live.
 
 use std::io::{Read, Write};
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -49,6 +55,9 @@ const TERMINAL_WRITE_DEADLINE: Duration = Duration::from_secs(2);
 /// Reader and writer loops use shallow fixed frames. Two stacks at this size reserve less than the former
 /// platform-default reader stack while keeping blocking terminal handles off the async executor.
 const TERMINAL_IO_STACK_BYTES: usize = 256 * 1024;
+/// How long an attaching viewer waits for the projector before taking an empty, unavailable checkpoint. The
+/// projector applies one chunk in microseconds; only a stalled screen model reaches this.
+const CHECKPOINT_WAIT: Duration = Duration::from_millis(250);
 /// How often the exit of the hosted CLI is checked.
 const EXIT_POLL: Duration = Duration::from_millis(100);
 /// How long after the exit the terminal is kept so its last frame can drain (measured on Windows: the
@@ -118,14 +127,29 @@ pub enum TerminalError {
     Runtime(String),
 }
 
+/// One chunk the CLI wrote, exactly as the host read it, with its place in the terminal's output order.
+#[derive(Debug, Clone)]
+pub struct OutputChunk {
+    /// One-based, monotonic per terminal. The checkpoint a viewer attaches from is the screen after some
+    /// sequence `n`; its live chunks begin at `n + 1`.
+    pub sequence: u64,
+    /// The bytes, exactly as the host read them.
+    pub bytes: Bytes,
+}
+
 /// What a viewer gets when it attaches: the screen as it is now, then everything after.
 #[derive(Debug)]
 pub struct Attachment {
-    /// The bytes that redraw the current screen on a fresh viewer.
+    /// The bytes that redraw the current screen on a fresh viewer: the checkpoint at the sequence just before
+    /// the first live chunk. Empty when `checkpoint_available` is false.
     pub snapshot: Bytes,
+    /// Whether the snapshot is the CLI's current screen. False when the projector was stalled past its
+    /// bounded wait, or reset after a panic or a lag and the CLI has not redrawn since (a resize makes it
+    /// redraw). The viewer still receives every live chunk from the boundary on.
+    pub checkpoint_available: bool,
     /// Every chunk written after the snapshot. `Lagged` means the viewer fell behind the ring; it should
     /// attach again and take a fresh snapshot.
-    pub live: broadcast::Receiver<Bytes>,
+    pub live: broadcast::Receiver<OutputChunk>,
     /// The exit code once the CLI has ended.
     pub exited: watch::Receiver<Option<i32>>,
 }
@@ -198,15 +222,20 @@ impl Child {
 
 struct Shared {
     child: Child,
-    /// The screen model and output-side carries share one lock because every output byte touches them.
-    state: Mutex<State>,
-    /// Input framing is independent from output rendering. Touch input briefly reads the screen too.
+    /// The raw lane's one ordering point: the next sequence to publish, held only while a chunk is sent.
+    /// A viewer subscribes under it so its boundary is exact. No projector work ever runs under it.
+    publish: Mutex<u64>,
+    /// The passive checkpoint lane, fed from the same ring as every viewer and never on the raw path.
+    projector: Mutex<Projector>,
+    /// Wakes the projector task when a chunk was published.
+    published: tokio::sync::Notify,
+    /// Input framing is independent from output rendering.
     input: Mutex<input::InputCarry>,
     /// One current terminal operation plus one ordered waiter. Output query answers use the same order lock
     /// but have one separate producer, so public callers cannot crowd them out or create unbounded waiters.
     operations: OperationGate,
     writer: blocking_mpsc::SyncSender<WriteRequest>,
-    output: broadcast::Sender<Bytes>,
+    output: broadcast::Sender<OutputChunk>,
     exited: watch::Sender<Option<i32>>,
     finished: AtomicBool,
     /// When this CLI last wrote anything, in unix milliseconds.
@@ -278,18 +307,93 @@ impl std::fmt::Debug for Shared {
     }
 }
 
-struct State {
+/// The passive checkpoint lane and the terminal control authority, together because a cursor report is
+/// answered from the screen the projector keeps.
+///
+/// It consumes the same ring every viewer reads, after publication, so it can neither delay nor change what a
+/// viewer receives. A panic inside the screen model, or falling a whole ring behind, resets the screen and marks
+/// the checkpoint unavailable; the CLI and every raw viewer stay live. The CLI's next full redraw (a resize
+/// makes one) brings the checkpoint back.
+struct Projector {
     screen: vt100::Parser,
     queries: xterm::QueryCarry,
+    feed: broadcast::Receiver<OutputChunk>,
+    /// A chunk taken from the feed that lies beyond an attaching viewer's boundary; projected next.
+    pending: Option<OutputChunk>,
+    /// The sequence the screen reflects.
+    processed: u64,
+    available: bool,
 }
 
-impl std::fmt::Debug for State {
+impl std::fmt::Debug for Projector {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let (rows, cols) = self.screen.screen().size();
-        f.debug_struct("State")
+        f.debug_struct("Projector")
             .field("rows", &rows)
             .field("cols", &cols)
+            .field("processed", &self.processed)
+            .field("available", &self.available)
             .finish_non_exhaustive()
+    }
+}
+
+impl Projector {
+    /// Apply one chunk: the screen first, the CLI's questions answered where they stand. The answers owed.
+    fn project(&mut self, size: PtySize, chunk: &OutputChunk) -> Vec<u8> {
+        let Self {
+            screen,
+            queries,
+            available,
+            ..
+        } = self;
+        let answers = queries.answer_in_order(&chunk.bytes, |bytes| {
+            if !process_screen_or_reset(screen, size, bytes) {
+                *available = false;
+            }
+            screen.screen().cursor_position()
+        });
+        self.processed = chunk.sequence;
+        answers
+    }
+
+    /// The next chunk to project, if one is waiting: the one an attach set aside, else the feed's next.
+    fn next_chunk(&mut self, size: PtySize) -> Option<OutputChunk> {
+        if let Some(chunk) = self.pending.take() {
+            return Some(chunk);
+        }
+        loop {
+            match self.feed.try_recv() {
+                Ok(chunk) => return Some(chunk),
+                Err(broadcast::error::TryRecvError::Lagged(_)) => {
+                    // A whole ring went by unprojected: this screen no longer describes the CLI's. It restarts
+                    // empty and untrusted; the raw viewers never waited for it.
+                    self.screen = new_screen(size);
+                    self.queries = xterm::QueryCarry::default();
+                    self.available = false;
+                }
+                Err(
+                    broadcast::error::TryRecvError::Empty | broadcast::error::TryRecvError::Closed,
+                ) => {
+                    return None;
+                }
+            }
+        }
+    }
+
+    /// Bring the screen exactly to the state after sequence `boundary - 1`, leaving later chunks for the task.
+    fn project_before(&mut self, size: PtySize, boundary: u64) -> Vec<u8> {
+        let mut answers = Vec::new();
+        while self.processed + 1 < boundary {
+            let Some(chunk) = self.next_chunk(size) else {
+                break;
+            };
+            if chunk.sequence >= boundary {
+                self.pending = Some(chunk);
+                break;
+            }
+            answers.extend(self.project(size, &chunk));
+        }
+        answers
     }
 }
 
@@ -343,10 +447,16 @@ impl Terminal {
         let (exited, _) = watch::channel(None);
         let shared = Arc::new(Shared {
             child,
-            state: Mutex::new(State {
+            publish: Mutex::new(1),
+            projector: Mutex::new(Projector {
                 screen: vt100::Parser::new(size.rows, size.cols, 0),
                 queries: xterm::QueryCarry::default(),
+                feed: output.subscribe(),
+                pending: None,
+                processed: 0,
+                available: true,
             }),
+            published: tokio::sync::Notify::new(),
             input: Mutex::new(input::InputCarry::default()),
             operations: OperationGate::default(),
             writer,
@@ -368,6 +478,8 @@ impl Terminal {
                 host.take_output(chunk).await;
             }
         });
+        let projector = Arc::clone(&shared);
+        handle.spawn(async move { projector.project_forever().await });
         let watcher = Arc::clone(&shared);
         handle.spawn(async move { watcher.watch_exit().await });
         Ok(Self { shared })
@@ -383,14 +495,41 @@ impl Terminal {
     ///
     /// Nothing is added to the screen: the host never switches mouse reporting on toward a viewer, whose
     /// own terminal keeps its selection and wheel (2026-08-29).
+    ///
+    /// Atomic at one sequence: the checkpoint is the screen after sequence `n` and the live receiver begins at
+    /// `n + 1`, whatever the projector had reached when the viewer arrived. A projector that cannot be reached
+    /// within [`CHECKPOINT_WAIT`] (stalled inside the screen model) yields an empty, unavailable checkpoint
+    /// with the live receiver still exact: the viewer sees everything from its boundary on.
     pub async fn attach(&self) -> Attachment {
-        let mut state = self.shared.state.lock().await;
-        let size = unpack_size(self.shared.geometry.load(Ordering::Acquire));
-        let snapshot = screen_snapshot_or_reset(&mut state.screen, size);
+        let shared = &self.shared;
+        let size = unpack_size(shared.geometry.load(Ordering::Acquire));
+        let exited = shared.exited.subscribe();
+        let Ok(mut projector) =
+            tokio::time::timeout(CHECKPOINT_WAIT, shared.projector.lock()).await
+        else {
+            let (live, _) = shared.subscribe().await;
+            return Attachment {
+                snapshot: Bytes::new(),
+                checkpoint_available: false,
+                live,
+                exited,
+            };
+        };
+        let (live, boundary) = shared.subscribe().await;
+        let answers = projector.project_before(size, boundary);
+        let checkpoint_available = projector.available && projector.processed + 1 == boundary;
+        let snapshot = if checkpoint_available {
+            screen_snapshot_or_reset(&mut projector, size)
+        } else {
+            Vec::new()
+        };
+        drop(projector);
+        shared.answer(answers).await;
         Attachment {
             snapshot: Bytes::from(snapshot),
-            live: self.shared.output.subscribe(),
-            exited: self.shared.exited.subscribe(),
+            checkpoint_available,
+            live,
+            exited,
         }
     }
 
@@ -479,11 +618,12 @@ impl Terminal {
     /// How many viewers are attached right now.
     ///
     /// Every attach subscribes to the output fan-out and every viewer that goes away drops its receiver, so
-    /// the fan-out's receiver count is exactly the number of windows and phones watching this terminal. A
-    /// draining generation reads it to decide it may close a conversation nobody is looking at.
+    /// the fan-out's receiver count, less the projector's own receiver, is exactly the number of windows and
+    /// phones watching this terminal. A draining generation reads it to decide it may close a conversation
+    /// nobody is looking at.
     #[must_use]
     pub fn viewer_count(&self) -> usize {
-        self.shared.output.receiver_count()
+        self.shared.output.receiver_count().saturating_sub(1)
     }
 }
 
@@ -512,7 +652,12 @@ impl TerminalOperation<'_> {
     pub async fn resize(&mut self, size: PtySize) -> Result<(), TerminalError> {
         let size = bounded_size(size);
         self.shared.child.resize(size)?;
-        rebuild_screen_for_resize(&mut self.shared.state.lock().await.screen, size);
+        {
+            let mut projector = self.shared.projector.lock().await;
+            rebuild_screen_for_resize(&mut projector.screen, size);
+            // A TUI redraws its whole screen for a new size, so the rebuilt projection is current again.
+            projector.available = true;
+        }
         self.shared
             .geometry
             .store(pack_size(size), Ordering::Release);
@@ -580,10 +725,11 @@ fn rebuild_screen_for_resize(screen: &mut vt100::Parser, size: PtySize) {
     *screen = replacement;
 }
 
-fn process_screen_or_reset(screen: &mut vt100::Parser, size: PtySize, bytes: &[u8]) {
+/// Whether the screen model took the bytes without a contained panic.
+fn process_screen_or_reset(screen: &mut vt100::Parser, size: PtySize, bytes: &[u8]) -> bool {
     mutate_screen_or_reset(screen, size, "output", |screen| {
         screen.process(bytes);
-    });
+    })
 }
 
 fn mutate_screen_or_reset(
@@ -601,13 +747,16 @@ fn mutate_screen_or_reset(
     }
 }
 
-fn screen_snapshot_or_reset(screen: &mut vt100::Parser, size: PtySize) -> Vec<u8> {
-    if let Ok(snapshot) = catch_unwind(AssertUnwindSafe(|| screen.screen().state_formatted())) {
+fn screen_snapshot_or_reset(projector: &mut Projector, size: PtySize) -> Vec<u8> {
+    if let Ok(snapshot) = catch_unwind(AssertUnwindSafe(|| {
+        projector.screen.screen().state_formatted()
+    })) {
         snapshot
     } else {
         report_screen_reset("snapshot");
-        *screen = new_screen(size);
-        screen.screen().state_formatted()
+        projector.screen = new_screen(size);
+        projector.available = false;
+        Vec::new()
     }
 }
 
@@ -666,35 +815,63 @@ impl Shared {
         std::io::Error::new(std::io::ErrorKind::TimedOut, message)
     }
 
-    /// One chunk the CLI wrote: into the screen, answered if it asked anything, and out to every viewer.
+    /// One chunk the CLI wrote, out to every viewer and the projector alike, exactly as the host read it.
+    ///
+    /// The raw lane: a sequence number, one send into the shared ring, a wake for the projector. Nothing is
+    /// rewritten and nothing waits for the screen model; a viewer that must keep its own mouse filters that one
+    /// control family at its own edge.
     async fn take_output(&self, chunk: Bytes) {
-        let answers = {
-            let mut state = self.state.lock().await;
-            // The raw lane carries the CLI's bytes exactly as the host read them. Nothing is rewritten here:
-            // a viewer that must keep its own mouse filters that one control family at its own edge.
-            let size = unpack_size(self.geometry.load(Ordering::Acquire));
-            let State {
-                screen, queries, ..
-            } = &mut *state;
-            // The control lane answers each of the CLI's questions where it stands: the bytes before a question
-            // reach the screen model first, and the answer observes the cursor they leave.
-            let answers = queries.answer_in_order(&chunk, |bytes| {
-                process_screen_or_reset(screen, size, bytes);
-                screen.screen().cursor_position()
-            });
-            self.wrote_at
-                .store(WallMs::now().as_millis(), Ordering::Relaxed);
-            // Snapshot creation subscribes while holding this same state lock. Sending before releasing it makes the
-            // boundary exact: an attaching viewer either snapshots this chunk and subscribes after it, or snapshots
-            // the prior screen and receives the chunk live. It can never receive the same bytes through both paths.
-            drop(self.output.send(chunk));
-            answers
-        };
-        if !answers.is_empty() {
-            // A failed answer means the child is gone; its exit is reported by the watcher, which is the
-            // one place that state belongs. ok: nothing downstream waits on this write.
-            drop(self.write_query_answer(Bytes::from(answers)).await);
+        {
+            let mut next = self.publish.lock().await;
+            let sequence = *next;
+            *next = sequence.saturating_add(1);
+            // ok: the projector always holds one receiver, so a send fails only after this terminal is gone.
+            drop(self.output.send(OutputChunk {
+                sequence,
+                bytes: chunk,
+            }));
         }
+        self.wrote_at
+            .store(WallMs::now().as_millis(), Ordering::Relaxed);
+        self.published.notify_one();
+    }
+
+    /// A viewer's receiver and its boundary: the sequence of the first chunk it will receive. Taken under the
+    /// publication lock so no chunk can fall between the two.
+    async fn subscribe(&self) -> (broadcast::Receiver<OutputChunk>, u64) {
+        let next = self.publish.lock().await;
+        (self.output.subscribe(), *next)
+    }
+
+    /// The projector task: every published chunk into the screen, in order, off the raw path.
+    async fn project_forever(&self) {
+        loop {
+            let answers = {
+                let mut projector = self.projector.lock().await;
+                let size = unpack_size(self.geometry.load(Ordering::Acquire));
+                projector
+                    .next_chunk(size)
+                    .map(|chunk| projector.project(size, &chunk))
+            };
+            if let Some(answers) = answers {
+                self.answer(answers).await;
+            } else {
+                if self.finished.load(Ordering::Acquire) {
+                    return;
+                }
+                self.published.notified().await;
+            }
+        }
+    }
+
+    /// The terminal control authority's replies, into the CLI.
+    async fn answer(&self, answers: Vec<u8>) {
+        if answers.is_empty() {
+            return;
+        }
+        // A failed answer means the child is gone; its exit is reported by the watcher, which is the one
+        // place that state belongs. ok: nothing downstream waits on this write.
+        drop(self.write_query_answer(Bytes::from(answers)).await);
     }
 
     /// Watch the CLI's exit; on exit, let the last frame drain, then release the terminal.
@@ -726,6 +903,8 @@ impl Shared {
     fn finish(&self) {
         if !self.finished.swap(true, Ordering::SeqCst) {
             self.child.finish();
+            // The projector task ends when it next wakes and finds nothing to project.
+            self.published.notify_one();
         }
     }
 }
@@ -906,7 +1085,8 @@ mod tests {
         // The sync queue owns the active payload rather than another copy, so only its slot metadata is added.
         let writer_payloads = (TERMINAL_OPERATION_ADMISSIONS + 1) * MAX_WRITE_BYTES;
         let writer_state = writer_payloads + WRITE_QUEUE * std::mem::size_of::<WriteRequest>();
-        let fixed_state = std::mem::size_of::<State>() + CHUNK_BYTES;
+        // The projector reads the shared ring through its own receiver: slot indexes, no payload of its own.
+        let fixed_state = std::mem::size_of::<Projector>() + CHUNK_BYTES;
         let structural_maximum =
             screen_cells + screen_rows + chunk_payloads + chunk_slots + writer_state + fixed_state;
         assert!(
@@ -1016,7 +1196,7 @@ mod tests {
                 .await
                 .expect("the viewer sees every fixture chunk in time")
                 .expect("the ring stays ahead of one viewer");
-            if script.get(matched).copied() == Some(received.as_ref()) {
+            if script.get(matched).copied() == Some(received.bytes.as_ref()) {
                 matched += 1;
             }
         }
@@ -1058,7 +1238,7 @@ mod tests {
         assert_eq!(terminal.exit(), Some(0));
         let mut seen = Vec::new();
         while let Ok(chunk) = early.live.try_recv() {
-            seen.extend_from_slice(&chunk);
+            seen.extend_from_slice(&chunk.bytes);
         }
         let text = String::from_utf8_lossy(&seen);
         assert!(
@@ -1074,6 +1254,178 @@ mod tests {
         assert!(
             !snapshot.contains("\x1b[?1000h"),
             "no mouse reporting is ever switched on toward a viewer: {snapshot:?}"
+        );
+    }
+
+    /// A hosted shell that reads one line and answers `reply-<line>`.
+    fn echo_fixture() -> (Terminal, &'static str) {
+        let (shell, arguments, line_end) = if cfg!(windows) {
+            (
+                "cmd",
+                vec![
+                    "/q".to_owned(),
+                    "/d".to_owned(),
+                    "/v:on".to_owned(),
+                    "/c".to_owned(),
+                    "set /p first=& echo reply-!first!".to_owned(),
+                ],
+                "\r\n",
+            )
+        } else {
+            (
+                "sh",
+                vec![
+                    "-c".to_owned(),
+                    "IFS= read -r first; printf 'reply-%s\\n' \"$first\"".to_owned(),
+                ],
+                "\n",
+            )
+        };
+        let program = runtrol_childproc::resolve(shell).expect("the platform shell resolves");
+        let cwd = AbsPath::canonicalize(std::env::temp_dir().to_str().expect("utf-8 temp dir"))
+            .expect("the temp dir is absolute");
+        let terminal = Terminal::open(&TerminalLaunch {
+            program: &program,
+            arguments,
+            cwd: &cwd,
+            env: Vec::new(),
+            env_unset: Vec::new(),
+            size: PtySize { cols: 80, rows: 24 },
+        })
+        .expect("the shell opens on a hosted terminal");
+        (terminal, line_end)
+    }
+
+    /// Everything the viewer receives until `needle` has appeared, or the deadline.
+    async fn live_until(viewer: &mut Attachment, needle: &str, deadline: Duration) -> String {
+        let mut seen = Vec::new();
+        let until = std::time::Instant::now() + deadline;
+        while !String::from_utf8_lossy(&seen).contains(needle) {
+            let remaining = until.saturating_duration_since(std::time::Instant::now());
+            let Ok(Ok(chunk)) = tokio::time::timeout(remaining, viewer.live.recv()).await else {
+                break;
+            };
+            seen.extend_from_slice(&chunk.bytes);
+        }
+        String::from_utf8_lossy(&seen).into_owned()
+    }
+
+    /// Attach until the checkpoint satisfies `accept`, within the deadline.
+    async fn checkpoint_until(
+        terminal: &Terminal,
+        deadline: Duration,
+        accept: impl Fn(&Attachment) -> bool,
+    ) -> Attachment {
+        let until = std::time::Instant::now() + deadline;
+        loop {
+            let attachment = terminal.attach().await;
+            if accept(&attachment) || std::time::Instant::now() >= until {
+                return attachment;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn a_stalled_projector_delays_no_raw_viewer_and_no_input() {
+        let (terminal, line_end) = echo_fixture();
+        let mut viewer = terminal.attach().await;
+        // The projector is held: the projector task and every checkpoint wait here, nothing else does.
+        let stalled = terminal.shared.projector.lock().await;
+        terminal
+            .shared
+            .take_output(Bytes::from_static(b"raw-while-stalled"))
+            .await;
+        let chunk = tokio::time::timeout(Duration::from_secs(1), viewer.live.recv())
+            .await
+            .expect("a raw viewer never waits for the projector")
+            .expect("the ring stays ahead of one viewer");
+        assert_eq!(chunk.bytes.as_ref(), b"raw-while-stalled");
+        terminal
+            .input(format!("hello{line_end}").as_bytes())
+            .await
+            .expect("input never waits for the projector");
+        let echoed = live_until(&mut viewer, "reply-hello", Duration::from_secs(10)).await;
+        assert!(
+            echoed.contains("reply-hello"),
+            "the CLI answered through the raw lane while the projector stood still: {echoed:?}"
+        );
+        let asked = std::time::Instant::now();
+        let late = terminal.attach().await;
+        assert!(
+            asked.elapsed() < CHECKPOINT_WAIT * 4,
+            "a late viewer waits a bounded time for a stalled projector"
+        );
+        assert!(
+            !late.checkpoint_available && late.snapshot.is_empty(),
+            "a stalled projector yields an empty checkpoint that says so"
+        );
+        drop(stalled);
+        let recovered = checkpoint_until(&terminal, Duration::from_secs(5), |attachment| {
+            attachment.checkpoint_available
+                && String::from_utf8_lossy(&attachment.snapshot).contains("reply-hello")
+        })
+        .await;
+        assert!(
+            recovered.checkpoint_available,
+            "once released, the projector catches up on the ring it never delayed"
+        );
+        assert!(String::from_utf8_lossy(&recovered.snapshot).contains("reply-hello"));
+    }
+
+    #[tokio::test]
+    async fn a_faulting_projector_leaves_the_cli_and_raw_viewers_live() {
+        let (terminal, line_end) = echo_fixture();
+        let mut viewer = terminal.attach().await;
+        // Put the screen model where `vt100` 0.16.2 panics on the next erase (the upstream wide-character bug
+        // the resize test contains), so the next chunk is a real panic inside the projector.
+        {
+            let mut projector = terminal.shared.projector.lock().await;
+            projector.screen = new_screen(PtySize { cols: 4, rows: 2 });
+            projector.screen.process("你".as_bytes());
+            projector.screen.screen_mut().set_size(2, 1);
+        }
+        terminal
+            .shared
+            .take_output(Bytes::from_static(b"\x1b[K"))
+            .await;
+        let chunk = tokio::time::timeout(Duration::from_secs(1), viewer.live.recv())
+            .await
+            .expect("the raw viewer receives the chunk the projector will panic on")
+            .expect("the ring stays ahead of one viewer");
+        assert_eq!(
+            chunk.bytes.as_ref(),
+            b"\x1b[K",
+            "the raw lane carried it unchanged"
+        );
+        let after_fault = checkpoint_until(&terminal, Duration::from_secs(5), |attachment| {
+            !attachment.checkpoint_available
+        })
+        .await;
+        assert!(
+            !after_fault.checkpoint_available && after_fault.snapshot.is_empty(),
+            "the contained panic marks the checkpoint unavailable (vt100 is pinned at 0.16.2; a moved pin needs another contained fault)"
+        );
+        terminal
+            .input(format!("hello{line_end}").as_bytes())
+            .await
+            .expect("the CLI still takes input after the projector panicked");
+        let echoed = live_until(&mut viewer, "reply-hello", Duration::from_secs(10)).await;
+        assert!(
+            echoed.contains("reply-hello"),
+            "the CLI is live and the raw lane still reaches the viewer: {echoed:?}"
+        );
+        terminal
+            .resize(PtySize {
+                cols: 100,
+                rows: 30,
+            })
+            .await
+            .expect("the terminal still resizes");
+        let redrawn = terminal.attach().await;
+        assert!(
+            redrawn.checkpoint_available,
+            "a resize, which makes the CLI redraw, brings the checkpoint back"
         );
     }
 
@@ -1132,7 +1484,7 @@ mod tests {
                 tokio::select! {
                     received = attachment.live.recv() => {
                         if let Ok(chunk) = received {
-                            output.extend_from_slice(&chunk);
+                            output.extend_from_slice(&chunk.bytes);
                             if String::from_utf8_lossy(&output).contains("first-second") {
                                 break;
                             }

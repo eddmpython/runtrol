@@ -37,6 +37,10 @@ and refactoring that no user can observe do not belong here.
 - Pressing Escape alone in a conversation tab now reaches the provider at once. The Core's input boundary used to
   hold a lone Escape as an unfinished sequence and deliver it glued to the next key, which a CLI reads as an Alt
   chord. A mouse report a viewer sends is now forwarded to the provider exactly as written instead of dropped.
+- The screen model that gives a late viewer its first picture no longer sits on the provider's output path. Every
+  viewer receives each chunk the moment the host read it, a stalled or panicking screen model delays nothing and
+  changes nothing for the provider or a viewer, and a late viewer whose checkpoint could not be trusted is told so
+  instead of being handed a stale screen.
 - A cursor position report now names the cursor where the provider asked, not where the host's read happened to
   end: the bytes before a question reach the screen model first and the answer observes that cursor. A question
   split across two reads is answered exactly once, when its last byte arrives, and only the unfinished question

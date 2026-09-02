@@ -447,13 +447,13 @@ pub(super) async fn relay_terminal(
                     continue;
                 };
                 while let Ok(chunk) = view.attachment.live.try_recv() {
-                    if chunk.len() > runtrol_runtime_protocol::MAX_TERMINAL_OUTPUT_BYTES {
+                    if chunk.bytes.len() > runtrol_runtime_protocol::MAX_TERMINAL_OUTPUT_BYTES {
                         return RelayOutcome::CloseConnection;
                     }
                     let notification = TerminalOutputNotification {
                         view_id: view.opened.view_id.clone(),
                         sequence,
-                        bytes_base64: base64ct::Base64::encode_string(&chunk),
+                        bytes_base64: base64ct::Base64::encode_string(&chunk.bytes),
                     };
                     sequence = sequence.saturating_add(1);
                     if send_notification(connection, RuntimeMethod::TerminalsOutput, &notification)
@@ -494,13 +494,13 @@ pub(super) async fn relay_terminal(
             output = view.attachment.live.recv() => {
                 match output {
                     Ok(chunk) => {
-                        if chunk.len() > runtrol_runtime_protocol::MAX_TERMINAL_OUTPUT_BYTES {
+                        if chunk.bytes.len() > runtrol_runtime_protocol::MAX_TERMINAL_OUTPUT_BYTES {
                             return RelayOutcome::CloseConnection;
                         }
                         let notification = TerminalOutputNotification {
                             view_id: view.opened.view_id.clone(),
                             sequence,
-                            bytes_base64: base64ct::Base64::encode_string(&chunk),
+                            bytes_base64: base64ct::Base64::encode_string(&chunk.bytes),
                         };
                         sequence = sequence.saturating_add(1);
                         if send_notification(connection, RuntimeMethod::TerminalsOutput, &notification)

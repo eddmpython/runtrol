@@ -29,8 +29,13 @@ transport or Studio navigation.
   terminal admission to the Core hot-process ceiling and proves the complete-set memory bound. Viewers reuse that
   fan-out and add no payload ring of their own; control records are bounded separately.
 - Runtime answers terminal capability and cursor-position queries once at the host. Viewers do not race to answer.
-- Snapshot creation and live fan-out share one output-state critical section. A viewer receives a chunk in its
-  snapshot or subscribes before that chunk is published, never both and never neither.
+- The raw lane publishes each chunk the host read, exactly and first, under one sequence. The passive checkpoint
+  projector reads that same ring afterwards and can neither delay nor change what a viewer receives; a panic
+  inside it, or falling a whole ring behind, resets it and marks the checkpoint unavailable while the provider and
+  every viewer stay live (the provider's next full redraw, which a resize makes, brings it back). Attachment is
+  atomic at one sequence: the checkpoint is the screen after sequence `n` and live output begins at `n + 1`, never
+  both and never neither; a projector that cannot be reached within a bounded wait yields an empty checkpoint
+  that says so, with the live stream still exact from the boundary on.
 - A viewer keeps its own terminal's selection, focus, and scroll behavior. Runtime forwards the provider's bytes
   exactly as the host read them, mouse-mode toggles included, never switches mouse reporting on toward a viewer,
   and turns no gesture into keys; what a viewer types, a mouse report included, reaches the provider exactly as

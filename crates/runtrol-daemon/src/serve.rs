@@ -3095,7 +3095,7 @@ async fn relay_local_broker(
                     Ok(bytes) => {
                         if write(
                             connection,
-                            &Response::TerminalOutput { bytes: bytes.to_vec().into() },
+                            &Response::TerminalOutput { bytes: bytes.bytes.to_vec().into() },
                         )
                         .await
                         .is_err()
