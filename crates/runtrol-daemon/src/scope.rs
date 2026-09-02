@@ -398,6 +398,7 @@ mod tests {
                 workspace: "/work".into(),
                 cols: 120,
                 rows: 40,
+                shell_ancestors: Vec::new(),
             },
             Request::TerminalAttach {
                 terminal: runtrol_provider::TerminalId::now(),

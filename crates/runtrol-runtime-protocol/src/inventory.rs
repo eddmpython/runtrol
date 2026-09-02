@@ -126,6 +126,10 @@ pub struct ProviderDescriptor {
     pub icon: Option<String>,
     /// Fast cached installation evidence. Listing does not start the provider.
     pub installation: InstallationObservation,
+    /// The command names this service answers to on a shell's search path, as its manifest declares them. A window
+    /// uses them to recognise a provider started in an ordinary terminal; nothing here runs them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub command_names: Vec<String>,
     /// This service's own commands for making itself usable, when it declares any.
     ///
     /// Absent rather than empty when nothing is declared, so a client shows nothing instead of an action

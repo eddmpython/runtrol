@@ -1627,6 +1627,13 @@
           ],
           "description": "Where the operator's account with this service stands, by the service's own status surface.\n\nAbsent until Runtime has asked the service once; a surface then says \"not checked yet\" rather than\ninventing a green light. Present for every installed service afterwards, including one whose\nservice publishes no way to ask, which the report says in so many words."
         },
+        "commandNames": {
+          "description": "The command names this service answers to on a shell's search path, as its manifest declares them. A window\nuses them to recognise a provider started in an ordinary terminal; nothing here runs them.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "displayName": {
           "description": "Provider or manifest supplied label for presentation only.",
           "type": "string"
@@ -3183,6 +3190,21 @@
           "type": "string"
         },
         {
+          "const": "windows/mirrorOpen",
+          "description": "A window opens a mirror of a terminal it observes.",
+          "type": "string"
+        },
+        {
+          "const": "windows/mirrorOutput",
+          "description": "A window feeds one chunk of an observed execution's raw output.",
+          "type": "string"
+        },
+        {
+          "const": "windows/mirrorEnd",
+          "description": "The observed execution ended or the window stops mirroring.",
+          "type": "string"
+        },
+        {
           "const": "approvals/listPending",
           "description": "Read pending structured provider approvals for one controlled session.",
           "type": "string"
@@ -4166,6 +4188,25 @@
           "minimum": 0,
           "type": "integer"
         },
+        "origin": {
+          "$ref": "#/$defs/TerminalOrigin",
+          "default": "owned",
+          "description": "Who owns the process behind this terminal and how the Runtime reaches it."
+        },
+        "ownerTerminalKey": {
+          "description": "For an observed mirror: the owner window's key for that terminal in the window registry.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ownerWindowSessionId": {
+          "description": "For an observed mirror: the VS Code window that owns the terminal, by its registered session identity.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "processState": {
           "$ref": "#/$defs/TerminalProcessState",
           "description": "Structural live process state."
@@ -4464,6 +4505,31 @@
             "adoptionToken"
           ],
           "type": "object"
+        }
+      ]
+    },
+    "TerminalOrigin": {
+      "description": "How the Runtime reaches the process behind a terminal (`docs/terminalSurface.md`, live capture ladder).",
+      "oneOf": [
+        {
+          "const": "owned",
+          "description": "The Runtime started the provider on its own pseudo terminal: the fully supervised tier.",
+          "type": "string"
+        },
+        {
+          "const": "consoleMirror",
+          "description": "The Runtime joined a Windows console some other process owns through its helper.",
+          "type": "string"
+        },
+        {
+          "const": "officialAttach",
+          "description": "The Runtime started only the provider's official attachment client; the owner is elsewhere.",
+          "type": "string"
+        },
+        {
+          "const": "observedMirror",
+          "description": "A VS Code window observes the terminal through shell integration and feeds its raw execution output here;\ninput reaches it only through that window and only with explicit authority.",
+          "type": "string"
         }
       ]
     },
@@ -4958,6 +5024,109 @@
       ],
       "type": "object"
     },
+    "WindowMirrorEndParams": {
+      "additionalProperties": false,
+      "description": "The observed execution ended, or the window stops mirroring it.",
+      "properties": {
+        "exitCode": {
+          "description": "The exit code shell integration reported, when it reported one.",
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "terminalId": {
+          "$ref": "#/$defs/RuntimeTerminalId",
+          "description": "The mirror."
+        }
+      },
+      "required": [
+        "terminalId"
+      ],
+      "type": "object"
+    },
+    "WindowMirrorOpenParams": {
+      "additionalProperties": false,
+      "description": "A window opens a mirror of a terminal it observes: from now on it feeds that terminal's raw execution output\nhere, and the terminal appears in the terminal index as an observed mirror other windows may attach to.",
+      "properties": {
+        "commandLine": {
+          "description": "The command line as shell integration reported it.",
+          "type": "string"
+        },
+        "cwd": {
+          "description": "The shell's working directory when shell integration reported one; the mirror's folder.",
+          "type": "string"
+        },
+        "executionId": {
+          "description": "The command generation being mirrored.",
+          "type": "string"
+        },
+        "geometry": {
+          "$ref": "#/$defs/TerminalGeometry",
+          "description": "The observed terminal's geometry, so a viewer renders the same width and height."
+        },
+        "processId": {
+          "description": "The shell process id of the observed terminal, when VS Code resolved it.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "providerId": {
+          "$ref": "#/$defs/ProviderId",
+          "description": "The provider whose command the window recognised, from the inventory's command names."
+        },
+        "terminalKey": {
+          "description": "The window's key for the terminal, as published to the registry.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "terminalKey",
+        "executionId",
+        "providerId",
+        "commandLine",
+        "cwd",
+        "geometry"
+      ],
+      "type": "object"
+    },
+    "WindowMirrorOpened": {
+      "additionalProperties": false,
+      "description": "The mirror the Runtime opened.",
+      "properties": {
+        "terminalId": {
+          "$ref": "#/$defs/RuntimeTerminalId",
+          "description": "The terminal the mirror appears as in the terminal index."
+        }
+      },
+      "required": [
+        "terminalId"
+      ],
+      "type": "object"
+    },
+    "WindowMirrorOutputParams": {
+      "additionalProperties": false,
+      "description": "One chunk of the observed execution's raw output, exactly as `execution.read()` yielded it.",
+      "properties": {
+        "bytesBase64": {
+          "description": "Base64 of the exact bytes.",
+          "type": "string"
+        },
+        "terminalId": {
+          "$ref": "#/$defs/RuntimeTerminalId",
+          "description": "The mirror."
+        }
+      },
+      "required": [
+        "terminalId",
+        "bytesBase64"
+      ],
+      "type": "object"
+    },
     "WindowRegisterParams": {
       "additionalProperties": false,
       "description": "A window announcing itself: once per Extension Host activation, on the connection it keeps open.",
@@ -5294,6 +5463,18 @@
     "window_index_ended": {
       "$ref": "#/$defs/WindowIndexEndedNotification"
     },
+    "window_mirror_end": {
+      "$ref": "#/$defs/WindowMirrorEndParams"
+    },
+    "window_mirror_open": {
+      "$ref": "#/$defs/WindowMirrorOpenParams"
+    },
+    "window_mirror_opened": {
+      "$ref": "#/$defs/WindowMirrorOpened"
+    },
+    "window_mirror_output": {
+      "$ref": "#/$defs/WindowMirrorOutputParams"
+    },
     "window_register": {
       "$ref": "#/$defs/WindowRegisterParams"
     },
@@ -5396,7 +5577,11 @@
     "watch_window_index",
     "watch_window_index_result",
     "window_index_changed",
-    "window_index_ended"
+    "window_index_ended",
+    "window_mirror_open",
+    "window_mirror_opened",
+    "window_mirror_output",
+    "window_mirror_end"
   ],
   "title": "PublicProtocolSchema",
   "type": "object",

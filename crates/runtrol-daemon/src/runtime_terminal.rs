@@ -253,6 +253,10 @@ fn terminal_lane_failure(error: &TerminalError) -> TerminalRuntimeFailure {
                 "the terminal operation could not enter its ordered lane",
             )
         }
+        TerminalError::NotFed | TerminalError::Feed(_) => TerminalRuntimeFailure::new(
+            RuntimeErrorKind::InvalidRequest,
+            "the terminal operation belongs to an observed mirror's feeding window",
+        ),
     }
 }
 
@@ -632,6 +636,12 @@ impl TerminalRuntimeAdapter {
                     TerminalRuntimeFailure::new(
                         RuntimeErrorKind::ProviderUnavailable,
                         "the provider terminal could not be opened",
+                    )
+                }
+                TerminalOpenError::AlreadyBrokered | TerminalOpenError::NotFedByCaller => {
+                    TerminalRuntimeFailure::new(
+                        RuntimeErrorKind::Internal,
+                        "an observed-mirror refusal reached a terminal open",
                     )
                 }
             }
@@ -1436,6 +1446,7 @@ fn descriptor(
     control: ControlView,
 ) -> Result<TerminalDescriptor, TerminalRuntimeFailure> {
     let size = hosted.terminal.size();
+    let (origin, owner) = hosted.origin.projection();
     Ok(TerminalDescriptor {
         terminal_id: hosted.id.to_string().parse().map_err(|_| {
             TerminalRuntimeFailure::new(
@@ -1460,6 +1471,9 @@ fn descriptor(
         },
         control_generation: control.generation,
         control_held: control.held,
+        origin,
+        owner_window_session_id: owner.map(|owner| owner.window_session_id.clone()),
+        owner_terminal_key: owner.map(|owner| owner.terminal_key.clone()),
         memory_bytes: if hosted.stopping {
             None
         } else {

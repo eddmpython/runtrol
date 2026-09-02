@@ -136,6 +136,10 @@ export function terminalIdentity(runtimeGeneration: string, terminalId: string):
   return `${runtimeGeneration}:${terminalId}`;
 }
 
+/// The geometry a view starts with before its panel reports one; an observed mirror keeps it, since its owner
+/// window's real size is not in the stable VS Code API.
+export const DEFAULT_VIEW_GEOMETRY: { readonly columns: number; readonly rows: number } = { columns: 120, rows: 40 };
+
 export class RuntimeTerminal implements vscode.Pseudoterminal {
   private readonly writeEmitter = new Emitter<string>();
   private readonly closeEmitter = new Emitter<number | void>();
@@ -155,8 +159,8 @@ export class RuntimeTerminal implements vscode.Pseudoterminal {
   private mouseModes = new MouseModeFilter();
   private closed = false;
   private commandTail = Promise.resolve();
-  private dimensions = { columns: 120, rows: 40 };
-  private lastResize = { columns: 120, rows: 40 };
+  private dimensions = { ...DEFAULT_VIEW_GEOMETRY };
+  private lastResize = { ...DEFAULT_VIEW_GEOMETRY };
   private resizeScheduled = false;
   /// Input typed before the connection is up is kept and sent once it is: a person who starts typing while
   /// the tab opens must not lose the first keys.

@@ -175,6 +175,7 @@ where
             workspace: workspace.into(),
             cols: initial_size.0,
             rows: initial_size.1,
+            shell_ancestors: invoking_ancestors(),
         },
     )
     .await?;
@@ -313,6 +314,16 @@ fn response_kind(response: &Response) -> &'static str {
         Response::TerminalExited { .. } => "a terminal exit before open acknowledgement",
         Response::Failed(_) => "a refusal",
         _ => "a non-terminal response",
+    }
+}
+
+/// The processes above this bridge, nearest first: the shell that ran the provider command is among them, so
+/// the Runtime can tell a window observing that shell that the command is brokered here. Empty when the platform
+/// cannot say; the terminal opens either way.
+fn invoking_ancestors() -> Vec<u32> {
+    match runtrol_childproc::ProcessTree::capture() {
+        Ok(tree) => tree.ancestors_of(std::process::id()),
+        Err(_unreadable) => Vec::new(),
     }
 }
 

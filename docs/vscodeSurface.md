@@ -157,6 +157,27 @@ the moment its connection ends, so a restarted host replaces its window's entry 
 generation and no duplicate. `tooling/window-registry-eye.mjs` proves this on two isolated windows and a third,
 development-mode window restarted by keys.
 
+### Observed mirror
+
+A provider started in an ordinary terminal of a Studio window is mirrored by that window (`windowRegistry.ts`,
+`observedMirrorState.ts`). When shell integration reports a command whose program word is one of the inventory's
+provider command names (`ProviderDescriptor.commandNames`, the manifest's own `bin.names`; the word is read past a
+PowerShell call operator, unquoted, as a file name without a launcher extension), the window takes the execution's
+output stream synchronously inside the start event (measured 2026-09-02: taken after any await it yields nothing),
+opens a mirror through `windows/mirrorOpen`, feeds every captured chunk in order through `windows/mirrorOutput` (64
+KiB per call, base64 of the exact UTF-8 bytes VS Code delivered), and ends it through `windows/mirrorEnd` with the
+exit code when the command ends or the terminal closes. The Runtime hosts the mirror as a terminal whose child is
+the feed (`runtrol-core::terminal::fed`): viewers, the raw lane, the checkpoint and the sidebar row apply
+unchanged; the descriptor says `origin: observedMirror` with the owner window's session identity and terminal key;
+input has nowhere to go, so viewer writes are refused and Stop answers that the owner window stops it. A provider
+typed by name is brokered by the transparent shim instead: the shim sends the processes above it (the invoking
+shell is among them, behind the `.cmd` launcher), the Runtime files the brokered terminal under each of them,
+refuses a mirror open for that shell, and retires a mirror that opened first (measured: the mirror opens about 20 ms
+after the command starts and the shim's brokered open retires it within the second), so one command generation
+is one row. A mirror ends with the connection that feeds it. `tooling/observed-mirror-eye.mjs`
+proves this on two isolated windows with the fixture TUI, real Claude and real Codex by absolute path, and Claude by
+name through the shim.
+
 ## Session and workspace contract
 
 - The exact managed-session release load and expected hot-process cardinality for this gate are owned by the

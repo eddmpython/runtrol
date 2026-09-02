@@ -10,6 +10,14 @@ and refactoring that no user can observe do not belong here.
 
 ## [Unreleased]
 
+### Added
+
+- Observed mirrors: a provider started in an ordinary terminal of a Studio window (by absolute path, or by any
+  spelling the transparent shim does not broker) appears as a hosted terminal fed by that window, with its origin
+  and owner window in the descriptor; the shim now reports the processes above it (the invoking shell among them)
+  so a command typed by name stays one row. Public protocol: `windows/mirrorOpen`, `windows/mirrorOutput`, `windows/mirrorEnd`,
+  `TerminalDescriptor.origin` with the owner window fields, and `ProviderDescriptor.commandNames`.
+
 ### Removed
 
 - The project actions and commands that turned Agent Tools on or off, the `tools enable` command, the `consult wire`

@@ -431,6 +431,13 @@ fn build_provider_inventory(composed: &Composed) -> CachedProviderInventory {
                 display_name: provider.manifest.display_name.to_string(),
                 icon: provider.manifest.icon.as_ref().map(ToString::to_string),
                 installation,
+                command_names: provider
+                    .manifest
+                    .bin
+                    .names
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect(),
                 help: help(provider),
                 switchable_modes: provider
                     .manifest

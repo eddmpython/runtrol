@@ -164,3 +164,54 @@ pub struct WindowIndexEndedNotification {
     /// Structural end reason.
     pub reason: WindowIndexEndReason,
 }
+
+/// A window opens a mirror of a terminal it observes: from now on it feeds that terminal's raw execution output
+/// here, and the terminal appears in the terminal index as an observed mirror other windows may attach to.
+#[derive(Clone, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WindowMirrorOpenParams {
+    /// The window's key for the terminal, as published to the registry.
+    pub terminal_key: String,
+    /// The command generation being mirrored.
+    pub execution_id: String,
+    /// The provider whose command the window recognised, from the inventory's command names.
+    pub provider_id: crate::ProviderId,
+    /// The command line as shell integration reported it.
+    pub command_line: String,
+    /// The shell's working directory when shell integration reported one; the mirror's folder.
+    pub cwd: String,
+    /// The shell process id of the observed terminal, when VS Code resolved it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process_id: Option<u32>,
+    /// The observed terminal's geometry, so a viewer renders the same width and height.
+    pub geometry: crate::TerminalGeometry,
+}
+
+/// The mirror the Runtime opened.
+#[derive(Clone, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WindowMirrorOpened {
+    /// The terminal the mirror appears as in the terminal index.
+    pub terminal_id: crate::RuntimeTerminalId,
+}
+
+/// One chunk of the observed execution's raw output, exactly as `execution.read()` yielded it.
+#[derive(Clone, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WindowMirrorOutputParams {
+    /// The mirror.
+    pub terminal_id: crate::RuntimeTerminalId,
+    /// Base64 of the exact bytes.
+    pub bytes_base64: String,
+}
+
+/// The observed execution ended, or the window stops mirroring it.
+#[derive(Clone, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WindowMirrorEndParams {
+    /// The mirror.
+    pub terminal_id: crate::RuntimeTerminalId,
+    /// The exit code shell integration reported, when it reported one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+}

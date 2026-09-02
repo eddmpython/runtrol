@@ -30,6 +30,7 @@
 //!
 //! Each phase prints one JSON object on stdout and exits non-zero with the failure on stderr.
 
+use std::fmt::Write as _;
 use std::io::Write as _;
 use std::path::Path;
 use std::process::ExitCode;
@@ -118,12 +119,12 @@ fn main() -> ExitCode {
             .collect::<Vec<_>>()
             .as_slice()
         {
-            ["enroll", home, runtrol, identity, workspace] => {
+            ["enroll", home, runtrol, identity, workspaces @ ..] if !workspaces.is_empty() => {
                 enroll(
                     Path::new(home),
                     Path::new(runtrol),
                     Path::new(identity),
-                    workspace,
+                    workspaces,
                 )
                 .await
             }
@@ -170,6 +171,9 @@ fn main() -> ExitCode {
             ["screen", home, identity, digest, terminal, settle] => {
                 screen(Path::new(home), Path::new(identity), digest, terminal, settle).await
             }
+            ["bytes", home, identity, digest, terminal, settle] => {
+                live_bytes(Path::new(home), Path::new(identity), digest, terminal, settle).await
+            }
             ["direct-screen", provider, cwd, settle] => direct_screen(provider, cwd, settle, None),
             ["direct-screen", provider, cwd, settle, hex] => {
                 direct_screen(provider, cwd, settle, Some(hex))
@@ -185,6 +189,9 @@ fn main() -> ExitCode {
             }
             ["windows-list", home, identity, digest] => {
                 windows_list(Path::new(home), Path::new(identity), digest).await
+            }
+            ["terminals-list", home, identity, digest] => {
+                terminals_list(Path::new(home), Path::new(identity), digest).await
             }
             ["write-twice", home, identity, digest, terminal, hex] => {
                 write_twice(Path::new(home), Path::new(identity), digest, terminal, hex).await
@@ -306,12 +313,13 @@ fn options_with(stored: &Stored) -> ClientOptions {
     ClientOptions::new(PROBE_NAME, PROBE_VERSION).with_credentials(credentials(stored))
 }
 
-/// Enroll a fresh identity with the current generation and approve it the way Studio approves its own.
+/// Enroll a fresh identity with the current generation and approve it the way Studio approves its own. Several
+/// roots make one grant, the way a window with several folders enrolls.
 async fn enroll(
     home: &Path,
     runtrol: &Path,
     identity_file: &Path,
-    workspace: &str,
+    workspaces: &[&str],
 ) -> Result<String, String> {
     let identity = IntegrationIdentity::generate().map_err(|error| error.to_string())?;
     let generation = current(home)?;
@@ -328,7 +336,10 @@ async fn enroll(
             "handover-probe-instance",
             [7; 32],
             AppScope::ALL.to_vec(),
-            vec![workspace.to_owned()],
+            workspaces
+                .iter()
+                .map(|workspace| (*workspace).to_owned())
+                .collect(),
         ))
         .await
         .map_err(|error| format!("request enrollment: {error}"))?;
@@ -598,6 +609,109 @@ fn settle_of(settle: &str) -> Result<Duration, String> {
         .parse::<u64>()
         .map(Duration::from_millis)
         .map_err(|error| format!("settle ms: {error}"))
+}
+
+/// Every terminal the Runtime lists for this grant, with its origin and owner: what a sidebar row is made of.
+async fn terminals_list(home: &Path, identity_file: &Path, digest: &str) -> Result<String, String> {
+    let stored = read_stored(identity_file)?;
+    let generation = generation(home, digest)?;
+    let mut client = RuntimeClient::connect_to(generation, options_with(&stored))
+        .await
+        .map_err(|error| format!("connect to generation {digest}: {error}"))?;
+    let listed = client
+        .terminals()
+        .list()
+        .await
+        .map_err(|error| format!("list terminals in {digest}: {error}"))?;
+    let terminals: Vec<serde_json::Value> = listed
+        .terminals
+        .iter()
+        .map(|terminal| {
+            serde_json::json!({
+                "terminalId": terminal.terminal_id.as_str(),
+                "providerId": terminal.provider_id.as_str(),
+                "workspace": terminal.workspace,
+                "nativeSessionId": terminal.native_session_id,
+                "processState": format!("{:?}", terminal.process_state),
+                "origin": format!("{:?}", terminal.origin),
+                "ownerWindowSessionId": terminal.owner_window_session_id,
+                "ownerTerminalKey": terminal.owner_terminal_key,
+                "controlHeld": terminal.control_held,
+            })
+        })
+        .collect();
+    Ok(serde_json::json!({ "terminals": terminals }).to_string())
+}
+
+/// The exact live bytes a viewer receives after attaching, as hex, for the observed-mirror journey (`EXT-02`):
+/// the harness holds them against what the owner window fed. The checkpoint is reported by size only, so a
+/// late attach (a non-empty checkpoint) is visible as such rather than hidden inside the bytes.
+async fn live_bytes(
+    home: &Path,
+    identity_file: &Path,
+    digest: &str,
+    terminal: &str,
+    settle: &str,
+) -> Result<String, String> {
+    const REPORTED_BYTES: usize = 256 * 1024;
+    let settle = settle_of(settle)?;
+    let stored = read_stored(identity_file)?;
+    let generation = generation(home, digest)?;
+    let mut client = RuntimeClient::connect_to(generation, options_with(&stored))
+        .await
+        .map_err(|error| format!("connect to generation {digest}: {error}"))?;
+    let terminal_id = terminal
+        .parse::<RuntimeTerminalId>()
+        .map_err(|error| format!("terminal id: {error}"))?;
+    let mut terminals = client.terminals();
+    let mut view = terminals
+        .attach(&TerminalAttachParams { terminal_id })
+        .await
+        .map_err(|error| format!("attach in generation {digest}: {error}"))?;
+    let checkpoint_bytes = view.initial_screen().len();
+    let mut live: Vec<u8> = Vec::new();
+    let mut chunks = 0_usize;
+    let mut lagged = 0_usize;
+    let mut exited: Option<i32> = None;
+    let deadline = Instant::now() + settle;
+    while Instant::now() < deadline {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        match tokio::time::timeout(remaining, view.next()).await {
+            Ok(Ok(runtrol_runtime_client::TerminalNotification::Output {
+                bytes: chunk, ..
+            })) => {
+                chunks += 1;
+                if live.len() < REPORTED_BYTES {
+                    live.extend_from_slice(&chunk);
+                }
+            }
+            Ok(Ok(runtrol_runtime_client::TerminalNotification::Lagged { .. })) => {
+                lagged += 1;
+            }
+            Ok(Ok(runtrol_runtime_client::TerminalNotification::Exited { exit_code, .. })) => {
+                exited = Some(exit_code);
+                break;
+            }
+            Ok(Err(error)) => return Err(format!("read the view: {error}")),
+            Err(_) => break,
+        }
+    }
+    let mut hex = String::with_capacity(live.len() * 2);
+    for byte in &live {
+        write!(hex, "{byte:02x}").map_err(|error| format!("format hex: {error}"))?;
+    }
+    Ok(serde_json::json!({
+        "origin": format!("{:?}", view.opened().terminal.origin),
+        "ownerWindowSessionId": view.opened().terminal.owner_window_session_id,
+        "ownerTerminalKey": view.opened().terminal.owner_terminal_key,
+        "checkpointBytes": checkpoint_bytes,
+        "chunks": chunks,
+        "lagged": lagged,
+        "liveBytes": live.len(),
+        "liveHex": hex,
+        "exited": exited,
+    })
+    .to_string())
 }
 
 /// What a Runtrol viewer receives for one terminal: the checkpoint, then live output for a settle period.
@@ -1152,9 +1266,14 @@ fn capture_direct(
         }
     }
     child.kill().map_err(|error| error.to_string())?;
+    let mut head_hex = String::new();
+    for byte in bytes.iter().take(64) {
+        write!(head_hex, "{byte:02x}").map_err(|error| format!("format hex: {error}"))?;
+    }
     Ok(serde_json::json!({
         "source": "direct",
         "bytes": bytes.len(),
+        "headHex": head_hex,
         "mouseModeSeen": mentions_mouse_mode(&bytes),
         "exited": exited,
         "rows": rendered_rows(&bytes),

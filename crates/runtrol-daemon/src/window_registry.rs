@@ -160,6 +160,16 @@ impl WindowRegistry {
     }
 
     /// The connection ended: whatever it registered is gone with it.
+    /// The window session identity `connection` registered, if it registered one.
+    pub(crate) async fn session_id_of(&self, connection: ConnectionToken) -> Option<String> {
+        let state = self.state.lock().await;
+        state
+            .windows
+            .iter()
+            .find(|(_, entry)| entry.connection == connection)
+            .map(|(session_id, _)| session_id.clone())
+    }
+
     pub(crate) async fn forget_connection(&self, connection: ConnectionToken) {
         let mut state = self.state.lock().await;
         let before = state.windows.len();

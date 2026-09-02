@@ -2401,6 +2401,7 @@ async fn converse_inner(
             workspace,
             cols,
             rows,
+            shell_ancestors,
             ..
         } = &request
             && conversation.greeted()
@@ -2474,6 +2475,10 @@ async fn converse_inner(
                     return;
                 }
             };
+            if !shell_ancestors.is_empty() {
+                crate::terminal_surface::brokered_by_shell(&composed, terminal_id, shell_ancestors)
+                    .await;
+            }
             let Some(hosted) = composed.terminals.lock().await.hosted(terminal_id) else {
                 drop(
                     write(

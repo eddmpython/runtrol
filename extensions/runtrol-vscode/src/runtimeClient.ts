@@ -27,6 +27,10 @@ import {
   type TerminalOpenParams,
   type TerminalDescriptor,
   type TerminalIndexSnapshot,
+  type WindowMirrorEndParams,
+  type WindowMirrorOpenParams,
+  type WindowMirrorOpened,
+  type WindowMirrorOutputParams,
   type WindowRegisterParams,
   type WindowUpdateParams,
   type TerminalIndexSubscription,
@@ -44,6 +48,7 @@ import {
   type StoredControlState,
 } from "./runtimeControl";
 import { collectNativeChats } from "./nativeChatCatalogue";
+import { providerCommandNames } from "./observedMirrorState";
 import { TerminalFleet } from "./terminalFleet";
 import { workspaceIdentity } from "./workspaceCollision";
 import type { NativeChatCatalogue, NativeChatLine } from "./runtimeTypes";
@@ -321,6 +326,28 @@ export class StudioRuntimeClient implements vscode.Disposable {
   async refreshProviderInventory(): Promise<void> {
     const nextProviders = await this.read((runtime) => runtime.providers().list());
     if (this.providerWatch) this.providerSnapshot = nextProviders;
+  }
+
+  /// The provider command names the Runtime's inventory declares, lowercase, to the provider each belongs to.
+  async providerCommandNames(): Promise<ReadonlyMap<string, string>> {
+    const known = providerCommandNames((await this.inventory()).providers.providers);
+    if (known.size > 0) return known;
+    // The first inventory can be the watch's empty opening snapshot; the Runtime's own list never is.
+    return providerCommandNames((await this.read((runtime) => runtime.providers().list())).providers);
+  }
+
+  /// Open a mirror of a terminal this window observes, on the same registered connection.
+  mirrorOpen(params: WindowMirrorOpenParams): Promise<WindowMirrorOpened> {
+    return this.read((runtime) => runtime.windows().mirrorOpen(params));
+  }
+
+  /// One chunk of the observed execution's output, in order with every other call on this lane.
+  mirrorOutput(params: WindowMirrorOutputParams): Promise<void> {
+    return this.read((runtime) => runtime.windows().mirrorOutput(params));
+  }
+
+  mirrorEnd(params: WindowMirrorEndParams): Promise<void> {
+    return this.read((runtime) => runtime.windows().mirrorEnd(params));
   }
 
   /// Every hosted terminal the Runtime lists right now, with what each process holds in memory.

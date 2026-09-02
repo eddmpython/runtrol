@@ -180,7 +180,10 @@ pub(super) fn required_scope(method: RuntimeMethod) -> Option<AppScope> {
         | RuntimeMethod::WindowsRegister
         | RuntimeMethod::WindowsUpdate
         | RuntimeMethod::WindowsList
-        | RuntimeMethod::WindowsWatchIndex => Some(AppScope::SessionList),
+        | RuntimeMethod::WindowsWatchIndex
+        | RuntimeMethod::WindowsMirrorOpen
+        | RuntimeMethod::WindowsMirrorOutput
+        | RuntimeMethod::WindowsMirrorEnd => Some(AppScope::SessionList),
         RuntimeMethod::SessionsStart => Some(AppScope::SessionStart),
         RuntimeMethod::SessionsAdoptNative | RuntimeMethod::SessionsResume => {
             Some(AppScope::SessionResume)

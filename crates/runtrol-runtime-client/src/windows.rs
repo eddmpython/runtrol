@@ -4,6 +4,7 @@
 use runtrol_runtime_protocol::{
     ListWindowsParams, RuntimeMethod, WatchWindowIndexParams, WatchWindowIndexResult,
     WindowIndexChangedNotification, WindowIndexEndedNotification, WindowIndexSnapshot,
+    WindowMirrorEndParams, WindowMirrorOpenParams, WindowMirrorOpened, WindowMirrorOutputParams,
     WindowRegisterParams, WindowRegistration, WindowUpdateParams,
 };
 
@@ -46,6 +47,49 @@ impl<'runtime> WindowClient<'runtime> {
         let _: EmptyResult = self
             .runtime
             .call(RuntimeMethod::WindowsUpdate, params)
+            .await?;
+        Ok(())
+    }
+
+    /// Open a mirror of a terminal this connection's window observes.
+    ///
+    /// # Errors
+    ///
+    /// Transport, protocol, scope, or Runtime failure, including a shell the transparent shim already brokers.
+    pub async fn mirror_open(
+        &mut self,
+        params: &WindowMirrorOpenParams,
+    ) -> Result<WindowMirrorOpened, ClientError> {
+        self.runtime
+            .call(RuntimeMethod::WindowsMirrorOpen, params)
+            .await
+    }
+
+    /// Feed one chunk of the observed execution's raw output into its mirror.
+    ///
+    /// # Errors
+    ///
+    /// Transport, protocol, scope, or Runtime failure, including a mirror this connection does not feed.
+    pub async fn mirror_output(
+        &mut self,
+        params: &WindowMirrorOutputParams,
+    ) -> Result<(), ClientError> {
+        let _: EmptyResult = self
+            .runtime
+            .call(RuntimeMethod::WindowsMirrorOutput, params)
+            .await?;
+        Ok(())
+    }
+
+    /// The observed execution ended, or this window stops mirroring it.
+    ///
+    /// # Errors
+    ///
+    /// Transport, protocol, scope, or Runtime failure, including a mirror this connection does not feed.
+    pub async fn mirror_end(&mut self, params: &WindowMirrorEndParams) -> Result<(), ClientError> {
+        let _: EmptyResult = self
+            .runtime
+            .call(RuntimeMethod::WindowsMirrorEnd, params)
             .await?;
         Ok(())
     }

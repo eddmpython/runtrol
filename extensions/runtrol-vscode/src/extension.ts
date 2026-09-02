@@ -700,6 +700,7 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     await controller.initialize();
   });
   const readyInitialization = controllerInitialization;
+  let windowRegistry: WindowRegistry | null = null;
   readyInitialization.then(
     () => {
       initializationStage = "ready";
@@ -712,7 +713,7 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
       });
       // This window's entry in the Runtime's window registry: what it is and which terminals it observes, kept
       // current by VS Code's own events so another window can name this one exactly.
-      const windowRegistry = new WindowRegistry(runtime, (message) => {
+      windowRegistry = new WindowRegistry(runtime, (message) => {
         void vscode.window.showWarningMessage(`Runtrol could not publish this window to the Runtime: ${message}`);
       });
       context.subscriptions.push(windowRegistry);
@@ -911,6 +912,8 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
         (sessionId) => sidebar.revealSession(sessionId),
         (key) => sidebar.revealConversation(key),
         () => sidebar.treeItemIds(),
+        () => windowRegistry?.mirrorEvidence() ?? [],
+        () => windowRegistry?.knownCommandNames() ?? null,
       )
       : undefined,
   };

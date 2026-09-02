@@ -154,6 +154,15 @@ pub enum RuntimeMethod {
     /// Subscribe to the window index.
     #[serde(rename = "windows/watchIndex")]
     WindowsWatchIndex,
+    /// A window opens a mirror of a terminal it observes.
+    #[serde(rename = "windows/mirrorOpen")]
+    WindowsMirrorOpen,
+    /// A window feeds one chunk of an observed execution's raw output.
+    #[serde(rename = "windows/mirrorOutput")]
+    WindowsMirrorOutput,
+    /// The observed execution ended or the window stops mirroring.
+    #[serde(rename = "windows/mirrorEnd")]
+    WindowsMirrorEnd,
     /// Read pending structured provider approvals for one controlled session.
     #[serde(rename = "approvals/listPending")]
     ApprovalsListPending,
@@ -260,6 +269,9 @@ impl RuntimeMethod {
             Self::WindowsUpdate => "windows/update",
             Self::WindowsList => "windows/list",
             Self::WindowsWatchIndex => "windows/watchIndex",
+            Self::WindowsMirrorOpen => "windows/mirrorOpen",
+            Self::WindowsMirrorOutput => "windows/mirrorOutput",
+            Self::WindowsMirrorEnd => "windows/mirrorEnd",
             Self::ApprovalsListPending => "approvals/listPending",
             Self::ApprovalsRespond => "approvals/respond",
             Self::SessionsIndexChanged => "sessions/indexChanged",
@@ -340,6 +352,9 @@ impl FromStr for RuntimeMethod {
             "windows/update" => Ok(Self::WindowsUpdate),
             "windows/list" => Ok(Self::WindowsList),
             "windows/watchIndex" => Ok(Self::WindowsWatchIndex),
+            "windows/mirrorOpen" => Ok(Self::WindowsMirrorOpen),
+            "windows/mirrorOutput" => Ok(Self::WindowsMirrorOutput),
+            "windows/mirrorEnd" => Ok(Self::WindowsMirrorEnd),
             "approvals/listPending" => Ok(Self::ApprovalsListPending),
             "approvals/respond" => Ok(Self::ApprovalsRespond),
             "sessions/indexChanged" => Ok(Self::SessionsIndexChanged),
@@ -421,6 +436,9 @@ mod tests {
             RuntimeMethod::WindowsUpdate,
             RuntimeMethod::WindowsList,
             RuntimeMethod::WindowsWatchIndex,
+            RuntimeMethod::WindowsMirrorOpen,
+            RuntimeMethod::WindowsMirrorOutput,
+            RuntimeMethod::WindowsMirrorEnd,
             RuntimeMethod::ApprovalsListPending,
             RuntimeMethod::ApprovalsRespond,
             RuntimeMethod::SessionsIndexChanged,

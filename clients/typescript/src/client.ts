@@ -85,6 +85,10 @@ import type {
   WindowIndexChangedNotification,
   WindowIndexEndedNotification,
   WindowIndexSnapshot,
+  WindowMirrorEndParams,
+  WindowMirrorOpenParams,
+  WindowMirrorOpened,
+  WindowMirrorOutputParams,
   WindowRegisterParams,
   WindowRegistration,
   WindowUpdateParams,
@@ -732,6 +736,18 @@ export class WindowClient {
 
   public async update(params: WindowUpdateParams): Promise<void> {
     requireEmpty(await callRuntime<unknown>(this.runtime, "windows/update", params));
+  }
+
+  public mirrorOpen(params: WindowMirrorOpenParams): Promise<WindowMirrorOpened> {
+    return callRuntime(this.runtime, "windows/mirrorOpen", params, "WindowMirrorOpened");
+  }
+
+  public async mirrorOutput(params: WindowMirrorOutputParams): Promise<void> {
+    requireEmpty(await callRuntime<unknown>(this.runtime, "windows/mirrorOutput", params));
+  }
+
+  public async mirrorEnd(params: WindowMirrorEndParams): Promise<void> {
+    requireEmpty(await callRuntime<unknown>(this.runtime, "windows/mirrorEnd", params));
   }
 
   public list(): Promise<WindowIndexSnapshot> {

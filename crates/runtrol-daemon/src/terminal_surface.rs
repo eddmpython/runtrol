@@ -15,6 +15,7 @@ use runtrol_provider::{AbsPath, ProviderId, TerminalId, WallMs};
 
 use crate::compose::Composed;
 use crate::native_claims::{TerminalClaimAdmission, TerminalClaimError};
+use crate::window_registry::ConnectionToken;
 
 const MAX_BROKER_ARGUMENTS: usize = 256;
 const MAX_BROKER_ARGUMENT_BYTES: usize = 256 * 1024;
@@ -29,6 +30,12 @@ pub(crate) enum TerminalOpenError {
     NoRoom { held: usize, limit: usize },
     #[error("{0}")]
     Provider(String),
+    /// The observed shell already has the transparent shim's own terminal as its row.
+    #[error("the transparent shim already brokers this shell's command")]
+    AlreadyBrokered,
+    /// The caller is not the connection feeding this observed mirror, or the terminal is no mirror.
+    #[error("no observed mirror fed by this connection has that identity")]
+    NotFedByCaller,
 }
 
 /// Every open terminal, by id and by the conversation it shows.
@@ -36,6 +43,8 @@ pub(crate) struct Terminals {
     by_id: BTreeMap<TerminalId, Open>,
     /// Which terminal shows which conversation, so a second open joins the first.
     by_conversation: BTreeMap<(ProviderId, Box<str>), TerminalId>,
+    /// Which shell invoked which brokered terminal, so a window observing that shell does not mirror it twice.
+    brokered_shells: BTreeMap<u32, TerminalId>,
     /// Structural table generation. Terminal content never enters this publisher.
     changes: tokio::sync::watch::Sender<u64>,
 }
@@ -46,6 +55,7 @@ impl Default for Terminals {
         Self {
             by_id: BTreeMap::new(),
             by_conversation: BTreeMap::new(),
+            brokered_shells: BTreeMap::new(),
             changes,
         }
     }
@@ -85,6 +95,37 @@ pub(crate) enum TerminalOrigin {
     /// Runtime started only the provider's official TUI attachment client. The conversation owner remains
     /// elsewhere and is stopped through the paired provider command.
     OfficialAttach(Box<OfficialStop>),
+    /// A registered VS Code window owns the terminal and feeds its raw execution output here.
+    ObservedMirror(Box<ObservedOwner>),
+}
+
+impl TerminalOrigin {
+    /// The public projection of this origin and, for an observed mirror, the window that owns it.
+    pub(crate) fn projection(
+        &self,
+    ) -> (
+        runtrol_runtime_protocol::TerminalOrigin,
+        Option<&ObservedOwner>,
+    ) {
+        use runtrol_runtime_protocol::TerminalOrigin as Public;
+        match self {
+            Self::Owned => (Public::Owned, None),
+            Self::ConsoleMirror => (Public::ConsoleMirror, None),
+            Self::OfficialAttach(_) => (Public::OfficialAttach, None),
+            Self::ObservedMirror(owner) => (Public::ObservedMirror, Some(owner)),
+        }
+    }
+}
+
+/// The window that owns an observed mirror, by the identities it registered.
+#[derive(Clone, Debug)]
+pub(crate) struct ObservedOwner {
+    pub(crate) window_session_id: String,
+    pub(crate) terminal_key: String,
+    /// The connection that feeds the mirror; only it may feed or end it, and its end ends the mirror.
+    pub(crate) feeder: ConnectionToken,
+    /// The observed shell, when the window resolved one: the key a brokered open of the same shell retires.
+    pub(crate) shell_pid: Option<u32>,
 }
 
 /// The provider's exact command for stopping a conversation reached through an official attachment.
@@ -342,6 +383,7 @@ impl Terminals {
             .remove(&id)
             .map(|open| HostedTerminal::from_open(id, &open));
         self.by_conversation.retain(|_, open| *open != id);
+        self.brokered_shells.retain(|_, open| *open != id);
         if removed.is_some() {
             self.publish_change();
         }
@@ -389,6 +431,105 @@ impl Terminals {
 
     pub(crate) fn len(&self) -> usize {
         self.by_id.len()
+    }
+
+    /// File a terminal the transparent shim opened under every process above the shim (the invoking shell is
+    /// among them), and hand back every observed mirror of one of those shells: the shim's own terminal is the one
+    /// row for that command generation.
+    fn brokered_by_shell(&mut self, id: TerminalId, ancestors: &[u32]) -> Vec<HostedTerminal> {
+        for ancestor in ancestors {
+            self.brokered_shells.insert(*ancestor, id);
+        }
+        self.observed_by_shell(ancestors)
+    }
+
+    fn observed_by_shell(&self, shells: &[u32]) -> Vec<HostedTerminal> {
+        self.by_id
+            .iter()
+            .filter(|(_, open)| match &open.origin {
+                TerminalOrigin::ObservedMirror(owner) => {
+                    owner.shell_pid.is_some_and(|pid| shells.contains(&pid))
+                }
+                TerminalOrigin::Owned
+                | TerminalOrigin::ConsoleMirror
+                | TerminalOrigin::OfficialAttach(_) => false,
+            })
+            .map(|(id, open)| HostedTerminal::from_open(*id, open))
+            .collect()
+    }
+
+    fn observed_by_feeder(
+        &self,
+        feeder: ConnectionToken,
+        terminal_key: &str,
+    ) -> Vec<HostedTerminal> {
+        self.by_id
+            .iter()
+            .filter(|(_, open)| match &open.origin {
+                TerminalOrigin::ObservedMirror(owner) => {
+                    owner.feeder == feeder && owner.terminal_key == terminal_key
+                }
+                TerminalOrigin::Owned
+                | TerminalOrigin::ConsoleMirror
+                | TerminalOrigin::OfficialAttach(_) => false,
+            })
+            .map(|(id, open)| HostedTerminal::from_open(*id, open))
+            .collect()
+    }
+
+    /// The observed mirror `id` if `feeder` is the connection feeding it.
+    fn observed_fed_by(&self, feeder: ConnectionToken, id: TerminalId) -> Option<HostedTerminal> {
+        let open = self.by_id.get(&id)?;
+        match &open.origin {
+            TerminalOrigin::ObservedMirror(owner) if owner.feeder == feeder => {
+                Some(HostedTerminal::from_open(id, open))
+            }
+            TerminalOrigin::ObservedMirror(_)
+            | TerminalOrigin::Owned
+            | TerminalOrigin::ConsoleMirror
+            | TerminalOrigin::OfficialAttach(_) => None,
+        }
+    }
+
+    /// Every observed mirror `feeder` feeds.
+    fn observed_all_by(&self, feeder: ConnectionToken) -> Vec<HostedTerminal> {
+        self.by_id
+            .iter()
+            .filter(|(_, open)| match &open.origin {
+                TerminalOrigin::ObservedMirror(owner) => owner.feeder == feeder,
+                TerminalOrigin::Owned
+                | TerminalOrigin::ConsoleMirror
+                | TerminalOrigin::OfficialAttach(_) => false,
+            })
+            .map(|(id, open)| HostedTerminal::from_open(*id, open))
+            .collect()
+    }
+
+    /// Register a renderer fed by the window that owns the terminal. No native identity is known yet, so the row
+    /// binds to no conversation until a later observation names one.
+    fn insert_observed(
+        &mut self,
+        id: TerminalId,
+        provider: ProviderId,
+        terminal: Terminal,
+        workspace: AbsPath,
+        owner: ObservedOwner,
+    ) {
+        self.by_id.insert(
+            id,
+            Open {
+                provider,
+                terminal,
+                workspace,
+                native: None,
+                native_process_pid: None,
+                opened_at_ms: WallMs::now().as_millis(),
+                generation: 1,
+                stopping: false,
+                origin: TerminalOrigin::ObservedMirror(Box::new(owner)),
+            },
+        );
+        self.publish_change();
     }
 
     /// Mark a terminal as stopping before the asynchronous process exit arrives.
@@ -538,7 +679,7 @@ fn drain_action(
         return DrainAction::Keep;
     }
     match origin {
-        TerminalOrigin::ConsoleMirror => DrainAction::Release,
+        TerminalOrigin::ConsoleMirror | TerminalOrigin::ObservedMirror(_) => DrainAction::Release,
         TerminalOrigin::Owned | TerminalOrigin::OfficialAttach(_) => DrainAction::Kill,
     }
 }
@@ -1009,6 +1150,147 @@ pub(crate) async fn open_official_attach(
     Ok((terminal_id, terminal, attachment))
 }
 
+/// The one row for a brokered command: the shim's own terminal. Any mirror a window opened for the same shell
+/// before the shim reached the Runtime is retired now, and later mirror opens for that shell are refused.
+pub(crate) async fn brokered_by_shell(composed: &Arc<Composed>, id: TerminalId, ancestors: &[u32]) {
+    let retired = composed
+        .terminals
+        .lock()
+        .await
+        .brokered_by_shell(id, ancestors);
+    for mirror in retired {
+        retire_observed(composed, &mirror).await;
+    }
+}
+
+async fn retire_observed(composed: &Arc<Composed>, mirror: &HostedTerminal) {
+    // ok: a mirror that already ended has nothing left to end; the table removal below is what matters.
+    drop(mirror.terminal.end_feed(None));
+    forget(composed, mirror.id).await;
+}
+
+/// Open a mirror fed by the VS Code window that owns and observes a terminal (`docs/vscodeSurface.md`,
+/// observed mirror). The Runtime spawns nothing: the window sends the raw bytes shell integration handed it,
+/// and from here on the terminal is a hosted one for every reader. A second open for the same observed terminal
+/// replaces the first (one row per command generation); a shell the transparent shim already brokered is refused,
+/// because the shim's own terminal is that row.
+pub(crate) async fn open_observed_mirror(
+    composed: &Arc<Composed>,
+    feeder: ConnectionToken,
+    window_session_id: String,
+    params: runtrol_runtime_protocol::WindowMirrorOpenParams,
+) -> Result<TerminalId, TerminalOpenError> {
+    let provider = ProviderId::parse(params.provider_id.as_str())
+        .map_err(|_| TerminalOpenError::Provider("the provider identity is invalid".to_owned()))?;
+    if composed.registry.get(provider).is_none() {
+        return Err(TerminalOpenError::Provider(format!(
+            "no provider called {provider}"
+        )));
+    }
+    let cwd = match AbsPath::canonicalize(&params.cwd) {
+        Ok(cwd) if cwd.as_std_path().is_dir() => cwd,
+        Ok(_) | Err(_) => {
+            return Err(TerminalOpenError::Provider(
+                "the observed terminal's working directory is not an existing directory".to_owned(),
+            ));
+        }
+    };
+    let replaced = {
+        let terminals = composed.terminals.lock().await;
+        if let Some(shell_pid) = params.process_id
+            && terminals.brokered_shells.contains_key(&shell_pid)
+        {
+            return Err(TerminalOpenError::AlreadyBrokered);
+        }
+        terminals.observed_by_feeder(feeder, &params.terminal_key)
+    };
+    for previous in replaced {
+        retire_observed(composed, &previous).await;
+    }
+    let terminal_id = TerminalId::now();
+    let (terminal, open) = {
+        let mut terminals = composed.terminals.lock().await;
+        if terminals.len() >= MAX_HOSTED_TERMINALS {
+            return Err(TerminalOpenError::NoRoom {
+                held: terminals.len(),
+                limit: MAX_HOSTED_TERMINALS,
+            });
+        }
+        let terminal = Terminal::fed(
+            params.process_id.unwrap_or(0),
+            runtrol_childproc::PtySize {
+                cols: params.geometry.columns,
+                rows: params.geometry.rows,
+            },
+        )
+        .map_err(|error| TerminalOpenError::Provider(error.to_string()))?;
+        terminals.insert_observed(
+            terminal_id,
+            provider,
+            terminal.clone(),
+            cwd,
+            ObservedOwner {
+                window_session_id,
+                terminal_key: params.terminal_key,
+                feeder,
+                shell_pid: params.process_id,
+            },
+        );
+        (terminal, terminals.len())
+    };
+    composed
+        .open_terminals
+        .store(open, std::sync::atomic::Ordering::Release);
+    forget_on_exit(Arc::clone(composed), terminal_id, &terminal);
+    Ok(terminal_id)
+}
+
+/// One chunk from the feeding window into its mirror.
+pub(crate) async fn feed_observed_mirror(
+    composed: &Arc<Composed>,
+    feeder: ConnectionToken,
+    id: TerminalId,
+    bytes: Vec<u8>,
+) -> Result<(), TerminalOpenError> {
+    let mirror = composed
+        .terminals
+        .lock()
+        .await
+        .observed_fed_by(feeder, id)
+        .ok_or(TerminalOpenError::NotFedByCaller)?;
+    mirror
+        .terminal
+        .feed(bytes)
+        .map_err(|error| TerminalOpenError::Provider(error.to_string()))
+}
+
+/// The feeding window says the observed command ended.
+pub(crate) async fn end_observed_mirror(
+    composed: &Arc<Composed>,
+    feeder: ConnectionToken,
+    id: TerminalId,
+    exit_code: Option<i32>,
+) -> Result<(), TerminalOpenError> {
+    let mirror = composed
+        .terminals
+        .lock()
+        .await
+        .observed_fed_by(feeder, id)
+        .ok_or(TerminalOpenError::NotFedByCaller)?;
+    mirror
+        .terminal
+        .end_feed(exit_code)
+        .map_err(|error| TerminalOpenError::Provider(error.to_string()))
+}
+
+/// The feeding connection went away: every mirror it fed ends, the way a closed window ends its terminals.
+pub(crate) async fn end_observed_mirrors_of(composed: &Arc<Composed>, feeder: ConnectionToken) {
+    let fed = composed.terminals.lock().await.observed_all_by(feeder);
+    for mirror in fed {
+        retire_observed(composed, &mirror).await;
+    }
+}
+
 /// Stop the live conversation behind a terminal, not merely its renderer.
 ///
 /// Owned PTYs and console mirrors already point at the owner process. An official attachment points at a
@@ -1021,6 +1303,9 @@ pub(crate) async fn stop_hosted(hosted: &HostedTerminal) -> Result<(), String> {
         TerminalOrigin::OfficialAttach(stop) => {
             run_official_stop(stop).await?;
             hosted.terminal.kill().map_err(|error| error.to_string())
+        }
+        TerminalOrigin::ObservedMirror(_) => {
+            Err("the window that owns this terminal stops it".to_owned())
         }
     }
 }
@@ -1246,6 +1531,143 @@ mod tests {
 
     /// Process birth reaches every terminal-index watcher through this publisher. The 50 ms hard ceiling is the
     /// daemon half of the sidebar discovery contract; provider preparation and catalogue reads are outside it.
+    fn composed_for(name: &str) -> (Arc<Composed>, String) {
+        let root = std::env::temp_dir().join(format!("runtrol-terminal-surface-{name}"));
+        if root.exists() {
+            std::fs::remove_dir_all(&root).expect("clear the previous run");
+        }
+        let text = root
+            .to_str()
+            .expect("the temporary path is UTF-8")
+            .to_owned();
+        let composed =
+            Composed::for_tests(&text, runtrol_drivers::builtin()).expect("a fresh home composes");
+        (Arc::new(composed), text)
+    }
+
+    async fn gone(composed: &Arc<Composed>, id: TerminalId) -> bool {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            if composed.terminals.lock().await.hosted(id).is_none() {
+                return true;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        false
+    }
+
+    fn mirror_params(
+        cwd: &str,
+        key: &str,
+        provider: &str,
+        process_id: Option<u32>,
+    ) -> runtrol_runtime_protocol::WindowMirrorOpenParams {
+        runtrol_runtime_protocol::WindowMirrorOpenParams {
+            terminal_key: key.to_owned(),
+            execution_id: format!("e-{key}"),
+            provider_id: runtrol_runtime_protocol::ProviderId::new(provider),
+            command_line: provider.to_owned(),
+            cwd: cwd.to_owned(),
+            process_id,
+            geometry: runtrol_runtime_protocol::TerminalGeometry {
+                columns: 80,
+                rows: 24,
+            },
+        }
+    }
+
+    /// An observed mirror is a hosted terminal fed by one connection: its viewers get exactly the fed bytes,
+    /// another connection cannot feed it, and the transparent shim's brokered open of the same shell retires it
+    /// and keeps a second mirror of that shell from opening.
+    #[tokio::test]
+    async fn an_observed_mirror_is_fed_by_its_window_and_yields_to_the_shims_brokered_row() {
+        let (composed, home) = composed_for("observed-mirror");
+        let feeder = ConnectionToken::next();
+        // VS Code reports a shell's folder with a lowercase drive letter on Windows; the mirror's folder must still
+        // sit under the root the operator approved with the letter as typed.
+        let reported_cwd = {
+            let mut text = home.clone();
+            if let Some(first) = text.get_mut(..1) {
+                first.make_ascii_lowercase();
+            }
+            text
+        };
+        let params = mirror_params(&reported_cwd, "t1", "claude", Some(4242));
+        let id = open_observed_mirror(&composed, feeder, "window-1".to_owned(), params.clone())
+            .await
+            .expect("the mirror opens");
+        let hosted = composed
+            .terminals
+            .lock()
+            .await
+            .hosted(id)
+            .expect("the mirror is listed");
+        let (origin, owner) = hosted.origin.projection();
+        assert_eq!(
+            origin,
+            runtrol_runtime_protocol::TerminalOrigin::ObservedMirror
+        );
+        let owner = owner.expect("an observed mirror names its window");
+        assert_eq!(owner.window_session_id, "window-1");
+        assert_eq!(owner.terminal_key, "t1");
+        assert_eq!(hosted.terminal.pid(), 4242);
+        let approved = AbsPath::new(&home).expect("the scratch home is absolute");
+        assert!(
+            hosted.workspace.is_under(&approved),
+            "{} is not under {}",
+            hosted.workspace.as_str(),
+            approved.as_str()
+        );
+        let mut attachment = hosted.terminal.attach().await;
+        feed_observed_mirror(&composed, feeder, id, b"hello".to_vec())
+            .await
+            .expect("the feeder feeds");
+        let chunk = tokio::time::timeout(Duration::from_secs(2), attachment.live.recv())
+            .await
+            .expect("the chunk arrives in time")
+            .expect("the ring is live");
+        assert_eq!(chunk.bytes.as_ref(), b"hello");
+        assert!(matches!(
+            feed_observed_mirror(&composed, ConnectionToken::next(), id, vec![1]).await,
+            Err(TerminalOpenError::NotFedByCaller)
+        ));
+        assert!(matches!(
+            stop_hosted(&hosted).await,
+            Err(message) if message.contains("owns this terminal")
+        ));
+
+        // The shim reaches the Runtime under the same shell (behind its launcher): its row wins.
+        brokered_by_shell(&composed, TerminalId::now(), &[9001, 4242, 1]).await;
+        assert!(gone(&composed, id).await, "the mirror is retired");
+        assert!(matches!(
+            open_observed_mirror(&composed, feeder, "window-1".to_owned(), params).await,
+            Err(TerminalOpenError::AlreadyBrokered)
+        ));
+
+        // A mirror of another shell ends with its connection.
+        let other = open_observed_mirror(
+            &composed,
+            feeder,
+            "window-1".to_owned(),
+            mirror_params(&home, "t2", "codex", None),
+        )
+        .await
+        .expect("a second mirror opens");
+        end_observed_mirrors_of(&composed, feeder).await;
+        assert!(
+            gone(&composed, other).await,
+            "the connection's mirrors end with it"
+        );
+        assert_eq!(
+            composed
+                .open_terminals
+                .load(std::sync::atomic::Ordering::Acquire),
+            0
+        );
+        drop(composed);
+        std::fs::remove_dir_all(&home).expect("remove the scratch home");
+    }
+
     #[tokio::test]
     async fn terminal_registry_publication_p95_is_below_fifty_milliseconds() {
         const SAMPLES: usize = 512;

@@ -180,7 +180,10 @@ pub(super) async fn dispatch_public(
             RuntimeMethod::WindowsRegister
             | RuntimeMethod::WindowsUpdate
             | RuntimeMethod::WindowsList
-            | RuntimeMethod::WindowsWatchIndex => {
+            | RuntimeMethod::WindowsWatchIndex
+            | RuntimeMethod::WindowsMirrorOpen
+            | RuntimeMethod::WindowsMirrorOutput
+            | RuntimeMethod::WindowsMirrorEnd => {
                 super::window_requests::window_operation(state, composed, method, id, params).await
             }
             RuntimeMethod::Initialized

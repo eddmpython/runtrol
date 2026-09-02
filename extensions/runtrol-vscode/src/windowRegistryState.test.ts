@@ -24,9 +24,15 @@ test("a window registers its identity and folders, and publishes every terminal 
       { terminalKey: "t2", name: "cmd", shellIntegration: false },
     ],
   });
+  assert.equal(state.terminalKey(one), "t1");
+  assert.equal(state.terminalKey({}), null);
+  assert.equal(state.cwdOf(one), null);
+  assert.equal(state.processIdOf(one), null);
   assert.equal(state.processResolved(one, 4242), true);
+  assert.equal(state.processIdOf(one), 4242);
   assert.equal(state.processResolved(one, 4242), false, "the same pid changes nothing");
   assert.equal(state.shellIntegrationChanged(one, "C:\\work"), true);
+  assert.equal(state.cwdOf(one), "C:\\work");
   const execution = state.executionStarted(one, "claude --resume abc", 2, 1000);
   assert.equal(execution, "e1");
   assert.deepEqual(state.update().terminals[0], {

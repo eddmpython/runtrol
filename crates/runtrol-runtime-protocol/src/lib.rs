@@ -91,16 +91,17 @@ pub use terminal::{
     TerminalControlParams, TerminalDescriptor, TerminalDetachParams, TerminalExitedNotification,
     TerminalGeometry, TerminalIdError, TerminalIndexChangedNotification, TerminalIndexEndReason,
     TerminalIndexEndedNotification, TerminalIndexSnapshot, TerminalLaggedNotification,
-    TerminalOpenParams, TerminalOpenTarget, TerminalOutputNotification, TerminalProcessState,
-    TerminalResizeParams, TerminalStopParams, TerminalViewOpened, TerminalWriteParams,
-    WatchTerminalIndexParams, WatchTerminalIndexResult,
+    TerminalOpenParams, TerminalOpenTarget, TerminalOrigin, TerminalOutputNotification,
+    TerminalProcessState, TerminalResizeParams, TerminalStopParams, TerminalViewOpened,
+    TerminalWriteParams, WatchTerminalIndexParams, WatchTerminalIndexResult,
 };
 pub use windows::{
     ListWindowsParams, MAX_OBSERVED_TERMINALS, MAX_REGISTERED_WINDOWS, MAX_WINDOW_FOLDERS,
     MAX_WINDOW_TEXT_CHARS, ObservedCommand, ObservedTerminal, WatchWindowIndexParams,
     WatchWindowIndexResult, WindowDescriptor, WindowIndexChangedNotification, WindowIndexEndReason,
-    WindowIndexEndedNotification, WindowIndexSnapshot, WindowRegisterParams, WindowRegistration,
-    WindowUpdateParams,
+    WindowIndexEndedNotification, WindowIndexSnapshot, WindowMirrorEndParams,
+    WindowMirrorOpenParams, WindowMirrorOpened, WindowMirrorOutputParams, WindowRegisterParams,
+    WindowRegistration, WindowUpdateParams,
 };
 
 /// Maximum JSON payload bytes in one public Runtime frame.

@@ -1068,6 +1068,9 @@ fn parse_session_operation(
         | RuntimeMethod::WindowsUpdate
         | RuntimeMethod::WindowsList
         | RuntimeMethod::WindowsWatchIndex
+        | RuntimeMethod::WindowsMirrorOpen
+        | RuntimeMethod::WindowsMirrorOutput
+        | RuntimeMethod::WindowsMirrorEnd
         | RuntimeMethod::WindowsIndexChanged
         | RuntimeMethod::WindowsIndexEnded
         | RuntimeMethod::SessionsEvent

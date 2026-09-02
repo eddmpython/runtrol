@@ -77,8 +77,12 @@ const ALLOWED_EDGES: &[(&str, &[&str])] = &[
         ],
     ),
     // L3. The command surface asks the daemon. It never opens storage itself, which the exclusive lock
-    // would refuse anyway.
-    ("runtrol-cli", &["runtrol-provider", "runtrol-ipc"]),
+    // would refuse anyway. The transparent shim reads its own ancestry through the process tree so the daemon
+    // knows which shell invoked it; it starts no process of its own.
+    (
+        "runtrol-cli",
+        &["runtrol-provider", "runtrol-ipc", "runtrol-childproc"],
+    ),
     // L4. The thin binary. It links everything, which is the one exception to all of the above, and
     // confining that exception to one short file is what lets this table be strict about everything else. The
     // edges past the two personalities are what being the program requires: naming which providers this build

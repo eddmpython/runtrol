@@ -61,6 +61,20 @@ export class WindowRegistryState {
     return this.terminals.delete(handle);
   }
 
+  /// The key this window published for a terminal, or null for one it never tracked.
+  terminalKey(handle: object): string | null {
+    return this.terminals.get(handle)?.key ?? null;
+  }
+
+  /// The shell's working directory as shell integration last reported it.
+  cwdOf(handle: object): string | null {
+    return this.terminals.get(handle)?.cwd ?? null;
+  }
+
+  processIdOf(handle: object): number | null {
+    return this.terminals.get(handle)?.processId ?? null;
+  }
+
   processResolved(handle: object, processId: number | undefined): boolean {
     const terminal = this.terminals.get(handle);
     if (!terminal || processId === undefined || terminal.processId === processId) return false;

@@ -21,9 +21,11 @@ transport or Studio navigation.
 
 - `runtrol-childproc::pty` owns ConPTY on Microsoft Windows and `openpty` on Unix.
 - One live conversation has one provider-owned conversation owner. Runtime exposes at most one central terminal
-  renderer for it: either the owner TUI, one official attachment client, or one Windows console mirror. That renderer
-  has one reader, one bounded output ring, and one `vt100` screen snapshot without scrollback. Adding VS Code windows,
-  phone views, or SDK viewers never duplicates those central objects.
+  renderer for it: either the owner TUI, one official attachment client, one Windows console mirror, or one observed
+  mirror fed by the VS Code window that owns the terminal (`fed.rs`; `docs/vscodeSurface.md`, observed mirror). That
+  renderer has one reader, one bounded output ring, and one `vt100` screen snapshot without scrollback. Adding VS
+  Code windows, phone views, or SDK viewers never duplicates those central objects. The descriptor's `origin` names
+  which of the four it is.
 - [`runtrol-core::terminal`](../crates/runtrol-core/src/terminal/mod.rs) owns the executable ring, geometry, screen,
   and shared-state limits. [`terminal_surface.rs`](../crates/runtrol-daemon/src/terminal_surface.rs) binds hosted
   terminal admission to the Core hot-process ceiling and proves the complete-set memory bound. Viewers reuse that

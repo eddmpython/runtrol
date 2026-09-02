@@ -375,6 +375,11 @@ pub enum Request {
         cols: u16,
         /// This viewer's rows.
         rows: u16,
+        /// The ancestors of the transparent execution bridge, nearest first, when the bridge could read them. The
+        /// shell that invoked it is on this chain, so a window observing that shell learns that this command is
+        /// already brokered here.
+        #[serde(default)]
+        shell_ancestors: Vec<u32>,
     },
 
     /// Join a terminal that is already open (a second viewer, such as a phone), and turn this connection into

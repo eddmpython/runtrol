@@ -60,6 +60,7 @@ pub(crate) async fn serve_connection(
     .await;
     // A window's registration lives exactly as long as this connection.
     composed.windows.forget_connection(token).await;
+    crate::terminal_surface::end_observed_mirrors_of(&composed, token).await;
 }
 
 #[expect(

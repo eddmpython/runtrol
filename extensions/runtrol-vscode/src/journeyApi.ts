@@ -1,3 +1,4 @@
+import type { MirrorEvidence } from "./windowRegistry";
 import * as vscode from "vscode";
 
 import { Controller } from "./controller";
@@ -56,6 +57,10 @@ export type JourneyApi = {
     workspaces: readonly IsolatedWorkspaceLine[];
     roots: readonly string[];
   }>;
+  /// Every observed mirror this window opened or was refused, with the digest of what it fed.
+  windowMirrors(): MirrorEvidence[];
+  /// The provider command names the registry recognises, or null while the inventory has not answered.
+  windowCommandNames(): string[] | null;
   /// Open the newest stored conversation of a service that has a title (a reopened conversation with history),
   /// returning its session id, or null when the service lists none.
   openStoredWithTitle(providerId: string): Promise<string | null>;
@@ -136,6 +141,8 @@ export function journeyApi(
   revealRow: (sessionId: string) => Promise<void> = async () => {},
   revealByKey: (key: string) => Promise<void> = async () => {},
   treeItemIds: () => string[] = () => [],
+  windowMirrors: () => MirrorEvidence[] = () => [],
+  windowCommandNames: () => string[] | null = () => null,
 ): JourneyApi | undefined {
   if (
     extensionMode !== vscode.ExtensionMode.Test
@@ -380,6 +387,8 @@ export function journeyApi(
       terminals.recordJourneyOutput(runtimeGeneration, terminalId, startText, endText, deadlineMs),
     terminalSetDimensions: (runtimeGeneration, terminalId, columns, rows) =>
       terminals.setJourneyDimensions(runtimeGeneration, terminalId, columns, rows),
+    windowMirrors,
+    windowCommandNames,
     terminalStop: (runtimeGeneration, terminalId, _deadlineMs) => afterReady(
       () => terminals.stopJourneyTerminal(runtimeGeneration, terminalId),
     ),

@@ -59,6 +59,42 @@ impl ProcessTree {
         }
     }
 
+    /// The parent of `pid` as the platform records it now, or none when `pid` names no live process.
+    #[must_use]
+    pub fn parent_of(&self, pid: u32) -> Option<u32> {
+        if pid == 0 {
+            return None;
+        }
+        #[cfg(windows)]
+        let node = self.node_of(pid)?;
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        let node = Self::node_of(pid)?;
+        (node.parent != 0).then_some(node.parent)
+    }
+
+    /// The ancestors of `pid`, nearest first, at most [`MAX_ANCESTOR_DEPTH`] of them, stopping at a vanished,
+    /// cyclic, or older-than-its-child parent exactly as attribution does.
+    ///
+    /// The transparent shim sends these for its own process so the Runtime knows which shell invoked it: the shell
+    /// is not the shim's direct parent (a `.cmd` launcher sits between them on Windows), but it is on this chain. A
+    /// window observing that shell then shows the brokered terminal once rather than beside a mirror of it.
+    #[must_use]
+    pub fn ancestors_of(&self, pid: u32) -> Vec<u32> {
+        let mut chain = Vec::new();
+        let mut current = pid;
+        for _ in 0..MAX_ANCESTOR_DEPTH {
+            let Some(parent) = self.parent_of(current) else {
+                break;
+            };
+            if parent == current || chain.contains(&parent) {
+                break;
+            }
+            chain.push(parent);
+            current = parent;
+        }
+        chain
+    }
+
     /// Whether `candidate` is `root` itself or one of its descendants in the captured current process tree.
     ///
     /// A missing, vanished, cyclic, or deeper-than-bounded chain is not attributed.

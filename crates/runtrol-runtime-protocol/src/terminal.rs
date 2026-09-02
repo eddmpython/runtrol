@@ -160,6 +160,22 @@ pub enum TerminalProcessState {
     Stopping,
 }
 
+/// How the Runtime reaches the process behind a terminal (`docs/terminalSurface.md`, live capture ladder).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TerminalOrigin {
+    /// The Runtime started the provider on its own pseudo terminal: the fully supervised tier.
+    #[default]
+    Owned,
+    /// The Runtime joined a Windows console some other process owns through its helper.
+    ConsoleMirror,
+    /// The Runtime started only the provider's official attachment client; the owner is elsewhere.
+    OfficialAttach,
+    /// A VS Code window observes the terminal through shell integration and feeds its raw execution output here;
+    /// input reaches it only through that window and only with explicit authority.
+    ObservedMirror,
+}
+
 /// One live terminal descriptor visible through an approved root.
 #[derive(Clone, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -191,6 +207,15 @@ pub struct TerminalDescriptor {
     /// Whether some view holds a live control lease right now.
     #[serde(default)]
     pub control_held: bool,
+    /// Who owns the process behind this terminal and how the Runtime reaches it.
+    #[serde(default)]
+    pub origin: TerminalOrigin,
+    /// For an observed mirror: the VS Code window that owns the terminal, by its registered session identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_window_session_id: Option<String>,
+    /// For an observed mirror: the owner window's key for that terminal in the window registry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_terminal_key: Option<String>,
     /// Resident memory of the hosted process in bytes, as the operating system reports it at listing time.
     ///
     /// Present only while the process runs and the operating system answered; absent means not measured.
@@ -500,6 +525,9 @@ mod tests {
             },
             control_generation: 1,
             control_held: true,
+            origin: TerminalOrigin::Owned,
+            owner_window_session_id: None,
+            owner_terminal_key: None,
             memory_bytes: None,
         };
         let value = serde_json::to_value(descriptor).expect("serializable");

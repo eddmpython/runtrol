@@ -33,8 +33,11 @@ use runtrol_childproc::{MirrorChild, Program, PtyChild, PtySize, PtySpawn, Spawn
 use runtrol_provider::AbsPath;
 use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore, broadcast, mpsc, oneshot, watch};
 
+pub mod fed;
 pub mod input;
 pub mod xterm;
+
+use fed::{FedChild, FeedError};
 
 /// How many output chunks the fan-out keeps for a slow viewer before it is told it lagged.
 ///
@@ -130,6 +133,12 @@ pub enum TerminalError {
     /// The runtime this was called from has no task executor.
     #[error("a terminal needs a runtime to watch its child: {0}")]
     Runtime(String),
+    /// Feeding a terminal whose bytes come from its own process, not from a window.
+    #[error("the terminal is not an observed mirror")]
+    NotFed,
+    /// The observed mirror refused a chunk.
+    #[error(transparent)]
+    Feed(#[from] FeedError),
 }
 
 /// One chunk the CLI wrote, exactly as the host read it, with its place in the terminal's output order.
@@ -165,12 +174,14 @@ pub struct Terminal {
     shared: Arc<Shared>,
 }
 
-/// What is on the other side of the host: a pseudo terminal this process created, or a helper that joined
-/// a console some other process owns. The host asks both the same five things.
+/// What is on the other side of the host: a pseudo terminal this process created, a helper that joined
+/// a console some other process owns, or a feed from a window that owns the terminal and observes it. The
+/// host asks all three the same five things.
 #[derive(Debug)]
 enum Child {
     Pty(PtyChild),
     Mirror(MirrorChild),
+    Fed(FedChild),
 }
 
 impl Child {
@@ -178,6 +189,7 @@ impl Child {
         match self {
             Self::Pty(child) => child.pid(),
             Self::Mirror(child) => child.pid(),
+            Self::Fed(child) => child.pid(),
         }
     }
 
@@ -185,6 +197,7 @@ impl Child {
         match self {
             Self::Pty(child) => child.reader(),
             Self::Mirror(child) => child.reader(),
+            Self::Fed(child) => child.reader(),
         }
     }
 
@@ -192,14 +205,16 @@ impl Child {
         match self {
             Self::Pty(child) => child.writer(),
             Self::Mirror(child) => child.writer(),
+            Self::Fed(_) => Ok(FedChild::writer()),
         }
     }
 
-    /// A mirrored console keeps the size its own host gave it; asking is not refused, it is simply not ours.
+    /// A mirrored console keeps the size its own host gave it, and an observed terminal the size its
+    /// window gave it; asking is not refused, it is simply not ours.
     fn resize(&self, size: PtySize) -> Result<(), runtrol_childproc::SpawnError> {
         match self {
             Self::Pty(child) => child.resize(size),
-            Self::Mirror(_) => Ok(()),
+            Self::Mirror(_) | Self::Fed(_) => Ok(()),
         }
     }
 
@@ -207,6 +222,7 @@ impl Child {
         match self {
             Self::Pty(child) => child.try_wait(),
             Self::Mirror(child) => child.try_wait(),
+            Self::Fed(child) => Ok(child.try_wait()),
         }
     }
 
@@ -214,6 +230,10 @@ impl Child {
         match self {
             Self::Pty(child) => child.kill(),
             Self::Mirror(child) => child.kill(),
+            Self::Fed(child) => {
+                child.kill();
+                Ok(())
+            }
         }
     }
 
@@ -221,6 +241,7 @@ impl Child {
         match self {
             Self::Pty(child) => child.finish(),
             Self::Mirror(child) => child.finish(),
+            Self::Fed(child) => child.kill(),
         }
     }
 }
@@ -443,6 +464,17 @@ impl Terminal {
         Self::host(Child::Mirror(child), bounded_size(size))
     }
 
+    /// Host a terminal some VS Code window owns and observes: the window feeds the raw bytes it captured
+    /// through [`Self::feed`] and ends the feed through [`Self::end_feed`]. `pid` is the observed shell's, or
+    /// zero when the window could not resolve one. Nothing is spawned.
+    ///
+    /// # Errors
+    ///
+    /// [`TerminalError::Runtime`] outside a runtime.
+    pub fn fed(pid: u32, size: PtySize) -> Result<Self, TerminalError> {
+        Self::host(Child::Fed(FedChild::new(pid)), bounded_size(size))
+    }
+
     fn host(child: Child, size: PtySize) -> Result<Self, TerminalError> {
         let reader = child.reader()?;
         let writer = child.writer()?;
@@ -609,6 +641,34 @@ impl Terminal {
     /// [`TerminalError::Spawn`] when the platform refuses.
     pub fn kill(&self) -> Result<(), TerminalError> {
         Ok(self.shared.child.kill()?)
+    }
+
+    /// One chunk the owner window observed, exactly.
+    ///
+    /// # Errors
+    ///
+    /// [`TerminalError::NotFed`] for a terminal with a process of its own; [`TerminalError::Feed`] when the
+    /// feed ended or the reader is behind.
+    pub fn feed(&self, bytes: Vec<u8>) -> Result<(), TerminalError> {
+        match &self.shared.child {
+            Child::Fed(child) => Ok(child.feed(bytes)?),
+            Child::Pty(_) | Child::Mirror(_) => Err(TerminalError::NotFed),
+        }
+    }
+
+    /// The observed command ended, or the owner window stops feeding.
+    ///
+    /// # Errors
+    ///
+    /// [`TerminalError::NotFed`] for a terminal with a process of its own.
+    pub fn end_feed(&self, exit_code: Option<i32>) -> Result<(), TerminalError> {
+        match &self.shared.child {
+            Child::Fed(child) => {
+                child.end(exit_code);
+                Ok(())
+            }
+            Child::Pty(_) | Child::Mirror(_) => Err(TerminalError::NotFed),
+        }
     }
 
     /// Let go of the child without ending its process: what a mirror does when the Runtime stops watching a
