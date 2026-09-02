@@ -86,9 +86,13 @@ const SESSION_SWITCH_ROUNDS = 5;
 const MEASURED_HOST = process.env.RUNTROL_VSCODE_PERFORMANCE === "1";
 
 export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi {
+  // Only an installed Studio has an uninstall: a development or test host runs from a source tree, and a record
+  // written there would be a stray file in somebody's checkout (measured 2026-09-02 after a hosted gate).
   // ok: a read-only extension folder refuses the record, and the uninstall hook then falls back to the default
   // storage locations; there is nothing the operator could do about the refusal, so it is not surfaced.
-  rememberForUninstall(context.extensionPath, context.globalStorageUri.fsPath).catch(() => undefined);
+  if (context.extensionMode === vscode.ExtensionMode.Production) {
+    rememberForUninstall(context.extensionPath, context.globalStorageUri.fsPath).catch(() => undefined);
+  }
   // Declared below; the private locator only asks it after activation has built it.
   let runtime: StudioRuntimeClient;
   const locator = new CoreLocator(

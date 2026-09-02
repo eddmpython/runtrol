@@ -28,8 +28,9 @@ type Step =
   | { kind: "break" }
   | { kind: "hang" };
 
-/// A view that plays a scripted sequence of notifications, as the Runtime client would deliver them.
-function fakeView(initialScreen: string, steps: Step[]): TerminalView {
+/// A view that plays a scripted sequence of notifications, as the Runtime client would deliver them, and records
+/// every byte string written through it.
+function fakeView(initialScreen: string, steps: Step[], writes: Uint8Array[] = []): TerminalView {
   const queue = [...steps];
   const lease: TerminalControlLease = {
     leaseId: "lease-1",
@@ -48,7 +49,7 @@ function fakeView(initialScreen: string, steps: Step[]): TerminalView {
       return { kind: "exited", exitCode: step.exitCode };
     },
     close() {},
-    async write() {},
+    async write(params: { bytesBase64: string }) { writes.push(new Uint8Array(Buffer.from(params.bytesBase64, "base64"))); },
     async acquireControl() { return lease; },
     async renewControl() { return lease; },
     async resize() {},
@@ -136,5 +137,21 @@ test("the pane's one exception still holds: mouse-mode switches never reach VS C
   pty.open(undefined);
   await settle();
   assert.deepEqual(written, ["screen", "\x1b[?1049hmore"]);
+  pty.close();
+});
+
+test("every key, paste, IME result, Escape, interrupt, and mouse report is written once, in order, unchanged", async () => {
+  const writes: Uint8Array[] = [];
+  const { pty } = harness([async () => fakeView("", [{ kind: "hang" }], writes)]);
+  const typed = ["안녕하세요 ", "hello", "\r", "pasted line one\nline two\r", "\x1b", "\x03", "\x1b[<0;10;5M"];
+  // Two keys land before the view is connected; they are queued and sent first, once.
+  pty.handleInput(typed[0]!);
+  pty.handleInput(typed[1]!);
+  pty.open(undefined);
+  await settle();
+  for (const text of typed.slice(2)) pty.handleInput(text);
+  await settle(80);
+  const decoder = new TextDecoder("utf-8");
+  assert.deepEqual(writes.map((bytes) => decoder.decode(bytes)), typed);
   pty.close();
 });

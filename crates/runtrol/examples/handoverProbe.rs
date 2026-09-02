@@ -18,7 +18,9 @@
 //! handoverProbe attach <home> <identity file> <digest> <terminal id>
 //! handoverProbe stop   <home> <identity file> <digest> <terminal id>
 //! handoverProbe screen <home> <identity file> <digest> <terminal id> <settle ms>
-//! handoverProbe direct-screen <provider> <cwd> <settle ms>
+//! handoverProbe direct-screen <provider> <cwd> <settle ms> [hex bytes typed after one second]
+//! handoverProbe direct-program <cwd> <settle ms> <hex bytes or -> <program> [arguments...]
+//! handoverProbe input-hex <home> <identity file> <digest> <terminal id> <hex bytes>
 //! ```
 //!
 //! The two `screen` phases exist for the raw-lane parity journey (`terminalTransportIntegrity`, `TERM-01`): one
@@ -164,7 +166,16 @@ fn main() -> ExitCode {
             ["screen", home, identity, digest, terminal, settle] => {
                 screen(Path::new(home), Path::new(identity), digest, terminal, settle).await
             }
-            ["direct-screen", provider, cwd, settle] => direct_screen(provider, cwd, settle),
+            ["direct-screen", provider, cwd, settle] => direct_screen(provider, cwd, settle, None),
+            ["direct-screen", provider, cwd, settle, hex] => {
+                direct_screen(provider, cwd, settle, Some(hex))
+            }
+            ["direct-program", cwd, settle, hex, program, arguments @ ..] => {
+                direct_program(cwd, settle, hex, program, arguments)
+            }
+            ["input-hex", home, identity, digest, terminal, hex] => {
+                input_hex(Path::new(home), Path::new(identity), digest, terminal, hex).await
+            }
             _ => Err(
                 "usage: handoverProbe enroll|open|open-native|find-native|attach|stop|parity ..."
                     .to_owned(),
@@ -570,6 +581,7 @@ async fn screen(
         .map_err(|error| format!("attach in generation {digest}: {error}"))?;
     let mut bytes = view.initial_screen().to_vec();
     let checkpoint_bytes = bytes.len();
+    let mut exited: Option<i32> = None;
     let deadline = Instant::now() + settle;
     while Instant::now() < deadline {
         let remaining = deadline.saturating_duration_since(Instant::now());
@@ -582,8 +594,12 @@ async fn screen(
             Ok(Ok(runtrol_runtime_client::TerminalNotification::Lagged { screen, .. })) => {
                 bytes = screen;
             }
-            Ok(Ok(runtrol_runtime_client::TerminalNotification::Exited { .. })) | Err(_) => break,
+            Ok(Ok(runtrol_runtime_client::TerminalNotification::Exited { exit_code, .. })) => {
+                exited = Some(exit_code);
+                break;
+            }
             Ok(Err(error)) => return Err(format!("read the view: {error}")),
+            Err(_) => break,
         }
     }
     Ok(serde_json::json!({
@@ -591,9 +607,46 @@ async fn screen(
         "checkpointBytes": checkpoint_bytes,
         "bytes": bytes.len(),
         "mouseModeSeen": mentions_mouse_mode(&bytes),
+        "exited": exited,
         "rows": rendered_rows(&bytes),
     })
     .to_string())
+}
+
+/// Write one exact byte string, given as hex, through a fresh writer connection under its own control lease.
+///
+/// Hex rather than an argv string, so Escape, Ctrl+C, and multibyte text arrive exactly and the shell in between
+/// rewrites nothing.
+async fn input_hex(
+    home: &Path,
+    identity_file: &Path,
+    digest: &str,
+    terminal: &str,
+    hex: &str,
+) -> Result<String, String> {
+    let stored = read_stored(identity_file)?;
+    let terminal_id = terminal
+        .parse::<RuntimeTerminalId>()
+        .map_err(|error| format!("terminal id: {error}"))?;
+    let bytes = decode_hex(hex)?;
+    write_through_a_writer(&stored, home, digest, terminal_id, &bytes).await?;
+    Ok(serde_json::json!({ "written": bytes.len() }).to_string())
+}
+
+fn decode_hex(hex: &str) -> Result<Vec<u8>, String> {
+    if !hex.len().is_multiple_of(2) {
+        return Err("hex input has an odd length".to_owned());
+    }
+    (0..hex.len())
+        .step_by(2)
+        .map(
+            |at| match hex.get(at..at + 2).map(|pair| u8::from_str_radix(pair, 16)) {
+                Some(Ok(byte)) => Ok(byte),
+                Some(Err(error)) => Err(format!("hex input is not hex at {at}: {error}")),
+                None => Err(format!("hex input is not hex at {at}")),
+            },
+        )
+        .collect()
 }
 
 /// The shipped manifest declaring one provider, or every reason none did.
@@ -619,8 +672,12 @@ fn shipped_manifest(provider: &str) -> Result<runtrol_provider::Manifest, String
 /// What the same provider draws on a `ConPTY` Runtrol never touched, launched exactly as the daemon launches it
 /// (the shipped manifest's program, `[tui] new` words, environment, and unset markers) and answered the way the
 /// Core's host answers, so the two captures differ only by what sits between the PTY and the viewer.
-fn direct_screen(provider: &str, cwd: &str, settle: &str) -> Result<String, String> {
-    let settle = settle_of(settle)?;
+fn direct_screen(
+    provider: &str,
+    cwd: &str,
+    settle: &str,
+    typed_hex: Option<&str>,
+) -> Result<String, String> {
     let manifest = shipped_manifest(provider)?;
     let tui = manifest
         .tui
@@ -634,17 +691,50 @@ fn direct_screen(provider: &str, cwd: &str, settle: &str) -> Result<String, Stri
         .map(|(name, value)| (name.to_string(), value.to_string()))
         .collect();
     let env_unset: Vec<String> = tui.env_unset.iter().map(ToString::to_string).collect();
+    capture_direct(
+        &program, &arguments, &env, &env_unset, cwd, settle, typed_hex,
+    )
+}
+
+/// Any program on a `ConPTY` Runtrol never touched, for probing the terminal host itself (a fixture that echoes
+/// what it reads, for example) with the same capture and the same query answers as `direct-screen`.
+fn direct_program(
+    cwd: &str,
+    settle: &str,
+    typed_hex: &str,
+    program: &str,
+    arguments: &[&str],
+) -> Result<String, String> {
+    let program = runtrol_childproc::resolve(program).map_err(|error| error.to_string())?;
+    let arguments: Vec<String> = arguments.iter().map(ToString::to_string).collect();
+    let typed = (typed_hex != "-").then_some(typed_hex);
+    capture_direct(&program, &arguments, &[], &[], cwd, settle, typed)
+}
+
+/// Run one program on a fresh `ConPTY`, answer its terminal queries as the Core's host does, optionally type
+/// one exact byte string after a second, and render what it drew.
+fn capture_direct(
+    program: &runtrol_childproc::Program,
+    arguments: &[String],
+    env: &[(String, String)],
+    env_unset: &[String],
+    cwd: &str,
+    settle: &str,
+    typed_hex: Option<&str>,
+) -> Result<String, String> {
+    let settle = settle_of(settle)?;
+    let mut typed = typed_hex.map(decode_hex).transpose()?;
     let cwd = runtrol_provider::AbsPath::canonicalize(cwd).map_err(|error| error.to_string())?;
     let size = runtrol_childproc::pty::PtySize {
         cols: GEOMETRY.columns,
         rows: GEOMETRY.rows,
     };
     let child = runtrol_childproc::pty::PtyChild::spawn(runtrol_childproc::pty::PtySpawn {
-        program: &program,
-        arguments: &arguments,
+        program,
+        arguments,
         cwd: &cwd,
-        env: &env,
-        env_unset: &env_unset,
+        env,
+        env_unset,
         size,
     })
     .map_err(|error| error.to_string())?;
@@ -670,9 +760,21 @@ fn direct_screen(provider: &str, cwd: &str, settle: &str) -> Result<String, Stri
     let mut parser = vt100::Parser::new(GEOMETRY.rows, GEOMETRY.columns, 0);
     let mut queries = runtrol_core::terminal::xterm::QueryCarry::default();
     let mut bytes = Vec::new();
-    let deadline = Instant::now() + settle;
+    let started = Instant::now();
+    let deadline = started + settle;
+    let mut exited: Option<i32> = None;
     while Instant::now() < deadline {
-        let remaining = deadline.saturating_duration_since(Instant::now());
+        if started.elapsed() >= Duration::from_secs(1)
+            && let Some(input) = typed.take()
+        {
+            writer
+                .write_all(&input)
+                .and_then(|()| writer.flush())
+                .map_err(|error| format!("type into the program: {error}"))?;
+        }
+        let remaining = deadline
+            .saturating_duration_since(Instant::now())
+            .min(Duration::from_millis(200));
         match receiver.recv_timeout(remaining) {
             Ok(chunk) => {
                 parser.process(&chunk);
@@ -685,10 +787,12 @@ fn direct_screen(provider: &str, cwd: &str, settle: &str) -> Result<String, Stri
                 }
                 bytes.extend_from_slice(&chunk);
             }
-            Err(
-                std::sync::mpsc::RecvTimeoutError::Timeout
-                | std::sync::mpsc::RecvTimeoutError::Disconnected,
-            ) => break,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+        if let Ok(Some(code)) = child.try_wait() {
+            exited = Some(code);
+            break;
         }
     }
     child.kill().map_err(|error| error.to_string())?;
@@ -696,6 +800,7 @@ fn direct_screen(provider: &str, cwd: &str, settle: &str) -> Result<String, Stri
         "source": "direct",
         "bytes": bytes.len(),
         "mouseModeSeen": mentions_mouse_mode(&bytes),
+        "exited": exited,
         "rows": rendered_rows(&bytes),
     })
     .to_string())

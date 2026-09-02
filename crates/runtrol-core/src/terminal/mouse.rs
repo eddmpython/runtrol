@@ -11,9 +11,14 @@
 //! A real terminal emulator ([`ViewerKind::Terminal`]) gets none of this. **The mouse is a touch-screen
 //! concept in this product and nothing else** (operator, 2026-08-29, fixed in the ledger): on a computer the
 //! terminal keeps its own mouse, selecting on drag and scrolling on wheel, and no click ever reaches the
-//! CLI. That takes two things. The host never switches reporting on toward a terminal, and any mouse report a
-//! terminal viewer sends anyway is dropped here instead of forwarded. Before this, every click became arrow
-//! keys, which in Claude Code's prompt recalled earlier input, and drag selection was gone.
+//! CLI. The host never switches reporting on toward a terminal, and Studio takes the CLI's own switch out at
+//! its edge, so a computer's terminal never enters mouse mode and never sends a report. Before this, every
+//! click became arrow keys, which in Claude Code's prompt recalled earlier input, and drag selection was gone.
+//!
+//! A mouse report that a terminal viewer does send is forwarded exactly as written: it is input the CLI asked
+//! for (it switched reporting on, and that viewer chose to honour it), and the input boundary may drop only the
+//! exact terminal replies this host already answered (`terminalTransportIntegrity`, input and geometry). Keys,
+//! paste, IME text, and a lone Escape are never rewritten or held back.
 //!
 //! The CLI's own attempts to switch reporting on (`ESC [ ? 1000 h` and its relatives, which one renderer of
 //! Claude Code sends) stay in the raw stream exactly as written: the raw lane rewrites nothing
@@ -65,7 +70,7 @@ impl InputCarry {
     }
 
     /// The bytes to forward to the CLI for this input: keys as typed, terminal answers dropped, and mouse
-    /// reports translated for a touch viewer or dropped for a terminal.
+    /// reports translated for a touch viewer or forwarded exactly for a terminal.
     pub fn translate(&mut self, input: &[u8], screen: &Screen, viewer: ViewerKind) -> Vec<u8> {
         match viewer {
             ViewerKind::Terminal => self.translate_inner(input, InputMode::Terminal),
@@ -89,10 +94,11 @@ impl InputCarry {
                 Scan::Mouse(report, end) => {
                     match mode {
                         InputMode::Touch(screen) => translate_mouse(report, screen, &mut out),
-                        // A terminal viewer has no mouse toward the CLI at all: it keeps its own mouse, so a
-                        // report that arrives anyway is the viewer's terminal acting on its own, and it goes
-                        // nowhere.
-                        InputMode::Terminal => {}
+                        // The CLI asked for reports when it switched its mouse on, and this viewer honoured
+                        // it: the report is the CLI's own input vocabulary and reaches it exactly as written.
+                        InputMode::Terminal => {
+                            out.extend_from_slice(window.get(at..end).unwrap_or(&[]));
+                        }
                     }
                     at = end;
                 }
@@ -108,7 +114,10 @@ impl InputCarry {
                     }
                     return out;
                 }
-                Scan::Plain => {
+                // A lone ESC ending a write is the Escape key. Holding it for the next write would delay the
+                // key and then deliver it glued to the next one, which a CLI reads as an Alt chord (measured
+                // 2026-09-02 in the carry's own fixture). Only a sequence already in progress is carried.
+                Scan::Escape | Scan::Plain => {
                     out.push(byte);
                     at += 1;
                 }
@@ -132,6 +141,8 @@ struct MouseReport {
 enum Scan {
     Mouse(MouseReport, usize),
     Answer(usize),
+    /// A lone ESC with nothing after it in this write: the Escape key, not the start of a sequence.
+    Escape,
     Incomplete,
     Plain,
 }
@@ -139,10 +150,10 @@ enum Scan {
 /// What begins at `start` (an ESC).
 fn sequence_at(window: &[u8], start: usize) -> Scan {
     let Some(rest) = window.get(start + 1..) else {
-        return Scan::Incomplete;
+        return Scan::Escape;
     };
     if rest.is_empty() {
-        return Scan::Incomplete;
+        return Scan::Escape;
     }
     if let Some(after) = rest.strip_prefix(b"[<") {
         return match parse_mouse(after) {
@@ -373,16 +384,46 @@ mod tests {
     }
 
     #[test]
-    fn a_terminal_viewers_mouse_report_goes_nowhere() {
-        // The mouse is a touch-screen concept: on a computer the terminal keeps its own mouse and no click
-        // reaches the CLI. Forwarding the report turned a click into arrow keys in Claude Code's prompt,
-        // which recalled earlier input (operator, 2026-08-29, three times).
+    fn keys_paste_ime_text_and_a_lone_escape_reach_the_cli_exactly_as_typed() {
+        let mut carry = InputCarry::default();
+        // Korean text, an English line, a pasted block with newlines, and an interrupt: bytes as typed.
+        let corpus: &[u8] = "안녕하세요 hello\r\nline one\nline two\r\x03".as_bytes();
+        assert_eq!(carry.translate_terminal(corpus), corpus.to_vec());
+        // The Escape key alone ends a write and is not held back for the next one.
+        assert_eq!(carry.translate_terminal(b"\x1b"), b"\x1b".to_vec());
+        assert_eq!(
+            carry.translate_terminal(b"x"),
+            b"x".to_vec(),
+            "the next key arrives on its own, never glued to a held Escape"
+        );
+        // A sequence actually in progress is still carried across the boundary.
+        let mut split = InputCarry::default();
+        assert_eq!(split.translate_terminal(b"\x1b[?6"), Vec::<u8>::new());
+        assert_eq!(
+            split.translate_terminal(b"3;1c"),
+            Vec::<u8>::new(),
+            "a device-attributes answer split across writes is one answer, dropped once"
+        );
+    }
+
+    #[test]
+    fn a_terminal_viewers_mouse_report_is_forwarded_exactly_once() {
+        // The CLI asked for the report when it switched its mouse on; a terminal viewer that honoured the
+        // switch sends the CLI's own vocabulary, which reaches it unchanged. A computer's Studio tab never
+        // sends one, because it takes the switch out at its edge and keeps its own mouse.
         let parser = screen_with_cursor_at(5);
         let mut carry = InputCarry::default();
-        assert!(
-            carry
-                .translate(b"\x1b[<0;4;9M", parser.screen(), ViewerKind::Terminal)
-                .is_empty()
+        assert_eq!(
+            carry.translate(b"\x1b[<0;4;9M", parser.screen(), ViewerKind::Terminal),
+            b"\x1b[<0;4;9M".to_vec()
+        );
+        let mut split = InputCarry::default();
+        let mut out = split.translate_terminal(b"\x1b[<0;4");
+        out.extend(split.translate_terminal(b";9m"));
+        assert_eq!(
+            out,
+            b"\x1b[<0;4;9m".to_vec(),
+            "a split report is forwarded once, whole"
         );
         // Its own terminal answers are still dropped: this host already answered the CLI.
         assert!(
