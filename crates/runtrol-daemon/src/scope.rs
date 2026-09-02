@@ -398,13 +398,11 @@ mod tests {
                 workspace: "/work".into(),
                 cols: 120,
                 rows: 40,
-                viewer: runtrol_ipc::wire::TerminalViewer::Terminal,
             },
             Request::TerminalAttach {
                 terminal: runtrol_provider::TerminalId::now(),
                 cols: 120,
                 rows: 40,
-                viewer: runtrol_ipc::wire::TerminalViewer::Touch,
             },
             Request::TerminalInput {
                 bytes: runtrol_ipc::TerminalBytes::from(b"ls\r".to_vec()),

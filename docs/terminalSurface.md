@@ -31,14 +31,16 @@ transport or Studio navigation.
 - Runtime answers terminal capability and cursor-position queries once at the host. Viewers do not race to answer.
 - Snapshot creation and live fan-out share one output-state critical section. A viewer receives a chunk in its
   snapshot or subscribes before that chunk is published, never both and never neither.
-- A desktop terminal viewer keeps VS Code's own selection, focus, and scroll behavior. Runtime forwards the
-  provider's bytes exactly as the host read them, mouse-mode toggles included, and rejects stray desktop mouse
-  reports; the Studio tab takes that one control family out at its own edge (`mouseModeFilter.ts`). Only a touch
-  viewer may translate gestures into bounded terminal input. Provider-specific launch behavior remains declarative in the manifest `[tui]`
-  section through `new`, `resume`, `attach`, `stop`, `env`, and `env_unset`.
+- A viewer keeps its own terminal's selection, focus, and scroll behavior. Runtime forwards the provider's bytes
+  exactly as the host read them, mouse-mode toggles included, never switches mouse reporting on toward a viewer,
+  and turns no gesture into keys; what a viewer types, a mouse report included, reaches the provider exactly as
+  written, and only the terminal answers the viewer's own terminal sends are dropped because the host already
+  answered. The Studio tab takes the provider's mouse-mode control family out at its own edge
+  (`mouseModeFilter.ts`). Provider-specific launch behavior remains declarative in the manifest `[tui]` section
+  through `new`, `resume`, `attach`, `stop`, `env`, and `env_unset`.
 - No Runtime, Studio, SDK, or phone code selects behavior by a hardcoded provider name.
 
-The screen model exists only for geometry, touch translation, and late-view snapshots. It is dropped with the hosted
+The screen model exists only for geometry, host query answers, and late-view snapshots. It is dropped with the hosted
 terminal and is never persisted as a conversation copy.
 
 ## Process-birth broker

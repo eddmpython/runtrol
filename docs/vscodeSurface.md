@@ -247,6 +247,7 @@ the operator procedure and recovery rules.
 | `vscodeMultiWindowTerminal` | deterministic two-window identity, first-use dispatch, warm input and fan-out, handoff, and cleanup |
 | `vscodeRealProviderJourney` | installed provider discovery and complete real CLI control journey |
 | `node tooling/real-window-eye.mjs` | isolated real VS Code visual journey and screenshots |
+| `node tooling/drag-select-eye.mjs` | a real pointer drag selects text in a Runtrol tab whose provider switched mouse reporting on, with screenshots and a public-wire screen comparison |
 | `vscodePackage` | complete target SSOT, exact archive contents, Runtime bytes, workflow, README, and brand metadata |
 | `crossPlatformMatrix` | exact VSIX installation and first-run action on native Windows, macOS, and Linux |
 | `vscodeUpgradeRollback` | active-session continuity across official VSIX upgrade and rollback |

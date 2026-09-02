@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use base64ct::{Base64, Encoding as _};
-use runtrol_core::terminal::{Attachment, TerminalError, ViewerKind};
+use runtrol_core::terminal::{Attachment, TerminalError};
 use runtrol_provider::{
     AbsPath, NativeTerminalAccess, NativeTerminalTarget, ProviderId as CoreProviderId, TerminalId,
     WallMs,
@@ -114,22 +114,15 @@ struct ActiveLease {
 pub(crate) struct LocalTerminalControl {
     terminal_id: TerminalId,
     terminal_generation: u64,
-    /// What this local viewer is, so its input is translated or forwarded the way that viewer needs.
-    viewer: ViewerKind,
 }
 
 impl LocalTerminalControl {
     /// Bind the first local viewer to the exact process generation it opened.
-    pub(crate) fn for_hosted(hosted: &HostedTerminal, viewer: ViewerKind) -> Self {
+    pub(crate) fn for_hosted(hosted: &HostedTerminal) -> Self {
         Self {
             terminal_id: hosted.id,
             terminal_generation: hosted.generation,
-            viewer,
         }
-    }
-
-    pub(crate) const fn viewer(&self) -> ViewerKind {
-        self.viewer
     }
 }
 
@@ -536,7 +529,6 @@ impl TerminalRuntimeAdapter {
                     workspace,
                     params.geometry.columns,
                     params.geometry.rows,
-                    ViewerKind::Terminal,
                 )
                 .await
             }
@@ -555,7 +547,6 @@ impl TerminalRuntimeAdapter {
                     params.geometry.columns,
                     params.geometry.rows,
                     exact_program()?,
-                    ViewerKind::Terminal,
                 )
                 .await
             }
@@ -568,8 +559,6 @@ impl TerminalRuntimeAdapter {
                     params.geometry.columns,
                     params.geometry.rows,
                     Some(exact_program()?),
-                    // The public surface is an editor's terminal, which has its own mouse.
-                    ViewerKind::Terminal,
                     // The service was asked above which conversations its live processes hold, and this one was not
                     // among them (`resume_would_fork`). A terminal in this folder that nobody has named is therefore
                     // provably some other conversation, and must not hold this one back.
@@ -651,15 +640,14 @@ impl TerminalRuntimeAdapter {
         terminal_id: TerminalId,
         initial_control: bool,
     ) -> Result<TerminalView, TerminalRuntimeFailure> {
-        let (_hosted, attachment) =
-            crate::terminal_surface::attach_current(composed, terminal_id, ViewerKind::Terminal)
-                .await
-                .map_err(|_| {
-                    TerminalRuntimeFailure::new(
-                        RuntimeErrorKind::TerminalGone,
-                        "the terminal ended in its recorded Runtime generation",
-                    )
-                })?;
+        let (_hosted, attachment) = crate::terminal_surface::attach_current(composed, terminal_id)
+            .await
+            .map_err(|_| {
+                TerminalRuntimeFailure::new(
+                    RuntimeErrorKind::TerminalGone,
+                    "the terminal ended in its recorded Runtime generation",
+                )
+            })?;
         self.finish_view(
             composed,
             authority,
@@ -929,15 +917,12 @@ impl TerminalRuntimeAdapter {
         )?;
         remember_pending_done(&mut state, key.clone(), fingerprint, now);
         drop(state);
-        operation
-            .input(&bytes, ViewerKind::Terminal)
-            .await
-            .map_err(|_| {
-                TerminalRuntimeFailure::new(
-                    RuntimeErrorKind::OutcomeUnknown,
-                    "the terminal input outcome is unknown and must not be retried automatically",
-                )
-            })?;
+        operation.input(&bytes).await.map_err(|_| {
+            TerminalRuntimeFailure::new(
+                RuntimeErrorKind::OutcomeUnknown,
+                "the terminal input outcome is unknown and must not be retried automatically",
+            )
+        })?;
         self.finish_done(&key, fingerprint).await
     }
 
@@ -1074,16 +1059,12 @@ impl TerminalRuntimeAdapter {
                 )
             })?;
         validate_local_generation(&hosted, control)?;
-        hosted
-            .terminal
-            .input(bytes, control.viewer())
-            .await
-            .map_err(|_| {
-                TerminalRuntimeFailure::new(
-                    RuntimeErrorKind::OutcomeUnknown,
-                    "the brokered terminal input outcome is unknown",
-                )
-            })
+        hosted.terminal.input(bytes).await.map_err(|_| {
+            TerminalRuntimeFailure::new(
+                RuntimeErrorKind::OutcomeUnknown,
+                "the brokered terminal input outcome is unknown",
+            )
+        })
     }
 
     /// Resize the shared PTY from the local terminal that owns the brokered invocation.

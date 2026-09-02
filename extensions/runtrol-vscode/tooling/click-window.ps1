@@ -7,6 +7,10 @@ param(
     # Right for a context menu. The reorder and rename actions live there, which is where a list's own
     # arrangement belongs rather than as more buttons on every row.
     [ValidateSet("left", "right")][string]$Button = "left",
+    # A drag: the button goes down at X,Y, the pointer travels in steps to this client point, and the button
+    # comes up there. A terminal selects the text between the two points, exactly as a hand would.
+    [int]$DragToX = -1,
+    [int]$DragToY = -1,
     # Two windows can carry the same title when they hold the same folder, and the operator's window is one of
     # them. The process family (a user-data-dir, say) is what tells an isolated window from theirs.
     [string]$CommandLineMatch = ""
@@ -16,7 +20,11 @@ $ErrorActionPreference = "Stop"
 # Kept before dot-sourcing: the shared file's own param() block resets these names in this scope.
 $wantedTitle = $TitleMatch
 $wantedFamily = $CommandLineMatch
+$startX = $X
+$startY = $Y
 . (Join-Path $PSScriptRoot "find-window.ps1")
+$X = $startX
+$Y = $startY
 Add-Type @"
 using System;
 using System.Runtime.InteropServices;
@@ -68,5 +76,30 @@ $down = if ($Button -eq "right") { 0x0008 } else { 0x0002 }
 $up = if ($Button -eq "right") { 0x0010 } else { 0x0004 }
 [RuntrolClickWin32]::mouse_event($down, 0, 0, 0, [UIntPtr]::Zero)
 Start-Sleep -Milliseconds 80
+if ($DragToX -ge 0 -and $DragToY -ge 0) {
+    if ($DragToX -ge $rect.Right -or $DragToY -ge $rect.Bottom) {
+        [RuntrolClickWin32]::mouse_event($up, 0, 0, 0, [UIntPtr]::Zero)
+        Write-Error "the drag target $DragToX,$DragToY is outside $($rect.Right)x$($rect.Bottom)"
+        exit 3
+    }
+    $target = New-Object RuntrolClickWin32+POINT
+    $target.X = $DragToX
+    $target.Y = $DragToY
+    [RuntrolClickWin32]::ClientToScreen($handle, [ref]$target) | Out-Null
+    # A hand moves through the points between; a terminal extends its selection on each move it sees.
+    $steps = 12
+    # Not $x and $y: PowerShell names are case-insensitive, and those would overwrite the parameters.
+    for ($step = 1; $step -le $steps; $step++) {
+        $moveX = [int]($point.X + ($target.X - $point.X) * $step / $steps)
+        $moveY = [int]($point.Y + ($target.Y - $point.Y) * $step / $steps)
+        [RuntrolClickWin32]::SetCursorPos($moveX, $moveY) | Out-Null
+        Start-Sleep -Milliseconds 30
+    }
+    Start-Sleep -Milliseconds 80
+}
 [RuntrolClickWin32]::mouse_event($up, 0, 0, 0, [UIntPtr]::Zero)
-Write-Output "$Button-clicked client point $X,$Y in '$($window.Title)'"
+if ($DragToX -ge 0 -and $DragToY -ge 0) {
+    Write-Output "$Button-dragged client point $X,$Y to $DragToX,$DragToY in '$($window.Title)'"
+} else {
+    Write-Output "$Button-clicked client point $X,$Y in '$($window.Title)'"
+}

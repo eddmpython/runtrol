@@ -4,9 +4,10 @@
 //! The conversation surface is the provider's own terminal interface (`docs/terminalSurface.md`). This
 //! module owns the one thing that makes that work across a PC tab and a phone at once: the daemon, not a
 //! viewer, is the terminal. It answers the questions a CLI asks its terminal at start (see [`xterm`]),
-//! keeps the screen so a viewer that attaches late is handed the current picture, and turns a viewer's
-//! mouse into keys on that screen (see [`mouse`]). It reads nothing for meaning: bytes go to viewers as the
-//! CLI wrote them, and the screen model exists for geometry, not for content.
+//! keeps the screen so a viewer that attaches late is handed the current picture, and forwards what a
+//! viewer typed exactly, dropping only the answers it already gave (see [`input`]). It reads nothing for
+//! meaning: bytes go to viewers as the CLI wrote them, and the screen model exists for geometry, not for
+//! content.
 //!
 //! Memory is bounded by construction: the output fan-out is a fixed ring of chunks and the screen model has
 //! no scrollback. A viewer that falls behind is told so and re-attached from the screen rather than fed
@@ -25,7 +26,7 @@ use runtrol_childproc::{MirrorChild, Program, PtyChild, PtySize, PtySpawn, Spawn
 use runtrol_provider::AbsPath;
 use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore, broadcast, mpsc, oneshot, watch};
 
-pub mod mouse;
+pub mod input;
 pub mod xterm;
 
 /// How many output chunks the fan-out keeps for a slow viewer before it is told it lagged.
@@ -120,8 +121,7 @@ pub enum TerminalError {
 /// What a viewer gets when it attaches: the screen as it is now, then everything after.
 #[derive(Debug)]
 pub struct Attachment {
-    /// The bytes that redraw the current screen on a fresh viewer, followed by the viewer-side mouse
-    /// enable that makes the viewer report clicks and wheel to this host.
+    /// The bytes that redraw the current screen on a fresh viewer.
     pub snapshot: Bytes,
     /// Every chunk written after the snapshot. `Lagged` means the viewer fell behind the ring; it should
     /// attach again and take a fresh snapshot.
@@ -201,7 +201,7 @@ struct Shared {
     /// The screen model and output-side carries share one lock because every output byte touches them.
     state: Mutex<State>,
     /// Input framing is independent from output rendering. Touch input briefly reads the screen too.
-    input: Mutex<mouse::InputCarry>,
+    input: Mutex<input::InputCarry>,
     /// One current terminal operation plus one ordered waiter. Output query answers use the same order lock
     /// but have one separate producer, so public callers cannot crowd them out or create unbounded waiters.
     operations: OperationGate,
@@ -278,19 +278,6 @@ impl std::fmt::Debug for Shared {
     }
 }
 
-/// What is on the other side of a view.
-///
-/// A terminal emulator (an editor's xterm.js, a console, Windows Terminal) has its own mouse: it selects on
-/// drag and scrolls on wheel, and the host must not report mouse toward it. A touch screen has no keys to
-/// send, so the host reports mouse to it and turns each report into keys (`mouse`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ViewerKind {
-    /// A terminal emulator with its own mouse.
-    Terminal,
-    /// A finger on a phone.
-    Touch,
-}
-
 struct State {
     screen: vt100::Parser,
     queries: xterm::QueryCarry,
@@ -360,7 +347,7 @@ impl Terminal {
                 screen: vt100::Parser::new(size.rows, size.cols, 0),
                 queries: xterm::QueryCarry::default(),
             }),
-            input: Mutex::new(mouse::InputCarry::default()),
+            input: Mutex::new(input::InputCarry::default()),
             operations: OperationGate::default(),
             writer,
             output,
@@ -394,15 +381,12 @@ impl Terminal {
 
     /// Attach a viewer: the current screen, then live output.
     ///
-    /// Mouse reporting is switched on toward a touch viewer only. A terminal emulator has its own mouse,
-    /// and reporting to it took its drag selection away and turned clicks into keys (2026-08-29).
-    pub async fn attach(&self, viewer: ViewerKind) -> Attachment {
+    /// Nothing is added to the screen: the host never switches mouse reporting on toward a viewer, whose
+    /// own terminal keeps its selection and wheel (2026-08-29).
+    pub async fn attach(&self) -> Attachment {
         let mut state = self.shared.state.lock().await;
         let size = unpack_size(self.shared.geometry.load(Ordering::Acquire));
-        let mut snapshot = screen_snapshot_or_reset(&mut state.screen, size);
-        if viewer == ViewerKind::Touch {
-            snapshot.extend_from_slice(mouse::VIEWER_MOUSE_ON);
-        }
+        let snapshot = screen_snapshot_or_reset(&mut state.screen, size);
         Attachment {
             snapshot: Bytes::from(snapshot),
             live: self.shared.output.subscribe(),
@@ -410,15 +394,14 @@ impl Terminal {
         }
     }
 
-    /// Bytes a viewer typed. A touch viewer's mouse reports are translated on the screen; terminal answers
-    /// the viewer sent on its own are dropped (this host already answered); everything else reaches the
-    /// CLI as it is.
+    /// Bytes a viewer typed. They reach the CLI exactly as written; only the terminal answers the viewer's
+    /// own terminal sent are dropped (this host already answered).
     ///
     /// # Errors
     ///
     /// [`TerminalError::Input`] when the terminal no longer accepts input.
-    pub async fn input(&self, bytes: &[u8], viewer: ViewerKind) -> Result<(), TerminalError> {
-        self.operation().await?.input(bytes, viewer).await
+    pub async fn input(&self, bytes: &[u8]) -> Result<(), TerminalError> {
+        self.operation().await?.input(bytes).await
     }
 
     /// The viewer changed size. The CLI redraws for the new one.
@@ -510,17 +493,8 @@ impl TerminalOperation<'_> {
     /// # Errors
     ///
     /// [`TerminalError::Input`] when the terminal rejects or does not acknowledge the input by its deadline.
-    pub async fn input(&mut self, bytes: &[u8], viewer: ViewerKind) -> Result<(), TerminalError> {
-        let forwarded = {
-            let mut input = self.shared.input.lock().await;
-            match viewer {
-                ViewerKind::Terminal => input.translate_terminal(bytes),
-                ViewerKind::Touch => {
-                    let state = self.shared.state.lock().await;
-                    input.translate(bytes, state.screen.screen(), viewer)
-                }
-            }
-        };
+    pub async fn input(&mut self, bytes: &[u8]) -> Result<(), TerminalError> {
+        let forwarded = self.shared.input.lock().await.forward(bytes);
         if forwarded.is_empty() {
             return Ok(());
         }
@@ -1021,7 +995,7 @@ mod tests {
             size: PtySize { cols: 40, rows: 10 },
         })
         .expect("a terminal opens");
-        let mut viewer = terminal.attach(ViewerKind::Terminal).await;
+        let mut viewer = terminal.attach().await;
         let script: [&[u8]; 4] = [
             b"plain \x1b[?10",
             b"00h\x1b[?1006h\x1b[?1049;1000;25h",
@@ -1069,7 +1043,7 @@ mod tests {
             size: PtySize { cols: 80, rows: 24 },
         })
         .expect("the shell opens on a hosted terminal");
-        let mut early = terminal.attach(ViewerKind::Terminal).await;
+        let mut early = terminal.attach().await;
         let mut exited = early.exited.clone();
         tokio::time::timeout(Duration::from_secs(10), async {
             loop {
@@ -1091,21 +1065,15 @@ mod tests {
             text.contains("host-hello"),
             "the early viewer saw the echo: {text:?}"
         );
-        let late = terminal.attach(ViewerKind::Terminal).await;
+        let late = terminal.attach().await;
         let snapshot = String::from_utf8_lossy(&late.snapshot);
         assert!(
             snapshot.contains("host-hello"),
             "the late viewer's snapshot carries the screen: {snapshot:?}"
         );
-        let mouse_on = std::str::from_utf8(mouse::VIEWER_MOUSE_ON).expect("ascii");
         assert!(
-            !snapshot.contains(mouse_on),
-            "a terminal viewer keeps its own mouse: no reporting is switched on toward it"
-        );
-        let touch = terminal.attach(ViewerKind::Touch).await;
-        assert!(
-            String::from_utf8_lossy(&touch.snapshot).ends_with(mouse_on),
-            "a touch viewer is asked to report mouse"
+            !snapshot.contains("\x1b[?1000h"),
+            "no mouse reporting is ever switched on toward a viewer: {snapshot:?}"
         );
     }
 
@@ -1147,14 +1115,14 @@ mod tests {
         })
         .expect("the shell opens on a hosted terminal");
         let second_view = first_view.clone();
-        let mut attachment = first_view.attach(ViewerKind::Terminal).await;
+        let mut attachment = first_view.attach().await;
 
         first_view
-            .input(format!("first{line_end}").as_bytes(), ViewerKind::Terminal)
+            .input(format!("first{line_end}").as_bytes())
             .await
             .expect("the first viewer writes");
         second_view
-            .input(format!("second{line_end}").as_bytes(), ViewerKind::Terminal)
+            .input(format!("second{line_end}").as_bytes())
             .await
             .expect("the second viewer writes");
 

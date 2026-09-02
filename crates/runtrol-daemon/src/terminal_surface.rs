@@ -10,7 +10,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use runtrol_core::terminal::{Attachment, Terminal, TerminalLaunch, ViewerKind};
+use runtrol_core::terminal::{Attachment, Terminal, TerminalLaunch};
 use runtrol_provider::{AbsPath, ProviderId, TerminalId, WallMs};
 
 use crate::compose::Composed;
@@ -572,7 +572,7 @@ fn forget_on_exit(composed: Arc<Composed>, id: TerminalId, terminal: &Terminal) 
 /// Open or join the one shared terminal table after the caller validated provider and root authority.
 #[expect(
     clippy::too_many_arguments,
-    reason = "one open binds provider, native identity, folder, geometry, program and viewer, and bundling them would only rename the list"
+    reason = "one open binds provider, native identity, folder, geometry and program, and bundling them would only rename the list"
 )]
 pub(crate) async fn open_hosted(
     composed: &Arc<Composed>,
@@ -582,7 +582,6 @@ pub(crate) async fn open_hosted(
     cols: u16,
     rows: u16,
     prepared_program: Option<runtrol_childproc::Program>,
-    viewer: ViewerKind,
     holder_known: bool,
 ) -> Result<(TerminalId, Terminal, Attachment), TerminalOpenError> {
     open_with_arguments(
@@ -594,18 +593,9 @@ pub(crate) async fn open_hosted(
         rows,
         prepared_program,
         None,
-        viewer,
         holder_known,
     )
     .await
-}
-
-/// The private wire's word for a viewer, as the host's own.
-pub(crate) const fn viewer_kind(viewer: runtrol_ipc::wire::TerminalViewer) -> ViewerKind {
-    match viewer {
-        runtrol_ipc::wire::TerminalViewer::Terminal => ViewerKind::Terminal,
-        runtrol_ipc::wire::TerminalViewer::Touch => ViewerKind::Touch,
-    }
 }
 
 /// Open an exact local provider invocation and make the invoking terminal its first viewer.
@@ -613,10 +603,6 @@ pub(crate) const fn viewer_kind(viewer: runtrol_ipc::wire::TerminalViewer) -> Vi
 /// Provider identity and executable still come from the runtime registry. Arguments are the local operator's exact
 /// argv and are never interpreted for meaning. A native identity is bound only when they structurally match the
 /// manifest's discovered resume prefix followed by one opaque id.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "one brokered open binds provider, folder, geometry, exact argv, program and viewer, and bundling them would only rename the list"
-)]
 pub(crate) async fn open_brokered(
     composed: &Arc<Composed>,
     id: ProviderId,
@@ -625,7 +611,6 @@ pub(crate) async fn open_brokered(
     rows: u16,
     arguments: Vec<String>,
     prepared_program: runtrol_childproc::Program,
-    viewer: ViewerKind,
 ) -> Result<(TerminalId, Terminal, Attachment), TerminalOpenError> {
     if arguments.len() > MAX_BROKER_ARGUMENTS
         || arguments.iter().map(String::len).sum::<usize>() > MAX_BROKER_ARGUMENT_BYTES
@@ -651,7 +636,6 @@ pub(crate) async fn open_brokered(
         rows,
         Some(prepared_program),
         Some(arguments),
-        viewer,
         // An exact invocation from a broker names its own conversation and nobody asked the service about it,
         // so the unnamed-terminal guard stays in force here.
         false,
@@ -688,7 +672,6 @@ async fn open_with_arguments(
     rows: u16,
     prepared_program: Option<runtrol_childproc::Program>,
     exact_arguments: Option<Vec<String>>,
-    viewer: ViewerKind,
     holder_known: bool,
 ) -> Result<(TerminalId, Terminal, Attachment), TerminalOpenError> {
     if let Some(native) = native
@@ -697,7 +680,7 @@ async fn open_with_arguments(
         if existing.workspace != cwd {
             return Err(TerminalClaimError::WorkspaceConflict.into());
         }
-        let attachment = existing.terminal.attach(viewer).await;
+        let attachment = existing.terminal.attach().await;
         return Ok((existing.id, existing.terminal, attachment));
     }
     let terminal_id = TerminalId::now();
@@ -709,7 +692,7 @@ async fn open_with_arguments(
         holder_known,
     )? {
         TerminalClaimAdmission::Join(existing) => {
-            let (hosted, attachment) = attach_current(composed, existing, viewer)
+            let (hosted, attachment) = attach_current(composed, existing)
                 .await
                 .map_err(TerminalOpenError::Provider)?;
             return Ok((hosted.id, hosted.terminal, attachment));
@@ -787,7 +770,7 @@ async fn open_with_arguments(
         return Err(error.into());
     }
     forget_on_exit(Arc::clone(composed), terminal_id, &terminal);
-    let attachment = terminal.attach(viewer).await;
+    let attachment = terminal.attach().await;
     Ok((terminal_id, terminal, attachment))
 }
 
@@ -802,10 +785,6 @@ async fn open_with_arguments(
 /// live: that claim owns no transcript or conversation, but it prevents another Runtime generation from allocating a
 /// second renderer for the same external owner. Observation alone never reaches this function. The first viewer
 /// allocates the helper, screen model and output ring, and later viewers attach to those same bounded objects.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "one console attachment binds exact process, native identity, folder, geometry and viewer"
-)]
 pub(crate) async fn open_console_mirror(
     composed: &Arc<Composed>,
     provider: ProviderId,
@@ -814,7 +793,6 @@ pub(crate) async fn open_console_mirror(
     cwd: AbsPath,
     cols: u16,
     rows: u16,
-    viewer: ViewerKind,
 ) -> Result<(TerminalId, Terminal, Attachment), TerminalOpenError> {
     let helper = runtrol_childproc::console_mirror::helper_program()
         .map_err(|error| TerminalOpenError::Provider(error.to_string()))?;
@@ -822,7 +800,7 @@ pub(crate) async fn open_console_mirror(
         if existing.workspace != cwd {
             return Err(TerminalClaimError::WorkspaceConflict.into());
         }
-        let attachment = existing.terminal.attach(viewer).await;
+        let attachment = existing.terminal.attach().await;
         return Ok((existing.id, existing.terminal, attachment));
     }
     // A session another Runtime generation already hosts is already a conversation, not a new one. Its terminal
@@ -837,7 +815,7 @@ pub(crate) async fn open_console_mirror(
         false,
     )? {
         TerminalClaimAdmission::Join(existing) => {
-            let (hosted, attachment) = attach_current(composed, existing, viewer)
+            let (hosted, attachment) = attach_current(composed, existing)
                 .await
                 .map_err(TerminalOpenError::Provider)?;
             return Ok((hosted.id, hosted.terminal, attachment));
@@ -850,7 +828,7 @@ pub(crate) async fn open_console_mirror(
             if existing.workspace != cwd {
                 return Err(TerminalClaimError::WorkspaceConflict.into());
             }
-            let attachment = existing.terminal.attach(viewer).await;
+            let attachment = existing.terminal.attach().await;
             return Ok((existing.id, existing.terminal, attachment));
         }
         if terminals.hosts_pid(pid) {
@@ -886,7 +864,7 @@ pub(crate) async fn open_console_mirror(
         return Err(error.into());
     }
     forget_on_exit(Arc::clone(composed), terminal_id, &terminal);
-    let attachment = terminal.attach(viewer).await;
+    let attachment = terminal.attach().await;
     Ok((terminal_id, terminal, attachment))
 }
 
@@ -910,13 +888,12 @@ pub(crate) async fn open_official_attach(
     cols: u16,
     rows: u16,
     program: runtrol_childproc::Program,
-    viewer: ViewerKind,
 ) -> Result<(TerminalId, Terminal, Attachment), TerminalOpenError> {
     if let Some(existing) = composed.terminals.lock().await.open_for(provider, native) {
         if existing.workspace != cwd {
             return Err(TerminalClaimError::WorkspaceConflict.into());
         }
-        let attachment = existing.terminal.attach(viewer).await;
+        let attachment = existing.terminal.attach().await;
         return Ok((existing.id, existing.terminal, attachment));
     }
     let declared = composed
@@ -943,7 +920,7 @@ pub(crate) async fn open_official_attach(
         false,
     )? {
         TerminalClaimAdmission::Join(existing) => {
-            let (hosted, attachment) = attach_current(composed, existing, viewer)
+            let (hosted, attachment) = attach_current(composed, existing)
                 .await
                 .map_err(TerminalOpenError::Provider)?;
             return Ok((hosted.id, hosted.terminal, attachment));
@@ -984,7 +961,7 @@ pub(crate) async fn open_official_attach(
             if existing.workspace != cwd {
                 return Err(TerminalClaimError::WorkspaceConflict.into());
             }
-            let attachment = existing.terminal.attach(viewer).await;
+            let attachment = existing.terminal.attach().await;
             return Ok((existing.id, existing.terminal, attachment));
         }
         if terminals.len() >= MAX_HOSTED_TERMINALS {
@@ -1022,7 +999,7 @@ pub(crate) async fn open_official_attach(
         return Err(error.into());
     }
     forget_on_exit(Arc::clone(composed), terminal_id, &terminal);
-    let attachment = terminal.attach(viewer).await;
+    let attachment = terminal.attach().await;
     Ok((terminal_id, terminal, attachment))
 }
 
@@ -1098,7 +1075,6 @@ async fn run_official_stop(stop: &OfficialStop) -> Result<(), String> {
 pub(crate) async fn attach_current(
     composed: &Composed,
     id: TerminalId,
-    viewer: ViewerKind,
 ) -> Result<(HostedTerminal, Attachment), String> {
     let terminals = composed.terminals.lock().await;
     let hosted = terminals
@@ -1109,7 +1085,7 @@ pub(crate) async fn attach_current(
     }
     // Keep the table lock until `Terminal::attach` has subscribed under the terminal state lock. Draining takes the
     // same table lock before testing `viewer_count`, which makes attach versus retirement one exact ordering point.
-    let attachment = hosted.terminal.attach(viewer).await;
+    let attachment = hosted.terminal.attach().await;
     drop(terminals);
     Ok((hosted, attachment))
 }
@@ -1139,7 +1115,7 @@ mod tests {
     async fn descendant_pid(terminal: &Terminal) -> u32 {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
         loop {
-            let attachment = terminal.attach(ViewerKind::Terminal).await;
+            let attachment = terminal.attach().await;
             let screen = String::from_utf8_lossy(&attachment.snapshot);
             if let Some(tail) = screen.split(DESCENDANT_PID_MARKER).nth(1) {
                 let digits = tail

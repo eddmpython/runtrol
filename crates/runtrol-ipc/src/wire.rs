@@ -375,10 +375,6 @@ pub enum Request {
         cols: u16,
         /// This viewer's rows.
         rows: u16,
-        /// What is on the other side of this view. Absent from a client built before the field, which is a
-        /// terminal: the only viewers that ever opened one were consoles and editor terminals.
-        #[serde(default)]
-        viewer: TerminalViewer,
     },
 
     /// Join a terminal that is already open (a second viewer, such as a phone), and turn this connection into
@@ -390,9 +386,6 @@ pub enum Request {
         cols: u16,
         /// This viewer's rows.
         rows: u16,
-        /// What is on the other side of this view.
-        #[serde(default)]
-        viewer: TerminalViewer,
     },
 
     /// Bytes the viewer typed or its mouse reported, on a connection that is a terminal view.
@@ -801,22 +794,6 @@ pub struct GenerationLiveClaimLine {
     pub surface: GenerationLiveClaimSurface,
     /// Surface-local owner identity with no content.
     pub owner_id: Box<str>,
-}
-
-/// What is on the other side of a terminal view.
-///
-/// A real terminal emulator (an editor's xterm.js, a console, Windows Terminal) selects on drag and scrolls
-/// on wheel by itself, so the host must not switch mouse reporting on toward it: with reporting on, every
-/// click became arrow keys and a drag stopped selecting (operator, 2026-08-29). A touch screen has no keys
-/// to send, so for it the host reports mouse and turns each report into keys.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub enum TerminalViewer {
-    /// A terminal emulator with its own mouse.
-    #[default]
-    Terminal,
-    /// A finger on a phone.
-    Touch,
 }
 
 /// One authorization row a draining generation kept for the successor that owns the store.

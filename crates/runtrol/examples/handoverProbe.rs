@@ -617,6 +617,7 @@ async fn screen(
         "exited": exited,
         "rows": rendered_rows(&bytes),
         "cursor": rendered_cursor(&bytes),
+        "mouseModeSeen": mentions_mouse_mode(&bytes),
     })
     .to_string())
 }

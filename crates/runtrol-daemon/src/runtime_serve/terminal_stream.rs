@@ -514,7 +514,7 @@ pub(super) async fn relay_terminal(
                         let fresh = view
                             .hosted
                             .terminal
-                            .attach(runtrol_core::terminal::ViewerKind::Terminal)
+                            .attach()
                             .await;
                         if fresh.snapshot.len() > runtrol_runtime_protocol::MAX_TERMINAL_SCREEN_BYTES {
                             return RelayOutcome::CloseConnection;

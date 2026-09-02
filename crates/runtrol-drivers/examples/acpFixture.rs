@@ -303,12 +303,16 @@ fn terminal() -> Result<(), ()> {
         marker.flush().map_err(|_| ())?;
     }
     let mut output = std::io::stdout().lock();
+    // Switch mouse reporting on, as a real TUI does (one renderer of Claude Code sends exactly this pair). What a
+    // viewer does with it is the viewer's business; a report that reaches this program is echoed below with its
+    // ESC made visible, so a screen shows whether any did.
+    write!(output, "\x1b[?1000h\x1b[?1006h").map_err(|_| ())?;
     writeln!(output, "acp-fixture terminal ready").map_err(|_| ())?;
     output.flush().map_err(|_| ())?;
     let input = std::io::stdin();
     for line in input.lock().lines() {
         let line = line.map_err(|_| ())?;
-        writeln!(output, "echo: {line}").map_err(|_| ())?;
+        writeln!(output, "echo: {}", line.replace('\x1b', "^[")).map_err(|_| ())?;
         output.flush().map_err(|_| ())?;
     }
     Ok(())
