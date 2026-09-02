@@ -113,18 +113,23 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
         # (2026-08-28). Widths and colours belong to a class in the nonced stylesheet.
         'style="': "an inline style attribute the page's own policy silently drops",
     }
-    # One timer is not a poll: it draws the Runtrol mark in a conversation tab while the tab opens and stops on
-    # the first byte the service writes (`openingMark.ts`, added 2026-08-28). It is named here by its exact call
-    # so that any other timer of this shape, which is what the ban is for, still trips.
-    opening_mark = "this.opening = setInterval(() => {"
-    if opening_mark not in sources.get("terminalTabs.ts", ""):
-        found.append("the opening mark's frame timer is missing from the conversation terminal")
-    if "clearInterval" not in sources.get("terminalTabs.ts", ""):
-        found.append("the opening mark's frame timer is never stopped")
     for token, meaning in forbidden.items():
-        haystack = all_source.replace(opening_mark, "") if token == "setInterval(" else all_source
-        if token in haystack:
+        if token in all_source:
             found.append(f"{meaning} is reachable through `{token}`")
+    # The conversation pane carries the service's bytes and nothing else (`terminalTransportIntegrity`, Studio
+    # presentation, 2026-09-02): no opening mark, no clear before a checkpoint, no exit or error sentence. What
+    # the pseudoterminal module may write is what the Runtime sent, after the one viewer-edge mouse filter.
+    pane = sources.get("runtimeTerminal.ts", "")
+    for token, meaning in {
+        "paintMark(": "the opening mark drawn into the conversation pane",
+        "x1b[2J": "a clear-screen sequence Studio writes into the conversation pane",
+        "x1b[31m": "an error sentence Studio writes into the conversation pane",
+        "ended with code": "an exit sentence Studio writes into the conversation pane",
+    }.items():
+        if token in pane:
+            found.append(f"{meaning} is back in runtimeTerminal.ts through `{token}`")
+    if "this.writeEmitter.fire(text)" not in pane or pane.count("this.writeEmitter.fire(") != 1:
+        found.append("runtimeTerminal.ts must write the pane from exactly one place, the filtered service bytes")
 
     # One view, one document. A second file that builds a whole page brings a second `body` rule with it, and
     # the last one concatenated wins. The usage strip had one from when it was its own webview; folding it into
@@ -222,6 +227,12 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
         "terminalTabs.ts": [
             "projectAccentColor(",
             "iconPath: this.iconFor(",
+            "vscode.ProgressLocation.Window",
+        ],
+        "runtimeTerminal.ts": [
+            "this.presentation.opening(connecting)",
+            "this.presentation.ended(notification.exitCode)",
+            "this.presentation.failed(message)",
         ],
         "extension.ts": [
             "afterReady",
@@ -473,7 +484,11 @@ def selftest() -> int:
             "this.socket.end()"
         ),
         "terminalTabs.ts": (
-            "this.opening = setInterval(() => { clearInterval projectAccentColor( iconPath: this.iconFor("
+            "projectAccentColor( iconPath: this.iconFor( vscode.ProgressLocation.Window"
+        ),
+        "runtimeTerminal.ts": (
+            "this.presentation.opening(connecting) this.presentation.ended(notification.exitCode) "
+            "this.presentation.failed(message) this.writeEmitter.fire(text)"
         ),
         "conversationIcon.ts": (
             'vscode.Uri.joinPath(extensionUri, "resources", "provider-icons", `${icon}.svg`) '

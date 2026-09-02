@@ -21,6 +21,10 @@ and refactoring that no user can observe do not belong here.
 
 ### Changed
 
+- A conversation tab's pane now holds the provider's bytes and nothing else. The Runtrol mark that was drawn while a
+  tab opened, the clear-screen written before a replacement screen, and the exit and error sentences written into
+  the pane are gone: opening shows as the window's progress indicator, an exit or failure changes the tab title, and
+  a failure is also reported as a notification.
 - The Core no longer rewrites provider terminal output: mouse-mode switches now reach every viewer exactly as the
   provider wrote them, and the Studio tab keeps its own selection and wheel by filtering that one control family at
   its own edge, checkpoints included.
