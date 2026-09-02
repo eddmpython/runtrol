@@ -35,6 +35,11 @@ transport or Studio navigation.
 - A viewer that crosses the ring's lag boundary receives one replacement checkpoint and then live output at the
   announced sequence; one that stops taking output for ten seconds is closed explicitly. Neither delays a healthy
   viewer, which drains its own receiver from the shared ring.
+- A write has one receipt: written, or failed. When its outcome is unknown (a short write, a broken pipe, a write
+  the terminal never acknowledged within two seconds) the host ends that terminal generation at once, so nothing is
+  ever written on top of a partial input; the Runtime answers such a write with `outcomeUnknown`, keeps its pending
+  record so a retry of the same request identity is refused rather than written again, and a repeat of a completed
+  request identity is answered from the record without a second write.
 - The raw lane publishes each chunk the host read, exactly and first, under one sequence. The passive checkpoint
   projector reads that same ring afterwards and can neither delay nor change what a viewer receives; a panic
   inside it, or falling a whole ring behind, resets it and marks the checkpoint unavailable while the provider and

@@ -180,6 +180,9 @@ fn main() -> ExitCode {
             ["input-hex", home, identity, digest, terminal, hex] => {
                 input_hex(Path::new(home), Path::new(identity), digest, terminal, hex).await
             }
+            ["write-twice", home, identity, digest, terminal, hex] => {
+                write_twice(Path::new(home), Path::new(identity), digest, terminal, hex).await
+            }
             ["flood", home, identity, digest, terminal, line_bytes, lines] => {
                 flood(
                     Path::new(home),
@@ -646,6 +649,57 @@ async fn screen(
         "rows": rendered_rows(&bytes),
         "cursor": rendered_cursor(&bytes),
         "mouseModeSeen": mentions_mouse_mode(&bytes),
+    })
+    .to_string())
+}
+
+/// The same write, the same request identity, sent twice under one lease: what a client that lost the first
+/// answer would do if it retried. The Runtime must answer the second from its record and write nothing again.
+async fn write_twice(
+    home: &Path,
+    identity_file: &Path,
+    digest: &str,
+    terminal: &str,
+    hex: &str,
+) -> Result<String, String> {
+    let bytes = decode_hex(hex)?;
+    let stored = read_stored(identity_file)?;
+    let generation = generation(home, digest)?;
+    let mut client = RuntimeClient::connect_to(generation, options_with(&stored))
+        .await
+        .map_err(|error| format!("connect to generation {digest}: {error}"))?;
+    let terminal_id = terminal
+        .parse::<RuntimeTerminalId>()
+        .map_err(|error| format!("terminal id: {error}"))?;
+    let mut terminals = client.terminals();
+    let mut view = terminals
+        .attach(&TerminalAttachParams {
+            terminal_id: terminal_id.clone(),
+        })
+        .await
+        .map_err(|error| format!("attach to write twice: {error}"))?;
+    let lease = view
+        .acquire_control(&TerminalAcquireControlParams {
+            request_id: MutationRequestId::now(),
+            terminal_id: terminal_id.clone(),
+            expected_terminal_generation: view.opened().terminal.terminal_generation,
+        })
+        .await
+        .map_err(|error| format!("acquire the control lease: {error}"))?;
+    let request_id = MutationRequestId::now();
+    let params = TerminalWriteParams {
+        request_id,
+        terminal_id,
+        lease_id: lease.lease_id.clone(),
+        lease_generation: lease.lease_generation,
+        bytes_base64: encode_base64(&bytes),
+    };
+    let first = view.write(&params).await.map_err(|error| error.to_string());
+    let second = view.write(&params).await.map_err(|error| error.to_string());
+    Ok(serde_json::json!({
+        "written": bytes.len(),
+        "first": first.map_or_else(|error| error, |()| "ok".to_owned()),
+        "second": second.map_or_else(|error| error, |()| "ok".to_owned()),
     })
     .to_string())
 }

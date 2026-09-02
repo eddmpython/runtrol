@@ -444,10 +444,22 @@ impl Terminal {
     }
 
     fn host(child: Child, size: PtySize) -> Result<Self, TerminalError> {
+        let reader = child.reader()?;
+        let writer = child.writer()?;
+        Self::host_with(child, reader, writer, size)
+    }
+
+    /// Host a child through the given reader and writer: the seam the writer-fault tests use to put a
+    /// short write, a broken pipe, or a lost acknowledgement between the host and a real process.
+    fn host_with(
+        child: Child,
+        reader: Box<dyn TerminalRead>,
+        writer: Box<dyn Write + Send>,
+        size: PtySize,
+    ) -> Result<Self, TerminalError> {
         let handle = tokio::runtime::Handle::try_current()
             .map_err(|error| TerminalError::Runtime(error.to_string()))?;
-        let reader = child.reader()?;
-        let writer = terminal_writer(child.writer()?)?;
+        let writer = terminal_writer(writer)?;
         let (output, _) = broadcast::channel(RING_CHUNKS);
         let (exited, _) = watch::channel(None);
         let shared = Arc::new(Shared {
@@ -787,14 +799,20 @@ impl Shared {
             return Err(terminal_writer_closed());
         }
         let (answered, answer) = oneshot::channel();
-        self.writer
+        if self
+            .writer
             .try_send(WriteRequest { bytes, answered })
-            .map_err(|_| terminal_writer_closed())?;
+            .is_err()
+        {
+            return Err(self.close_uncertain_writer(&terminal_writer_closed()));
+        }
         match await_writer_answer(answer, TERMINAL_WRITE_DEADLINE).await {
-            Err(error) if error.kind() == std::io::ErrorKind::TimedOut => {
-                Err(self.close_stalled_writer())
-            }
-            outcome => outcome,
+            Ok(()) => Ok(()),
+            // A short write, a broken pipe, or an unanswered write all leave the same question: how much of
+            // the input reached the process? Nothing may be written again on top of an unknown, so the
+            // terminal ends here and the question never has to be answered (`terminalTransportIntegrity`,
+            // input: one receipt, never replayed).
+            Err(cause) => Err(self.close_uncertain_writer(&cause)),
         }
     }
 
@@ -805,19 +823,20 @@ impl Shared {
         self.write_ordered(bytes).await
     }
 
-    fn close_stalled_writer(&self) -> std::io::Error {
+    /// End this terminal generation because a write's outcome is unknown. The process is killed and the
+    /// host finished, so no later input can land after a partial one.
+    fn close_uncertain_writer(&self, cause: &std::io::Error) -> std::io::Error {
         let killed = self.child.kill();
         self.finish();
         let message = match killed {
-            Ok(()) => {
-                "terminal input exceeded its writer deadline; the stalled terminal was closed"
-                    .to_owned()
-            }
+            Ok(()) => format!(
+                "terminal input outcome is uncertain ({cause}); the terminal was closed so nothing is written twice"
+            ),
             Err(error) => format!(
-                "terminal input exceeded its writer deadline; closing the stalled terminal failed: {error}"
+                "terminal input outcome is uncertain ({cause}); closing the terminal failed: {error}"
             ),
         };
-        std::io::Error::new(std::io::ErrorKind::TimedOut, message)
+        std::io::Error::new(cause.kind(), message)
     }
 
     /// One chunk the CLI wrote, out to every viewer and the projector alike, exactly as the host read it.
@@ -1525,6 +1544,144 @@ mod tests {
             checked >= 30,
             "most late viewers arrived mid-stream: {checked}"
         );
+    }
+
+    /// How a faulted writer misbehaves.
+    #[derive(Clone, Copy)]
+    enum WriterFault {
+        /// Accepts three bytes, then reports that nothing more could be written.
+        Short,
+        /// Refuses the first byte: the other end is gone.
+        BrokenPipe,
+        /// Takes the bytes and never answers within the host's deadline.
+        LostAcknowledgement,
+    }
+
+    /// A writer between the host and a real process that fails the way a pipe can. It counts every write call
+    /// so a test can see that nothing was tried again after the failure.
+    struct FaultyWriter {
+        fault: WriterFault,
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl Write for FaultyWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            let call = self.calls.fetch_add(1, Ordering::SeqCst);
+            match self.fault {
+                WriterFault::Short if call == 0 => Ok(buf.len().min(3)),
+                WriterFault::Short => Err(std::io::Error::new(
+                    std::io::ErrorKind::WriteZero,
+                    "the terminal took no more bytes",
+                )),
+                WriterFault::BrokenPipe => Err(std::io::Error::new(
+                    std::io::ErrorKind::BrokenPipe,
+                    "the terminal is gone",
+                )),
+                WriterFault::LostAcknowledgement => {
+                    std::thread::sleep(TERMINAL_WRITE_DEADLINE * 3);
+                    Ok(buf.len())
+                }
+            }
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// A real shell on a real pseudo terminal, hosted through a writer that will fail.
+    fn hosted_through(fault: WriterFault) -> (Terminal, Arc<std::sync::atomic::AtomicUsize>) {
+        let (shell, arguments) = if cfg!(windows) {
+            (
+                "cmd",
+                vec![
+                    "/q".to_owned(),
+                    "/d".to_owned(),
+                    "/c".to_owned(),
+                    "set /p first=".to_owned(),
+                ],
+            )
+        } else {
+            ("sh", vec!["-c".to_owned(), "IFS= read -r first".to_owned()])
+        };
+        let program = runtrol_childproc::resolve(shell).expect("the platform shell resolves");
+        let cwd = AbsPath::canonicalize(std::env::temp_dir().to_str().expect("utf-8 temp dir"))
+            .expect("the temp dir is absolute");
+        let size = PtySize { cols: 80, rows: 24 };
+        let child = PtyChild::spawn(PtySpawn {
+            program: &program,
+            arguments: &arguments,
+            cwd: &cwd,
+            env: &[],
+            env_unset: &[],
+            size,
+        })
+        .expect("the shell spawns on a pseudo terminal");
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let reader = child.reader().expect("the terminal reads");
+        let writer = Box::new(FaultyWriter {
+            fault,
+            calls: Arc::clone(&calls),
+        });
+        let terminal = Terminal::host_with(Child::Pty(child), reader, writer, size)
+            .expect("the shell is hosted through the faulty writer");
+        (terminal, calls)
+    }
+
+    async fn uncertain_write_is_fatal_and_never_replayed(
+        fault: WriterFault,
+        calls_before_failure: usize,
+    ) {
+        let (terminal, calls) = hosted_through(fault);
+        let mut viewer = terminal.attach().await;
+        let refused = terminal
+            .input(b"first line\r\n")
+            .await
+            .expect_err("a write whose outcome is unknown is refused");
+        assert!(
+            matches!(refused, TerminalError::Input(_)),
+            "the refusal names the input path: {refused:?}"
+        );
+        assert!(
+            terminal.shared.finished.load(Ordering::Acquire),
+            "the terminal generation ended with the uncertain write"
+        );
+        let exit = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if viewer.exited.borrow().is_some() {
+                    return *viewer.exited.borrow();
+                }
+                viewer.exited.changed().await.expect("the exit watch lives");
+            }
+        })
+        .await
+        .expect("the killed process is reported as exited");
+        assert!(exit.is_some());
+        let again = terminal
+            .input(b"second line\r\n")
+            .await
+            .expect_err("nothing is written into an ended terminal");
+        assert!(matches!(again, TerminalError::Input(_)));
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            calls_before_failure,
+            "no write was tried again after the failure"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_short_write_ends_the_terminal_and_is_never_replayed() {
+        uncertain_write_is_fatal_and_never_replayed(WriterFault::Short, 2).await;
+    }
+
+    #[tokio::test]
+    async fn a_broken_pipe_ends_the_terminal_and_is_never_replayed() {
+        uncertain_write_is_fatal_and_never_replayed(WriterFault::BrokenPipe, 1).await;
+    }
+
+    #[tokio::test]
+    async fn a_lost_acknowledgement_ends_the_terminal_and_is_never_replayed() {
+        uncertain_write_is_fatal_and_never_replayed(WriterFault::LostAcknowledgement, 1).await;
     }
 
     #[tokio::test]

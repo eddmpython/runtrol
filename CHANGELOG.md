@@ -41,6 +41,9 @@ and refactoring that no user can observe do not belong here.
 - Pressing Escape alone in a conversation tab now reaches the provider at once. The Core's input boundary used to
   hold a lone Escape as an unfinished sequence and deliver it glued to the next key, which a CLI reads as an Alt
   chord. A mouse report a viewer sends is now forwarded to the provider exactly as written instead of dropped.
+- A write into a conversation whose outcome is unknown (a short write, a broken pipe, a write the terminal never
+  acknowledged) now ends that conversation terminal at once instead of leaving it open for more input on top of a
+  partial line; nothing typed is ever written twice.
 - A window no longer falls behind and gets its screen replaced during a fast provider burst: the Runtime host now
   reads a burst whole (waiting at most a millisecond for the rest of it) instead of publishing hundreds of tiny
   pieces, and a window that stops taking output altogether for ten seconds is closed explicitly rather than held
