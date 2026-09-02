@@ -29,6 +29,12 @@ transport or Studio navigation.
   terminal admission to the Core hot-process ceiling and proves the complete-set memory bound. Viewers reuse that
   fan-out and add no payload ring of their own; control records are bounded separately.
 - Runtime answers terminal capability and cursor-position queries once at the host. Viewers do not race to answer.
+- The host reads a burst whole: after a partial read it waits at most one millisecond for the rest, so a fast
+  provider arrives as a few full chunks rather than hundreds of scraps and a healthy viewer never falls behind the
+  bounded ring on a burst. Bytes and order are the provider's; only the read boundary is the host's.
+- A viewer that crosses the ring's lag boundary receives one replacement checkpoint and then live output at the
+  announced sequence; one that stops taking output for ten seconds is closed explicitly. Neither delays a healthy
+  viewer, which drains its own receiver from the shared ring.
 - The raw lane publishes each chunk the host read, exactly and first, under one sequence. The passive checkpoint
   projector reads that same ring afterwards and can neither delay nor change what a viewer receives; a panic
   inside it, or falling a whole ring behind, resets it and marks the checkpoint unavailable while the provider and

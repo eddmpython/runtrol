@@ -92,7 +92,7 @@ impl PtyChild {
     /// # Errors
     ///
     /// [`SpawnError::Pty`] when the platform cannot duplicate the terminal's read end.
-    pub fn reader(&self) -> Result<Box<dyn Read + Send>, SpawnError> {
+    pub fn reader(&self) -> Result<Box<dyn TerminalRead>, SpawnError> {
         self.inner.reader()
     }
 
@@ -192,6 +192,21 @@ fn full_arguments(spawn: &PtySpawn<'_>) -> Vec<String> {
         .cloned()
         .collect()
 }
+
+/// What the host reads a terminal through: a blocking reader that can also say whether more is already waiting.
+///
+/// A pseudo terminal hands out output in many small pieces under load (measured 2026-09-02: a 840 KB echo burst
+/// arrived as 1947 reads of about 300 bytes). A host that publishes every piece as it comes spends its bounded
+/// ring on scraps and makes a healthy viewer lag. Asking whether more is waiting lets the host fill one read to
+/// its chunk size without ever blocking for bytes that are not there; the bytes and their order are untouched.
+pub trait TerminalRead: Read + Send {
+    /// How many bytes can be read right now without blocking. Zero when unknown or none.
+    fn available(&mut self) -> usize {
+        0
+    }
+}
+
+impl TerminalRead for std::process::ChildStdout {}
 
 #[cfg(test)]
 mod tests {

@@ -136,12 +136,12 @@ impl Child {
     )]
     pub(super) fn finish(&self) {}
 
-    pub(super) fn reader(&self) -> Result<Box<dyn Read + Send>, SpawnError> {
+    pub(super) fn reader(&self) -> Result<Box<dyn super::TerminalRead>, SpawnError> {
         let file = self.master.try_clone().map_err(|error| SpawnError::Pty {
             doing: "duplicating the terminal output",
             detail: error.to_string(),
         })?;
-        Ok(Box::new(file))
+        Ok(Box::new(PtyReader { file }))
     }
 
     pub(super) fn writer(&self) -> Result<Box<dyn Write + Send>, SpawnError> {
@@ -213,5 +213,35 @@ impl Drop for Child {
         // Reported nowhere on purpose: `Drop` has no error channel, and a process that already ended makes
         // this call fail by design.
         drop(self.kill());
+    }
+}
+
+/// The pseudo terminal's master side, read.
+struct PtyReader {
+    file: File,
+}
+
+impl Read for PtyReader {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.file.read(buf)
+    }
+}
+
+impl super::TerminalRead for PtyReader {
+    #[expect(
+        unsafe_code,
+        reason = "polling a descriptor for readiness is a kernel call with no safe wrapper"
+    )]
+    fn available(&mut self) -> usize {
+        let mut descriptor = libc::pollfd {
+            fd: self.file.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // SAFETY: one valid pollfd for this process's own open descriptor, a zero timeout, so the call neither
+        // blocks nor touches anything else.
+        let ready = unsafe { libc::poll(&raw mut descriptor, 1, 0) };
+        // A terminal reports readiness, not a count: one more byte is enough to know the next read will not block.
+        usize::from(ready > 0 && descriptor.revents & libc::POLLIN != 0)
     }
 }

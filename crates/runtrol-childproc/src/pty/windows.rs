@@ -12,7 +12,7 @@ use std::ffi::OsStr;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::os::windows::ffi::OsStrExt;
-use std::os::windows::io::FromRawHandle;
+use std::os::windows::io::{AsRawHandle, FromRawHandle};
 use std::sync::atomic::{AtomicIsize, Ordering};
 
 use windows_sys::Win32::Foundation::{
@@ -21,7 +21,7 @@ use windows_sys::Win32::Foundation::{
 use windows_sys::Win32::System::Console::{
     COORD, ClosePseudoConsole, CreatePseudoConsole, HPCON, ResizePseudoConsole,
 };
-use windows_sys::Win32::System::Pipes::CreatePipe;
+use windows_sys::Win32::System::Pipes::{CreatePipe, PeekNamedPipe};
 use windows_sys::Win32::System::Threading::{
     CREATE_UNICODE_ENVIRONMENT, CreateProcessW, DeleteProcThreadAttributeList,
     EXTENDED_STARTUPINFO_PRESENT, GetExitCodeProcess, InitializeProcThreadAttributeList,
@@ -407,12 +407,12 @@ impl Child {
         self.pid
     }
 
-    pub(super) fn reader(&self) -> Result<Box<dyn Read + Send>, SpawnError> {
+    pub(super) fn reader(&self) -> Result<Box<dyn super::TerminalRead>, SpawnError> {
         let file = self.output.try_clone().map_err(|error| SpawnError::Pty {
             doing: "duplicating the terminal output",
             detail: error.to_string(),
         })?;
-        Ok(Box::new(file))
+        Ok(Box::new(PtyReader { file }))
     }
 
     pub(super) fn writer(&self) -> Result<Box<dyn Write + Send>, SpawnError> {
@@ -519,6 +519,44 @@ impl Drop for Child {
         // this call fail by design.
         drop(self.kill());
         close(self.process);
+    }
+}
+
+/// The read end of the pseudo console's output pipe.
+struct PtyReader {
+    file: File,
+}
+
+impl Read for PtyReader {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.file.read(buf)
+    }
+}
+
+impl super::TerminalRead for PtyReader {
+    #[expect(
+        unsafe_code,
+        reason = "asking a pipe how much it holds is a kernel call with no safe wrapper"
+    )]
+    fn available(&mut self) -> usize {
+        let mut waiting: u32 = 0;
+        // SAFETY: the handle is this process's own open pipe read end (the `File` owns it), no buffer is passed
+        // (null with size 0 is the documented way to ask only for the count), and `waiting` outlives the call.
+        let ok = unsafe {
+            PeekNamedPipe(
+                self.file.as_raw_handle(),
+                std::ptr::null_mut(),
+                0,
+                std::ptr::null_mut(),
+                &raw mut waiting,
+                std::ptr::null_mut(),
+            )
+        };
+        if ok == 0 {
+            // A broken pipe answers the next blocking read with its error; nothing is waiting to be read now.
+            return 0;
+        }
+        usize::try_from(waiting).unwrap_or(usize::MAX)
     }
 }
 

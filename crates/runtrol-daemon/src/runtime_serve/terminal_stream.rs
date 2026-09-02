@@ -456,7 +456,7 @@ pub(super) async fn relay_terminal(
                         bytes_base64: base64ct::Base64::encode_string(&chunk.bytes),
                     };
                     sequence = sequence.saturating_add(1);
-                    if send_notification(connection, RuntimeMethod::TerminalsOutput, &notification)
+                    if send_to_view(connection, RuntimeMethod::TerminalsOutput, &notification)
                         .await
                         .is_err()
                     {
@@ -503,9 +503,9 @@ pub(super) async fn relay_terminal(
                             bytes_base64: base64ct::Base64::encode_string(&chunk.bytes),
                         };
                         sequence = sequence.saturating_add(1);
-                        if send_notification(connection, RuntimeMethod::TerminalsOutput, &notification)
-                            .await
-                            .is_err()
+                        if send_to_view(connection, RuntimeMethod::TerminalsOutput, &notification)
+                        .await
+                        .is_err()
                         {
                             return RelayOutcome::CloseConnection;
                         }
@@ -528,9 +528,9 @@ pub(super) async fn relay_terminal(
                             checkpoint_available: fresh.checkpoint_available,
                             next_sequence: sequence,
                         };
-                        if send_notification(connection, RuntimeMethod::TerminalsLagged, &notification)
-                            .await
-                            .is_err()
+                        if send_to_view(connection, RuntimeMethod::TerminalsLagged, &notification)
+                        .await
+                        .is_err()
                         {
                             return RelayOutcome::CloseConnection;
                         }
@@ -914,4 +914,30 @@ async fn send_terminal_index_end(
         )
         .await,
     );
+}
+
+/// How long one view's connection may take to accept one output or replacement frame before the view is closed.
+///
+/// A window that stopped reading (a frozen renderer, a suspended machine) fills its socket and would otherwise hold
+/// this relay forever. The healthy viewers never wait on it either way, since each view drains its own receiver
+/// from the shared ring; this bound only turns a permanently stalled view into an explicit close instead of a
+/// silent hang (`terminalTransportIntegrity`, lag replacement and disconnect).
+const VIEW_WRITE_DEADLINE: Duration = Duration::from_secs(10);
+
+/// One notification into the view's connection, or a failure when the connection did not take it in time.
+async fn send_to_view<T: serde::Serialize>(
+    connection: &mut Connection,
+    method: RuntimeMethod,
+    params: &T,
+) -> Result<(), ()> {
+    match tokio::time::timeout(
+        VIEW_WRITE_DEADLINE,
+        send_notification(connection, method, params),
+    )
+    .await
+    {
+        Ok(Ok(())) => Ok(()),
+        // ok: a transport failure and a stalled connection both end the view; the caller closes the connection.
+        Ok(Err(_)) | Err(_) => Err(()),
+    }
 }

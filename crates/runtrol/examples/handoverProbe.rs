@@ -97,6 +97,10 @@ impl Stored {
     }
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "one flat table of probe phases, each one line per word, reads better than a second dispatch layer"
+)]
 fn main() -> ExitCode {
     let words = std::env::args().skip(1).collect::<Vec<_>>();
     let runtime = match tokio::runtime::Builder::new_current_thread()
@@ -175,6 +179,29 @@ fn main() -> ExitCode {
             }
             ["input-hex", home, identity, digest, terminal, hex] => {
                 input_hex(Path::new(home), Path::new(identity), digest, terminal, hex).await
+            }
+            ["flood", home, identity, digest, terminal, line_bytes, lines] => {
+                flood(
+                    Path::new(home),
+                    Path::new(identity),
+                    digest,
+                    terminal,
+                    line_bytes,
+                    lines,
+                )
+                .await
+            }
+            ["stall", home, identity, digest, terminal, read_ms, pause_ms, resume_ms] => {
+                stall(
+                    Path::new(home),
+                    Path::new(identity),
+                    digest,
+                    terminal,
+                    read_ms,
+                    pause_ms,
+                    resume_ms,
+                )
+                .await
             }
             _ => Err(
                 "usage: handoverProbe enroll|open|open-native|find-native|attach|stop|parity ..."
@@ -621,6 +648,193 @@ async fn screen(
         "mouseModeSeen": mentions_mouse_mode(&bytes),
     })
     .to_string())
+}
+
+/// Fast output on demand: `lines` lines of `line_bytes` letters each, written under one lease, which a fixture
+/// that echoes every line turns into a burst larger than the shared ring.
+async fn flood(
+    home: &Path,
+    identity_file: &Path,
+    digest: &str,
+    terminal: &str,
+    line_bytes: &str,
+    lines: &str,
+) -> Result<String, String> {
+    let line_bytes = line_bytes
+        .parse::<usize>()
+        .map_err(|error| format!("line bytes: {error}"))?;
+    let lines = lines
+        .parse::<usize>()
+        .map_err(|error| format!("lines: {error}"))?;
+    let stored = read_stored(identity_file)?;
+    let generation = generation(home, digest)?;
+    let mut client = RuntimeClient::connect_to(generation, options_with(&stored))
+        .await
+        .map_err(|error| format!("connect to generation {digest}: {error}"))?;
+    let terminal_id = terminal
+        .parse::<RuntimeTerminalId>()
+        .map_err(|error| format!("terminal id: {error}"))?;
+    let mut terminals = client.terminals();
+    let mut view = terminals
+        .attach(&TerminalAttachParams {
+            terminal_id: terminal_id.clone(),
+        })
+        .await
+        .map_err(|error| format!("attach to flood: {error}"))?;
+    let lease = view
+        .acquire_control(&TerminalAcquireControlParams {
+            request_id: MutationRequestId::now(),
+            terminal_id: terminal_id.clone(),
+            expected_terminal_generation: view.opened().terminal.terminal_generation,
+        })
+        .await
+        .map_err(|error| format!("acquire the control lease: {error}"))?;
+    let mut line = vec![b'x'; line_bytes];
+    line.extend_from_slice(b"\r\n");
+    let started = Instant::now();
+    for _ in 0..lines {
+        write_bytes(&mut view, &lease, terminal_id.clone(), &line).await?;
+    }
+    Ok(serde_json::json!({
+        "written": line.len() * lines,
+        "lines": lines,
+        "elapsedMs": started.elapsed().as_millis(),
+    })
+    .to_string())
+}
+
+/// What one reading stretch of a view saw.
+#[derive(Default)]
+struct ReadStretch {
+    chunks: u64,
+    bytes: u64,
+    lagged: u64,
+    lost_chunks: u64,
+    /// The largest wait between two consecutive notifications while reading, in milliseconds.
+    max_gap_ms: u128,
+    /// Whether every output sequence followed its predecessor, or the sequence a lag replacement announced.
+    sequence_continuous: bool,
+    first: Option<String>,
+    exited: Option<i32>,
+    closed: Option<String>,
+}
+
+impl ReadStretch {
+    fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "chunks": self.chunks,
+            "bytes": self.bytes,
+            "lagged": self.lagged,
+            "lostChunks": self.lost_chunks,
+            "maxGapMs": self.max_gap_ms,
+            "sequenceContinuous": self.sequence_continuous,
+            "first": self.first,
+            "exited": self.exited,
+            "closed": self.closed,
+        })
+    }
+}
+
+/// A viewer that reads, stops reading for a while (what a frozen window does), and reads again. It reports what
+/// the Runtime did about it: chunks before, then after the pause exactly how many lag replacements arrived,
+/// whether output went on at the announced sequence, the largest gap between arrivals, or an explicit close.
+async fn stall(
+    home: &Path,
+    identity_file: &Path,
+    digest: &str,
+    terminal: &str,
+    read_ms: &str,
+    pause_ms: &str,
+    resume_ms: &str,
+) -> Result<String, String> {
+    let read = settle_of(read_ms)?;
+    let pause = settle_of(pause_ms)?;
+    let resume = settle_of(resume_ms)?;
+    let stored = read_stored(identity_file)?;
+    let generation = generation(home, digest)?;
+    let mut client = RuntimeClient::connect_to(generation, options_with(&stored))
+        .await
+        .map_err(|error| format!("connect to generation {digest}: {error}"))?;
+    let terminal_id = terminal
+        .parse::<RuntimeTerminalId>()
+        .map_err(|error| format!("terminal id: {error}"))?;
+    let mut terminals = client.terminals();
+    let mut view = terminals
+        .attach(&TerminalAttachParams { terminal_id })
+        .await
+        .map_err(|error| format!("attach in generation {digest}: {error}"))?;
+    let mut expected_sequence = 1u64;
+    let before = read_stretch(&mut view, read, &mut expected_sequence).await;
+    tokio::time::sleep(pause).await;
+    let after = read_stretch(&mut view, resume, &mut expected_sequence).await;
+    Ok(serde_json::json!({ "before": before.to_json(), "after": after.to_json() }).to_string())
+}
+
+async fn read_stretch(
+    view: &mut runtrol_runtime_client::TerminalView<'_>,
+    window: Duration,
+    expected_sequence: &mut u64,
+) -> ReadStretch {
+    let mut stretch = ReadStretch {
+        sequence_continuous: true,
+        ..ReadStretch::default()
+    };
+    let deadline = Instant::now() + window;
+    let mut last_arrival: Option<Instant> = None;
+    while Instant::now() < deadline {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let arrived = match tokio::time::timeout(remaining, view.next()).await {
+            Ok(Ok(notification)) => notification,
+            Ok(Err(error)) => {
+                stretch.closed = Some(error.to_string());
+                if stretch.first.is_none() {
+                    stretch.first = Some("closed".to_owned());
+                }
+                break;
+            }
+            Err(_) => break,
+        };
+        let now = Instant::now();
+        if let Some(previous) = last_arrival {
+            stretch.max_gap_ms = stretch
+                .max_gap_ms
+                .max(now.duration_since(previous).as_millis());
+        }
+        last_arrival = Some(now);
+        match arrived {
+            runtrol_runtime_client::TerminalNotification::Output { sequence, bytes } => {
+                if stretch.first.is_none() {
+                    stretch.first = Some("output".to_owned());
+                }
+                if sequence != *expected_sequence {
+                    stretch.sequence_continuous = false;
+                }
+                *expected_sequence = sequence.saturating_add(1);
+                stretch.chunks += 1;
+                stretch.bytes += bytes.len() as u64;
+            }
+            runtrol_runtime_client::TerminalNotification::Lagged {
+                lost_chunks,
+                next_sequence,
+                ..
+            } => {
+                if stretch.first.is_none() {
+                    stretch.first = Some("lagged".to_owned());
+                }
+                stretch.lagged += 1;
+                stretch.lost_chunks += lost_chunks;
+                *expected_sequence = next_sequence;
+            }
+            runtrol_runtime_client::TerminalNotification::Exited { exit_code } => {
+                if stretch.first.is_none() {
+                    stretch.first = Some("exited".to_owned());
+                }
+                stretch.exited = Some(exit_code);
+                break;
+            }
+        }
+    }
+    stretch
 }
 
 /// Write one exact byte string, given as hex, through a fresh writer connection under its own control lease.

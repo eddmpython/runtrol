@@ -28,6 +28,7 @@ use runtrol_provider::WallMs;
 use std::time::Duration;
 
 use bytes::Bytes;
+use runtrol_childproc::pty::TerminalRead;
 use runtrol_childproc::{MirrorChild, Program, PtyChild, PtySize, PtySpawn, SpawnError};
 use runtrol_provider::AbsPath;
 use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore, broadcast, mpsc, oneshot, watch};
@@ -41,6 +42,10 @@ pub mod xterm;
 const RING_CHUNKS: usize = 128;
 /// The largest single read from the terminal, and so the largest chunk in the ring.
 const CHUNK_BYTES: usize = 4096;
+/// How long the host waits, after a partial read, for the rest of a burst before publishing the chunk.
+const COALESCE_WAIT: Duration = Duration::from_millis(1);
+/// How often the host looks for more of the burst while waiting.
+const COALESCE_STEP: Duration = Duration::from_micros(200);
 /// Pending writes retained between the async host and the blocking terminal handle.
 const WRITE_QUEUE: usize = 1;
 /// One operation may touch the terminal while one more waits in exact arrival order. A third caller is
@@ -176,7 +181,7 @@ impl Child {
         }
     }
 
-    fn reader(&self) -> Result<Box<dyn std::io::Read + Send>, runtrol_childproc::SpawnError> {
+    fn reader(&self) -> Result<Box<dyn TerminalRead>, runtrol_childproc::SpawnError> {
         match self {
             Self::Pty(child) => child.reader(),
             Self::Mirror(child) => child.reader(),
@@ -931,17 +936,37 @@ fn terminal_writer_closed() -> std::io::Error {
 }
 
 /// The reader thread: block on the terminal, hand each chunk to the host task, stop at end of stream.
-fn read_terminal(mut reader: Box<dyn Read + Send>, chunks: &mpsc::Sender<Bytes>) {
+/// The host's read loop: one blocking read, then whatever is already waiting up to the chunk size, then one
+/// publication. Bytes and order are exactly the terminal's; only the read boundary is the host's, and a
+/// burst that would have been hundreds of scraps is a few full chunks (`terminalTransportIntegrity`, raw lane).
+fn read_terminal(mut reader: Box<dyn TerminalRead>, chunks: &mpsc::Sender<Bytes>) {
     let mut buffer = vec![0u8; CHUNK_BYTES];
     loop {
-        match reader.read(&mut buffer) {
+        let mut filled = match reader.read(&mut buffer) {
             Ok(0) | Err(_) => return,
-            Ok(n) => {
-                let chunk = Bytes::copy_from_slice(buffer.get(..n).unwrap_or(&[]));
-                if chunks.blocking_send(chunk).is_err() {
-                    return;
+            Ok(n) => n,
+        };
+        // A burst arrives as many small pipe writes a few hundred microseconds apart. Waiting one millisecond
+        // at most for the next of them fills the chunk; a lone write (a keystroke's echo) costs that
+        // millisecond once and nothing more.
+        let mut waited = Duration::ZERO;
+        while filled < CHUNK_BYTES {
+            if reader.available() == 0 {
+                if waited >= COALESCE_WAIT {
+                    break;
                 }
+                std::thread::sleep(COALESCE_STEP);
+                waited += COALESCE_STEP;
+                continue;
             }
+            match buffer.get_mut(filled..).map(|rest| reader.read(rest)) {
+                Some(Ok(more)) if more > 0 => filled += more,
+                _ => break,
+            }
+        }
+        let chunk = Bytes::copy_from_slice(buffer.get(..filled).unwrap_or(&[]));
+        if chunks.blocking_send(chunk).is_err() {
+            return;
         }
     }
 }

@@ -702,12 +702,12 @@ mod platform {
         /// # Errors
         ///
         /// It was already taken.
-        pub fn reader(&self) -> Result<Box<dyn Read + Send>, SpawnError> {
+        pub fn reader(&self) -> Result<Box<dyn crate::pty::TerminalRead>, SpawnError> {
             self.stdout
                 .write()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .take()
-                .map(|stdout| Box::new(stdout) as Box<dyn Read + Send>)
+                .map(|stdout| Box::new(stdout) as Box<dyn crate::pty::TerminalRead>)
                 .ok_or(SpawnError::Pty {
                     doing: "reading the console mirror",
                     detail: "the mirror's output was already taken".to_owned(),
@@ -843,7 +843,7 @@ mod platform {
         /// # Errors
         ///
         /// Always [`SpawnError::Pty`].
-        pub fn reader(&self) -> Result<Box<dyn Read + Send>, SpawnError> {
+        pub fn reader(&self) -> Result<Box<dyn crate::pty::TerminalRead>, SpawnError> {
             Err(unsupported("reading the console mirror"))
         }
 

@@ -41,6 +41,10 @@ and refactoring that no user can observe do not belong here.
 - Pressing Escape alone in a conversation tab now reaches the provider at once. The Core's input boundary used to
   hold a lone Escape as an unfinished sequence and deliver it glued to the next key, which a CLI reads as an Alt
   chord. A mouse report a viewer sends is now forwarded to the provider exactly as written instead of dropped.
+- A window no longer falls behind and gets its screen replaced during a fast provider burst: the Runtime host now
+  reads a burst whole (waiting at most a millisecond for the rest of it) instead of publishing hundreds of tiny
+  pieces, and a window that stops taking output altogether for ten seconds is closed explicitly rather than held
+  open forever.
 - The screen model that gives a late viewer its first picture no longer sits on the provider's output path. Every
   viewer receives each chunk the moment the host read it, a stalled or panicking screen model delays nothing and
   changes nothing for the provider or a viewer, and a late viewer whose checkpoint could not be trusted is told so
