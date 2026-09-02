@@ -13,6 +13,11 @@ use runtrol_runtime_protocol::{
     WindowMirrorOpenParams, WindowMirrorOpened, WindowMirrorOutputParams, WindowRegisterParams,
     WindowUpdateParams,
 };
+use runtrol_runtime_protocol::{
+    WatchWindowRevealsParams, WatchWindowRevealsResult, WindowForeground, WindowRevealParams,
+    WindowRevealRequestedNotification, WindowRevealResult, WindowRevealsEndedNotification,
+};
+use tokio::sync::broadcast;
 use tokio::sync::watch;
 
 use super::authority::authorized_scopes;
@@ -20,7 +25,7 @@ use super::connection_state::PublicState;
 use super::response::{Answer, EmptyResult, random_subscription_id, send_notification};
 use crate::Composed;
 use crate::terminal_surface::TerminalOpenError;
-use crate::window_registry::{ConnectionToken, WindowRegistryFailure};
+use crate::window_registry::{ConnectionToken, RevealRequest, WindowRegistryFailure};
 
 /// The largest chunk a window may feed at once: the public terminal input ceiling, applied to output too.
 const MAX_MIRROR_CHUNK_BYTES: usize = 64 * 1024;
@@ -99,6 +104,8 @@ pub(super) async fn window_operation(
         RuntimeMethod::WindowsMirrorOpen => mirror_open(token, composed, id, params).await,
         RuntimeMethod::WindowsMirrorOutput => mirror_output(token, composed, id, params).await,
         RuntimeMethod::WindowsMirrorEnd => mirror_end(token, composed, id, params).await,
+        RuntimeMethod::WindowsReveal => reveal(token, composed, id, params).await,
+        RuntimeMethod::WindowsWatchReveals => watch_reveals(composed, id, params).await,
         _ => Answer::plain(
             id,
             RuntimeErrorKind::InvalidRequest,
@@ -109,6 +116,162 @@ pub(super) async fn window_operation(
 
 fn refused(id: JsonRpcId, failure: WindowRegistryFailure) -> Answer {
     Answer::plain(id, failure.kind, failure.message)
+}
+
+/// Ask the owner window to show a terminal, then bring its editor window forward as far as Windows permits.
+async fn reveal(
+    token: ConnectionToken,
+    composed: &Arc<Composed>,
+    id: JsonRpcId,
+    params: serde_json::Value,
+) -> Answer {
+    let Ok(params) = serde_json::from_value::<WindowRevealParams>(params) else {
+        return Answer::plain(
+            id,
+            RuntimeErrorKind::InvalidRequest,
+            "reveal parameters are invalid",
+        );
+    };
+    let from = composed.windows.session_id_of(token).await;
+    let Some(target) = composed
+        .windows
+        .reveal(&params.window_session_id, &params.terminal_key, from)
+        .await
+    else {
+        return Answer::plain(
+            id,
+            RuntimeErrorKind::InvalidRequest,
+            "no window with that identity is registered",
+        );
+    };
+    let foreground = bring_forward(target.host_pid, &target.workspace_folders).await;
+    Answer::success(
+        id,
+        &WindowRevealResult {
+            delivered: target.delivered,
+            foreground,
+        },
+    )
+}
+
+/// The editor window belongs to an ancestor of the Extension Host; among those processes' visible windows the one
+/// titled with the window's first folder name is the owner. Blocking Win32 calls run off the async lanes.
+async fn bring_forward(host_pid: Option<u32>, workspace_folders: &[String]) -> WindowForeground {
+    let Some(host_pid) = host_pid else {
+        return WindowForeground::NotFound;
+    };
+    let Some(fragment) = workspace_folders
+        .first()
+        .and_then(|folder| std::path::Path::new(folder).file_name())
+        .and_then(|name| name.to_str())
+        .map(str::to_owned)
+    else {
+        return WindowForeground::NotFound;
+    };
+    let outcome = tokio::task::spawn_blocking(move || {
+        let mut processes = vec![host_pid];
+        if let Ok(tree) = runtrol_childproc::ProcessTree::capture() {
+            processes.extend(tree.ancestors_of(host_pid));
+        }
+        runtrol_childproc::os_window::reveal_window(&processes, &fragment)
+    })
+    .await;
+    match outcome {
+        Ok(runtrol_childproc::os_window::RevealOutcome::Raised) => WindowForeground::Raised,
+        Ok(runtrol_childproc::os_window::RevealOutcome::Flashed) => WindowForeground::Flashed,
+        Ok(runtrol_childproc::os_window::RevealOutcome::Ambiguous) => WindowForeground::Ambiguous,
+        Ok(runtrol_childproc::os_window::RevealOutcome::Unsupported) => {
+            WindowForeground::Unsupported
+        }
+        Ok(runtrol_childproc::os_window::RevealOutcome::NotFound) | Err(_) => {
+            WindowForeground::NotFound
+        }
+    }
+}
+
+async fn watch_reveals(
+    composed: &Arc<Composed>,
+    id: JsonRpcId,
+    params: serde_json::Value,
+) -> Answer {
+    let Ok(params) = serde_json::from_value::<WatchWindowRevealsParams>(params) else {
+        return Answer::plain(
+            id,
+            RuntimeErrorKind::InvalidRequest,
+            "reveal watch parameters are invalid",
+        );
+    };
+    let Some(requests) = composed
+        .windows
+        .watch_reveals(&params.window_session_id)
+        .await
+    else {
+        return Answer::plain(
+            id,
+            RuntimeErrorKind::InvalidRequest,
+            "no window with that identity is registered",
+        );
+    };
+    let Ok(subscription_id) = random_subscription_id() else {
+        return Answer::plain(
+            id,
+            RuntimeErrorKind::Internal,
+            "Runtime could not allocate a reveal subscription",
+        );
+    };
+    Answer::watching_window_reveals(id, &WatchWindowRevealsResult { subscription_id }, requests)
+}
+
+/// Send every reveal request to the subscribed window until it goes away or its registration does.
+pub(super) async fn relay_window_reveals(
+    connection: &mut Connection,
+    subscription_id: String,
+    mut requests: broadcast::Receiver<RevealRequest>,
+) {
+    loop {
+        let request = tokio::select! {
+            peer = connection.recv() => {
+                drop(peer);
+                return;
+            }
+            request = requests.recv() => request,
+        };
+        match request {
+            Ok(request) => {
+                if send_notification(
+                    connection,
+                    RuntimeMethod::WindowsRevealRequested,
+                    &WindowRevealRequestedNotification {
+                        subscription_id: subscription_id.clone(),
+                        terminal_key: request.terminal_key,
+                        from_window_session_id: request.from_window_session_id,
+                    },
+                )
+                .await
+                .is_err()
+                {
+                    return;
+                }
+            }
+            // A window that fell sixteen reveals behind reads the next one; the dropped ones asked for the same
+            // window and are answered by any one of them being shown.
+            Err(broadcast::error::RecvError::Lagged(_)) => {}
+            Err(broadcast::error::RecvError::Closed) => {
+                drop(
+                    send_notification(
+                        connection,
+                        RuntimeMethod::WindowsRevealsEnded,
+                        &WindowRevealsEndedNotification {
+                            subscription_id,
+                            reason: WindowIndexEndReason::RuntimeUnavailable,
+                        },
+                    )
+                    .await,
+                );
+                return;
+            }
+        }
+    }
 }
 
 async fn mirror_open(

@@ -7,6 +7,9 @@
   control lease, and acquiring it transfers it (an earlier holder's next write answers `controlConflict`).
 - Added the window registry: `windows/register`, `windows/update`, `windows/list`, `windows/watchIndex` and the
   `windows/indexChanged` and `windows/indexEnded` notifications, with `WindowClient` and `WindowIndexSubscription`.
+- Added `WindowClient.mirrorOpen`, `mirrorOutput` and `mirrorEnd`; `TerminalDescriptor.origin`,
+  `ownerWindowSessionId` and `ownerTerminalKey`; `ProviderDescriptor.commandNames`.
+- Added `WindowClient.reveal` and `watchReveals` with `WindowRevealSubscription`, and `WindowRegisterParams.hostPid`.
 
 ## 0.1.1
 

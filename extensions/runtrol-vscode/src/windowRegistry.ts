@@ -97,6 +97,7 @@ export class WindowRegistry implements vscode.Disposable {
         windowSessionId: vscode.env.sessionId,
         hostGeneration: `${process.pid}-${Date.now()}`,
         vscodeVersion: vscode.version,
+        hostPid: process.pid,
       },
       folders(),
     );
@@ -184,6 +185,15 @@ export class WindowRegistry implements vscode.Disposable {
       this.history.push(failedMirror(this.state.terminalKey(start.terminal) ?? "", executionId, providerId, start.execution.commandLine.value, error));
       this.reportOnce(error);
     }
+  }
+
+  /// Another window asked for one of this window's terminals: show it here, the way a person would click its
+  /// tab. Returns whether the key named a terminal this window still has.
+  showTerminal(terminalKey: string): boolean {
+    const handle = this.state.handleOf(terminalKey);
+    if (handle === null) return false;
+    (handle as vscode.Terminal).show(false);
+    return true;
   }
 
   /// The provider command names this window recognises, or null while the inventory has not answered.

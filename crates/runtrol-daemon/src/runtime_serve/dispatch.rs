@@ -183,7 +183,9 @@ pub(super) async fn dispatch_public(
             | RuntimeMethod::WindowsWatchIndex
             | RuntimeMethod::WindowsMirrorOpen
             | RuntimeMethod::WindowsMirrorOutput
-            | RuntimeMethod::WindowsMirrorEnd => {
+            | RuntimeMethod::WindowsMirrorEnd
+            | RuntimeMethod::WindowsReveal
+            | RuntimeMethod::WindowsWatchReveals => {
                 super::window_requests::window_operation(state, composed, method, id, params).await
             }
             RuntimeMethod::Initialized
@@ -201,7 +203,9 @@ pub(super) async fn dispatch_public(
             | RuntimeMethod::TerminalsLagged
             | RuntimeMethod::TerminalsExited
             | RuntimeMethod::WindowsIndexChanged
-            | RuntimeMethod::WindowsIndexEnded => Answer::plain(
+            | RuntimeMethod::WindowsIndexEnded
+            | RuntimeMethod::WindowsRevealRequested
+            | RuntimeMethod::WindowsRevealsEnded => Answer::plain(
                 id,
                 RuntimeErrorKind::InvalidRequest,
                 "the method is not a client request in the current state",

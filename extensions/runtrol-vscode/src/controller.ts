@@ -2,7 +2,7 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 
 import { PUBLIC_LIMITS, type NativeActivity, type PublicInputBlock } from "@runtrol/runtime-client";
-import type { TerminalIndexSnapshot } from "@runtrol/runtime-client";
+import type { TerminalIndexSnapshot, WindowRevealResult } from "@runtrol/runtime-client";
 import * as vscode from "vscode";
 
 import { BoundedDedupe } from "./boundedDedupe";
@@ -594,6 +594,9 @@ export class Controller implements vscode.Disposable {
     await this.startSessionInWorkspace(row.workspace);
   }
 
+  /// What the Runtime answered to the last owner reveal this window asked for, for the journey to read.
+  lastReveal: WindowRevealResult | null = null;
+
   private async applySelection(
     value: SelectionTarget,
     reveal: boolean,
@@ -603,6 +606,22 @@ export class Controller implements vscode.Disposable {
     // A conversation row opens the service's own terminal interface in an editor tab. That is the whole
     // surface (`docs/terminalSurface.md`): no adoption, no structured session, no page of ours.
     if ("key" in target) {
+      // A terminal another window owns is shown there: the owner is asked to show it and its window is brought
+      // forward as far as Windows permits (`docs/vscodeSurface.md`, owner reveal). Nothing opens here.
+      const owner = target.hostedTerminal?.ownerWindowSessionId ?? null;
+      const ownerKey = target.hostedTerminal?.ownerTerminalKey ?? null;
+      if (owner !== null && ownerKey !== null && owner !== vscode.env.sessionId) {
+        const outcome = await this.runtime.revealAtOwner({ windowSessionId: owner, terminalKey: ownerKey });
+        this.lastReveal = outcome;
+        this.say(
+          outcome.delivered
+            ? `Shown in its own window (${outcome.foreground})`
+            : `Its window is not listening for that (${outcome.foreground})`,
+          outcome.delivered ? "info" : "warning",
+        );
+        afterApplied();
+        return;
+      }
       if (!target.canOpen) {
         // A live conversation without a currently proven terminal route is the one refusal a person meets every
         // day on a machine that also runs CLIs directly or still has a legacy Runtime owner. An error toast in

@@ -791,6 +791,7 @@ async fn windows_probe(home: &Path, identity_file: &Path, digest: &str) -> Resul
             host_generation: "probe-host".to_owned(),
             vscode_version: "0.0.0".to_owned(),
             workspace_folders: vec!["C:/work".to_owned()],
+            host_pid: Some(std::process::id()),
         })
         .await
         .map_err(|error| format!("register: {error}"))?;

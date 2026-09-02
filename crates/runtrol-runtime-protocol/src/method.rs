@@ -163,6 +163,12 @@ pub enum RuntimeMethod {
     /// The observed execution ended or the window stops mirroring.
     #[serde(rename = "windows/mirrorEnd")]
     WindowsMirrorEnd,
+    /// Ask the window that owns a terminal to show it and come forward.
+    #[serde(rename = "windows/reveal")]
+    WindowsReveal,
+    /// A window subscribes to reveal requests for its own terminals.
+    #[serde(rename = "windows/watchReveals")]
+    WindowsWatchReveals,
     /// Read pending structured provider approvals for one controlled session.
     #[serde(rename = "approvals/listPending")]
     ApprovalsListPending,
@@ -211,6 +217,12 @@ pub enum RuntimeMethod {
     /// The window index subscription ended.
     #[serde(rename = "windows/indexEnded")]
     WindowsIndexEnded,
+    /// Notification: someone asked the subscribed window to show one of its terminals.
+    #[serde(rename = "windows/revealRequested")]
+    WindowsRevealRequested,
+    /// Notification: the reveal subscription ended.
+    #[serde(rename = "windows/revealsEnded")]
+    WindowsRevealsEnded,
     /// Stop every supervised process in the safe direction.
     #[serde(rename = "runtime/panicStop")]
     PanicStop,
@@ -272,6 +284,8 @@ impl RuntimeMethod {
             Self::WindowsMirrorOpen => "windows/mirrorOpen",
             Self::WindowsMirrorOutput => "windows/mirrorOutput",
             Self::WindowsMirrorEnd => "windows/mirrorEnd",
+            Self::WindowsReveal => "windows/reveal",
+            Self::WindowsWatchReveals => "windows/watchReveals",
             Self::ApprovalsListPending => "approvals/listPending",
             Self::ApprovalsRespond => "approvals/respond",
             Self::SessionsIndexChanged => "sessions/indexChanged",
@@ -288,6 +302,8 @@ impl RuntimeMethod {
             Self::TerminalsExited => "terminals/exited",
             Self::WindowsIndexChanged => "windows/indexChanged",
             Self::WindowsIndexEnded => "windows/indexEnded",
+            Self::WindowsRevealRequested => "windows/revealRequested",
+            Self::WindowsRevealsEnded => "windows/revealsEnded",
             Self::PanicStop => "runtime/panicStop",
         }
     }
@@ -355,6 +371,8 @@ impl FromStr for RuntimeMethod {
             "windows/mirrorOpen" => Ok(Self::WindowsMirrorOpen),
             "windows/mirrorOutput" => Ok(Self::WindowsMirrorOutput),
             "windows/mirrorEnd" => Ok(Self::WindowsMirrorEnd),
+            "windows/reveal" => Ok(Self::WindowsReveal),
+            "windows/watchReveals" => Ok(Self::WindowsWatchReveals),
             "approvals/listPending" => Ok(Self::ApprovalsListPending),
             "approvals/respond" => Ok(Self::ApprovalsRespond),
             "sessions/indexChanged" => Ok(Self::SessionsIndexChanged),
@@ -371,6 +389,8 @@ impl FromStr for RuntimeMethod {
             "terminals/exited" => Ok(Self::TerminalsExited),
             "windows/indexChanged" => Ok(Self::WindowsIndexChanged),
             "windows/indexEnded" => Ok(Self::WindowsIndexEnded),
+            "windows/revealRequested" => Ok(Self::WindowsRevealRequested),
+            "windows/revealsEnded" => Ok(Self::WindowsRevealsEnded),
             "runtime/panicStop" => Ok(Self::PanicStop),
             _ => Err(UnknownMethod(value.to_owned())),
         }
@@ -439,6 +459,8 @@ mod tests {
             RuntimeMethod::WindowsMirrorOpen,
             RuntimeMethod::WindowsMirrorOutput,
             RuntimeMethod::WindowsMirrorEnd,
+            RuntimeMethod::WindowsReveal,
+            RuntimeMethod::WindowsWatchReveals,
             RuntimeMethod::ApprovalsListPending,
             RuntimeMethod::ApprovalsRespond,
             RuntimeMethod::SessionsIndexChanged,
@@ -455,6 +477,8 @@ mod tests {
             RuntimeMethod::TerminalsExited,
             RuntimeMethod::WindowsIndexChanged,
             RuntimeMethod::WindowsIndexEnded,
+            RuntimeMethod::WindowsRevealRequested,
+            RuntimeMethod::WindowsRevealsEnded,
             RuntimeMethod::PanicStop,
         ] {
             assert_eq!(method.as_str().parse(), Ok(method));

@@ -178,6 +178,27 @@ is one row. A mirror ends with the connection that feeds it. `tooling/observed-m
 proves this on two isolated windows with the fixture TUI, real Claude and real Codex by absolute path, and Claude by
 name through the shim.
 
+### Owner reveal
+
+A row whose terminal another window owns (the descriptor's `ownerWindowSessionId` is not this window's) does not open
+here. Its click asks the Runtime (`windows/reveal` with the owner's session identity and terminal key); the Runtime
+sends the owner window a `windows/revealRequested` on the owner's reveal subscription (`windows/watchReveals`, a
+dedicated connection every window keeps after it registers, reconnecting on its own), and the owner shows that exact
+terminal the way a click on its tab would. The Runtime then brings the owner's editor window forward itself
+(`runtrol-childproc::os_window`): a VS Code window belongs to the editor's main process, an ancestor of the Extension
+Host whose pid the window registered, so the search walks that chain and stops at the nearest process that owns a
+visible, unowned, titled top-level window (the chain of a window started from another editor's terminal reaches that
+other editor too, measured 2026-09-02); among that process's windows it takes the one whose title carries the folder
+name, or the only one. The window is restored if minimised and asked to the foreground; when Windows refuses (it
+grants the foreground to the process that last sent input) the Runtime sends one input event of its own, a mouse move
+of zero pixels that reaches no window, and asks once more; if that is refused too the taskbar button flashes instead.
+The Runtime never attaches its thread's input queue to the editor's (`AttachThreadInput`), the usual third resort:
+attached queues make two threads share one, so a stall in either freezes both, and the other one is the operator's
+editor. A flashing taskbar button is the smaller loss. The answer says what happened (`delivered`,
+`foreground` as `raised`, `flashed`, `notFound`, `ambiguous` or `unsupported`) and the clicking window says it in the
+status bar. Nothing is typed into any window. `tooling/owner-reveal-eye.mjs` proves this on two isolated windows on
+different projects clicking each other's provider rows.
+
 ## Session and workspace contract
 
 - The exact managed-session release load and expected hot-process cardinality for this gate are owned by the

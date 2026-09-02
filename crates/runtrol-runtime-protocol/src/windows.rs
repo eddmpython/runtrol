@@ -35,6 +35,10 @@ pub struct WindowRegisterParams {
     pub vscode_version: String,
     /// The workspace folders open in the window, as absolute paths.
     pub workspace_folders: Vec<String>,
+    /// The Extension Host's process id. The editor's own window belongs to an ancestor of it, which is how a reveal
+    /// finds the window to bring forward.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_pid: Option<u32>,
 }
 
 /// The Runtime's record of a registration.
@@ -103,6 +107,9 @@ pub struct WindowDescriptor {
     pub vscode_version: String,
     /// The workspace folders open in the window.
     pub workspace_folders: Vec<String>,
+    /// The Extension Host's process id, when the window reported one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_pid: Option<u32>,
     /// Every terminal the window published, in the order it published them.
     pub terminals: Vec<ObservedTerminal>,
 }
@@ -214,4 +221,79 @@ pub struct WindowMirrorEndParams {
     /// The exit code shell integration reported, when it reported one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exit_code: Option<i32>,
+}
+
+/// Ask the window that owns a terminal to show it and come forward.
+#[derive(Clone, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WindowRevealParams {
+    /// The owner window, by its registered session identity.
+    pub window_session_id: String,
+    /// The owner's key for the terminal in the window registry.
+    pub terminal_key: String,
+}
+
+/// What became of the owner's window on the desktop.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum WindowForeground {
+    /// The owner's window is in the foreground now.
+    Raised,
+    /// Windows refused the foreground change; the owner's taskbar button flashes.
+    Flashed,
+    /// The owner registered no host process, or none of its windows could be found.
+    NotFound,
+    /// More than one of the owner's windows matched; none was raised.
+    Ambiguous,
+    /// This platform has no window to raise.
+    Unsupported,
+}
+
+/// The reveal as far as the Runtime could take it.
+#[derive(Clone, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WindowRevealResult {
+    /// Whether the owner window was watching for reveals and was told which terminal to show.
+    pub delivered: bool,
+    /// What became of the owner's window on the desktop.
+    pub foreground: WindowForeground,
+}
+
+/// A window asks to be told when someone wants one of its terminals shown.
+#[derive(Clone, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WatchWindowRevealsParams {
+    /// The window's own registered session identity.
+    pub window_session_id: String,
+}
+
+/// The reveal subscription.
+#[derive(Clone, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WatchWindowRevealsResult {
+    /// Identity of this subscription, echoed on every notification.
+    pub subscription_id: String,
+}
+
+/// Someone asked the subscribed window to show one of its terminals.
+#[derive(Clone, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WindowRevealRequestedNotification {
+    /// The subscription this belongs to.
+    pub subscription_id: String,
+    /// The window's own key for the terminal to show.
+    pub terminal_key: String,
+    /// The asking window's registered session identity, when the asker is a registered window.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_window_session_id: Option<String>,
+}
+
+/// The reveal subscription ended.
+#[derive(Clone, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WindowRevealsEndedNotification {
+    /// The subscription this belongs to.
+    pub subscription_id: String,
+    /// Why it ended.
+    pub reason: WindowIndexEndReason,
 }

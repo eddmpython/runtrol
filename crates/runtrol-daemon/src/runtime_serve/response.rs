@@ -147,6 +147,21 @@ impl Answer {
         }
     }
 
+    pub(super) fn watching_window_reveals(
+        id: JsonRpcId,
+        result: &runtrol_runtime_protocol::WatchWindowRevealsResult,
+        requests: tokio::sync::broadcast::Receiver<crate::window_registry::RevealRequest>,
+    ) -> Self {
+        Self {
+            response: success(id, result),
+            close: false,
+            watching: Some(Watching::WindowReveals {
+                subscription_id: result.subscription_id.clone(),
+                requests,
+            }),
+        }
+    }
+
     pub(super) fn watching_window_index(
         id: JsonRpcId,
         result: &runtrol_runtime_protocol::WatchWindowIndexResult,

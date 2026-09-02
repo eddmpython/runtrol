@@ -17,6 +17,10 @@ and refactoring that no user can observe do not belong here.
   and owner window in the descriptor; the shim now reports the processes above it (the invoking shell among them)
   so a command typed by name stays one row. Public protocol: `windows/mirrorOpen`, `windows/mirrorOutput`, `windows/mirrorEnd`,
   `TerminalDescriptor.origin` with the owner window fields, and `ProviderDescriptor.commandNames`.
+- Owner reveal: clicking a row whose terminal another VS Code window owns asks that window to show the exact
+  terminal and brings the window forward as far as Windows permits (flashing its taskbar button otherwise). Public
+  protocol: `windows/reveal`, `windows/watchReveals` with `windows/revealRequested` and `windows/revealsEnded`, and
+  `hostPid` on a window registration.
 
 ### Removed
 

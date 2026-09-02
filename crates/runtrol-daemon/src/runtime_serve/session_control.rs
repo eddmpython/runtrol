@@ -976,6 +976,10 @@ impl ParsedSessionOperation {
     }
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "every public method is named so a new one cannot fall through to the session lane by omission"
+)]
 fn parse_session_operation(
     method: RuntimeMethod,
     params: serde_json::Value,
@@ -1071,8 +1075,12 @@ fn parse_session_operation(
         | RuntimeMethod::WindowsMirrorOpen
         | RuntimeMethod::WindowsMirrorOutput
         | RuntimeMethod::WindowsMirrorEnd
+        | RuntimeMethod::WindowsReveal
+        | RuntimeMethod::WindowsWatchReveals
         | RuntimeMethod::WindowsIndexChanged
         | RuntimeMethod::WindowsIndexEnded
+        | RuntimeMethod::WindowsRevealRequested
+        | RuntimeMethod::WindowsRevealsEnded
         | RuntimeMethod::SessionsEvent
         | RuntimeMethod::SessionsLagged
         | RuntimeMethod::SessionsIndexChanged

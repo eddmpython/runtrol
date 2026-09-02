@@ -98,10 +98,12 @@ pub use terminal::{
 pub use windows::{
     ListWindowsParams, MAX_OBSERVED_TERMINALS, MAX_REGISTERED_WINDOWS, MAX_WINDOW_FOLDERS,
     MAX_WINDOW_TEXT_CHARS, ObservedCommand, ObservedTerminal, WatchWindowIndexParams,
-    WatchWindowIndexResult, WindowDescriptor, WindowIndexChangedNotification, WindowIndexEndReason,
+    WatchWindowIndexResult, WatchWindowRevealsParams, WatchWindowRevealsResult, WindowDescriptor,
+    WindowForeground, WindowIndexChangedNotification, WindowIndexEndReason,
     WindowIndexEndedNotification, WindowIndexSnapshot, WindowMirrorEndParams,
     WindowMirrorOpenParams, WindowMirrorOpened, WindowMirrorOutputParams, WindowRegisterParams,
-    WindowRegistration, WindowUpdateParams,
+    WindowRegistration, WindowRevealParams, WindowRevealRequestedNotification, WindowRevealResult,
+    WindowRevealsEndedNotification, WindowUpdateParams,
 };
 
 /// Maximum JSON payload bytes in one public Runtime frame.

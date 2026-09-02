@@ -15,7 +15,25 @@ use runtrol_runtime_protocol::{
     ObservedTerminal, RuntimeErrorKind, WindowDescriptor, WindowIndexSnapshot,
     WindowRegisterParams, WindowRegistration, WindowUpdateParams,
 };
-use tokio::sync::{Mutex, watch};
+use tokio::sync::{Mutex, broadcast, watch};
+
+/// Reveal requests a window may hold unread before the oldest is dropped; a window reads them at once.
+const REVEAL_QUEUE: usize = 16;
+
+/// One request for a window to show one of its terminals.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct RevealRequest {
+    pub(crate) terminal_key: String,
+    pub(crate) from_window_session_id: Option<String>,
+}
+
+/// What a reveal needs to know about the owner window besides delivery.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct RevealTarget {
+    pub(crate) delivered: bool,
+    pub(crate) host_pid: Option<u32>,
+    pub(crate) workspace_folders: Vec<String>,
+}
 
 /// One public connection, told apart from every other for the life of the daemon.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -42,6 +60,9 @@ const fn refused(kind: RuntimeErrorKind, message: &'static str) -> WindowRegistr
 struct Registered {
     connection: ConnectionToken,
     descriptor: WindowDescriptor,
+    /// Reveal requests for this window; a sender exists from registration so a request before the window watches
+    /// is counted as undelivered rather than lost silently.
+    reveals: broadcast::Sender<RevealRequest>,
 }
 
 #[derive(Default)]
@@ -113,8 +134,10 @@ impl WindowRegistry {
                     registration_generation,
                     vscode_version: params.vscode_version,
                     workspace_folders: params.workspace_folders,
+                    host_pid: params.host_pid,
                     terminals: Vec::new(),
                 },
+                reveals: broadcast::channel(REVEAL_QUEUE).0,
             },
         );
         drop(state);
@@ -160,6 +183,44 @@ impl WindowRegistry {
     }
 
     /// The connection ended: whatever it registered is gone with it.
+    /// Subscribe to reveal requests for the registered window `window_session_id`; none when no such window is
+    /// registered. A window watches on a dedicated connection while its registration lives on its command
+    /// connection, so the two are not required to be the same; a request only names a terminal to show and the
+    /// window that owns it is the one that can show it.
+    pub(crate) async fn watch_reveals(
+        &self,
+        window_session_id: &str,
+    ) -> Option<broadcast::Receiver<RevealRequest>> {
+        let state = self.state.lock().await;
+        state
+            .windows
+            .get(window_session_id)
+            .map(|entry| entry.reveals.subscribe())
+    }
+
+    /// Tell the window `window_session_id` to show `terminal_key`; none when no such window is registered.
+    pub(crate) async fn reveal(
+        &self,
+        window_session_id: &str,
+        terminal_key: &str,
+        from_window_session_id: Option<String>,
+    ) -> Option<RevealTarget> {
+        let state = self.state.lock().await;
+        let entry = state.windows.get(window_session_id)?;
+        let delivered = entry
+            .reveals
+            .send(RevealRequest {
+                terminal_key: terminal_key.to_owned(),
+                from_window_session_id,
+            })
+            .is_ok();
+        Some(RevealTarget {
+            delivered,
+            host_pid: entry.descriptor.host_pid,
+            workspace_folders: entry.descriptor.workspace_folders.clone(),
+        })
+    }
+
     /// The window session identity `connection` registered, if it registered one.
     pub(crate) async fn session_id_of(&self, connection: ConnectionToken) -> Option<String> {
         let state = self.state.lock().await;
@@ -256,6 +317,7 @@ mod tests {
             host_generation: host.to_owned(),
             vscode_version: "1.132.1".to_owned(),
             workspace_folders: vec!["C:\\work".to_owned()],
+            host_pid: None,
         }
     }
 
@@ -275,6 +337,40 @@ mod tests {
         }
     }
 
+    /// A reveal reaches the window's watcher and says so; without a watcher it is undelivered, not lost silently;
+    /// an unknown window is refused.
+    #[tokio::test]
+    async fn a_reveal_reaches_the_watching_window_and_says_whether_it_did() {
+        let registry = WindowRegistry::default();
+        let connection = ConnectionToken::next();
+        registry
+            .register(connection, window("w1", "h1"))
+            .await
+            .expect("registers");
+        let undelivered = registry
+            .reveal("w1", "t1", None)
+            .await
+            .expect("the window is registered");
+        assert!(!undelivered.delivered, "nobody watches yet");
+        let mut watcher = registry
+            .watch_reveals("w1")
+            .await
+            .expect("a registered window can be watched");
+        let delivered = registry
+            .reveal("w1", "t2", Some("w2".to_owned()))
+            .await
+            .expect("the window is registered");
+        assert!(delivered.delivered);
+        assert_eq!(
+            watcher.recv().await.expect("the request arrives"),
+            RevealRequest {
+                terminal_key: "t2".to_owned(),
+                from_window_session_id: Some("w2".to_owned()),
+            }
+        );
+        assert!(registry.reveal("w9", "t1", None).await.is_none());
+        assert!(registry.watch_reveals("w9").await.is_none());
+    }
     #[tokio::test]
     async fn a_window_has_one_entry_and_a_restarted_host_replaces_it_with_a_higher_generation() {
         let registry = WindowRegistry::default();

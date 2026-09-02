@@ -106,6 +106,14 @@ pub(super) async fn relay_watch(
             .await;
             RelayOutcome::CloseConnection
         }
+        Watching::WindowReveals {
+            subscription_id,
+            requests,
+        } => {
+            super::window_requests::relay_window_reveals(connection, subscription_id, requests)
+                .await;
+            RelayOutcome::CloseConnection
+        }
     }
 }
 

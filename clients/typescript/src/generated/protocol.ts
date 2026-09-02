@@ -345,7 +345,7 @@ export interface RuntimeLimits { readonly challengeLifetimeMs: number; readonly 
 export interface RuntimeLocatorRecord { readonly generations: ReadonlyArray<RuntimeGeneration>; readonly instanceId: string; readonly schema: number; }
 
 /** A public Runtime method implemented by the initial read-only boundary. */
-export type RuntimeMethod = "runtime/initialize" | "runtime/initialized" | "runtime/challenge" | "integrations/requestEnrollment" | "integrations/watchEnrollment" | "integrations/getGrant" | "integrations/rotateKey" | "providers/usage" | "providers/list" | "providers/watch" | "providers/getCapabilities" | "providers/listModels" | "providers/listNativeSessions" | "providers/nativeActivity" | "sessions/list" | "sessions/watchIndex" | "sessions/get" | "sessions/start" | "sessions/adoptNative" | "sessions/resume" | "sessions/acquireControl" | "sessions/renewControl" | "sessions/releaseControl" | "sessions/submitInput" | "sessions/submitBlocks" | "sessions/setModel" | "sessions/setMode" | "sessions/watchEvents" | "sessions/interrupt" | "sessions/cool" | "sessions/forget" | "sessions/deleteNative" | "sessions/archiveNative" | "terminals/list" | "terminals/watchIndex" | "terminals/open" | "terminals/attach" | "terminals/acquireControl" | "terminals/renewControl" | "terminals/releaseControl" | "terminals/write" | "terminals/resize" | "terminals/detach" | "terminals/stop" | "windows/register" | "windows/update" | "windows/list" | "windows/watchIndex" | "windows/mirrorOpen" | "windows/mirrorOutput" | "windows/mirrorEnd" | "approvals/listPending" | "approvals/respond" | "sessions/indexChanged" | "sessions/indexEnded" | "providers/changed" | "providers/watchEnded" | "providers/usageChanged" | "sessions/event" | "sessions/lagged" | "terminals/indexChanged" | "terminals/indexEnded" | "terminals/output" | "terminals/lagged" | "terminals/exited" | "windows/indexChanged" | "windows/indexEnded" | "runtime/panicStop";
+export type RuntimeMethod = "runtime/initialize" | "runtime/initialized" | "runtime/challenge" | "integrations/requestEnrollment" | "integrations/watchEnrollment" | "integrations/getGrant" | "integrations/rotateKey" | "providers/usage" | "providers/list" | "providers/watch" | "providers/getCapabilities" | "providers/listModels" | "providers/listNativeSessions" | "providers/nativeActivity" | "sessions/list" | "sessions/watchIndex" | "sessions/get" | "sessions/start" | "sessions/adoptNative" | "sessions/resume" | "sessions/acquireControl" | "sessions/renewControl" | "sessions/releaseControl" | "sessions/submitInput" | "sessions/submitBlocks" | "sessions/setModel" | "sessions/setMode" | "sessions/watchEvents" | "sessions/interrupt" | "sessions/cool" | "sessions/forget" | "sessions/deleteNative" | "sessions/archiveNative" | "terminals/list" | "terminals/watchIndex" | "terminals/open" | "terminals/attach" | "terminals/acquireControl" | "terminals/renewControl" | "terminals/releaseControl" | "terminals/write" | "terminals/resize" | "terminals/detach" | "terminals/stop" | "windows/register" | "windows/update" | "windows/list" | "windows/watchIndex" | "windows/mirrorOpen" | "windows/mirrorOutput" | "windows/mirrorEnd" | "windows/reveal" | "windows/watchReveals" | "approvals/listPending" | "approvals/respond" | "sessions/indexChanged" | "sessions/indexEnded" | "providers/changed" | "providers/watchEnded" | "providers/usageChanged" | "sessions/event" | "sessions/lagged" | "terminals/indexChanged" | "terminals/indexEnded" | "terminals/output" | "terminals/lagged" | "terminals/exited" | "windows/indexChanged" | "windows/indexEnded" | "windows/revealRequested" | "windows/revealsEnded" | "runtime/panicStop";
 
 /** The current model information Runtime can truthfully expose. */
 export type RuntimeModelCatalog = { readonly coverage: "known"; readonly models: ReadonlyArray<RuntimeModelChoice>; } | { readonly aliases: ReadonlyArray<string>; readonly coverage: "aliases"; readonly reasoningEfforts: ReadonlyArray<RuntimeReasoningChoice>; readonly why: string; } | { readonly aliases: ReadonlyArray<string>; readonly coverage: "partial"; readonly models: ReadonlyArray<RuntimeModelChoice>; readonly reasoningEfforts: ReadonlyArray<RuntimeReasoningChoice>; readonly why: string; } | { readonly coverage: "unknown"; readonly why: string; } | { readonly coverage: "unsupported"; readonly why: string; };
@@ -523,8 +523,17 @@ export type WatchWindowIndexParams = Readonly<Record<string, never>>;
 /** Initial window index and the connection-local subscription identity. */
 export interface WatchWindowIndexResult { readonly snapshot: WindowIndexSnapshot; readonly subscriptionId: string; }
 
+/** A window asks to be told when someone wants one of its terminals shown. */
+export interface WatchWindowRevealsParams { readonly windowSessionId: string; }
+
+/** The reveal subscription. */
+export interface WatchWindowRevealsResult { readonly subscriptionId: string; }
+
 /** One registered window as every reader sees it. */
-export interface WindowDescriptor { readonly hostGeneration: string; readonly registrationGeneration: number; readonly terminals: ReadonlyArray<ObservedTerminal>; readonly vscodeVersion: string; readonly windowSessionId: string; readonly workspaceFolders: ReadonlyArray<string>; }
+export interface WindowDescriptor { readonly hostGeneration: string; readonly hostPid?: number | null; readonly registrationGeneration: number; readonly terminals: ReadonlyArray<ObservedTerminal>; readonly vscodeVersion: string; readonly windowSessionId: string; readonly workspaceFolders: ReadonlyArray<string>; }
+
+/** What became of the owner's window on the desktop. */
+export type WindowForeground = "raised" | "flashed" | "notFound" | "ambiguous" | "unsupported";
 
 /** The window index after a registration, an update, or a window going away. */
 export interface WindowIndexChangedNotification { readonly snapshot: WindowIndexSnapshot; readonly subscriptionId: string; }
@@ -552,10 +561,22 @@ export interface WindowMirrorOpened { readonly terminalId: RuntimeTerminalId; }
 export interface WindowMirrorOutputParams { readonly bytesBase64: string; readonly terminalId: RuntimeTerminalId; }
 
 /** A window announcing itself: once per Extension Host activation, on the connection it keeps open. */
-export interface WindowRegisterParams { readonly hostGeneration: string; readonly vscodeVersion: string; readonly windowSessionId: string; readonly workspaceFolders: ReadonlyArray<string>; }
+export interface WindowRegisterParams { readonly hostGeneration: string; readonly hostPid?: number | null; readonly vscodeVersion: string; readonly windowSessionId: string; readonly workspaceFolders: ReadonlyArray<string>; }
 
 /** The Runtime's record of a registration. */
 export interface WindowRegistration { readonly registrationGeneration: number; }
+
+/** Ask the window that owns a terminal to show it and come forward. */
+export interface WindowRevealParams { readonly terminalKey: string; readonly windowSessionId: string; }
+
+/** Someone asked the subscribed window to show one of its terminals. */
+export interface WindowRevealRequestedNotification { readonly fromWindowSessionId?: string | null; readonly subscriptionId: string; readonly terminalKey: string; }
+
+/** The reveal as far as the Runtime could take it. */
+export interface WindowRevealResult { readonly delivered: boolean; readonly foreground: WindowForeground; }
+
+/** The reveal subscription ended. */
+export interface WindowRevealsEndedNotification { readonly reason: WindowIndexEndReason; readonly subscriptionId: string; }
 
 /** A window publishing the terminals it observes: the whole set, every time something changed. */
 export interface WindowUpdateParams { readonly terminals: ReadonlyArray<ObservedTerminal>; }

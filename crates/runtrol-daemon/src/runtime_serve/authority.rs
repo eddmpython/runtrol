@@ -183,7 +183,9 @@ pub(super) fn required_scope(method: RuntimeMethod) -> Option<AppScope> {
         | RuntimeMethod::WindowsWatchIndex
         | RuntimeMethod::WindowsMirrorOpen
         | RuntimeMethod::WindowsMirrorOutput
-        | RuntimeMethod::WindowsMirrorEnd => Some(AppScope::SessionList),
+        | RuntimeMethod::WindowsMirrorEnd
+        | RuntimeMethod::WindowsReveal
+        | RuntimeMethod::WindowsWatchReveals => Some(AppScope::SessionList),
         RuntimeMethod::SessionsStart => Some(AppScope::SessionStart),
         RuntimeMethod::SessionsAdoptNative | RuntimeMethod::SessionsResume => {
             Some(AppScope::SessionResume)
@@ -234,6 +236,8 @@ pub(super) fn required_scope(method: RuntimeMethod) -> Option<AppScope> {
         | RuntimeMethod::TerminalsExited
         | RuntimeMethod::WindowsIndexChanged
         | RuntimeMethod::WindowsIndexEnded
+        | RuntimeMethod::WindowsRevealRequested
+        | RuntimeMethod::WindowsRevealsEnded
         | RuntimeMethod::PanicStop => None,
     }
 }

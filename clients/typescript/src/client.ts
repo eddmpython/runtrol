@@ -85,6 +85,12 @@ import type {
   WindowIndexChangedNotification,
   WindowIndexEndedNotification,
   WindowIndexSnapshot,
+  WatchWindowRevealsParams,
+  WatchWindowRevealsResult,
+  WindowRevealParams,
+  WindowRevealRequestedNotification,
+  WindowRevealResult,
+  WindowRevealsEndedNotification,
   WindowMirrorEndParams,
   WindowMirrorOpenParams,
   WindowMirrorOpened,
@@ -750,6 +756,20 @@ export class WindowClient {
     requireEmpty(await callRuntime<unknown>(this.runtime, "windows/mirrorEnd", params));
   }
 
+  public reveal(params: WindowRevealParams): Promise<WindowRevealResult> {
+    return callRuntime(this.runtime, "windows/reveal", params, "WindowRevealResult");
+  }
+
+  public async watchReveals(params: WatchWindowRevealsParams): Promise<WindowRevealSubscription> {
+    const started = await callRuntime<WatchWindowRevealsResult>(
+      this.runtime,
+      "windows/watchReveals",
+      params,
+      "WatchWindowRevealsResult",
+    );
+    return new WindowRevealSubscription(beginStream(this.runtime), started);
+  }
+
   public list(): Promise<WindowIndexSnapshot> {
     return callRuntime(this.runtime, "windows/list", {}, "WindowIndexSnapshot");
   }
@@ -762,6 +782,45 @@ export class WindowClient {
       "WatchWindowIndexResult",
     );
     return new WindowIndexSubscription(beginStream(this.runtime), started);
+  }
+}
+
+export type WindowRevealNotification =
+  | { readonly kind: "requested"; readonly requested: WindowRevealRequestedNotification }
+  | { readonly kind: "ended"; readonly ended: WindowRevealsEndedNotification };
+
+export class WindowRevealSubscription {
+  public constructor(
+    private readonly transport: RuntimeTransport,
+    public readonly started: WatchWindowRevealsResult,
+  ) {}
+
+  public async next(): Promise<WindowRevealNotification> {
+    const notification = decodeRuntimeNotification(await this.transport.receive(), "window reveals");
+    if (notification.method === "windows/revealRequested") {
+      const requested = validatePublic<WindowRevealRequestedNotification>(
+        "WindowRevealRequestedNotification",
+        notification.params,
+      );
+      this.#requireTarget(requested.subscriptionId);
+      return { kind: "requested", requested };
+    }
+    if (notification.method === "windows/revealsEnded") {
+      const ended = validatePublic<WindowRevealsEndedNotification>("WindowRevealsEndedNotification", notification.params);
+      this.#requireTarget(ended.subscriptionId);
+      return { kind: "ended", ended };
+    }
+    throw new RuntimeProtocolError("dedicated window reveal stream received a different method");
+  }
+
+  public close(): void {
+    abortTransport(this.transport);
+  }
+
+  #requireTarget(subscriptionId: string): void {
+    if (subscriptionId !== this.started.subscriptionId) {
+      throw new RuntimeProtocolError("window reveal notification targets a different subscription");
+    }
   }
 }
 

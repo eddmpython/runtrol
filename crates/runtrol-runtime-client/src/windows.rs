@@ -7,6 +7,10 @@ use runtrol_runtime_protocol::{
     WindowMirrorEndParams, WindowMirrorOpenParams, WindowMirrorOpened, WindowMirrorOutputParams,
     WindowRegisterParams, WindowRegistration, WindowUpdateParams,
 };
+use runtrol_runtime_protocol::{
+    WatchWindowRevealsParams, WatchWindowRevealsResult, WindowRevealParams,
+    WindowRevealRequestedNotification, WindowRevealResult, WindowRevealsEndedNotification,
+};
 
 use crate::ClientError;
 use crate::client::RuntimeClient;
@@ -94,6 +98,39 @@ impl<'runtime> WindowClient<'runtime> {
         Ok(())
     }
 
+    /// Ask the window that owns a terminal to show it and come forward.
+    ///
+    /// # Errors
+    ///
+    /// Transport, protocol, scope, or Runtime failure, including an unregistered window identity.
+    pub async fn reveal(
+        &mut self,
+        params: &WindowRevealParams,
+    ) -> Result<WindowRevealResult, ClientError> {
+        self.runtime
+            .call(RuntimeMethod::WindowsReveal, params)
+            .await
+    }
+
+    /// Convert this connection into the reveal-request stream of one registered window.
+    ///
+    /// # Errors
+    ///
+    /// Transport, protocol, scope, or Runtime failure, including an unregistered window identity.
+    pub async fn watch_reveals(
+        &mut self,
+        params: &WatchWindowRevealsParams,
+    ) -> Result<WindowRevealSubscription<'_>, ClientError> {
+        let started: WatchWindowRevealsResult = self
+            .runtime
+            .call(RuntimeMethod::WindowsWatchReveals, params)
+            .await?;
+        Ok(WindowRevealSubscription {
+            runtime: self.runtime,
+            subscription_id: started.subscription_id,
+        })
+    }
+
     /// Every registered window.
     ///
     /// # Errors
@@ -123,6 +160,56 @@ impl<'runtime> WindowClient<'runtime> {
             subscription_id: started.subscription_id.clone(),
             started,
         })
+    }
+}
+
+/// A request for the subscribed window to show a terminal, or the end of the stream.
+#[derive(Debug, PartialEq, Eq)]
+pub enum WindowRevealNotification {
+    /// Show this terminal.
+    Requested(WindowRevealRequestedNotification),
+    /// The subscription ended.
+    Ended(WindowRevealsEndedNotification),
+}
+
+/// One dedicated reveal-request stream on this connection.
+pub struct WindowRevealSubscription<'runtime> {
+    runtime: &'runtime mut RuntimeClient,
+    subscription_id: String,
+}
+
+impl WindowRevealSubscription<'_> {
+    /// The subscription identity.
+    #[must_use]
+    pub fn subscription_id(&self) -> &str {
+        &self.subscription_id
+    }
+
+    /// The next request or end.
+    ///
+    /// # Errors
+    ///
+    /// Transport failure or a notification outside the selected protocol revision.
+    pub async fn next(&mut self) -> Result<WindowRevealNotification, ClientError> {
+        let payload = self.runtime.connection.receive().await?;
+        let notification = decode_notification(&payload, "window reveals")?;
+        match parse_method(&notification, "window reveals")? {
+            RuntimeMethod::WindowsRevealRequested => {
+                let requested: WindowRevealRequestedNotification =
+                    decode_params(notification.params, "window reveal request")?;
+                require_subscription(&self.subscription_id, &requested.subscription_id)?;
+                Ok(WindowRevealNotification::Requested(requested))
+            }
+            RuntimeMethod::WindowsRevealsEnded => {
+                let ended: WindowRevealsEndedNotification =
+                    decode_params(notification.params, "window reveals end")?;
+                require_subscription(&self.subscription_id, &ended.subscription_id)?;
+                Ok(WindowRevealNotification::Ended(ended))
+            }
+            _ => Err(ClientError::Protocol(
+                "the dedicated window reveal stream received a different method".to_owned(),
+            )),
+        }
     }
 }
 

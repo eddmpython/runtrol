@@ -92,6 +92,7 @@ optional GUI. A public connection cannot approve itself.
 | `terminals/stop` | `session.stop` and the current terminal lease |
 | `windows/register`, `windows/update`, `windows/list`, `windows/watchIndex` | `session.list`; a registration is bound to the connection that made it and leaves with it |
 | `windows/mirrorOpen`, `windows/mirrorOutput`, `windows/mirrorEnd` | `session.list` on a connection that registered a window; a mirror is fed only by the connection that opened it and ends with it |
+| `windows/reveal`, `windows/watchReveals` | `session.list`; a reveal names a registered window and one of its terminal keys, and a reveal watch names a registered window |
 | `terminals/renewControl`, `terminals/releaseControl`, `terminals/detach` | The current terminal view or lease generation |
 | `approvals/respond` | `approval.respond.low` or `approval.respond.high`, plus the current lease |
 | `sessions/renewControl`, `sessions/releaseControl` | The current lease generation |
@@ -101,7 +102,7 @@ optional GUI. A public connection cannot approve itself.
 Notifications are `providers/changed`, `providers/usageChanged` (the account usage snapshot, sent once when a
 provider subscription starts and again on every change), `providers/watchEnded`, `sessions/indexChanged`,
 `sessions/indexEnded`, `sessions/event`, `sessions/lagged`, `terminals/indexChanged`, `terminals/indexEnded`,
-`windows/indexChanged`, `windows/indexEnded`,
+`windows/indexChanged`, `windows/indexEnded`, `windows/revealRequested`, `windows/revealsEnded`,
 `terminals/output`, `terminals/lagged`, and `terminals/exited`. Notification names cannot be invoked as requests.
 
 ### Native discovery scope

@@ -718,6 +718,13 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
       });
       context.subscriptions.push(windowRegistry);
       windowRegistry.start();
+      // Another window's click on one of this window's terminals arrives here; the terminal is shown as if its
+      // tab were clicked, and the Runtime brings this window forward itself.
+      const reveals = new AbortController();
+      context.subscriptions.push({ dispose: () => reveals.abort() });
+      void runtime.watchWindowReveals(vscode.env.sessionId, (terminalKey) => {
+        windowRegistry?.showTerminal(terminalKey);
+      }, reveals.signal);
     },
     (error: unknown) => {
       // Activation itself failed. If nothing was ever listed the Core never answered, so say that rather than
@@ -914,6 +921,7 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
         () => sidebar.treeItemIds(),
         () => windowRegistry?.mirrorEvidence() ?? [],
         () => windowRegistry?.knownCommandNames() ?? null,
+        (folder) => projectStore.create(folder).then(() => undefined),
       )
       : undefined,
   };

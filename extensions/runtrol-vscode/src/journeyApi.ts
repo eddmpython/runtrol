@@ -61,6 +61,18 @@ export type JourneyApi = {
   windowMirrors(): MirrorEvidence[];
   /// The provider command names the registry recognises, or null while the inventory has not answered.
   windowCommandNames(): string[] | null;
+  /// Click a sidebar row by its key, the way the webview does.
+  clickRow(key: string): Promise<void>;
+  /// File a folder as a project, the way the "Add a project" action does.
+  addProject(folder: string): Promise<void>;
+  /// The name of the terminal VS Code shows as active in this window, or null.
+  activeTerminalName(): string | null;
+  /// This window's registered session identity.
+  windowSessionId(): string;
+  /// The keys of the rows the sidebar lists right now.
+  rowKeys(): string[];
+  /// What the Runtime answered to this window's last owner reveal, or null.
+  lastReveal(): { delivered: boolean; foreground: string } | null;
   /// Open the newest stored conversation of a service that has a title (a reopened conversation with history),
   /// returning its session id, or null when the service lists none.
   openStoredWithTitle(providerId: string): Promise<string | null>;
@@ -143,6 +155,7 @@ export function journeyApi(
   treeItemIds: () => string[] = () => [],
   windowMirrors: () => MirrorEvidence[] = () => [],
   windowCommandNames: () => string[] | null = () => null,
+  addProject: (folder: string) => Promise<void> = async () => {},
 ): JourneyApi | undefined {
   if (
     extensionMode !== vscode.ExtensionMode.Test
@@ -389,6 +402,16 @@ export function journeyApi(
       terminals.setJourneyDimensions(runtimeGeneration, terminalId, columns, rows),
     windowMirrors,
     windowCommandNames,
+    clickRow: (key) => afterReady(async () => {
+      const row = state.conversations.find((candidate) => candidate.key === key);
+      if (!row) throw new Error(`no sidebar row has key ${key}`);
+      await controller.select(row);
+    }),
+    addProject,
+    activeTerminalName: () => vscode.window.activeTerminal?.name ?? null,
+    windowSessionId: () => vscode.env.sessionId,
+    rowKeys: () => state.conversations.map((row) => row.key),
+    lastReveal: () => controller.lastReveal,
     terminalStop: (runtimeGeneration, terminalId, _deadlineMs) => afterReady(
       () => terminals.stopJourneyTerminal(runtimeGeneration, terminalId),
     ),

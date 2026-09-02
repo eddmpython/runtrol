@@ -3205,6 +3205,16 @@
           "type": "string"
         },
         {
+          "const": "windows/reveal",
+          "description": "Ask the window that owns a terminal to show it and come forward.",
+          "type": "string"
+        },
+        {
+          "const": "windows/watchReveals",
+          "description": "A window subscribes to reveal requests for its own terminals.",
+          "type": "string"
+        },
+        {
           "const": "approvals/listPending",
           "description": "Read pending structured provider approvals for one controlled session.",
           "type": "string"
@@ -3282,6 +3292,16 @@
         {
           "const": "windows/indexEnded",
           "description": "The window index subscription ended.",
+          "type": "string"
+        },
+        {
+          "const": "windows/revealRequested",
+          "description": "Notification: someone asked the subscribed window to show one of its terminals.",
+          "type": "string"
+        },
+        {
+          "const": "windows/revealsEnded",
+          "description": "Notification: the reveal subscription ended.",
           "type": "string"
         },
         {
@@ -4907,6 +4927,34 @@
       ],
       "type": "object"
     },
+    "WatchWindowRevealsParams": {
+      "additionalProperties": false,
+      "description": "A window asks to be told when someone wants one of its terminals shown.",
+      "properties": {
+        "windowSessionId": {
+          "description": "The window's own registered session identity.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "windowSessionId"
+      ],
+      "type": "object"
+    },
+    "WatchWindowRevealsResult": {
+      "additionalProperties": false,
+      "description": "The reveal subscription.",
+      "properties": {
+        "subscriptionId": {
+          "description": "Identity of this subscription, echoed on every notification.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "subscriptionId"
+      ],
+      "type": "object"
+    },
     "WindowDescriptor": {
       "additionalProperties": false,
       "description": "One registered window as every reader sees it.",
@@ -4914,6 +4962,15 @@
         "hostGeneration": {
           "description": "The Extension Host activation that holds the registration.",
           "type": "string"
+        },
+        "hostPid": {
+          "description": "The Extension Host's process id, when the window reported one.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "registrationGeneration": {
           "description": "Which registration this is; higher is newer.",
@@ -4953,6 +5010,36 @@
         "terminals"
       ],
       "type": "object"
+    },
+    "WindowForeground": {
+      "description": "What became of the owner's window on the desktop.",
+      "oneOf": [
+        {
+          "const": "raised",
+          "description": "The owner's window is in the foreground now.",
+          "type": "string"
+        },
+        {
+          "const": "flashed",
+          "description": "Windows refused the foreground change; the owner's taskbar button flashes.",
+          "type": "string"
+        },
+        {
+          "const": "notFound",
+          "description": "The owner registered no host process, or none of its windows could be found.",
+          "type": "string"
+        },
+        {
+          "const": "ambiguous",
+          "description": "More than one of the owner's windows matched; none was raised.",
+          "type": "string"
+        },
+        {
+          "const": "unsupported",
+          "description": "This platform has no window to raise.",
+          "type": "string"
+        }
+      ]
     },
     "WindowIndexChangedNotification": {
       "additionalProperties": false,
@@ -5135,6 +5222,15 @@
           "description": "One value per Extension Host activation, so a restarted host is told apart from the one before it.",
           "type": "string"
         },
+        "hostPid": {
+          "description": "The Extension Host's process id. The editor's own window belongs to an ancestor of it, which is how a reveal\nfinds the window to bring forward.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "vscodeVersion": {
           "description": "The VS Code version the window runs.",
           "type": "string"
@@ -5172,6 +5268,89 @@
       },
       "required": [
         "registrationGeneration"
+      ],
+      "type": "object"
+    },
+    "WindowRevealParams": {
+      "additionalProperties": false,
+      "description": "Ask the window that owns a terminal to show it and come forward.",
+      "properties": {
+        "terminalKey": {
+          "description": "The owner's key for the terminal in the window registry.",
+          "type": "string"
+        },
+        "windowSessionId": {
+          "description": "The owner window, by its registered session identity.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "windowSessionId",
+        "terminalKey"
+      ],
+      "type": "object"
+    },
+    "WindowRevealRequestedNotification": {
+      "additionalProperties": false,
+      "description": "Someone asked the subscribed window to show one of its terminals.",
+      "properties": {
+        "fromWindowSessionId": {
+          "description": "The asking window's registered session identity, when the asker is a registered window.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "subscriptionId": {
+          "description": "The subscription this belongs to.",
+          "type": "string"
+        },
+        "terminalKey": {
+          "description": "The window's own key for the terminal to show.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "subscriptionId",
+        "terminalKey"
+      ],
+      "type": "object"
+    },
+    "WindowRevealResult": {
+      "additionalProperties": false,
+      "description": "The reveal as far as the Runtime could take it.",
+      "properties": {
+        "delivered": {
+          "description": "Whether the owner window was watching for reveals and was told which terminal to show.",
+          "type": "boolean"
+        },
+        "foreground": {
+          "$ref": "#/$defs/WindowForeground",
+          "description": "What became of the owner's window on the desktop."
+        }
+      },
+      "required": [
+        "delivered",
+        "foreground"
+      ],
+      "type": "object"
+    },
+    "WindowRevealsEndedNotification": {
+      "additionalProperties": false,
+      "description": "The reveal subscription ended.",
+      "properties": {
+        "reason": {
+          "$ref": "#/$defs/WindowIndexEndReason",
+          "description": "Why it ended."
+        },
+        "subscriptionId": {
+          "description": "The subscription this belongs to.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "subscriptionId",
+        "reason"
       ],
       "type": "object"
     },
@@ -5451,6 +5630,12 @@
     "watch_window_index_result": {
       "$ref": "#/$defs/WatchWindowIndexResult"
     },
+    "watch_window_reveals": {
+      "$ref": "#/$defs/WatchWindowRevealsParams"
+    },
+    "watch_window_reveals_result": {
+      "$ref": "#/$defs/WatchWindowRevealsResult"
+    },
     "window_descriptor": {
       "$ref": "#/$defs/WindowDescriptor"
     },
@@ -5480,6 +5665,18 @@
     },
     "window_registration": {
       "$ref": "#/$defs/WindowRegistration"
+    },
+    "window_reveal": {
+      "$ref": "#/$defs/WindowRevealParams"
+    },
+    "window_reveal_requested": {
+      "$ref": "#/$defs/WindowRevealRequestedNotification"
+    },
+    "window_reveal_result": {
+      "$ref": "#/$defs/WindowRevealResult"
+    },
+    "window_reveals_ended": {
+      "$ref": "#/$defs/WindowRevealsEndedNotification"
     },
     "window_update": {
       "$ref": "#/$defs/WindowUpdateParams"
@@ -5581,7 +5778,13 @@
     "window_mirror_open",
     "window_mirror_opened",
     "window_mirror_output",
-    "window_mirror_end"
+    "window_mirror_end",
+    "window_reveal",
+    "window_reveal_result",
+    "watch_window_reveals",
+    "watch_window_reveals_result",
+    "window_reveal_requested",
+    "window_reveals_ended"
   ],
   "title": "PublicProtocolSchema",
   "type": "object",

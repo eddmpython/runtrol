@@ -14,6 +14,8 @@ export type WindowIdentity = {
   readonly windowSessionId: string;
   readonly hostGeneration: string;
   readonly vscodeVersion: string;
+  /// The Extension Host's process id: the editor window that owns this host is found among its ancestors.
+  readonly hostPid: number;
 };
 
 type Observed = {
@@ -64,6 +66,12 @@ export class WindowRegistryState {
   /// The key this window published for a terminal, or null for one it never tracked.
   terminalKey(handle: object): string | null {
     return this.terminals.get(handle)?.key ?? null;
+  }
+
+  /// The terminal published under `key`, or null when this window never published it.
+  handleOf(key: string): object | null {
+    for (const [handle, terminal] of this.terminals) if (terminal.key === key) return handle;
+    return null;
   }
 
   /// The shell's working directory as shell integration last reported it.
@@ -122,6 +130,7 @@ export class WindowRegistryState {
       hostGeneration: this.identity.hostGeneration,
       vscodeVersion: this.identity.vscodeVersion,
       workspaceFolders: this.folders.slice(0, 32),
+      hostPid: this.identity.hostPid,
     };
   }
 

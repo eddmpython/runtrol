@@ -28,6 +28,8 @@ import {
   type TerminalDescriptor,
   type TerminalIndexSnapshot,
   type WindowMirrorEndParams,
+  type WindowRevealParams,
+  type WindowRevealResult,
   type WindowMirrorOpenParams,
   type WindowMirrorOpened,
   type WindowMirrorOutputParams,
@@ -348,6 +350,41 @@ export class StudioRuntimeClient implements vscode.Disposable {
 
   mirrorEnd(params: WindowMirrorEndParams): Promise<void> {
     return this.read((runtime) => runtime.windows().mirrorEnd(params));
+  }
+
+  /// Ask the window that owns a terminal to show it and come forward.
+  revealAtOwner(params: WindowRevealParams): Promise<WindowRevealResult> {
+    return this.read((runtime) => runtime.windows().reveal(params));
+  }
+
+  /// Follow reveal requests for this window on a dedicated connection until `signal` aborts, reconnecting after
+  /// a Runtime restart; `onRequest` gets the key of the terminal to show.
+  async watchWindowReveals(
+    windowSessionId: string,
+    onRequest: (terminalKey: string) => void,
+    signal: AbortSignal,
+  ): Promise<void> {
+    while (!signal.aborted) {
+      let runtime: RuntimeClient | null = null;
+      try {
+        runtime = await this.withRuntimeLocator(
+          (locator) => this.connector.connectWithRetry(locator, this.requireOptions()),
+        );
+        const subscription = await runtime.windows().watchReveals({ windowSessionId });
+        while (!signal.aborted) {
+          const notification = await subscription.next();
+          if (notification.kind !== "requested") break;
+          onRequest(notification.requested.terminalKey);
+        }
+      } catch (error) {
+        if (signal.aborted) return;
+        // The Runtime went away or refused (a registration not made yet); the next round asks again.
+        void error;
+      } finally {
+        runtime?.close();
+      }
+      if (!signal.aborted) await abortableDelay(2_000, signal);
+    }
   }
 
   /// Every hosted terminal the Runtime lists right now, with what each process holds in memory.

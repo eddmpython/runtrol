@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { WindowRegistryState } from "./windowRegistryState";
 
-const identity = { windowSessionId: "window-1", hostGeneration: "host-1", vscodeVersion: "1.132.1" };
+const identity = { windowSessionId: "window-1", hostGeneration: "host-1", vscodeVersion: "1.132.1", hostPid: 4321 };
 
 test("a window registers its identity and folders, and publishes every terminal it knows with its command generation", () => {
   const state = new WindowRegistryState(identity, ["C:\\work"]);
@@ -12,6 +12,7 @@ test("a window registers its identity and folders, and publishes every terminal 
     hostGeneration: "host-1",
     vscodeVersion: "1.132.1",
     workspaceFolders: ["C:\\work"],
+    hostPid: 4321,
   });
   const one = {};
   const two = {};
@@ -26,6 +27,8 @@ test("a window registers its identity and folders, and publishes every terminal 
   });
   assert.equal(state.terminalKey(one), "t1");
   assert.equal(state.terminalKey({}), null);
+  assert.equal(state.handleOf("t1"), one);
+  assert.equal(state.handleOf("t9"), null);
   assert.equal(state.cwdOf(one), null);
   assert.equal(state.processIdOf(one), null);
   assert.equal(state.processResolved(one, 4242), true);

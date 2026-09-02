@@ -46,6 +46,7 @@ pub mod footprint;
 pub mod handoff;
 pub mod held;
 pub mod local_terminal;
+pub mod os_window;
 pub mod process_tree;
 pub mod pty;
 pub mod resolve;

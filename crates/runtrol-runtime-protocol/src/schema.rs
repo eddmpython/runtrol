@@ -26,10 +26,12 @@ use crate::{
     WatchEnrollmentParams, WatchEventsParams, WatchEventsResult, WatchProvidersParams,
     WatchProvidersResult, WatchSessionIndexParams, WatchSessionIndexResult,
     WatchTerminalIndexParams, WatchTerminalIndexResult, WatchWindowIndexParams,
-    WatchWindowIndexResult, WindowDescriptor, WindowIndexChangedNotification,
-    WindowIndexEndedNotification, WindowIndexSnapshot, WindowMirrorEndParams,
-    WindowMirrorOpenParams, WindowMirrorOpened, WindowMirrorOutputParams, WindowRegisterParams,
-    WindowRegistration, WindowUpdateParams,
+    WatchWindowIndexResult, WatchWindowRevealsParams, WatchWindowRevealsResult, WindowDescriptor,
+    WindowIndexChangedNotification, WindowIndexEndedNotification, WindowIndexSnapshot,
+    WindowMirrorEndParams, WindowMirrorOpenParams, WindowMirrorOpened, WindowMirrorOutputParams,
+    WindowRegisterParams, WindowRegistration, WindowRevealParams,
+    WindowRevealRequestedNotification, WindowRevealResult, WindowRevealsEndedNotification,
+    WindowUpdateParams,
 };
 
 /// Checked schema filename inside this package.
@@ -138,6 +140,12 @@ struct PublicProtocolSchema {
     window_mirror_opened: WindowMirrorOpened,
     window_mirror_output: WindowMirrorOutputParams,
     window_mirror_end: WindowMirrorEndParams,
+    window_reveal: WindowRevealParams,
+    window_reveal_result: WindowRevealResult,
+    watch_window_reveals: WatchWindowRevealsParams,
+    watch_window_reveals_result: WatchWindowRevealsResult,
+    window_reveal_requested: WindowRevealRequestedNotification,
+    window_reveals_ended: WindowRevealsEndedNotification,
 }
 
 /// Generate the language-neutral public schema from the Rust DTOs.
