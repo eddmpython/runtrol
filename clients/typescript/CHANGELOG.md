@@ -5,6 +5,8 @@
 - Added `checkpointAvailable` to the terminal view opened and lagged messages (regenerated bindings).
 - Added `controlGeneration` and `controlHeld` to the terminal descriptor: exactly one view holds a terminal's
   control lease, and acquiring it transfers it (an earlier holder's next write answers `controlConflict`).
+- Added the window registry: `windows/register`, `windows/update`, `windows/list`, `windows/watchIndex` and the
+  `windows/indexChanged` and `windows/indexEnded` notifications, with `WindowClient` and `WindowIndexSubscription`.
 
 ## 0.1.1
 

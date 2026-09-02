@@ -155,7 +155,7 @@ pub enum TerminalFleetOutcome {
 }
 
 #[derive(serde::Deserialize)]
-struct EmptyResult {}
+pub(crate) struct EmptyResult {}
 
 /// One terminal-index stream notification.
 #[derive(Debug)]
@@ -549,7 +549,10 @@ fn require_response_id(
     Ok(())
 }
 
-fn decode_notification(payload: &[u8], surface: &str) -> Result<JsonRpcNotification, ClientError> {
+pub(crate) fn decode_notification(
+    payload: &[u8],
+    surface: &str,
+) -> Result<JsonRpcNotification, ClientError> {
     let notification: JsonRpcNotification = serde_json::from_slice(payload).map_err(|error| {
         ClientError::Protocol(format!(
             "{surface} notification is not valid JSON-RPC: {error}"
@@ -563,7 +566,7 @@ fn decode_notification(payload: &[u8], surface: &str) -> Result<JsonRpcNotificat
     Ok(notification)
 }
 
-fn parse_method(
+pub(crate) fn parse_method(
     notification: &JsonRpcNotification,
     surface: &str,
 ) -> Result<RuntimeMethod, ClientError> {
@@ -573,7 +576,7 @@ fn parse_method(
         .map_err(|_| ClientError::Protocol(format!("{surface} notification method is unknown")))
 }
 
-fn decode_params<T: DeserializeOwned>(
+pub(crate) fn decode_params<T: DeserializeOwned>(
     params: serde_json::Value,
     surface: &str,
 ) -> Result<T, ClientError> {
@@ -584,7 +587,7 @@ fn decode_params<T: DeserializeOwned>(
     })
 }
 
-fn require_subscription(expected: &str, actual: &str) -> Result<(), ClientError> {
+pub(crate) fn require_subscription(expected: &str, actual: &str) -> Result<(), ClientError> {
     if expected == actual {
         Ok(())
     } else {

@@ -403,6 +403,11 @@ impl RuntimeClient {
         crate::terminal::TerminalClient::new(self)
     }
 
+    /// The window registry: what every VS Code window says about itself and the terminals it observes.
+    pub fn windows(&mut self) -> crate::windows::WindowClient<'_> {
+        crate::windows::WindowClient::new(self)
+    }
+
     /// Bind an approved grant returned on this connection to its consumer-owned signing identity.
     ///
     /// # Errors

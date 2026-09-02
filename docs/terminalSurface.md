@@ -124,6 +124,7 @@ Application integrations use the public Runtime methods:
 | `terminals/open`, `terminals/attach` | Open a fresh or native provider terminal, or attach a viewer to an existing one |
 | `terminals/acquireControl`, `renewControl`, `releaseControl` | Hold one bounded terminal input lease |
 | `terminals/write`, `terminals/resize` | Send base64 bytes or exact geometry under the current lease |
+| `windows/register`, `windows/update`, `windows/list`, `windows/watchIndex` | A VS Code window registers itself (session identity, host generation, folders) and the ordinary terminals it observes (process id, shell integration, current command generation); every window reads or watches the index. One entry per window, bound to the registering connection, replaced by the same window's next registration |
 | `terminals/detach`, `terminals/stop` | Detach one viewer or explicitly stop the live conversation through its owning route |
 | `terminals/output`, `terminals/lagged`, `terminals/exited` | Stream ordered output, replace a lagged view from a complete snapshot, and report exit |
 

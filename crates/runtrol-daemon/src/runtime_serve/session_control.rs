@@ -1064,6 +1064,12 @@ fn parse_session_operation(
         | RuntimeMethod::TerminalsOutput
         | RuntimeMethod::TerminalsLagged
         | RuntimeMethod::TerminalsExited
+        | RuntimeMethod::WindowsRegister
+        | RuntimeMethod::WindowsUpdate
+        | RuntimeMethod::WindowsList
+        | RuntimeMethod::WindowsWatchIndex
+        | RuntimeMethod::WindowsIndexChanged
+        | RuntimeMethod::WindowsIndexEnded
         | RuntimeMethod::SessionsEvent
         | RuntimeMethod::SessionsLagged
         | RuntimeMethod::SessionsIndexChanged

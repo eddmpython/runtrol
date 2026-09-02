@@ -8,6 +8,7 @@ mod connection;
 mod identity;
 mod locator;
 mod terminal;
+mod windows;
 
 pub use client::{
     ApprovalClient, ClientOptions, EnrollmentProposal, EventSubscription, IntegrationClient,
@@ -24,6 +25,7 @@ pub use terminal::{
     TerminalClient, TerminalFleetEntry, TerminalFleetOutcome, TerminalIndexNotification,
     TerminalIndexSubscription, TerminalNotification, TerminalView,
 };
+pub use windows::{WindowClient, WindowIndexNotification, WindowIndexSubscription};
 
 /// A public client operation failed.
 #[derive(Debug, thiserror::Error)]

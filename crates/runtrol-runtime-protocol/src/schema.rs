@@ -8,9 +8,10 @@ use crate::{
     EnrollmentReceipt, ForgetSessionParams, GetProviderCapabilitiesParams, GetSessionParams,
     InitializeParams, InitializeResult, IntegrationGrant, JsonRpcNotification, JsonRpcRequest,
     JsonRpcResponse, LaggedNotification, ListModelsParams, ListNativeSessionsParams,
-    ListPendingApprovalsParams, ListTerminalsParams, ManagedSessionList, NativeActivity,
-    NativeActivityParams, NativeSessionCatalogue, PendingApprovalList, ProviderList,
-    ProviderUsageList, ProviderWatchEndedNotification, ProvidersChangedNotification,
+    ListPendingApprovalsParams, ListTerminalsParams, ListWindowsParams, ManagedSessionList,
+    NativeActivity, NativeActivityParams, NativeSessionCatalogue, ObservedCommand,
+    ObservedTerminal, PendingApprovalList, ProviderList, ProviderUsageList,
+    ProviderWatchEndedNotification, ProvidersChangedNotification,
     ProvidersUsageChangedNotification, RequestEnrollmentParams, RespondApprovalParams,
     ResumeSessionParams, RotateIntegrationKeyParams, RuntimeEventNotification,
     RuntimeLocatorRecord, RuntimeMethod, RuntimeModelCatalog, RuntimeProviderCapabilities,
@@ -24,7 +25,10 @@ use crate::{
     TerminalResizeParams, TerminalStopParams, TerminalViewOpened, TerminalWriteParams,
     WatchEnrollmentParams, WatchEventsParams, WatchEventsResult, WatchProvidersParams,
     WatchProvidersResult, WatchSessionIndexParams, WatchSessionIndexResult,
-    WatchTerminalIndexParams, WatchTerminalIndexResult,
+    WatchTerminalIndexParams, WatchTerminalIndexResult, WatchWindowIndexParams,
+    WatchWindowIndexResult, WindowDescriptor, WindowIndexChangedNotification,
+    WindowIndexEndedNotification, WindowIndexSnapshot, WindowRegisterParams, WindowRegistration,
+    WindowUpdateParams,
 };
 
 /// Checked schema filename inside this package.
@@ -117,6 +121,18 @@ struct PublicProtocolSchema {
     terminal_output: TerminalOutputNotification,
     terminal_lagged: TerminalLaggedNotification,
     terminal_exited: TerminalExitedNotification,
+    window_register: WindowRegisterParams,
+    window_registration: WindowRegistration,
+    window_update: WindowUpdateParams,
+    observed_terminal: ObservedTerminal,
+    observed_command: ObservedCommand,
+    window_descriptor: WindowDescriptor,
+    list_windows: ListWindowsParams,
+    window_index: WindowIndexSnapshot,
+    watch_window_index: WatchWindowIndexParams,
+    watch_window_index_result: WatchWindowIndexResult,
+    window_index_changed: WindowIndexChangedNotification,
+    window_index_ended: WindowIndexEndedNotification,
 }
 
 /// Generate the language-neutral public schema from the Rust DTOs.

@@ -91,6 +91,21 @@ pub(super) async fn relay_watch(
             .await;
             RelayOutcome::CloseConnection
         }
+        Watching::WindowIndex {
+            subscription_id,
+            last,
+            updates,
+        } => {
+            super::window_requests::relay_window_index(
+                connection,
+                composed,
+                subscription_id,
+                last,
+                updates,
+            )
+            .await;
+            RelayOutcome::CloseConnection
+        }
     }
 }
 

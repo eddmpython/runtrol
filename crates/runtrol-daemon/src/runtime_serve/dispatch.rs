@@ -177,6 +177,12 @@ pub(super) async fn dispatch_public(
                 )
                 .await
             }
+            RuntimeMethod::WindowsRegister
+            | RuntimeMethod::WindowsUpdate
+            | RuntimeMethod::WindowsList
+            | RuntimeMethod::WindowsWatchIndex => {
+                super::window_requests::window_operation(state, composed, method, id, params).await
+            }
             RuntimeMethod::Initialized
             | RuntimeMethod::Challenge
             | RuntimeMethod::ProvidersChanged
@@ -190,7 +196,9 @@ pub(super) async fn dispatch_public(
             | RuntimeMethod::TerminalsIndexEnded
             | RuntimeMethod::TerminalsOutput
             | RuntimeMethod::TerminalsLagged
-            | RuntimeMethod::TerminalsExited => Answer::plain(
+            | RuntimeMethod::TerminalsExited
+            | RuntimeMethod::WindowsIndexChanged
+            | RuntimeMethod::WindowsIndexEnded => Answer::plain(
                 id,
                 RuntimeErrorKind::InvalidRequest,
                 "the method is not a client request in the current state",

@@ -142,6 +142,21 @@ No published Studio version before this public terminal contract persisted a pri
 so there is no discoverable legacy tab to migrate. Runtime's native claim registry and `legacyGenerationBusy` error
 protect any older live owner without inventing a client-side bridge.
 
+## Window registry
+
+Every Studio window registers itself with the Runtime once it is ready and keeps that record current from VS
+Code's own events (`windowRegistry.ts`, `windowRegistryState.ts`): the window's session identity (kept across an
+Extension Host restart, renewed by a reload), a host generation minted per activation, its workspace folders, and
+every ordinary terminal it observes with the shell process id, whether shell integration is attached, the working
+directory, and the command generation shell integration reported as running. Nothing is polled: a terminal opened
+or closed, shell integration attaching, a command starting or ending, and a folder change each publish the whole
+set once, with one publish in flight and the latest state sent after it. A terminal's name is read again at publish
+time because VS Code names it after the shell starts and raises no event for that. The registration lives on the
+persistent command connection; a fresh connection registers again before it updates, and the Runtime drops an entry
+the moment its connection ends, so a restarted host replaces its window's entry with a higher registration
+generation and no duplicate. `tooling/window-registry-eye.mjs` proves this on two isolated windows and a third,
+development-mode window restarted by keys.
+
 ## Session and workspace contract
 
 - The exact managed-session release load and expected hot-process cardinality for this gate are owned by the
@@ -248,6 +263,7 @@ the operator procedure and recovery rules.
 | `vscodeRealProviderJourney` | installed provider discovery and complete real CLI control journey |
 | `node tooling/real-window-eye.mjs` | isolated real VS Code visual journey and screenshots |
 | `node tooling/drag-select-eye.mjs` | a real pointer drag selects text in a Runtrol tab whose provider switched mouse reporting on, with screenshots and a public-wire screen comparison |
+| `node tooling/window-registry-eye.mjs` | two isolated windows and a development-mode third register with one Runtime, follow terminal open, command, and close, and survive an Extension Host restart as one entry each, read through the public wire |
 | `vscodePackage` | complete target SSOT, exact archive contents, Runtime bytes, workflow, README, and brand metadata |
 | `crossPlatformMatrix` | exact VSIX installation and first-run action on native Windows, macOS, and Linux |
 | `vscodeUpgradeRollback` | active-session continuity across official VSIX upgrade and rollback |

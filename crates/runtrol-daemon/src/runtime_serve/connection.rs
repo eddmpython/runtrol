@@ -21,14 +21,54 @@ use super::provider_requests::{
 };
 use super::response::{EmptyParams, send_notification, send_response};
 use super::watch_relay::relay_watch;
+use crate::window_registry::ConnectionToken;
 
-/// Serve one public connection until it closes or violates the public frame contract.
+/// Serve one public connection until it closes or violates the public frame contract, then take with it
+/// whatever it registered.
 #[expect(
     clippy::too_many_arguments,
     reason = "one connection keeps endpoint identity, discovery authority, catalogue snapshots, and owner channels explicit"
 )]
 pub(crate) async fn serve_connection(
+    connection: Connection,
+    instance_id: String,
+    composed: Arc<Composed>,
+    audit: crate::runtime_audit::AuditJournal,
+    discovering: Arc<crate::serve::DiscoveryGates>,
+    native_cursors: Arc<NativeCursorCodec>,
+    providers: watch::Sender<Arc<ProviderList>>,
+    sessions: watch::Receiver<Arc<RuntimeSessionCatalogue>>,
+    account_gauges: watch::Receiver<Arc<ProviderUsageList>>,
+    asking: mpsc::Sender<Box<RuntimeAsked>>,
+    returning: mpsc::UnboundedSender<RuntimeReturned>,
+) {
+    let token = ConnectionToken::next();
+    serve_requests(
+        connection,
+        token,
+        instance_id,
+        Arc::clone(&composed),
+        audit,
+        discovering,
+        native_cursors,
+        providers,
+        sessions,
+        account_gauges,
+        asking,
+        returning,
+    )
+    .await;
+    // A window's registration lives exactly as long as this connection.
+    composed.windows.forget_connection(token).await;
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one connection binds every shared publisher it may serve; bundling them would only rename the list"
+)]
+async fn serve_requests(
     mut connection: Connection,
+    token: ConnectionToken,
     instance_id: String,
     composed: Arc<Composed>,
     audit: crate::runtime_audit::AuditJournal,
@@ -49,7 +89,7 @@ pub(crate) async fn serve_connection(
     {
         return;
     }
-    let mut state = PublicState::Fresh { challenge };
+    let mut state = PublicState::Fresh { challenge, token };
     loop {
         let Ok(Some(payload)) = connection.recv().await else {
             return;
@@ -65,9 +105,15 @@ pub(crate) async fn serve_connection(
                 return;
             }
             state = match state {
-                PublicState::Negotiated { context, authority } => {
-                    PublicState::Ready { context, authority }
-                }
+                PublicState::Negotiated {
+                    context,
+                    authority,
+                    token,
+                } => PublicState::Ready {
+                    context,
+                    authority,
+                    token,
+                },
                 PublicState::Fresh { .. } | PublicState::Ready { .. } => return,
             };
             continue;

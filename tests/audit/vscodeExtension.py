@@ -772,8 +772,9 @@ def run() -> int:
             print(f"[vscodeExtension] FAIL. npm run {script} returned {result.returncode}.", file=sys.stderr)
             return 2
 
-    # The current Studio surface fits inside 320 KiB. This is a bloat tripwire, not a target; a reviewed feature may
-    # move it deliberately, while deleted surfaces cannot leave their former budget behind.
+    # The current Studio surface fits inside 336 KiB. This is a bloat tripwire, not a target; a reviewed feature may
+    # move it deliberately, while deleted surfaces cannot leave their former budget behind. Moved from 320 KiB on
+    # 2026-09-02 for the window registry (`EXT-01`): the SDK's window client and Studio's own registration.
     bundles = [
         EXTENSION / "dist" / name
         for name in (
@@ -782,8 +783,8 @@ def run() -> int:
         )
     ]
     for bundle in bundles:
-        if not bundle.is_file() or bundle.stat().st_size > 320 * 1024:
-            failures.append(f"{bundle.relative_to(ROOT)} is missing or exceeds 320 KiB")
+        if not bundle.is_file() or bundle.stat().st_size > 336 * 1024:
+            failures.append(f"{bundle.relative_to(ROOT)} is missing or exceeds 336 KiB")
     qr_bundle = EXTENSION / "dist" / "pairingQrVendor.js"
     if qr_bundle.is_file() and qr_bundle.stat().st_size > 32 * 1024:
         failures.append(f"{qr_bundle.relative_to(ROOT)} exceeds its pairing-only 32 KiB budget")

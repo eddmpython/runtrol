@@ -155,6 +155,9 @@ export interface ListPendingApprovalsParams { readonly leaseGeneration: number; 
 /** Read the visible terminal index in the connected Runtime generation. */
 export type ListTerminalsParams = Readonly<Record<string, never>>;
 
+/** Read every registered window. */
+export type ListWindowsParams = Readonly<Record<string, never>>;
+
 /** A bounded Runtime-managed session snapshot. */
 export interface ManagedSessionList { readonly sessions: ReadonlyArray<SessionDescriptor>; readonly warnings: ReadonlyArray<string>; }
 
@@ -180,6 +183,12 @@ export interface NativeSessionCatalogue { readonly coverage: CatalogueCoverage; 
 
 /** One root-authorized official provider-native session. */
 export interface NativeSessionDescriptor { readonly additionalDirectories: ReadonlyArray<string>; readonly adoptionToken?: string | null; readonly alreadyManagedAs?: RuntimeSessionId | null; readonly cwd: string; readonly nativeSessionId: string; readonly resume: NativeResumeCapability; readonly title?: string | null; readonly updatedAt?: string | null; }
+
+/** The command a shell-integrated terminal is running right now, as VS Code's shell integration reported it. */
+export interface ObservedCommand { readonly commandLine: string; readonly confidence: number; readonly executionId: string; readonly startedAtMs: number; }
+
+/** One terminal a window observes: an ordinary VS Code terminal, not one the Runtime hosts. */
+export interface ObservedTerminal { readonly command?: ObservedCommand | null; readonly cwd?: string | null; readonly name: string; readonly processId?: number | null; readonly shellIntegration: boolean; readonly terminalKey: string; }
 
 /** One provider-neutral approval request retained by the live driver. */
 export interface PendingApproval { readonly approvalId: string; readonly expiresAtMs: number; readonly kind: RuntimeApprovalKind; readonly options: ReadonlyArray<RuntimeApprovalOption>; readonly risk: RuntimeApprovalRisk; readonly subject: unknown; readonly subjectDigest: ReadonlyArray<number>; readonly subjectIncomplete: boolean; }
@@ -336,7 +345,7 @@ export interface RuntimeLimits { readonly challengeLifetimeMs: number; readonly 
 export interface RuntimeLocatorRecord { readonly generations: ReadonlyArray<RuntimeGeneration>; readonly instanceId: string; readonly schema: number; }
 
 /** A public Runtime method implemented by the initial read-only boundary. */
-export type RuntimeMethod = "runtime/initialize" | "runtime/initialized" | "runtime/challenge" | "integrations/requestEnrollment" | "integrations/watchEnrollment" | "integrations/getGrant" | "integrations/rotateKey" | "providers/usage" | "providers/list" | "providers/watch" | "providers/getCapabilities" | "providers/listModels" | "providers/listNativeSessions" | "providers/nativeActivity" | "sessions/list" | "sessions/watchIndex" | "sessions/get" | "sessions/start" | "sessions/adoptNative" | "sessions/resume" | "sessions/acquireControl" | "sessions/renewControl" | "sessions/releaseControl" | "sessions/submitInput" | "sessions/submitBlocks" | "sessions/setModel" | "sessions/setMode" | "sessions/watchEvents" | "sessions/interrupt" | "sessions/cool" | "sessions/forget" | "sessions/deleteNative" | "sessions/archiveNative" | "terminals/list" | "terminals/watchIndex" | "terminals/open" | "terminals/attach" | "terminals/acquireControl" | "terminals/renewControl" | "terminals/releaseControl" | "terminals/write" | "terminals/resize" | "terminals/detach" | "terminals/stop" | "approvals/listPending" | "approvals/respond" | "sessions/indexChanged" | "sessions/indexEnded" | "providers/changed" | "providers/watchEnded" | "providers/usageChanged" | "sessions/event" | "sessions/lagged" | "terminals/indexChanged" | "terminals/indexEnded" | "terminals/output" | "terminals/lagged" | "terminals/exited" | "runtime/panicStop";
+export type RuntimeMethod = "runtime/initialize" | "runtime/initialized" | "runtime/challenge" | "integrations/requestEnrollment" | "integrations/watchEnrollment" | "integrations/getGrant" | "integrations/rotateKey" | "providers/usage" | "providers/list" | "providers/watch" | "providers/getCapabilities" | "providers/listModels" | "providers/listNativeSessions" | "providers/nativeActivity" | "sessions/list" | "sessions/watchIndex" | "sessions/get" | "sessions/start" | "sessions/adoptNative" | "sessions/resume" | "sessions/acquireControl" | "sessions/renewControl" | "sessions/releaseControl" | "sessions/submitInput" | "sessions/submitBlocks" | "sessions/setModel" | "sessions/setMode" | "sessions/watchEvents" | "sessions/interrupt" | "sessions/cool" | "sessions/forget" | "sessions/deleteNative" | "sessions/archiveNative" | "terminals/list" | "terminals/watchIndex" | "terminals/open" | "terminals/attach" | "terminals/acquireControl" | "terminals/renewControl" | "terminals/releaseControl" | "terminals/write" | "terminals/resize" | "terminals/detach" | "terminals/stop" | "windows/register" | "windows/update" | "windows/list" | "windows/watchIndex" | "approvals/listPending" | "approvals/respond" | "sessions/indexChanged" | "sessions/indexEnded" | "providers/changed" | "providers/watchEnded" | "providers/usageChanged" | "sessions/event" | "sessions/lagged" | "terminals/indexChanged" | "terminals/indexEnded" | "terminals/output" | "terminals/lagged" | "terminals/exited" | "windows/indexChanged" | "windows/indexEnded" | "runtime/panicStop";
 
 /** The current model information Runtime can truthfully expose. */
 export type RuntimeModelCatalog = { readonly coverage: "known"; readonly models: ReadonlyArray<RuntimeModelChoice>; } | { readonly aliases: ReadonlyArray<string>; readonly coverage: "aliases"; readonly reasoningEfforts: ReadonlyArray<RuntimeReasoningChoice>; readonly why: string; } | { readonly aliases: ReadonlyArray<string>; readonly coverage: "partial"; readonly models: ReadonlyArray<RuntimeModelChoice>; readonly reasoningEfforts: ReadonlyArray<RuntimeReasoningChoice>; readonly why: string; } | { readonly coverage: "unknown"; readonly why: string; } | { readonly coverage: "unsupported"; readonly why: string; };
@@ -504,3 +513,33 @@ export type WatchTerminalIndexParams = Readonly<Record<string, never>>;
 
 /** Initial terminal index and the connection-local subscription identity. */
 export interface WatchTerminalIndexResult { readonly snapshot: TerminalIndexSnapshot; readonly subscriptionId: string; }
+
+/** Install one bounded window index subscription. */
+export type WatchWindowIndexParams = Readonly<Record<string, never>>;
+
+/** Initial window index and the connection-local subscription identity. */
+export interface WatchWindowIndexResult { readonly snapshot: WindowIndexSnapshot; readonly subscriptionId: string; }
+
+/** One registered window as every reader sees it. */
+export interface WindowDescriptor { readonly hostGeneration: string; readonly registrationGeneration: number; readonly terminals: ReadonlyArray<ObservedTerminal>; readonly vscodeVersion: string; readonly windowSessionId: string; readonly workspaceFolders: ReadonlyArray<string>; }
+
+/** The window index after a registration, an update, or a window going away. */
+export interface WindowIndexChangedNotification { readonly snapshot: WindowIndexSnapshot; readonly subscriptionId: string; }
+
+/** Final typed reason for retiring a window index subscription. */
+export type WindowIndexEndReason = "authorityChanged" | "runtimeUnavailable";
+
+/** The window index subscription ended. */
+export interface WindowIndexEndedNotification { readonly reason: WindowIndexEndReason; readonly subscriptionId: string; }
+
+/** Every registered window, in registration order. */
+export interface WindowIndexSnapshot { readonly windows: ReadonlyArray<WindowDescriptor>; }
+
+/** A window announcing itself: once per Extension Host activation, on the connection it keeps open. */
+export interface WindowRegisterParams { readonly hostGeneration: string; readonly vscodeVersion: string; readonly windowSessionId: string; readonly workspaceFolders: ReadonlyArray<string>; }
+
+/** The Runtime's record of a registration. */
+export interface WindowRegistration { readonly registrationGeneration: number; }
+
+/** A window publishing the terminals it observes: the whole set, every time something changed. */
+export interface WindowUpdateParams { readonly terminals: ReadonlyArray<ObservedTerminal>; }

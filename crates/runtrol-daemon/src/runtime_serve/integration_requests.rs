@@ -25,7 +25,7 @@ pub(super) async fn initialize(
     id: JsonRpcId,
     params: serde_json::Value,
 ) -> Answer {
-    let PublicState::Fresh { challenge } = state else {
+    let PublicState::Fresh { challenge, token } = state else {
         return Answer::plain(
             id,
             RuntimeErrorKind::InvalidRequest,
@@ -100,7 +100,12 @@ pub(super) async fn initialize(
         limits: RuntimeLimits::default(),
         grant: granted,
     };
-    *state = PublicState::Negotiated { context, authority };
+    let token = *token;
+    *state = PublicState::Negotiated {
+        context,
+        authority,
+        token,
+    };
     Answer::success(id, &result)
 }
 
@@ -110,7 +115,10 @@ pub(super) fn request_integration(
     id: JsonRpcId,
     params: serde_json::Value,
 ) -> Answer {
-    let PublicState::Ready { context, authority } = state else {
+    let PublicState::Ready {
+        context, authority, ..
+    } = state
+    else {
         return not_ready(id);
     };
     if !matches!(authority, PublicAuthority::Anonymous) {

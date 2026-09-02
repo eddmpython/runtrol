@@ -142,6 +142,18 @@ pub enum RuntimeMethod {
     /// Stop one hosted provider CLI process under the current terminal lease.
     #[serde(rename = "terminals/stop")]
     TerminalsStop,
+    /// A VS Code window registers itself and its observed terminals.
+    #[serde(rename = "windows/register")]
+    WindowsRegister,
+    /// A registered window publishes the terminals it observes now.
+    #[serde(rename = "windows/update")]
+    WindowsUpdate,
+    /// Read every registered window.
+    #[serde(rename = "windows/list")]
+    WindowsList,
+    /// Subscribe to the window index.
+    #[serde(rename = "windows/watchIndex")]
+    WindowsWatchIndex,
     /// Read pending structured provider approvals for one controlled session.
     #[serde(rename = "approvals/listPending")]
     ApprovalsListPending,
@@ -184,6 +196,12 @@ pub enum RuntimeMethod {
     /// Provider process exit after preceding output drained.
     #[serde(rename = "terminals/exited")]
     TerminalsExited,
+    /// The window index changed.
+    #[serde(rename = "windows/indexChanged")]
+    WindowsIndexChanged,
+    /// The window index subscription ended.
+    #[serde(rename = "windows/indexEnded")]
+    WindowsIndexEnded,
     /// Stop every supervised process in the safe direction.
     #[serde(rename = "runtime/panicStop")]
     PanicStop,
@@ -238,6 +256,10 @@ impl RuntimeMethod {
             Self::TerminalsResize => "terminals/resize",
             Self::TerminalsDetach => "terminals/detach",
             Self::TerminalsStop => "terminals/stop",
+            Self::WindowsRegister => "windows/register",
+            Self::WindowsUpdate => "windows/update",
+            Self::WindowsList => "windows/list",
+            Self::WindowsWatchIndex => "windows/watchIndex",
             Self::ApprovalsListPending => "approvals/listPending",
             Self::ApprovalsRespond => "approvals/respond",
             Self::SessionsIndexChanged => "sessions/indexChanged",
@@ -252,6 +274,8 @@ impl RuntimeMethod {
             Self::TerminalsOutput => "terminals/output",
             Self::TerminalsLagged => "terminals/lagged",
             Self::TerminalsExited => "terminals/exited",
+            Self::WindowsIndexChanged => "windows/indexChanged",
+            Self::WindowsIndexEnded => "windows/indexEnded",
             Self::PanicStop => "runtime/panicStop",
         }
     }
@@ -312,6 +336,10 @@ impl FromStr for RuntimeMethod {
             "terminals/resize" => Ok(Self::TerminalsResize),
             "terminals/detach" => Ok(Self::TerminalsDetach),
             "terminals/stop" => Ok(Self::TerminalsStop),
+            "windows/register" => Ok(Self::WindowsRegister),
+            "windows/update" => Ok(Self::WindowsUpdate),
+            "windows/list" => Ok(Self::WindowsList),
+            "windows/watchIndex" => Ok(Self::WindowsWatchIndex),
             "approvals/listPending" => Ok(Self::ApprovalsListPending),
             "approvals/respond" => Ok(Self::ApprovalsRespond),
             "sessions/indexChanged" => Ok(Self::SessionsIndexChanged),
@@ -326,6 +354,8 @@ impl FromStr for RuntimeMethod {
             "terminals/output" => Ok(Self::TerminalsOutput),
             "terminals/lagged" => Ok(Self::TerminalsLagged),
             "terminals/exited" => Ok(Self::TerminalsExited),
+            "windows/indexChanged" => Ok(Self::WindowsIndexChanged),
+            "windows/indexEnded" => Ok(Self::WindowsIndexEnded),
             "runtime/panicStop" => Ok(Self::PanicStop),
             _ => Err(UnknownMethod(value.to_owned())),
         }
@@ -387,6 +417,10 @@ mod tests {
             RuntimeMethod::TerminalsResize,
             RuntimeMethod::TerminalsDetach,
             RuntimeMethod::TerminalsStop,
+            RuntimeMethod::WindowsRegister,
+            RuntimeMethod::WindowsUpdate,
+            RuntimeMethod::WindowsList,
+            RuntimeMethod::WindowsWatchIndex,
             RuntimeMethod::ApprovalsListPending,
             RuntimeMethod::ApprovalsRespond,
             RuntimeMethod::SessionsIndexChanged,
@@ -401,6 +435,8 @@ mod tests {
             RuntimeMethod::TerminalsOutput,
             RuntimeMethod::TerminalsLagged,
             RuntimeMethod::TerminalsExited,
+            RuntimeMethod::WindowsIndexChanged,
+            RuntimeMethod::WindowsIndexEnded,
             RuntimeMethod::PanicStop,
         ] {
             assert_eq!(method.as_str().parse(), Ok(method));

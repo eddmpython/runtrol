@@ -176,7 +176,11 @@ pub(super) fn required_scope(method: RuntimeMethod) -> Option<AppScope> {
         | RuntimeMethod::SessionsWatchIndex
         | RuntimeMethod::SessionsGet
         | RuntimeMethod::TerminalsList
-        | RuntimeMethod::TerminalsWatchIndex => Some(AppScope::SessionList),
+        | RuntimeMethod::TerminalsWatchIndex
+        | RuntimeMethod::WindowsRegister
+        | RuntimeMethod::WindowsUpdate
+        | RuntimeMethod::WindowsList
+        | RuntimeMethod::WindowsWatchIndex => Some(AppScope::SessionList),
         RuntimeMethod::SessionsStart => Some(AppScope::SessionStart),
         RuntimeMethod::SessionsAdoptNative | RuntimeMethod::SessionsResume => {
             Some(AppScope::SessionResume)
@@ -225,6 +229,8 @@ pub(super) fn required_scope(method: RuntimeMethod) -> Option<AppScope> {
         | RuntimeMethod::TerminalsOutput
         | RuntimeMethod::TerminalsLagged
         | RuntimeMethod::TerminalsExited
+        | RuntimeMethod::WindowsIndexChanged
+        | RuntimeMethod::WindowsIndexEnded
         | RuntimeMethod::PanicStop => None,
     }
 }

@@ -147,6 +147,22 @@ impl Answer {
         }
     }
 
+    pub(super) fn watching_window_index(
+        id: JsonRpcId,
+        result: &runtrol_runtime_protocol::WatchWindowIndexResult,
+        updates: watch::Receiver<u64>,
+    ) -> Self {
+        Self {
+            response: success(id, result),
+            close: false,
+            watching: Some(Watching::WindowIndex {
+                subscription_id: result.subscription_id.clone(),
+                last: result.snapshot.clone(),
+                updates,
+            }),
+        }
+    }
+
     pub(super) fn watching_terminal_index(
         id: JsonRpcId,
         result: &WatchTerminalIndexResult,

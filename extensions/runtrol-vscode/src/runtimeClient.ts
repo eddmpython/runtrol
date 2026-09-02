@@ -27,6 +27,8 @@ import {
   type TerminalOpenParams,
   type TerminalDescriptor,
   type TerminalIndexSnapshot,
+  type WindowRegisterParams,
+  type WindowUpdateParams,
   type TerminalIndexSubscription,
   type TerminalView,
   type ValidatedLocator,
@@ -105,6 +107,8 @@ export type RuntimeSessionAction = {
 export class StudioRuntimeClient implements vscode.Disposable {
   private readonly connector = new RuntimeConnector();
   private command: RuntimeClient | null = null;
+  /// The command connection this window's registration was made on; a new connection needs a new one.
+  private windowRegisteredOn: RuntimeClient | null = null;
   /// The 250 ms process-roster clock must never queue in front of operator commands.
   ///
   /// A provider can take tens of milliseconds to validate its structural activity surface on Windows. Sharing
@@ -320,6 +324,18 @@ export class StudioRuntimeClient implements vscode.Disposable {
   }
 
   /// Every hosted terminal the Runtime lists right now, with what each process holds in memory.
+  /// Register this window and publish the terminals it observes, on the persistent command connection. A
+  /// registration lives as long as its connection, so a fresh connection registers again before it updates.
+  async publishWindow(register: WindowRegisterParams, update: WindowUpdateParams): Promise<void> {
+    await this.read(async (runtime) => {
+      if (this.windowRegisteredOn !== runtime) {
+        await runtime.windows().register(register);
+        this.windowRegisteredOn = runtime;
+      }
+      await runtime.windows().update(update);
+    });
+  }
+
   async listTerminals(): Promise<TerminalIndexSnapshot> {
     return this.read((runtime) => runtime.terminals().list());
   }

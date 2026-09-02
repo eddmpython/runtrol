@@ -180,6 +180,12 @@ fn main() -> ExitCode {
             ["input-hex", home, identity, digest, terminal, hex] => {
                 input_hex(Path::new(home), Path::new(identity), digest, terminal, hex).await
             }
+            ["windows-probe", home, identity, digest] => {
+                windows_probe(Path::new(home), Path::new(identity), digest).await
+            }
+            ["windows-list", home, identity, digest] => {
+                windows_list(Path::new(home), Path::new(identity), digest).await
+            }
             ["write-twice", home, identity, digest, terminal, hex] => {
                 write_twice(Path::new(home), Path::new(identity), digest, terminal, hex).await
             }
@@ -651,6 +657,76 @@ async fn screen(
         "mouseModeSeen": mentions_mouse_mode(&bytes),
     })
     .to_string())
+}
+
+/// Register a window with one observed terminal and read the registry back on the same connection: the
+/// daemon's side of the window registry contract, exercised without any VS Code.
+async fn windows_probe(home: &Path, identity_file: &Path, digest: &str) -> Result<String, String> {
+    use runtrol_runtime_client::protocol::{
+        ObservedCommand, ObservedTerminal, WindowRegisterParams, WindowUpdateParams,
+    };
+    let stored = read_stored(identity_file)?;
+    let generation = generation(home, digest)?;
+    let mut client = RuntimeClient::connect_to(generation, options_with(&stored))
+        .await
+        .map_err(|error| format!("connect to generation {digest}: {error}"))?;
+    let registered = client
+        .windows()
+        .register(&WindowRegisterParams {
+            window_session_id: "probe-window".to_owned(),
+            host_generation: "probe-host".to_owned(),
+            vscode_version: "0.0.0".to_owned(),
+            workspace_folders: vec!["C:/work".to_owned()],
+        })
+        .await
+        .map_err(|error| format!("register: {error}"))?;
+    let update = client
+        .windows()
+        .update(&WindowUpdateParams {
+            terminals: vec![ObservedTerminal {
+                terminal_key: "t1".to_owned(),
+                name: "pwsh".to_owned(),
+                process_id: Some(4242),
+                shell_integration: true,
+                cwd: Some("C:/work".to_owned()),
+                command: Some(ObservedCommand {
+                    execution_id: "e1".to_owned(),
+                    command_line: "echo hi".to_owned(),
+                    confidence: 2,
+                    started_at_ms: 1,
+                }),
+            }],
+        })
+        .await
+        .map_err(|error| format!("update: {error}"));
+    let listed = client
+        .windows()
+        .list()
+        .await
+        .map_err(|error| format!("list: {error}"))?;
+    Ok(serde_json::json!({
+        "registration": registered.registration_generation,
+        "update": update.map_or_else(|error| error, |()| "ok".to_owned()),
+        "windows": listed.windows.len(),
+        "terminals": listed.windows.first().map_or(0, |window| window.terminals.len()),
+    })
+    .to_string())
+}
+
+/// Every VS Code window the Runtime knows, with the terminals each one observes: the window registry as any
+/// Runtime client reads it.
+async fn windows_list(home: &Path, identity_file: &Path, digest: &str) -> Result<String, String> {
+    let stored = read_stored(identity_file)?;
+    let generation = generation(home, digest)?;
+    let mut client = RuntimeClient::connect_to(generation, options_with(&stored))
+        .await
+        .map_err(|error| format!("connect to generation {digest}: {error}"))?;
+    let snapshot = client
+        .windows()
+        .list()
+        .await
+        .map_err(|error| format!("list windows: {error}"))?;
+    serde_json::to_string(&snapshot).map_err(|error| error.to_string())
 }
 
 /// The same write, the same request identity, sent twice under one lease: what a client that lost the first

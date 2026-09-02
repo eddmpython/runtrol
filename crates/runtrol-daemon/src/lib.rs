@@ -45,6 +45,7 @@ pub mod scope;
 pub mod serve;
 mod session_catalogue;
 mod terminal_surface;
+mod window_registry;
 
 pub use compose::{ComposeError, Composed};
 pub use crash::record_panics_at;

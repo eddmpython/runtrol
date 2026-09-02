@@ -8,6 +8,7 @@ use tokio::sync::watch;
 
 use crate::runtime_auth::{AuthorizedIntegration, ClientContext};
 use crate::runtime_terminal::TerminalView;
+use crate::window_registry::ConnectionToken;
 
 pub(super) enum PublicAuthority {
     Anonymous,
@@ -18,15 +19,29 @@ pub(super) enum PublicAuthority {
 pub(super) enum PublicState {
     Fresh {
         challenge: runtrol_runtime_protocol::ServerChallenge,
+        token: ConnectionToken,
     },
     Negotiated {
         context: ClientContext,
         authority: PublicAuthority,
+        token: ConnectionToken,
     },
     Ready {
         context: ClientContext,
         authority: PublicAuthority,
+        token: ConnectionToken,
     },
+}
+
+impl PublicState {
+    /// The connection this state belongs to, for what the connection registers and takes with it.
+    pub(super) const fn token(&self) -> ConnectionToken {
+        match self {
+            Self::Fresh { token, .. }
+            | Self::Negotiated { token, .. }
+            | Self::Ready { token, .. } => *token,
+        }
+    }
 }
 
 pub(super) enum Watching {
@@ -53,6 +68,11 @@ pub(super) enum Watching {
         last: runtrol_runtime_protocol::TerminalIndexSnapshot,
         updates: watch::Receiver<u64>,
         authority: AuthorizedIntegration,
+    },
+    WindowIndex {
+        subscription_id: String,
+        last: runtrol_runtime_protocol::WindowIndexSnapshot,
+        updates: watch::Receiver<u64>,
     },
 }
 

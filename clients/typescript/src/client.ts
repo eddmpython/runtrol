@@ -81,6 +81,13 @@ import type {
   WatchProvidersResult,
   WatchSessionIndexResult,
   WatchTerminalIndexResult,
+  WatchWindowIndexResult,
+  WindowIndexChangedNotification,
+  WindowIndexEndedNotification,
+  WindowIndexSnapshot,
+  WindowRegisterParams,
+  WindowRegistration,
+  WindowUpdateParams,
 } from "./generated/protocol.js";
 import { FINALIZED_REVISIONS, PUBLIC_LIMITS } from "./generated/protocol.js";
 import {
@@ -316,6 +323,11 @@ export class RuntimeClient {
 
   public terminals(): TerminalClient {
     return new TerminalClient(this);
+  }
+
+  /// The window registry: what every VS Code window says about itself and the terminals it observes.
+  public windows(): WindowClient {
+    return new WindowClient(this);
   }
 
   public credentials(grant: IntegrationGrant): IntegrationCredentials {
@@ -706,6 +718,75 @@ export class TerminalClient {
     } catch (error) {
       runtime.close();
       throw error;
+    }
+  }
+}
+
+/// The window registry over one authenticated connection. A registration lives as long as the connection.
+export class WindowClient {
+  public constructor(private readonly runtime: RuntimeClient) {}
+
+  public register(params: WindowRegisterParams): Promise<WindowRegistration> {
+    return callRuntime(this.runtime, "windows/register", params, "WindowRegistration");
+  }
+
+  public async update(params: WindowUpdateParams): Promise<void> {
+    requireEmpty(await callRuntime<unknown>(this.runtime, "windows/update", params));
+  }
+
+  public list(): Promise<WindowIndexSnapshot> {
+    return callRuntime(this.runtime, "windows/list", {}, "WindowIndexSnapshot");
+  }
+
+  public async watchIndex(): Promise<WindowIndexSubscription> {
+    const started = await callRuntime<WatchWindowIndexResult>(
+      this.runtime,
+      "windows/watchIndex",
+      {},
+      "WatchWindowIndexResult",
+    );
+    return new WindowIndexSubscription(beginStream(this.runtime), started);
+  }
+}
+
+export type WindowIndexNotification =
+  | { readonly kind: "changed"; readonly changed: WindowIndexChangedNotification }
+  | { readonly kind: "ended"; readonly ended: WindowIndexEndedNotification };
+
+export class WindowIndexSubscription {
+  public constructor(
+    private readonly transport: RuntimeTransport,
+    public readonly started: WatchWindowIndexResult,
+  ) {}
+
+  public async next(): Promise<WindowIndexNotification> {
+    const notification = decodeRuntimeNotification(await this.transport.receive(), "window index");
+    if (notification.method === "windows/indexChanged") {
+      const changed = validatePublic<WindowIndexChangedNotification>(
+        "WindowIndexChangedNotification",
+        notification.params,
+      );
+      this.#requireTarget(changed.subscriptionId);
+      return { kind: "changed", changed };
+    }
+    if (notification.method === "windows/indexEnded") {
+      const ended = validatePublic<WindowIndexEndedNotification>(
+        "WindowIndexEndedNotification",
+        notification.params,
+      );
+      this.#requireTarget(ended.subscriptionId);
+      return { kind: "ended", ended };
+    }
+    throw new RuntimeProtocolError("dedicated window index stream received a different method");
+  }
+
+  public close(): void {
+    abortTransport(this.transport);
+  }
+
+  #requireTarget(subscriptionId: string): void {
+    if (subscriptionId !== this.started.subscriptionId) {
+      throw new RuntimeProtocolError("window index notification targets another subscription");
     }
   }
 }

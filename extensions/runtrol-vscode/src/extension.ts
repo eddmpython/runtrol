@@ -45,6 +45,7 @@ import { setupRows } from "./usageDisplay";
 import { WorkspaceRootFollowing } from "./workspaceRoots";
 import { accentedConversationIcon, conversationIcon } from "./conversationIcon";
 import { TerminalTabs } from "./terminalTabs";
+import { WindowRegistry } from "./windowRegistry";
 import { ConversationItem, ProjectItem, ServiceChoiceItem } from "./sidebarTargets";
 import { SIDEBAR_VIEW_ID, SidebarView } from "./sidebarView";
 import { showMoreActions } from "./moreActions";
@@ -709,6 +710,13 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
       void run(async () => {
         await materializeProviderShims(await locator.runtimeExecutable(), providerShimDirectory);
       });
+      // This window's entry in the Runtime's window registry: what it is and which terminals it observes, kept
+      // current by VS Code's own events so another window can name this one exactly.
+      const windowRegistry = new WindowRegistry(runtime, (message) => {
+        void vscode.window.showWarningMessage(`Runtrol could not publish this window to the Runtime: ${message}`);
+      });
+      context.subscriptions.push(windowRegistry);
+      windowRegistry.start();
     },
     (error: unknown) => {
       // Activation itself failed. If nothing was ever listed the Core never answered, so say that rather than

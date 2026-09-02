@@ -61,6 +61,10 @@ and refactoring that no user can observe do not belong here.
 
 ### Added
 
+- Every Studio window now registers itself with the Runtime (its identity, folders, and the ordinary terminals it
+  observes with their shell process ids, shell integration, and the command each is running) and keeps that record
+  current from VS Code's own events, so another window can name exactly which window owns a terminal. The record
+  leaves with the window's connection and a restarted Extension Host replaces it without a duplicate.
 - The public Runtime protocol's terminal view opened and lagged messages now carry `checkpointAvailable`, which
   says whether the screen they deliver is the provider's current one; a client built before the field reads it as
   true, as every earlier Runtime meant.

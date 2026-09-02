@@ -12,6 +12,7 @@ mod session_control;
 mod session_requests;
 mod terminal_stream;
 mod watch_relay;
+mod window_requests;
 
 pub(crate) use connection::serve_connection;
 pub(crate) use provider_requests::{observe_native_activity, reconcile_native_activity};

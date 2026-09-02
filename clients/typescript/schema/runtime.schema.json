@@ -1093,6 +1093,11 @@
       "description": "Read the visible terminal index in the connected Runtime generation.",
       "type": "object"
     },
+    "ListWindowsParams": {
+      "additionalProperties": false,
+      "description": "Read every registered window.",
+      "type": "object"
+    },
     "ManagedSessionList": {
       "additionalProperties": false,
       "description": "A bounded Runtime-managed session snapshot.",
@@ -1288,6 +1293,91 @@
         "cwd",
         "additionalDirectories",
         "resume"
+      ],
+      "type": "object"
+    },
+    "ObservedCommand": {
+      "additionalProperties": false,
+      "description": "The command a shell-integrated terminal is running right now, as VS Code's shell integration reported it.",
+      "properties": {
+        "commandLine": {
+          "description": "The command line as the shell reported it.",
+          "type": "string"
+        },
+        "confidence": {
+          "description": "VS Code's confidence in the command line: 0 low, 1 medium, 2 high.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "executionId": {
+          "description": "One value per started execution in the owning window: the command generation.",
+          "type": "string"
+        },
+        "startedAtMs": {
+          "description": "When the execution started, in the window's Unix milliseconds.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "executionId",
+        "commandLine",
+        "confidence",
+        "startedAtMs"
+      ],
+      "type": "object"
+    },
+    "ObservedTerminal": {
+      "additionalProperties": false,
+      "description": "One terminal a window observes: an ordinary VS Code terminal, not one the Runtime hosts.",
+      "properties": {
+        "command": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ObservedCommand"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The command running now, when shell integration reported one that has not ended."
+        },
+        "cwd": {
+          "description": "The shell's current working directory when shell integration reports it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "description": "The terminal's name as VS Code shows it.",
+          "type": "string"
+        },
+        "processId": {
+          "description": "The shell process id, once VS Code has resolved it; a terminal keeps it across a host restart.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "shellIntegration": {
+          "description": "Whether VS Code's shell integration is attached, which is what makes command observation possible.",
+          "type": "boolean"
+        },
+        "terminalKey": {
+          "description": "The window's own key for the terminal, stable for the terminal's life in that window.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "terminalKey",
+        "name",
+        "shellIntegration"
       ],
       "type": "object"
     },
@@ -3073,6 +3163,26 @@
           "type": "string"
         },
         {
+          "const": "windows/register",
+          "description": "A VS Code window registers itself and its observed terminals.",
+          "type": "string"
+        },
+        {
+          "const": "windows/update",
+          "description": "A registered window publishes the terminals it observes now.",
+          "type": "string"
+        },
+        {
+          "const": "windows/list",
+          "description": "Read every registered window.",
+          "type": "string"
+        },
+        {
+          "const": "windows/watchIndex",
+          "description": "Subscribe to the window index.",
+          "type": "string"
+        },
+        {
           "const": "approvals/listPending",
           "description": "Read pending structured provider approvals for one controlled session.",
           "type": "string"
@@ -3140,6 +3250,16 @@
         {
           "const": "terminals/exited",
           "description": "Provider process exit after preceding output drained.",
+          "type": "string"
+        },
+        {
+          "const": "windows/indexChanged",
+          "description": "The window index changed.",
+          "type": "string"
+        },
+        {
+          "const": "windows/indexEnded",
+          "description": "The window index subscription ended.",
           "type": "string"
         },
         {
@@ -4696,6 +4816,212 @@
         "snapshot"
       ],
       "type": "object"
+    },
+    "WatchWindowIndexParams": {
+      "additionalProperties": false,
+      "description": "Install one bounded window index subscription.",
+      "type": "object"
+    },
+    "WatchWindowIndexResult": {
+      "additionalProperties": false,
+      "description": "Initial window index and the connection-local subscription identity.",
+      "properties": {
+        "snapshot": {
+          "$ref": "#/$defs/WindowIndexSnapshot",
+          "description": "Initial snapshot."
+        },
+        "subscriptionId": {
+          "description": "Opaque connection-local subscription identity.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "subscriptionId",
+        "snapshot"
+      ],
+      "type": "object"
+    },
+    "WindowDescriptor": {
+      "additionalProperties": false,
+      "description": "One registered window as every reader sees it.",
+      "properties": {
+        "hostGeneration": {
+          "description": "The Extension Host activation that holds the registration.",
+          "type": "string"
+        },
+        "registrationGeneration": {
+          "description": "Which registration this is; higher is newer.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "terminals": {
+          "description": "Every terminal the window published, in the order it published them.",
+          "items": {
+            "$ref": "#/$defs/ObservedTerminal"
+          },
+          "type": "array"
+        },
+        "vscodeVersion": {
+          "description": "The VS Code version the window runs.",
+          "type": "string"
+        },
+        "windowSessionId": {
+          "description": "The window's identity, as registered.",
+          "type": "string"
+        },
+        "workspaceFolders": {
+          "description": "The workspace folders open in the window.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "windowSessionId",
+        "hostGeneration",
+        "registrationGeneration",
+        "vscodeVersion",
+        "workspaceFolders",
+        "terminals"
+      ],
+      "type": "object"
+    },
+    "WindowIndexChangedNotification": {
+      "additionalProperties": false,
+      "description": "The window index after a registration, an update, or a window going away.",
+      "properties": {
+        "snapshot": {
+          "$ref": "#/$defs/WindowIndexSnapshot",
+          "description": "Complete new snapshot."
+        },
+        "subscriptionId": {
+          "description": "Opaque connection-local subscription identity.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "subscriptionId",
+        "snapshot"
+      ],
+      "type": "object"
+    },
+    "WindowIndexEndReason": {
+      "description": "Final typed reason for retiring a window index subscription.",
+      "oneOf": [
+        {
+          "const": "authorityChanged",
+          "description": "The integration's authority changed or was revoked.",
+          "type": "string"
+        },
+        {
+          "const": "runtimeUnavailable",
+          "description": "The Runtime generation is going away.",
+          "type": "string"
+        }
+      ]
+    },
+    "WindowIndexEndedNotification": {
+      "additionalProperties": false,
+      "description": "The window index subscription ended.",
+      "properties": {
+        "reason": {
+          "$ref": "#/$defs/WindowIndexEndReason",
+          "description": "Structural end reason."
+        },
+        "subscriptionId": {
+          "description": "Opaque connection-local subscription identity.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "subscriptionId",
+        "reason"
+      ],
+      "type": "object"
+    },
+    "WindowIndexSnapshot": {
+      "additionalProperties": false,
+      "description": "Every registered window, in registration order.",
+      "properties": {
+        "windows": {
+          "description": "The registered windows, oldest registration first.",
+          "items": {
+            "$ref": "#/$defs/WindowDescriptor"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "windows"
+      ],
+      "type": "object"
+    },
+    "WindowRegisterParams": {
+      "additionalProperties": false,
+      "description": "A window announcing itself: once per Extension Host activation, on the connection it keeps open.",
+      "properties": {
+        "hostGeneration": {
+          "description": "One value per Extension Host activation, so a restarted host is told apart from the one before it.",
+          "type": "string"
+        },
+        "vscodeVersion": {
+          "description": "The VS Code version the window runs.",
+          "type": "string"
+        },
+        "windowSessionId": {
+          "description": "The window's own identity: VS Code's session id, one per window, kept across an Extension Host restart and\nrenewed by a window reload.",
+          "type": "string"
+        },
+        "workspaceFolders": {
+          "description": "The workspace folders open in the window, as absolute paths.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "windowSessionId",
+        "hostGeneration",
+        "vscodeVersion",
+        "workspaceFolders"
+      ],
+      "type": "object"
+    },
+    "WindowRegistration": {
+      "additionalProperties": false,
+      "description": "The Runtime's record of a registration.",
+      "properties": {
+        "registrationGeneration": {
+          "description": "Monotonic across every registration this Runtime generation accepted; a later registration of the same\nwindow has a higher number, so readers can tell which one is current.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "registrationGeneration"
+      ],
+      "type": "object"
+    },
+    "WindowUpdateParams": {
+      "additionalProperties": false,
+      "description": "A window publishing the terminals it observes: the whole set, every time something changed.",
+      "properties": {
+        "terminals": {
+          "description": "Every terminal the window observes right now.",
+          "items": {
+            "$ref": "#/$defs/ObservedTerminal"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "terminals"
+      ],
+      "type": "object"
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -4764,6 +5090,9 @@
     "list_terminals": {
       "$ref": "#/$defs/ListTerminalsParams"
     },
+    "list_windows": {
+      "$ref": "#/$defs/ListWindowsParams"
+    },
     "managed_session_list": {
       "$ref": "#/$defs/ManagedSessionList"
     },
@@ -4784,6 +5113,12 @@
     },
     "notification": {
       "$ref": "#/$defs/JsonRpcNotification"
+    },
+    "observed_command": {
+      "$ref": "#/$defs/ObservedCommand"
+    },
+    "observed_terminal": {
+      "$ref": "#/$defs/ObservedTerminal"
     },
     "pending_approvals": {
       "$ref": "#/$defs/PendingApprovalList"
@@ -4940,6 +5275,33 @@
     },
     "watch_terminal_index_result": {
       "$ref": "#/$defs/WatchTerminalIndexResult"
+    },
+    "watch_window_index": {
+      "$ref": "#/$defs/WatchWindowIndexParams"
+    },
+    "watch_window_index_result": {
+      "$ref": "#/$defs/WatchWindowIndexResult"
+    },
+    "window_descriptor": {
+      "$ref": "#/$defs/WindowDescriptor"
+    },
+    "window_index": {
+      "$ref": "#/$defs/WindowIndexSnapshot"
+    },
+    "window_index_changed": {
+      "$ref": "#/$defs/WindowIndexChangedNotification"
+    },
+    "window_index_ended": {
+      "$ref": "#/$defs/WindowIndexEndedNotification"
+    },
+    "window_register": {
+      "$ref": "#/$defs/WindowRegisterParams"
+    },
+    "window_registration": {
+      "$ref": "#/$defs/WindowRegistration"
+    },
+    "window_update": {
+      "$ref": "#/$defs/WindowUpdateParams"
     }
   },
   "required": [
@@ -5022,7 +5384,19 @@
     "terminal_index_ended",
     "terminal_output",
     "terminal_lagged",
-    "terminal_exited"
+    "terminal_exited",
+    "window_register",
+    "window_registration",
+    "window_update",
+    "observed_terminal",
+    "observed_command",
+    "window_descriptor",
+    "list_windows",
+    "window_index",
+    "watch_window_index",
+    "watch_window_index_result",
+    "window_index_changed",
+    "window_index_ended"
   ],
   "title": "PublicProtocolSchema",
   "type": "object",

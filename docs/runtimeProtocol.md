@@ -90,6 +90,7 @@ optional GUI. A public connection cannot approve itself.
 | `terminals/open` | `session.start` for a fresh target or `session.resume` for a native target, plus an approved root |
 | `terminals/acquireControl`, `terminals/write`, `terminals/resize` | `session.input.write` and the current terminal lease where applicable |
 | `terminals/stop` | `session.stop` and the current terminal lease |
+| `windows/register`, `windows/update`, `windows/list`, `windows/watchIndex` | `session.list`; a registration is bound to the connection that made it and leaves with it |
 | `terminals/renewControl`, `terminals/releaseControl`, `terminals/detach` | The current terminal view or lease generation |
 | `approvals/respond` | `approval.respond.low` or `approval.respond.high`, plus the current lease |
 | `sessions/renewControl`, `sessions/releaseControl` | The current lease generation |
