@@ -166,7 +166,10 @@ PowerShell call operator, unquoted, as a file name without a launcher extension)
 output stream synchronously inside the start event (measured 2026-09-02: taken after any await it yields nothing),
 opens a mirror through `windows/mirrorOpen`, feeds every captured chunk in order through `windows/mirrorOutput` (64
 KiB per call, base64 of the exact UTF-8 bytes VS Code delivered), and ends it through `windows/mirrorEnd` with the
-exit code when the command ends or the terminal closes. The Runtime hosts the mirror as a terminal whose child is
+exit code when the command ends or the terminal closes. The feed has its own connection, and the open names the owner
+window by its session identity rather than being inferred from the connection: chunks then never queue behind a
+person's click, and a chunk the Runtime refuses closes only the feed, never the command connection that holds this
+window's registration in the registry. The Runtime hosts the mirror as a terminal whose child is
 the feed (`runtrol-core::terminal::fed`): viewers, the raw lane, the checkpoint and the sidebar row apply
 unchanged; the descriptor says `origin: observedMirror` with the owner window's session identity and terminal key;
 input has nowhere to go, so viewer writes are refused and Stop answers that the owner window stops it. A provider

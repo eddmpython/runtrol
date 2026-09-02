@@ -249,6 +249,7 @@ export class WindowRegistry implements vscode.Disposable {
     const cwd = this.state.cwdOf(terminal);
     const processId = this.state.processIdOf(terminal);
     const open: WindowMirrorOpenParams = {
+      windowSessionId: vscode.env.sessionId,
       terminalKey,
       executionId,
       providerId,
@@ -298,6 +299,9 @@ export class WindowRegistry implements vscode.Disposable {
       mirror.openedAtMs = Date.now();
       try {
         for await (const text of stream) {
+          // A mirror this window has already replaced or ended has no feed left to fill; the Runtime retired it and
+          // the stream is drained rather than fed.
+          if (mirror.ended && mirror.endSent) break;
           for (const bytesBase64 of mirrorChunks(text)) {
             const chunk = Buffer.from(bytesBase64, "base64");
             mirror.digest.update(chunk);

@@ -123,6 +123,11 @@ export class StudioRuntimeClient implements vscode.Disposable {
   /// depends on it. One persistent authenticated connection and one narrow queue preserve ordering inside the
   /// activity lane without adding a connection per tick or delaying the command lane.
   private activity: RuntimeClient | null = null;
+  /// The observed mirror's own connection. It carries only this window's captured provider output, so a chunk
+  /// the Runtime refuses closes this and nothing else: not a person's click, and not the command connection
+  /// that holds this window's registration in the Runtime's window registry.
+  private mirror: RuntimeClient | null = null;
+  private mirrorTail: Promise<void> = Promise.resolve();
   private options: ClientOptions | null = null;
   private stored: StoredIntegration | null = null;
   private locator: Promise<ValidatedLocator> | null = null;
@@ -338,18 +343,18 @@ export class StudioRuntimeClient implements vscode.Disposable {
     return providerCommandNames((await this.read((runtime) => runtime.providers().list())).providers);
   }
 
-  /// Open a mirror of a terminal this window observes, on the same registered connection.
+  /// Open a mirror of a terminal this window observes, on the mirror's own connection.
   mirrorOpen(params: WindowMirrorOpenParams): Promise<WindowMirrorOpened> {
-    return this.read((runtime) => runtime.windows().mirrorOpen(params));
+    return this.mirrorLane((runtime) => runtime.windows().mirrorOpen(params));
   }
 
-  /// One chunk of the observed execution's output, in order with every other call on this lane.
+  /// One chunk of the observed execution's output, in order with every other chunk and behind nothing else.
   mirrorOutput(params: WindowMirrorOutputParams): Promise<void> {
-    return this.read((runtime) => runtime.windows().mirrorOutput(params));
+    return this.mirrorLane((runtime) => runtime.windows().mirrorOutput(params));
   }
 
   mirrorEnd(params: WindowMirrorEndParams): Promise<void> {
-    return this.read((runtime) => runtime.windows().mirrorEnd(params));
+    return this.mirrorLane((runtime) => runtime.windows().mirrorEnd(params));
   }
 
   /// Ask the window that owns a terminal to show it and come forward.
@@ -1142,6 +1147,7 @@ export class StudioRuntimeClient implements vscode.Disposable {
 
   dispose(): void {
     this.closeActivity();
+    this.closeMirror();
     this.command?.close();
     this.command = null;
     this.controls.clear();
@@ -1263,6 +1269,41 @@ export class StudioRuntimeClient implements vscode.Disposable {
   private closeActivity(): void {
     this.activity?.close();
     this.activity = null;
+  }
+
+  private async mirrorClient(): Promise<RuntimeClient> {
+    if (this.mirror) return this.mirror;
+    this.mirror = await this.withRuntimeLocator(
+      (locator) => this.connector.connectWithRetry(locator, this.requireOptions()),
+    );
+    return this.mirror;
+  }
+
+  /// The mirror's lane: chunks keep their order among themselves, never queue behind a person's command, and a
+  /// failure tears down only this connection. The Runtime ends the mirrors of a connection that goes away, which is
+  /// the honest outcome: the feed really has stopped.
+  private mirrorLane<T>(operation: (runtime: RuntimeClient) => Promise<T>): Promise<T> {
+    const action = async (): Promise<T> => {
+      const runtime = await this.mirrorClient();
+      try {
+        return await operation(runtime);
+      } catch (error) {
+        runtime.close();
+        if (this.mirror === runtime) this.mirror = null;
+        throw error;
+      }
+    };
+    const result = this.mirrorTail.then(action);
+    this.mirrorTail = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  }
+
+  private closeMirror(): void {
+    this.mirror?.close();
+    this.mirror = null;
   }
 
   private async rememberControl(control: ControlLease): Promise<void> {

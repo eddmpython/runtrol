@@ -47,7 +47,10 @@ generation retirement closes admission, waits for every active pair and the writ
 
 Terminal attachment changes the connection into a bounded data plane. The public open or attach admission is audited,
 but provider output notifications and view-bound input, resize, and lease frames are not appended to redb per frame or
-per keystroke. They remain transient and are constrained by the authenticated view, current grant and root proof,
+per keystroke. An observed mirror is the same boundary in the opposite direction: `windows/mirrorOpen` and
+`windows/mirrorEnd` are audited because they decide that a terminal is mirrored at all, while `windows/mirrorOutput`
+carries the captured bytes and is not journaled, since a provider redrawing its screen would otherwise write two
+durable rows per redraw and crowd out the events this journal exists for. They remain transient and are constrained by the authenticated view, current grant and root proof,
 terminal generation, control lease, and transport bounds. This avoids turning conversation bytes into either an audit
 payload or a synchronous storage operation.
 

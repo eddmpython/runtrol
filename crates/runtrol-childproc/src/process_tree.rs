@@ -83,16 +83,39 @@ impl ProcessTree {
         let mut chain = Vec::new();
         let mut current = pid;
         for _ in 0..MAX_ANCESTOR_DEPTH {
-            let Some(parent) = self.parent_of(current) else {
+            let Some(node) = self.node(current) else {
                 break;
             };
-            if parent == current || chain.contains(&parent) {
+            if node.parent == 0 || node.parent == current || chain.contains(&node.parent) {
                 break;
             }
-            chain.push(parent);
-            current = parent;
+            let Some(parent) = self.node(node.parent) else {
+                break;
+            };
+            // A process cannot be older than the process that created it. A recorded parent id that has already exited
+            // and been reused would otherwise splice a stranger's process into this chain, which then decides which
+            // window is raised and which shell owns a brokered command.
+            if parent.started > node.started {
+                break;
+            }
+            chain.push(node.parent);
+            current = node.parent;
         }
         chain
+    }
+
+    fn node(&self, pid: u32) -> Option<ProcessNode> {
+        if pid == 0 {
+            return None;
+        }
+        #[cfg(windows)]
+        {
+            self.node_of(pid)
+        }
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        {
+            Self::node_of(pid)
+        }
     }
 
     /// Whether `candidate` is `root` itself or one of its descendants in the captured current process tree.

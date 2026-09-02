@@ -552,7 +552,7 @@ export interface WindowMirrorEndParams { readonly exitCode?: number | null; read
 
 /** A window opens a mirror of a terminal it observes: from now on it feeds that terminal's raw execution output
 here, and the terminal appears in the terminal index as an observed mirror other windows may attach to. */
-export interface WindowMirrorOpenParams { readonly commandLine: string; readonly cwd: string; readonly executionId: string; readonly geometry: TerminalGeometry; readonly processId?: number | null; readonly providerId: ProviderId; readonly terminalKey: string; }
+export interface WindowMirrorOpenParams { readonly commandLine: string; readonly cwd: string; readonly executionId: string; readonly geometry: TerminalGeometry; readonly processId?: number | null; readonly providerId: ProviderId; readonly terminalKey: string; readonly windowSessionId: string; }
 
 /** The mirror the Runtime opened. */
 export interface WindowMirrorOpened { readonly terminalId: RuntimeTerminalId; }

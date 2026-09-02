@@ -74,7 +74,7 @@ mod windows {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         EnumWindows, FLASHW_TIMERNOFG, FLASHW_TRAY, FLASHWINFO, FlashWindowEx, GW_OWNER, GetWindow,
         GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindowVisible,
-        SW_RESTORE, SetForegroundWindow, ShowWindow,
+        SW_RESTORE, SetForegroundWindow, ShowWindowAsync,
     };
 
     use super::RevealOutcome;
@@ -168,7 +168,9 @@ mod windows {
         // system is free to refuse, and a refused request leaves the window as it was.
         unsafe {
             if IsIconic(window) != 0 {
-                ShowWindow(window, SW_RESTORE);
+                // Asynchronous on purpose: the synchronous form waits for the owning thread to handle the message,
+                // and that thread belongs to the operator's editor.
+                ShowWindowAsync(window, SW_RESTORE);
             }
             if SetForegroundWindow(window) != 0 {
                 return RevealOutcome::Raised;

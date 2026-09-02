@@ -1563,6 +1563,7 @@ mod tests {
         process_id: Option<u32>,
     ) -> runtrol_runtime_protocol::WindowMirrorOpenParams {
         runtrol_runtime_protocol::WindowMirrorOpenParams {
+            window_session_id: "window-1".to_owned(),
             terminal_key: key.to_owned(),
             execution_id: format!("e-{key}"),
             provider_id: runtrol_runtime_protocol::ProviderId::new(provider),

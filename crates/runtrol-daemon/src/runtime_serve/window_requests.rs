@@ -287,13 +287,18 @@ async fn mirror_open(
             "mirror open parameters are invalid",
         );
     };
-    let Some(window_session_id) = composed.windows.session_id_of(token).await else {
+    if !composed
+        .windows
+        .is_registered(&params.window_session_id)
+        .await
+    {
         return Answer::plain(
             id,
             RuntimeErrorKind::InvalidRequest,
-            "the connection registered no window",
+            "no window with that identity is registered",
         );
-    };
+    }
+    let window_session_id = params.window_session_id.clone();
     match crate::terminal_surface::open_observed_mirror(composed, token, window_session_id, params)
         .await
     {

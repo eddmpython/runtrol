@@ -177,6 +177,10 @@ pub struct WindowIndexEndedNotification {
 #[derive(Clone, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WindowMirrorOpenParams {
+    /// The window that owns the terminal, by its registered session identity. The mirror is fed on whichever
+    /// connection opened it, which is deliberately not the connection that holds the window's registration: a
+    /// refused chunk must never take the registration down with it.
+    pub window_session_id: String,
     /// The window's key for the terminal, as published to the registry.
     pub terminal_key: String,
     /// The command generation being mirrored.

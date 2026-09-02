@@ -221,6 +221,15 @@ impl WindowRegistry {
         })
     }
 
+    /// Whether a window with that session identity is registered right now.
+    pub(crate) async fn is_registered(&self, window_session_id: &str) -> bool {
+        self.state
+            .lock()
+            .await
+            .windows
+            .contains_key(window_session_id)
+    }
+
     /// The window session identity `connection` registered, if it registered one.
     pub(crate) async fn session_id_of(&self, connection: ConnectionToken) -> Option<String> {
         let state = self.state.lock().await;
@@ -370,6 +379,10 @@ mod tests {
         );
         assert!(registry.reveal("w9", "t1", None).await.is_none());
         assert!(registry.watch_reveals("w9").await.is_none());
+        // A mirror feed opens on its own connection and names the window, so the registry answers who is registered
+        // without being asked which connection is asking.
+        assert!(registry.is_registered("w1").await);
+        assert!(!registry.is_registered("w9").await);
     }
     #[tokio::test]
     async fn a_window_has_one_entry_and_a_restarted_host_replaces_it_with_a_higher_generation() {

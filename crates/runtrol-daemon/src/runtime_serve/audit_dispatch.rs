@@ -82,13 +82,19 @@ pub(super) async fn answer(
     let audit_response_id = id.clone();
     let scope = required_scope(method);
     let (integration, key_generation) = audit_identity(state);
-    if audit
-        .attempt(
-            &audit_admission,
-            crate::runtime_audit::AuditContext::new(integration, key_generation, method, scope),
-        )
-        .await
-        .is_err()
+    // The observed mirror's byte feed is data, not an authority event: the decision to mirror that terminal was
+    // audited at `windows/mirrorOpen`, and a provider that redraws its screen would otherwise write two durable audit
+    // rows per redraw and crowd out the events this journal exists for. Terminal output is not audited per byte
+    // either. Every other method, including the open and the end, stays audited.
+    let audited = !matches!(method, RuntimeMethod::WindowsMirrorOutput);
+    if audited
+        && audit
+            .attempt(
+                &audit_admission,
+                crate::runtime_audit::AuditContext::new(integration, key_generation, method, scope),
+            )
+            .await
+            .is_err()
     {
         return audit_unavailable(id);
     }
@@ -116,6 +122,9 @@ pub(super) async fn answer(
             (IntegrationAuditOutcome::Denied, error.error.code.as_str())
         }
     };
+    if !audited {
+        return answered;
+    }
     let (integration, key_generation) = audit_identity(state);
     if audit
         .finish(

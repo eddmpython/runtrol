@@ -5169,9 +5169,14 @@
         "terminalKey": {
           "description": "The window's key for the terminal, as published to the registry.",
           "type": "string"
+        },
+        "windowSessionId": {
+          "description": "The window that owns the terminal, by its registered session identity. The mirror is fed on whichever\nconnection opened it, which is deliberately not the connection that holds the window's registration: a\nrefused chunk must never take the registration down with it.",
+          "type": "string"
         }
       },
       "required": [
+        "windowSessionId",
         "terminalKey",
         "executionId",
         "providerId",
