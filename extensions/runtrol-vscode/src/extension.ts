@@ -2,6 +2,7 @@ import path from "node:path";
 
 import * as vscode from "vscode";
 
+import { rememberForUninstall } from "./core/uninstallRecord";
 import { LEGACY_CLEANUP_KEY, LegacyCleanup, legacyCleanupDue, legacyCleanupStamp } from "./legacyCleanup";
 import { conversations as conversationRows, namedPlaceholders } from "./conversationList";
 import { ActivityWatcher } from "./activityWatch";
@@ -85,6 +86,9 @@ const SESSION_SWITCH_ROUNDS = 5;
 const MEASURED_HOST = process.env.RUNTROL_VSCODE_PERFORMANCE === "1";
 
 export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi {
+  // ok: a read-only extension folder refuses the record, and the uninstall hook then falls back to the default
+  // storage locations; there is nothing the operator could do about the refusal, so it is not surfaced.
+  rememberForUninstall(context.extensionPath, context.globalStorageUri.fsPath).catch(() => undefined);
   // Declared below; the private locator only asks it after activation has built it.
   let runtime: StudioRuntimeClient;
   const locator = new CoreLocator(

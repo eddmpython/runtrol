@@ -1340,11 +1340,25 @@ pub(crate) async fn answer_prepared(
 
         // Consults nothing: no ledger, no scope, no configuration. The security posture requires this to work from
         // anywhere with no permission at all, and the worst a hostile caller achieves through it is stopping work.
-        Request::StopEverything => match composed.containment.terminate_all() {
-            Ok(()) => Reply::One(Response::Done),
-            // Reported rather than swallowed. An operator who pressed the panic button has to know whether it worked.
-            Err(error) => Reply::One(refuse(&error.to_string())),
-        },
+        Request::StopEverything => {
+            // The termination below takes this process with it (the daemon sits in its own kill-on-close job),
+            // so the locator entry is withdrawn first; otherwise `runtrol status` keeps listing a dead pid and
+            // the uninstaller refuses until the next generation publishes.
+            // ok: an entry that could not be withdrawn is dropped by the next generation's publish, which probes
+            // every listed control endpoint, and the panic button must not be refused for a locator write.
+            if let Some(digest) = crate::build_identity::build_digest() {
+                drop(crate::generations::withdraw_this_process(
+                    composed.home.paths(),
+                    digest,
+                ));
+            }
+            match composed.containment.terminate_all() {
+                Ok(()) => Reply::One(Response::Done),
+                // Reported rather than swallowed. An operator who pressed the panic button has to know whether it
+                // worked.
+                Err(error) => Reply::One(refuse(&error.to_string())),
+            }
+        }
 
         // Never refused: the successor is already listening, and what it needs is the store. The
         // owner loop releases it and decides when this process ends (once no turn is running); an

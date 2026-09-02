@@ -77,6 +77,13 @@ detaches that viewer without ending the provider process. If an update creates a
 reconnects a tab only to the exact generation that owns its terminal. It never redirects input to a different process
 or retries uncertain input.
 
+## Uninstall
+
+Uninstalling Runtrol Studio and restarting VS Code removes everything Runtrol put on the machine: the daemons Studio
+started, its Core images and provider shims, and the Runtime state root (grants, locator, cache) unless a standalone
+Runtrol Runtime install shares it. Provider CLIs, their sign-ins, their MCP entries, and their conversations are never
+touched.
+
 ## Phone continuity
 
 Pair the phone PWA from Studio's one-use QR to view the same Core-hosted conversations remotely. Remote authority is

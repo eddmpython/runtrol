@@ -19,6 +19,17 @@ and refactoring that no user can observe do not belong here.
   builds left in Claude, Codex, and the Runtrol home is read with `runtrol legacy inventory` and removed with
   `runtrol legacy cleanup`, which Studio runs once per Core image. Ordinary provider MCP entries are never touched.
 
+### Fixed
+
+- `runtrol panic` now withdraws the daemon's own locator entry before it stops, so `runtrol status` and the standalone
+  uninstaller no longer see a dead process listed after the panic button.
+
+### Added
+
+- Uninstalling Runtrol Studio and restarting VS Code now runs a hook that stops the daemons Studio started, removes its
+  Core images, provider shims, and other storage, and removes the Runtime state root unless a standalone Runtime
+  install shares it. Provider profiles and conversations are never touched.
+
 ### Changed
 
 - The first activation of each new Studio Core image removes the MCP registrations, Runtime grants, and local

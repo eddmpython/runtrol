@@ -138,12 +138,13 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
         found.append(f"exactly one file may build the webview document, found {documents or ['none']}")
 
     writers = [relative for relative, source in sources.items() if "writeFile(" in source]
-    # The selected-session scalar, and the Core installer's digest memory (file identity -> sha256, so an
-    # activation does not hash the Core twice; measured 2026-08-25 at 60 ms per hash).
-    expected_writers = {"selectionStore.ts", "core/managedCore.ts"}
+    # The selected-session scalar, the Core installer's digest memory (file identity -> sha256, so an
+    # activation does not hash the Core twice; measured 2026-08-25 at 60 ms per hash), and the one fact the
+    # `vscode:uninstall` hook cannot derive on its own: which global storage this Studio owned.
+    expected_writers = {"selectionStore.ts", "core/managedCore.ts", "core/uninstallRecord.ts"}
     if set(writers) != expected_writers or len(writers) != len(expected_writers):
         found.append(
-            "direct writeFile calls must stay in selectionStore.ts and core/managedCore.ts, found "
+            "direct writeFile calls must stay in selectionStore.ts, core/managedCore.ts, and core/uninstallRecord.ts, found "
             + (", ".join(writers) if writers else "none")
         )
     handleWriters = [

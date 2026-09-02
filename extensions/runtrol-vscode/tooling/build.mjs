@@ -54,6 +54,18 @@ await Promise.all([
     logLevel: "info",
   }),
   build({
+    // The `vscode:uninstall` hook: plain Node, no VS Code API, run on the start after Studio was removed.
+    entryPoints: [path.join(extensionRoot, "src/uninstall.ts")],
+    outfile: path.join(dist, "uninstall.js"),
+    bundle: true,
+    platform: "node",
+    format: "cjs",
+    target: "node20",
+    minify: true,
+    sourcemap: false,
+    logLevel: "info",
+  }),
+  build({
     entryPoints: [path.join(extensionRoot, "src/pairingQrVendor.ts")],
     outfile: path.join(dist, "pairingQrVendor.js"),
     bundle: true,

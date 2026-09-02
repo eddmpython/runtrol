@@ -546,6 +546,7 @@
     }
   },
   "scripts": {
+    "vscode:uninstall": "node ./dist/uninstall.js",
     "build": "node tooling/build.mjs",
     "check": "tsc --noEmit",
     "test": "node tooling/test.mjs",

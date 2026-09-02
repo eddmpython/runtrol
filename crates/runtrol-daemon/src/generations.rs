@@ -730,12 +730,38 @@ impl Drop for PublishedGeneration {
     fn drop(&mut self) {
         // ok: an entry that cannot be removed at exit is dropped by the next generation's publish, which
         // probes every listed control endpoint; nothing can act on this process after it is gone anyway.
-        drop(self.rewrite(|record| {
-            record.generations.retain(|generation| {
-                !(generation.process_id == self.process_id && generation.digest == self.digest)
-            });
-        }));
+        drop(self.rewrite(|record| without_process(record, self.process_id, &self.digest)));
     }
+}
+
+/// Take this process's entry out of the home locator now, ahead of an exit that runs no drop.
+///
+/// The panic button terminates the job this daemon belongs to, so the [`PublishedGeneration`] guard never
+/// drops and its entry stayed behind naming a dead process (measured 2026-09-02: `runtrol status` kept listing
+/// the pid after `panic`, and the standalone uninstaller refuses while any entry exists). Called before the
+/// termination, the locator tells the truth the moment the process is gone.
+///
+/// # Errors
+///
+/// The locator could not be locked, read, or rewritten. The caller decides whether the exit still proceeds.
+pub(crate) fn withdraw_this_process(
+    paths: &Layout,
+    digest: &str,
+) -> Result<(), RuntimeBootstrapError> {
+    let locator = paths.runtime_locator().as_std_path();
+    let _held = LocatorLock::take(paths.runtime_locator_lock().as_std_path())?;
+    let Some(mut record) = current_record(locator)? else {
+        return Ok(());
+    };
+    without_process(&mut record, std::process::id(), digest);
+    write_locator(locator, &record)
+}
+
+/// Drop exactly one process's entry for one generation, leaving every other generation alone.
+fn without_process(record: &mut RuntimeLocatorRecord, process_id: u32, digest: &str) {
+    record
+        .generations
+        .retain(|generation| !(generation.process_id == process_id && generation.digest == digest));
 }
 
 /// Whether a daemon still answers on a control endpoint. A refusal to connect for any reason other than
@@ -1062,6 +1088,57 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn withdrawing_this_process_leaves_every_other_generation_in_the_locator() {
+        let scratch = std::env::temp_dir().join(format!(
+            "runtrol-withdraw-{}-{}",
+            std::process::id(),
+            now_ms()
+        ));
+        std::fs::create_dir_all(&scratch).expect("scratch");
+        let home = RuntrolHome::open_at(scratch.to_str().expect("UTF-8 scratch")).expect("home");
+        let paths = home.paths();
+        let mine = std::process::id();
+        let entry = |process_id: u32, digest: &str| RuntimeGeneration {
+            digest: digest.to_owned(),
+            endpoint_kind: endpoint_kind(),
+            endpoint: format!("endpoint-{digest}"),
+            control_endpoint: format!("control-{digest}"),
+            runtime_version: "0.0.0".to_owned(),
+            process_id,
+            started_at_ms: 1,
+            live_sessions: 0,
+            draining: false,
+        };
+        write_locator(
+            paths.runtime_locator().as_std_path(),
+            &RuntimeLocatorRecord {
+                schema: RUNTIME_LOCATOR_SCHEMA,
+                instance_id: "rtm_test".to_owned(),
+                generations: vec![
+                    entry(mine, "mine"),
+                    entry(mine, "other-build"),
+                    entry(1, "mine"),
+                ],
+            },
+        )
+        .expect("seed locator");
+
+        withdraw_this_process(paths, "mine").expect("withdraw");
+
+        let left = current_record(paths.runtime_locator().as_std_path())
+            .expect("read locator")
+            .expect("the locator survives with the other entries");
+        let digests: Vec<(u32, &str)> = left
+            .generations
+            .iter()
+            .map(|generation| (generation.process_id, generation.digest.as_str()))
+            .collect();
+        assert_eq!(digests, vec![(mine, "other-build"), (1, "mine")]);
+        drop(home);
+        let _ignored = std::fs::remove_dir_all(&scratch);
+    }
 
     struct Scratch(PathBuf);
 

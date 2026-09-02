@@ -166,6 +166,16 @@ once. Core removes the provider MCP registrations, Runtime grants, and local cre
 builds created for the retired Agent Tools and cross-consult surfaces, through each provider's official CLI commands,
 and reports every entry it preserved. Studio registers nothing and edits no provider configuration file.
 
+## Uninstall
+
+`package.json` declares the `vscode:uninstall` hook `dist/uninstall.js`. VS Code runs it with its own Electron as plain
+Node on the start after Studio was removed. Every activation writes `uninstall.json` beside the hook naming the global
+storage this Studio owned; the hook stops the daemons running from the managed Core directory through `runtrol panic`,
+removes that global storage (Core images, provider shims, projectless scratch, digests), and removes the Runtime state
+root unless a standalone Runtime install shares it. Provider profiles, provider processes Runtrol never started, and
+provider-owned conversations are never read or touched. `runtrol panic` itself withdraws the daemon's locator entry
+before termination, so nothing lists a dead process afterwards.
+
 ## Module boundaries
 
 | Module | Owns | Must not own |
@@ -183,6 +193,7 @@ and reports every entry it preserved. Studio registers nothing and edits no prov
 | `controller.ts` | explicit user actions, provider-neutral navigation, workspace binding | transcript discovery or an agent loop |
 | `terminalTabs.ts` | one public Runtime terminal view per editor tab | reading, storing, rewriting, or retrying terminal input |
 | `legacyCleanup.ts` | one exact Core cleanup run per Core image | provider configuration bytes or any registration |
+| `core/uninstallRecord.ts`, `uninstall.ts` | the uninstall record and the post-uninstall hook that removes Runtrol's own residue | provider profiles, provider processes, or conversation content |
 | `selectionStore.ts` | one bounded selected-session identifier | prompts, replies, terminal frames, or provider state |
 | `pairingAdministration.ts` | local phone pairing and authority review | relay trust or conversation content |
 
