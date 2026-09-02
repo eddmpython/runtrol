@@ -95,8 +95,23 @@ impl Default for TerminalRuntimeAdapter {
 
 #[derive(Default)]
 struct TerminalAuthorityState {
-    leases: BTreeMap<(TerminalId, String), ActiveLease>,
+    /// Exactly one control lease per terminal: the view that holds input and resize authority right now.
+    leases: BTreeMap<TerminalId, ActiveLease>,
+    /// Monotonic per terminal across transfers and renewals; it outlives a lease's expiry or release so a
+    /// later holder's generation is still above every earlier one. Bounded by [`MAX_CONTROL_GENERATIONS`].
+    control_generations: BTreeMap<TerminalId, u64>,
     mutations: BTreeMap<MutationKey, StoredMutation>,
+}
+
+/// How many terminals' control generations are remembered. Above this, the entries of terminals nobody holds
+/// control of are dropped; a live holder's ordering is never touched.
+const MAX_CONTROL_GENERATIONS: usize = 256;
+
+/// What the public index says about control of one terminal.
+#[derive(Clone, Copy, Default)]
+struct ControlView {
+    generation: u64,
+    held: bool,
 }
 
 struct ActiveLease {
@@ -275,6 +290,7 @@ impl TerminalRuntimeAdapter {
         roots: &[AuthorizedRoot],
     ) -> Result<TerminalIndexSnapshot, TerminalRuntimeFailure> {
         let generation = runtime_generation()?;
+        let control = control_views(&mut *self.state.lock().await, WallMs::now().as_millis());
         let (hosted, changes) = {
             let terminals = composed.terminals.lock().await;
             (terminals.hosted_all(), terminals.change_sender())
@@ -289,7 +305,12 @@ impl TerminalRuntimeAdapter {
                 omitted = omitted.saturating_add(1);
                 continue;
             }
-            terminals.push(descriptor(&terminal, generation, &changes)?);
+            terminals.push(descriptor(
+                &terminal,
+                generation,
+                &changes,
+                control.get(&terminal.id).copied().unwrap_or_default(),
+            )?);
         }
         let warnings = if omitted == 0 {
             Vec::new()
@@ -696,8 +717,12 @@ impl TerminalRuntimeAdapter {
         } else {
             None
         };
+        let control = control_views(&mut *self.state.lock().await, WallMs::now().as_millis())
+            .get(&hosted.id)
+            .copied()
+            .unwrap_or_default();
         let opened = TerminalViewOpened {
-            terminal: descriptor(&hosted, runtime_generation()?, &changes)?,
+            terminal: descriptor(&hosted, runtime_generation()?, &changes, control)?,
             view_id: RuntimeTerminalViewId::now(),
             screen_base64: Base64::encode_string(&attachment.snapshot),
             checkpoint_available: attachment.checkpoint_available,
@@ -724,11 +749,11 @@ impl TerminalRuntimeAdapter {
         let mut state = self.state.lock().await;
         prune_expired_leases(&mut state, now);
         ensure_lease_capacity(&state)?;
-        let active = new_lease(owner, hosted.generation)?;
+        let lease_generation = next_control_generation(&mut state, hosted.id);
+        let active = new_lease(owner, hosted.generation, lease_generation)?;
         let public = public_lease(hosted.id, &active)?;
-        state
-            .leases
-            .insert((hosted.id, active.lease_id.clone()), active);
+        // The opener takes control: any earlier holder's lease is replaced, which its next write is told.
+        state.leases.insert(hosted.id, active);
         Ok(Some(public))
     }
 
@@ -767,11 +792,11 @@ impl TerminalRuntimeAdapter {
         prune_expired_leases(&mut state, now);
         ensure_lease_capacity(&state)?;
         ensure_mutation_capacity(&state)?;
-        let active = new_lease(authority.key, hosted.generation)?;
+        let lease_generation = next_control_generation(&mut state, terminal_id);
+        let active = new_lease(authority.key, hosted.generation, lease_generation)?;
         let public = public_lease(terminal_id, &active)?;
-        state
-            .leases
-            .insert((terminal_id, active.lease_id.clone()), active);
+        // Exactly one holder: whoever held control before loses it here, and learns so on its next write.
+        state.leases.insert(terminal_id, active);
         state.mutations.insert(
             key,
             StoredMutation {
@@ -780,6 +805,9 @@ impl TerminalRuntimeAdapter {
                 outcome: MutationOutcome::Lease(public.clone()),
             },
         );
+        drop(state);
+        // Visible and ordered: the index carries the new control generation to every reader.
+        composed.terminals.lock().await.publish_control_change();
         Ok(public)
     }
 
@@ -810,8 +838,15 @@ impl TerminalRuntimeAdapter {
         let mut state = self.state.lock().await;
         prune_mutations(&mut state, now);
         ensure_mutation_capacity(&state)?;
-        let active = current_lease_mut(&mut state, terminal_id, authority.key, params, now)?;
-        active.lease_generation = active.lease_generation.saturating_add(1);
+        current_lease_mut(&mut state, terminal_id, authority.key, params, now)?;
+        let lease_generation = next_control_generation(&mut state, terminal_id);
+        let active = state.leases.get_mut(&terminal_id).ok_or_else(|| {
+            TerminalRuntimeFailure::new(
+                RuntimeErrorKind::LeaseExpired,
+                "the terminal lease expired",
+            )
+        })?;
+        active.lease_generation = lease_generation;
         active.expires_at_ms = now.saturating_add(LEASE_LIFETIME_MS);
         let public = public_lease(terminal_id, active)?;
         state.mutations.insert(
@@ -844,9 +879,11 @@ impl TerminalRuntimeAdapter {
         let mut state = self.state.lock().await;
         prune_mutations(&mut state, now);
         ensure_mutation_capacity(&state)?;
-        let _active = current_lease_mut(&mut state, terminal_id, authority.key, params, now)?;
-        state.leases.remove(&(terminal_id, params.lease_id.clone()));
+        current_lease_mut(&mut state, terminal_id, authority.key, params, now)?;
+        state.leases.remove(&terminal_id);
         remember_done(&mut state, key, fingerprint, now);
+        drop(state);
+        composed.terminals.lock().await.publish_control_change();
         Ok(())
     }
 
@@ -1027,9 +1064,7 @@ impl TerminalRuntimeAdapter {
             })?;
         let mut state = self.state.lock().await;
         finish_done_from_state(&mut state, &key, fingerprint, WallMs::now().as_millis())?;
-        state
-            .leases
-            .retain(|(leased_terminal, _), _| *leased_terminal != terminal_id);
+        state.leases.remove(&terminal_id);
         drop(state);
         composed.terminals.lock().await.mark_stopping(terminal_id);
         Ok(())
@@ -1165,11 +1200,9 @@ impl TerminalRuntimeAdapter {
 
     /// Retire all control authority for an ended terminal.
     pub(crate) async fn terminal_ended(&self, terminal_id: TerminalId) {
-        self.state
-            .lock()
-            .await
-            .leases
-            .retain(|(leased_terminal, _), _| *leased_terminal != terminal_id);
+        let mut state = self.state.lock().await;
+        state.leases.remove(&terminal_id);
+        state.control_generations.remove(&terminal_id);
     }
 }
 
@@ -1400,6 +1433,7 @@ fn descriptor(
     hosted: &HostedTerminal,
     runtime_generation: &str,
     changes: &tokio::sync::watch::Sender<u64>,
+    control: ControlView,
 ) -> Result<TerminalDescriptor, TerminalRuntimeFailure> {
     let size = hosted.terminal.size();
     Ok(TerminalDescriptor {
@@ -1424,6 +1458,8 @@ fn descriptor(
             columns: size.cols,
             rows: size.rows,
         },
+        control_generation: control.generation,
+        control_held: control.held,
         memory_bytes: if hosted.stopping {
             None
         } else {
@@ -1594,6 +1630,7 @@ fn remember_done(
 fn new_lease(
     owner: IntegrationKey,
     terminal_generation: u64,
+    lease_generation: u64,
 ) -> Result<ActiveLease, TerminalRuntimeFailure> {
     let mut random = [0_u8; 16];
     getrandom::fill(&mut random).map_err(|_| {
@@ -1616,7 +1653,7 @@ fn new_lease(
         owner,
         lease_id,
         terminal_generation,
-        lease_generation: 1,
+        lease_generation,
         expires_at_ms: WallMs::now().as_millis().saturating_add(LEASE_LIFETIME_MS),
     })
 }
@@ -1644,6 +1681,42 @@ fn prune_expired_leases(state: &mut TerminalAuthorityState, now: u64) {
     state.leases.retain(|_, lease| lease.expires_at_ms > now);
 }
 
+/// The next control generation of one terminal: one above every generation it ever handed out.
+fn next_control_generation(state: &mut TerminalAuthorityState, terminal_id: TerminalId) -> u64 {
+    if state.control_generations.len() >= MAX_CONTROL_GENERATIONS
+        && !state.control_generations.contains_key(&terminal_id)
+    {
+        let held: std::collections::BTreeSet<TerminalId> = state.leases.keys().copied().collect();
+        state
+            .control_generations
+            .retain(|terminal, _| held.contains(terminal));
+    }
+    let slot = state.control_generations.entry(terminal_id).or_insert(0);
+    *slot = slot.saturating_add(1);
+    *slot
+}
+
+/// What the index says about control of every terminal, read in one short lock.
+fn control_views(
+    state: &mut TerminalAuthorityState,
+    now: u64,
+) -> BTreeMap<TerminalId, ControlView> {
+    prune_expired_leases(state, now);
+    state
+        .control_generations
+        .iter()
+        .map(|(terminal, generation)| {
+            (
+                *terminal,
+                ControlView {
+                    generation: *generation,
+                    held: state.leases.contains_key(terminal),
+                },
+            )
+        })
+        .collect()
+}
+
 fn ensure_lease_capacity(state: &TerminalAuthorityState) -> Result<(), TerminalRuntimeFailure> {
     if state.leases.len() >= usize::from(MAX_IDEMPOTENCY_RECORDS) {
         return Err(TerminalRuntimeFailure::new(
@@ -1669,15 +1742,9 @@ fn current_lease_mut<'a>(
         params.lease_generation,
         now,
     )?;
-    state
-        .leases
-        .get_mut(&(terminal_id, params.lease_id.clone()))
-        .ok_or_else(|| {
-            TerminalRuntimeFailure::new(
-                RuntimeErrorKind::LeaseExpired,
-                "the terminal lease expired",
-            )
-        })
+    state.leases.get_mut(&terminal_id).ok_or_else(|| {
+        TerminalRuntimeFailure::new(RuntimeErrorKind::LeaseExpired, "the terminal lease expired")
+    })
 }
 
 fn validate_lease_fields(
@@ -1689,16 +1756,19 @@ fn validate_lease_fields(
     now: u64,
 ) -> Result<(), TerminalRuntimeFailure> {
     prune_expired_leases(state, now);
-    let Some(active) = state.leases.get(&(terminal_id, lease_id.to_owned())) else {
+    let Some(active) = state.leases.get(&terminal_id) else {
         return Err(TerminalRuntimeFailure::new(
             RuntimeErrorKind::LeaseExpired,
             "the terminal control lease expired or was released",
         ));
     };
-    if active.owner != owner
-        || active.lease_id != lease_id
-        || active.lease_generation != lease_generation
-    {
+    if active.owner != owner || active.lease_id != lease_id {
+        return Err(TerminalRuntimeFailure::new(
+            RuntimeErrorKind::ControlConflict,
+            "another view holds control of this terminal",
+        ));
+    }
+    if active.lease_generation != lease_generation {
         return Err(TerminalRuntimeFailure::new(
             RuntimeErrorKind::ControlConflict,
             "the supplied terminal control lease is not current",
@@ -1846,27 +1916,50 @@ mod tests {
     }
 
     #[test]
-    fn two_views_of_one_integration_hold_independent_writer_leases_for_one_pty() {
+    fn a_second_view_takes_control_and_the_first_is_told_on_its_next_write() {
         let terminal = TerminalId::now();
-        let owner = IntegrationKey::from_bytes([1; 16]);
-        let first_lease = new_lease(owner, 7).expect("the first lease is allocated");
-        let second_lease = new_lease(owner, 7).expect("the second lease is allocated");
-        let first_id = first_lease.lease_id.clone();
-        let second_id = second_lease.lease_id.clone();
+        let first_owner = IntegrationKey::from_bytes([1; 16]);
+        let second_owner = IntegrationKey::from_bytes([2; 16]);
         let mut state = TerminalAuthorityState::default();
-        state
-            .leases
-            .insert((terminal, first_id.clone()), first_lease);
-        state
-            .leases
-            .insert((terminal, second_id.clone()), second_lease);
+        let first = new_lease(
+            first_owner,
+            7,
+            next_control_generation(&mut state, terminal),
+        )
+        .expect("the first lease is allocated");
+        let first_id = first.lease_id.clone();
+        state.leases.insert(terminal, first);
+        assert!(validate_lease_fields(&mut state, terminal, first_owner, &first_id, 1, 0).is_ok());
 
-        assert!(validate_lease_fields(&mut state, terminal, owner, &first_id, 1, 0).is_ok());
-        assert!(validate_lease_fields(&mut state, terminal, owner, &second_id, 1, 0).is_ok());
+        let second = new_lease(
+            second_owner,
+            7,
+            next_control_generation(&mut state, terminal),
+        )
+        .expect("the second lease is allocated");
+        let second_id = second.lease_id.clone();
         assert_eq!(
-            state.leases.len(),
-            2,
-            "both viewers still write to the one PTY"
+            second.lease_generation, 2,
+            "control generations are ordered"
+        );
+        state.leases.insert(terminal, second);
+        assert_eq!(state.leases.len(), 1, "exactly one view holds control");
+        assert!(
+            validate_lease_fields(&mut state, terminal, second_owner, &second_id, 2, 0).is_ok()
+        );
+        let refused = validate_lease_fields(&mut state, terminal, first_owner, &first_id, 1, 0)
+            .expect_err("the first view lost control");
+        assert_eq!(refused.kind, RuntimeErrorKind::ControlConflict);
+
+        // Released, then held again: the generation keeps climbing past every earlier holder.
+        state.leases.remove(&terminal);
+        assert_eq!(next_control_generation(&mut state, terminal), 3);
+        let views = control_views(&mut state, 0);
+        assert_eq!(
+            views
+                .get(&terminal)
+                .map(|view| (view.generation, view.held)),
+            Some((3, false))
         );
     }
 

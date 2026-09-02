@@ -4008,6 +4008,18 @@
       "additionalProperties": false,
       "description": "One live terminal descriptor visible through an approved root.",
       "properties": {
+        "controlGeneration": {
+          "default": 0,
+          "description": "Monotonic count of control transfers and renewals on this terminal: exactly one view holds input and\nresize authority at a time, and a view whose lease generation is below this number no longer holds it.\nZero until control was first held.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "controlHeld": {
+          "default": false,
+          "description": "Whether some view holds a live control lease right now.",
+          "type": "boolean"
+        },
         "geometry": {
           "$ref": "#/$defs/TerminalGeometry",
           "description": "Current shared PTY geometry."

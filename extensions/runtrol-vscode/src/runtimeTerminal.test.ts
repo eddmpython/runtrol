@@ -140,6 +140,46 @@ test("the pane's one exception still holds: mouse-mode switches never reach VS C
   pty.close();
 });
 
+test("a follower's pane resize never takes control; typing does, and the pane's size follows the transfer", async () => {
+  const calls: string[] = [];
+  let resizeRefusals = 1;
+  const view = fakeView("", [{ kind: "hang" }]);
+  const traced = Object.assign(view, {
+    async write() { calls.push("write"); },
+    async acquireControl() {
+      calls.push("acquire");
+      return { leaseId: "lease-2", leaseGeneration: 2, expiresAtMs: Date.now() + 60_000 } as unknown as TerminalControlLease;
+    },
+    async resize() {
+      calls.push("resize");
+      // The Runtime refuses a resize from a view that no longer holds control.
+      if (resizeRefusals > 0) {
+        resizeRefusals -= 1;
+        throw new Error("controlConflict: another view holds control of this terminal");
+      }
+    },
+  });
+  const { pty } = harness([async () => traced]);
+  // The open request itself carries the pane's size, so a view that opens holding control sends no resize.
+  pty.open({ columns: 100, rows: 30 });
+  await settle();
+  assert.deepEqual(calls, []);
+  // Another window took control meanwhile: this pane's resize is refused once and it does not take control back.
+  pty.setDimensions({ columns: 90, rows: 25 });
+  await settle();
+  assert.deepEqual(calls, ["resize"], "a holder-turned-follower is refused once and asks for nothing");
+  calls.length = 0;
+  // Now a follower: a further pane change sends nothing at all.
+  pty.setDimensions({ columns: 80, rows: 20 });
+  await settle();
+  assert.deepEqual(calls, [], "a follower never resizes the shared process");
+  // Typing takes control, writes once, and only then sends this pane's size.
+  pty.handleInput("k");
+  await settle(80);
+  assert.deepEqual(calls, ["acquire", "write", "resize"]);
+  pty.close();
+});
+
 test("every key, paste, IME result, Escape, interrupt, and mouse report is written once, in order, unchanged", async () => {
   const writes: Uint8Array[] = [];
   const { pty } = harness([async () => fakeView("", [{ kind: "hang" }], writes)]);

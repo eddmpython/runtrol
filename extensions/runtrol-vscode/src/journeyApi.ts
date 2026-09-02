@@ -122,6 +122,8 @@ export type JourneyApi = {
     endText: string,
     deadlineMs: number,
   ): Promise<{ chunks: number; bytes: number; digest: string }>;
+  /// The pane's size changed, exactly as VS Code tells the pseudoterminal when its tab is resized.
+  terminalSetDimensions(runtimeGeneration: string, terminalId: string, columns: number, rows: number): void;
   terminalStop(runtimeGeneration: string, terminalId: string, deadlineMs: number): Promise<void>;
 };
 
@@ -376,6 +378,8 @@ export function journeyApi(
       terminals.writeDirectJourneyInput(runtimeGeneration, terminalId, text),
     terminalRecordOutput: (runtimeGeneration, terminalId, startText, endText, deadlineMs) =>
       terminals.recordJourneyOutput(runtimeGeneration, terminalId, startText, endText, deadlineMs),
+    terminalSetDimensions: (runtimeGeneration, terminalId, columns, rows) =>
+      terminals.setJourneyDimensions(runtimeGeneration, terminalId, columns, rows),
     terminalStop: (runtimeGeneration, terminalId, _deadlineMs) => afterReady(
       () => terminals.stopJourneyTerminal(runtimeGeneration, terminalId),
     ),

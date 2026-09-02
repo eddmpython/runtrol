@@ -183,6 +183,14 @@ pub struct TerminalDescriptor {
     pub terminal_generation: u64,
     /// Current shared PTY geometry.
     pub geometry: TerminalGeometry,
+    /// Monotonic count of control transfers and renewals on this terminal: exactly one view holds input and
+    /// resize authority at a time, and a view whose lease generation is below this number no longer holds it.
+    /// Zero until control was first held.
+    #[serde(default)]
+    pub control_generation: u64,
+    /// Whether some view holds a live control lease right now.
+    #[serde(default)]
+    pub control_held: bool,
     /// Resident memory of the hosted process in bytes, as the operating system reports it at listing time.
     ///
     /// Present only while the process runs and the operating system answered; absent means not measured.
@@ -490,6 +498,8 @@ mod tests {
                 columns: 80,
                 rows: 24,
             },
+            control_generation: 1,
+            control_held: true,
             memory_bytes: None,
         };
         let value = serde_json::to_value(descriptor).expect("serializable");

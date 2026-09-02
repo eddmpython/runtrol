@@ -130,6 +130,17 @@ async function ownerJourney(coordination: string): Promise<void> {
     }
     streamDigest = await record;
   }
+  // Exactly one view holds input and resize authority. The orchestrator outside watches the Runtime's own
+  // descriptor between these steps; this window only types when told, and its size is whatever its pane is.
+  if (!NAVIGATION_MODE) {
+    await publish(coordination, "lease-ready.json", {});
+    await readPublished(coordination, "lease-owner-type-1.json", DEADLINE_MS);
+    await typeLine(journey, terminal, "runtrol-lease-owner-1");
+    await publish(coordination, "lease-owner-typed-1.json", {});
+    await readPublished(coordination, "lease-owner-type-2.json", DEADLINE_MS);
+    await typeLine(journey, terminal, "runtrol-lease-owner-2");
+    await publish(coordination, "lease-owner-typed-2.json", {});
+  }
   await publish(coordination, "owner-result.json", {
     terminal,
     streamDigest,
@@ -189,6 +200,18 @@ async function mirrorJourney(coordination: string): Promise<void> {
     );
     await publish(coordination, "mirror-digest-armed.json", {});
     streamDigest = await record;
+    // A follower: its pane may change size, and the shared process must not follow until it types.
+    const resize = await readPublished<{ columns: number; rows: number }>(
+      coordination,
+      "lease-mirror-resize.json",
+      DEADLINE_MS,
+    );
+    journey.terminalSetDimensions(terminal.runtimeGeneration, terminal.terminalId, resize.columns, resize.rows);
+    await delay(400);
+    await publish(coordination, "lease-mirror-resized.json", {});
+    await readPublished(coordination, "lease-mirror-type.json", DEADLINE_MS);
+    await typeLine(journey, terminal, "runtrol-lease-mirror-1");
+    await publish(coordination, "lease-mirror-typed-1.json", {});
   }
 
   await readPublished(coordination, "owner-closed.json", DEADLINE_MS);
@@ -257,6 +280,17 @@ async function warmNavigationPath(
     await writeInput(journey, terminal, text);
     await output;
   }
+}
+
+/// Type one line through this window's tab and wait until the provider echoed it.
+async function typeLine(
+  journey: NonNullable<RuntrolExtensionApi["journey"]>,
+  terminal: JourneyTerminal,
+  line: string,
+): Promise<void> {
+  const echoed = waitForInputOutput(journey, terminal, line);
+  await writeInput(journey, terminal, line, true);
+  await echoed;
 }
 
 async function writeInput(

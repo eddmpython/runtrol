@@ -124,9 +124,14 @@ so a client never attempts to reconstruct missing bytes semantically.
 may open or attach another view on that same authenticated connection. Process exit, lost authority, malformed input,
 and transport failure still end the connection.
 
-Each view has its own renewable lease generation. One window renewing, expiring, releasing, or closing its lease does
-not invalidate another window. Authorized writes from all live views are serialized through the one PTY writer, so
-every viewer observes one input order and one resulting output stream.
+Exactly one view holds a terminal's control lease, which is input and resize authority together. Acquiring control
+transfers it: the earlier holder's next write or resize is refused with `controlConflict`, and a client that wants to
+type asks again, which is a visible, ordered transfer rather than a race. The descriptor carries `controlGeneration`,
+a per-terminal count that climbs on every transfer and renewal, and `controlHeld`; the terminal index publishes a
+change on every transfer and release, so every window sees who leads in order. Geometry follows the holder: a
+follower window renders the canonical geometry and never resizes the shared process, and a window that takes control
+by typing sends its own size once. Writes are serialized through the one PTY writer, so every viewer observes one
+input order and one resulting output stream, and a refused write is never applied twice.
 
 `vscodeMultiWindowTerminal` is the direct product proof. It runs two simultaneous real VS Code Extension Hosts with
 separate profiles, opens the provider TUI through the first editor terminal tab, and attaches the second tab to the

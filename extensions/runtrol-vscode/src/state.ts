@@ -462,5 +462,7 @@ function terminalRowEqual(left: TerminalDescriptor, right: TerminalDescriptor | 
     && left.processState === right.processState
     && left.openedAtMs === right.openedAtMs
     && left.geometry.columns === right.geometry.columns
-    && left.geometry.rows === right.geometry.rows;
+    && left.geometry.rows === right.geometry.rows
+    && left.controlGeneration === right.controlGeneration
+    && left.controlHeld === right.controlHeld;
 }

@@ -847,11 +847,19 @@ async fn attach(
         .attach(&TerminalAttachParams { terminal_id })
         .await
         .map_err(|error| format!("attach in generation {digest}: {error}"))?;
-    let state = format!("{:?}", view.opened().terminal.process_state);
-    Ok(format!(
-        r#"{{"attached":true,"generation":"{digest}","draining":{draining},"listed":{known},"processState":"{state}","screenBytes":{}}}"#,
-        view.initial_screen().len()
-    ))
+    let opened = view.opened();
+    Ok(serde_json::json!({
+        "attached": true,
+        "generation": digest,
+        "draining": draining,
+        "listed": known,
+        "processState": format!("{:?}", opened.terminal.process_state),
+        "screenBytes": view.initial_screen().len(),
+        "geometry": [opened.terminal.geometry.columns, opened.terminal.geometry.rows],
+        "controlGeneration": opened.terminal.control_generation,
+        "controlHeld": opened.terminal.control_held,
+    })
+    .to_string())
 }
 
 /// Two live views of one terminal see the same session, and the remaining view survives a writer handoff.

@@ -340,6 +340,12 @@ export class TerminalTabs implements vscode.Disposable {
     return found[1].recordOutput(startText, endText, deadlineMs);
   }
 
+  setJourneyDimensions(runtimeGeneration: string, terminalId: string, columns: number, rows: number): void {
+    const found = this.journeyHost({ runtimeGeneration, terminalId });
+    if (!found) throw this.journeyUnavailable(runtimeGeneration, terminalId);
+    found[1].setDimensions({ columns, rows });
+  }
+
   writeJourneyInput(runtimeGeneration: string, terminalId: string, text: string): Promise<JourneyInputTiming> {
     const found = this.journeyHost({ runtimeGeneration, terminalId });
     if (!found) throw this.journeyUnavailable(runtimeGeneration, terminalId);

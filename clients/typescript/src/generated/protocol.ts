@@ -421,7 +421,7 @@ export interface TerminalControlLease { readonly expiresAtMs: number; readonly l
 export interface TerminalControlParams { readonly leaseGeneration: number; readonly leaseId: string; readonly requestId: MutationRequestId; readonly terminalId: RuntimeTerminalId; }
 
 /** One live terminal descriptor visible through an approved root. */
-export interface TerminalDescriptor { readonly geometry: TerminalGeometry; readonly memoryBytes?: number | null; readonly nativeSessionId?: string | null; readonly openedAtMs: number; readonly processState: TerminalProcessState; readonly providerId: ProviderId; readonly runtimeGeneration: string; readonly terminalGeneration: number; readonly terminalId: RuntimeTerminalId; readonly workspace: string; }
+export interface TerminalDescriptor { readonly controlGeneration?: number; readonly controlHeld?: boolean; readonly geometry: TerminalGeometry; readonly memoryBytes?: number | null; readonly nativeSessionId?: string | null; readonly openedAtMs: number; readonly processState: TerminalProcessState; readonly providerId: ProviderId; readonly runtimeGeneration: string; readonly terminalGeneration: number; readonly terminalId: RuntimeTerminalId; readonly workspace: string; }
 
 /** Detach only one connection-bound view without stopping the provider process. */
 export interface TerminalDetachParams { readonly terminalId: RuntimeTerminalId; readonly viewId: RuntimeTerminalViewId; }

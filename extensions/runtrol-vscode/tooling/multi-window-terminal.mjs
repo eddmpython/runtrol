@@ -81,6 +81,7 @@ try {
   mirror = launch("mirror", mirrorUserData, mirrorExtensions);
   const mirrorArmed = await waitForPublished("mirror-armed.json", WINDOW_READY_DEADLINE_MS);
   const ownerAliveWhileBothOpen = ownerPid === null ? null : processAlive(ownerPid);
+  const lease = inputMode === "navigation" ? null : await leasePhase();
   await waitForPublished("owner-result.json", 60_000);
   await requireCleanExit(owner, "owner VS Code", 20_000);
   const ownerAliveAfterOwnerWindowClosed = ownerPid === null ? null : processAlive(ownerPid);
@@ -107,6 +108,12 @@ try {
       && ownerDigest.bytes === mirrorDigest.bytes,
     streamDigest: ownerDigest,
     mirrorStreamDigest: mirrorDigest,
+    // Exactly one view holds input and resize authority; transfer is visible in the descriptor and ordered.
+    leaseTransferOrdered: lease?.transferOrdered ?? false,
+    followerResizeIgnored: lease?.followerResizeIgnored ?? false,
+    geometryFollowsHolder: lease?.geometryFollowsHolder ?? false,
+    noDuplicateEcho: lease?.noDuplicateEcho ?? false,
+    lease,
     terminalId: ownerReady.terminalId,
     runtimeGeneration: ownerReady.runtimeGeneration,
     terminalGeneration: ownerReady.terminalGeneration,
@@ -152,6 +159,62 @@ try {
   if (cleanupErrors.length > 0) {
     throw new AggregateError(cleanupErrors, "multi-window VS Code cleanup failed");
   }
+}
+
+/// Alternate typing and a resize between the two windows and watch the Runtime's own descriptor between steps:
+/// control moves only when a window types, its generation climbs at every transfer, a follower's pane resize
+/// leaves the shared geometry alone, the holder's size is applied when it takes control, and each typed line
+/// is echoed exactly once.
+async function leasePhase() {
+  const probe = requiredEnvironment("RUNTROL_TEST_PROBE");
+  const home = requiredEnvironment("RUNTROL_HOME");
+  const identity = path.join(workRoot, "lease-identity.json");
+  await waitForPublished("lease-ready.json", 120_000);
+  probeJson(probe, ["enroll", home, core, identity, workspace]);
+  const ready = await waitForPublished("owner-ready.json", 1_000);
+  const words = (...more) => [home, identity, ready.runtimeGeneration, ready.terminalId, ...more];
+  const look = (label) => {
+    const attached = probeJson(probe, ["attach", ...words()]);
+    const screen = probeJson(probe, ["screen", ...words("400")]);
+    const echoes = (line) => screen.rows.filter((row) => row.trim() === `echo: ${line}`).length;
+    return { label, geometry: attached.geometry, generation: attached.controlGeneration, held: attached.controlHeld, echoes };
+  };
+  await publish("lease-owner-type-1.json", {});
+  await waitForPublished("lease-owner-typed-1.json", 30_000);
+  const afterOwner1 = look("owner typed");
+  const followerSize = { columns: 96, rows: 28 };
+  await publish("lease-mirror-resize.json", followerSize);
+  await waitForPublished("lease-mirror-resized.json", 30_000);
+  const afterFollowerResize = look("follower resized its pane");
+  await publish("lease-mirror-type.json", {});
+  await waitForPublished("lease-mirror-typed-1.json", 30_000);
+  const afterMirrorTyped = look("mirror typed");
+  await publish("lease-owner-type-2.json", {});
+  await waitForPublished("lease-owner-typed-2.json", 30_000);
+  const afterOwner2 = look("owner typed again");
+  const sameGeometry = (left, right) => left[0] === right[0] && left[1] === right[1];
+  const steps = [afterOwner1, afterFollowerResize, afterMirrorTyped, afterOwner2]
+    .map(({ label, geometry, generation, held }) => ({ label, geometry, generation, held }));
+  return {
+    steps,
+    transferOrdered: afterOwner1.generation > 0
+      && afterFollowerResize.generation === afterOwner1.generation
+      && afterMirrorTyped.generation > afterFollowerResize.generation
+      && afterOwner2.generation > afterMirrorTyped.generation
+      && [afterOwner1, afterFollowerResize, afterMirrorTyped, afterOwner2].every((step) => step.held === true),
+    followerResizeIgnored: sameGeometry(afterFollowerResize.geometry, afterOwner1.geometry),
+    geometryFollowsHolder: sameGeometry(afterMirrorTyped.geometry, [followerSize.columns, followerSize.rows])
+      && sameGeometry(afterOwner2.geometry, afterOwner1.geometry),
+    noDuplicateEcho: afterOwner2.echoes("runtrol-lease-owner-1") === 1
+      && afterOwner2.echoes("runtrol-lease-mirror-1") === 1
+      && afterOwner2.echoes("runtrol-lease-owner-2") === 1,
+  };
+}
+
+function probeJson(probe, words) {
+  const ran = spawnSync(probe, words, { cwd: extensionRoot, env: process.env, encoding: "utf8", windowsHide: true, timeout: 120_000 });
+  if (ran.status !== 0) throw new Error(`handoverProbe ${words[0]} failed: ${ran.stderr}${ran.stdout}`);
+  return JSON.parse(ran.stdout.trim().split("\n").pop());
 }
 
 function launch(role, userData, extensions) {

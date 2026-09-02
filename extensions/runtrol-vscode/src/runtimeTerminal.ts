@@ -431,8 +431,9 @@ export class RuntimeTerminal implements vscode.Pseudoterminal {
       this.lastResize = geometry;
     }, () => {
       this.resizeScheduled = false;
-      this.scheduleResize();
-    });
+      // A follower keeps its pending size for the moment it types and takes control; nothing to repeat now.
+      if (this.holdsControl()) this.scheduleResize();
+    }, false);
   }
 
   /// Read the view until the service ends. A transport break reattaches only to the exact recorded generation and
@@ -505,23 +506,33 @@ export class RuntimeTerminal implements vscode.Pseudoterminal {
     }
   }
 
+  /// Run one action under this view's control lease.
+  ///
+  /// Exactly one view holds input and resize authority (`terminalTransportIntegrity`, input and geometry). Typing
+  /// takes it: a lease lost to another window, or expired after a quiet thirty seconds, is acquired again and the
+  /// action runs once under the new lease (the Runtime refused the first attempt, so nothing was applied twice).
+  /// A resize only follows: with `takeOver` false the action runs solely while this view already holds control,
+  /// so a follower window never resizes the shared process from under the window that is typing.
   private queueControl(
     action: (view: TerminalView, lease: TerminalControlLease) => Promise<void>,
     settled: (error?: unknown) => void = () => undefined,
+    takeOver = true,
   ): void {
     const command = this.commandTail.then(async () => {
       if (this.closed) return;
       const view = this.view;
       if (!view) throw new Error("The public Runtime terminal is not connected.");
+      if (!takeOver && !this.holdsControl()) return;
       try {
         await action(view, await this.ensureControl(view));
       } catch (error: unknown) {
         // The lease lives thirty seconds and is renewed when something is sent, so a conversation nobody typed
         // into for longer answers the next keystroke with `leaseExpired`. That is recoverable and used to reach
         // the person as a red line in their conversation instead (operator, 2026-08-28, with a picture). Another
-        // reconnect in this view may also have replaced its generation, and asking again is the exact recovery.
+        // window may also have taken control since, and asking again is the exact, visible transfer back.
         if (!leaseLost(error)) throw error;
         this.lease = null;
+        if (!takeOver) return;
         await action(view, await this.ensureControl(view));
       }
     });
@@ -546,19 +557,30 @@ export class RuntimeTerminal implements vscode.Pseudoterminal {
     // to renew is a round trip that fails by construction. Past that moment the only move is to ask for
     // control again, which is what a person typing after a quiet minute is entitled to.
     const renewable = lease !== null && lease.expiresAtMs > Date.now();
-    this.lease = renewable && lease
-      ? await view.renewControl({
-          requestId: newMutationRequestId(),
-          terminalId: view.opened.terminal.terminalId,
-          leaseId: lease.leaseId,
-          leaseGeneration: lease.leaseGeneration,
-        })
-      : await view.acquireControl({
-          requestId: newMutationRequestId(),
-          terminalId: view.opened.terminal.terminalId,
-          expectedTerminalGeneration: view.opened.terminal.terminalGeneration,
-        });
+    if (renewable && lease) {
+      this.lease = await view.renewControl({
+        requestId: newMutationRequestId(),
+        terminalId: view.opened.terminal.terminalId,
+        leaseId: lease.leaseId,
+        leaseGeneration: lease.leaseGeneration,
+      });
+      return this.lease;
+    }
+    this.lease = await view.acquireControl({
+      requestId: newMutationRequestId(),
+      terminalId: view.opened.terminal.terminalId,
+      expectedTerminalGeneration: view.opened.terminal.terminalGeneration,
+    });
+    // Geometry follows the lease holder: the process was sized for whoever held control before, so this view's
+    // own size is sent once, after this action, now that it is the one typing.
+    this.lastResize = { columns: 0, rows: 0 };
+    this.scheduleResize();
     return this.lease;
+  }
+
+  /// Whether this view holds a control lease that has not run out.
+  private holdsControl(): boolean {
+    return this.lease !== null && this.lease.expiresAtMs > Date.now();
   }
 
   private fail(error: unknown): void {

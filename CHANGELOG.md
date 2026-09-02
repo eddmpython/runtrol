@@ -28,6 +28,10 @@ and refactoring that no user can observe do not belong here.
 - The Core no longer rewrites provider terminal output: mouse-mode switches now reach every viewer exactly as the
   provider wrote them, and the Studio tab keeps its own selection and wheel by filtering that one control family at
   its own edge, checkpoints included.
+- Exactly one window holds a conversation terminal's input and resize authority at a time. Typing in another window
+  takes it over, visibly and in order (the terminal descriptor now carries `controlGeneration` and `controlHeld`),
+  and a window that only changed size while another window was typing no longer resizes the shared process from
+  under it; the size of the window that takes control is applied once when it does.
 - The Core no longer switches mouse reporting on toward any viewer and no longer turns a viewer's mouse reports
   into arrow keys: what a viewer types reaches the provider exactly as written, and the private wire's viewer kind
   (terminal or touch) is gone with the translation it selected.

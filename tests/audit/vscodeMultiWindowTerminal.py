@@ -50,6 +50,10 @@ class Evidence:
 
     same_terminal: bool
     same_stream_digest: bool
+    lease_transfer_ordered: bool
+    follower_resize_ignored: bool
+    geometry_follows_holder: bool
+    no_duplicate_echo: bool
     one_owner_pid: bool
     owner_alive_before_mirror: bool
     owner_alive_while_both_open: bool
@@ -83,6 +87,10 @@ def evidenceProblems(evidence: Evidence) -> list[str]:
             evidence.same_stream_digest,
             "the two VS Code windows digested different raw output over the same chunk stretch",
         ),
+        (evidence.lease_transfer_ordered, "control did not move only on typing with a climbing generation"),
+        (evidence.follower_resize_ignored, "a follower window's pane resize changed the shared geometry"),
+        (evidence.geometry_follows_holder, "the shared geometry did not follow the window that took control"),
+        (evidence.no_duplicate_echo, "a typed line was echoed other than exactly once"),
         (evidence.one_owner_pid, "the journey did not establish one provider owner PID"),
         (evidence.owner_alive_before_mirror, "the provider owner exited before the second window opened"),
         (evidence.owner_alive_while_both_open, "the provider owner was not alive while both windows were open"),
@@ -204,6 +212,10 @@ def selftest() -> int:
     valid = Evidence(
         same_terminal=True,
         same_stream_digest=True,
+        lease_transfer_ordered=True,
+        follower_resize_ignored=True,
+        geometry_follows_holder=True,
+        no_duplicate_echo=True,
         one_owner_pid=True,
         owner_alive_before_mirror=True,
         owner_alive_while_both_open=True,
@@ -232,6 +244,10 @@ def selftest() -> int:
         for field in (
             "same_terminal",
             "same_stream_digest",
+            "lease_transfer_ordered",
+            "follower_resize_ignored",
+            "geometry_follows_holder",
+            "no_duplicate_echo",
             "one_owner_pid",
             "owner_alive_before_mirror",
             "owner_alive_while_both_open",
@@ -337,6 +353,24 @@ def hostCommand(node: str) -> list[str]:
     return command
 
 
+def buildProbe() -> Path:
+    """Build the public-wire probe the orchestrator uses to watch the Runtime's own descriptor between steps."""
+    built = subprocess.run(
+        ["cargo", "build", "-p", "runtrol", "--example", "handoverProbe"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=900,
+        check=False,
+    )
+    if built.returncode != 0:
+        raise Failed(f"the public-wire probe did not build: {(built.stderr or built.stdout)[-4_000:]}")
+    suffix = ".exe" if sys.platform == "win32" else ""
+    return acp.cargoTargetDir() / "debug" / "examples" / f"handoverProbe{suffix}"
+
+
 def resultRecord(output: str) -> dict[str, Any]:
     """Read exactly one bounded result from the Node orchestrator."""
     records = [line[len(MARKER):] for line in output.splitlines() if line.startswith(MARKER)]
@@ -355,6 +389,7 @@ def exercise() -> Evidence:
         raise Failed("node is required to launch the VS Code Extension Hosts")
     vscode = process.vscodeExecutable(node)
     binary, fixture = acp.build()
+    probe = buildProbe()
     evidence: Evidence | None = None
     cleanup_detail = ""
     with tempfile.TemporaryDirectory(prefix="rvm-", dir=executionRoot()) as raw_root:
@@ -386,6 +421,7 @@ def exercise() -> Evidence:
             host_env.update(
                 {
                     "RUNTROL_TEST_CORE": str(binary),
+                    "RUNTROL_TEST_PROBE": str(probe),
                     "RUNTROL_TEST_INTEGRATION_ROOTS": json.dumps([str(workspace)]),
                     "RUNTROL_TEST_VSCODE_EXECUTABLE": str(vscode),
                     "RUNTROL_VSCODE_PROVIDER": PROVIDER,
@@ -436,6 +472,10 @@ def exercise() -> Evidence:
             evidence = Evidence(
                 same_terminal=result.get("sameTerminal") is True,
                 same_stream_digest=result.get("sameStreamDigest") is True,
+                lease_transfer_ordered=result.get("leaseTransferOrdered") is True,
+                follower_resize_ignored=result.get("followerResizeIgnored") is True,
+                geometry_follows_holder=result.get("geometryFollowsHolder") is True,
+                no_duplicate_echo=result.get("noDuplicateEcho") is True,
                 one_owner_pid=result.get("oneOwnerPid") is True,
                 owner_alive_before_mirror=result.get("ownerAliveBeforeMirror") is True,
                 owner_alive_while_both_open=result.get("ownerAliveWhileBothOpen") is True,

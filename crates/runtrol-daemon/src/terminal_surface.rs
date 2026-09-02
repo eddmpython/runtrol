@@ -408,6 +408,12 @@ impl Terminals {
         self.publish_change();
     }
 
+    /// Publish a descriptor change after control of a terminal moved to another view or was released, so every
+    /// index reader sees the transfer in order.
+    pub(crate) fn publish_control_change(&self) {
+        self.publish_change();
+    }
+
     fn publish_change(&self) {
         let next = self.changes.borrow().wrapping_add(1);
         self.changes.send_replace(next);
