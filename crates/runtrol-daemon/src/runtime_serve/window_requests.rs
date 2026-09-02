@@ -132,10 +132,20 @@ async fn reveal(
             "reveal parameters are invalid",
         );
     };
-    let from = composed.windows.session_id_of(token).await;
+    // A reveal moves a window on this machine's desktop, so only a window on this machine may ask for one. The
+    // connection that registered a window is the proof Runtime has of that; a paired phone holds the same
+    // `session.list` scope and must never be able to raise the operator's editor (`docs/runtimeSecurity.md`,
+    // default-deny).
+    let Some(from) = composed.windows.session_id_of(token).await else {
+        return Answer::plain(
+            id,
+            RuntimeErrorKind::PresenceRequired,
+            "only a VS Code window registered on this machine can ask for a reveal",
+        );
+    };
     let Some(target) = composed
         .windows
-        .reveal(&params.window_session_id, &params.terminal_key, from)
+        .reveal(&params.window_session_id, &params.terminal_key, Some(from))
         .await
     else {
         return Answer::plain(

@@ -92,7 +92,8 @@ optional GUI. A public connection cannot approve itself.
 | `terminals/stop` | `session.stop` and the current terminal lease |
 | `windows/register`, `windows/update`, `windows/list`, `windows/watchIndex` | `session.list`; a registration is bound to the connection that made it and leaves with it |
 | `windows/mirrorOpen`, `windows/mirrorOutput`, `windows/mirrorEnd` | `session.list` and a registered window named by the open; a mirror is fed only by the connection that opened it and ends with it. `windows/mirrorOutput` is the one method that carries bytes rather than an authority decision and is not journaled (`docs/runtimeSecurity.md`) |
-| `windows/reveal`, `windows/watchReveals` | `session.list`; a reveal names a registered window and one of its terminal keys, and a reveal watch names a registered window |
+| `windows/reveal` | `session.list` and a caller that registered a window on this machine; a reveal moves a window on the operator's desktop, so a paired device holding the same scope is refused with `presenceRequired` |
+| `windows/watchReveals` | `session.list`; the watch names a registered window and receives only its terminal keys, which `windows/list` already exposes |
 | `terminals/renewControl`, `terminals/releaseControl`, `terminals/detach` | The current terminal view or lease generation |
 | `approvals/respond` | `approval.respond.low` or `approval.respond.high`, plus the current lease |
 | `sessions/renewControl`, `sessions/releaseControl` | The current lease generation |
