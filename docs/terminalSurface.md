@@ -31,9 +31,10 @@ transport or Studio navigation.
 - Runtime answers terminal capability and cursor-position queries once at the host. Viewers do not race to answer.
 - Snapshot creation and live fan-out share one output-state critical section. A viewer receives a chunk in its
   snapshot or subscribes before that chunk is published, never both and never neither.
-- A desktop terminal viewer keeps VS Code's own selection, focus, and scroll behavior. Runtime strips provider mouse
-  mode toggles from the viewer stream and rejects stray desktop mouse reports. Only a touch viewer may translate
-  gestures into bounded terminal input. Provider-specific launch behavior remains declarative in the manifest `[tui]`
+- A desktop terminal viewer keeps VS Code's own selection, focus, and scroll behavior. Runtime forwards the
+  provider's bytes exactly as the host read them, mouse-mode toggles included, and rejects stray desktop mouse
+  reports; the Studio tab takes that one control family out at its own edge (`mouseModeFilter.ts`). Only a touch
+  viewer may translate gestures into bounded terminal input. Provider-specific launch behavior remains declarative in the manifest `[tui]`
   section through `new`, `resume`, `attach`, `stop`, `env`, and `env_unset`.
 - No Runtime, Studio, SDK, or phone code selects behavior by a hardcoded provider name.
 

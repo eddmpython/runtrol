@@ -19,6 +19,12 @@ and refactoring that no user can observe do not belong here.
   builds left in Claude, Codex, and the Runtrol home is read with `runtrol legacy inventory` and removed with
   `runtrol legacy cleanup`, which Studio runs once per Core image. Ordinary provider MCP entries are never touched.
 
+### Changed
+
+- The Core no longer rewrites provider terminal output: mouse-mode switches now reach every viewer exactly as the
+  provider wrote them, and the Studio tab keeps its own selection and wheel by filtering that one control family at
+  its own edge, checkpoints included.
+
 ### Fixed
 
 - `runtrol panic` now withdraws the daemon's own locator entry before it stops, so `runtrol status` and the standalone

@@ -35,3 +35,10 @@ tokio = { workspace = true, features = ["io-util", "process", "rt", "sync", "tim
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+# The parity probe renders captured terminal bytes through the same model the Core uses.
+vt100 = { workspace = true }
+runtrol-core = { workspace = true }
+runtrol-provider = { workspace = true }
+toml = { workspace = true, features = ["std", "parse", "serde"] }

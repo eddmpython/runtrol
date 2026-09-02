@@ -294,8 +294,6 @@ pub enum ViewerKind {
 struct State {
     screen: vt100::Parser,
     queries: xterm::QueryCarry,
-    /// The CLI's mouse-mode switches are taken out of its output here, before the model or a viewer sees it.
-    strip: mouse::OutputCarry,
 }
 
 impl std::fmt::Debug for State {
@@ -361,7 +359,6 @@ impl Terminal {
             state: Mutex::new(State {
                 screen: vt100::Parser::new(size.rows, size.cols, 0),
                 queries: xterm::QueryCarry::default(),
-                strip: mouse::OutputCarry::default(),
             }),
             input: Mutex::new(mouse::InputCarry::default()),
             operations: OperationGate::default(),
@@ -699,9 +696,8 @@ impl Shared {
     async fn take_output(&self, chunk: Bytes) {
         let answers = {
             let mut state = self.state.lock().await;
-            // The mouse is a touch-screen concept here (`mouse`): a CLI switching a terminal's mouse on
-            // never reaches the model or a viewer.
-            let chunk = Bytes::from(state.strip.strip(&chunk));
+            // The raw lane carries the CLI's bytes exactly as the host read them. Nothing is rewritten here:
+            // a viewer that must keep its own mouse filters that one control family at its own edge.
             let size = unpack_size(self.geometry.load(Ordering::Acquire));
             process_screen_or_reset(&mut state.screen, size, &chunk);
             let cursor = state.screen.screen().cursor_position();
@@ -994,6 +990,58 @@ mod tests {
         ] {
             assert_eq!(unpack_size(pack_size(size)), size);
         }
+    }
+
+    #[tokio::test]
+    async fn every_chunk_the_host_reads_reaches_a_viewer_byte_for_byte() {
+        // The raw lane's promise: what the host read is what a viewer gets, in order, including the
+        // sequences the old path rewrote (mouse-mode switches) or answered (terminal queries), and a
+        // sequence cut across two reads. ConPTY renders what a child writes, so the fixture enters at the
+        // host's read boundary, which is the boundary the promise is about.
+        let (shell, arguments) = if cfg!(windows) {
+            ("cmd", vec!["/c".to_owned(), "echo raw-lane".to_owned()])
+        } else {
+            ("sh", vec!["-c".to_owned(), "echo raw-lane".to_owned()])
+        };
+        let program = runtrol_childproc::resolve(shell).expect("the platform shell resolves");
+        let cwd = AbsPath::canonicalize(std::env::temp_dir().to_str().expect("utf-8 temp dir"))
+            .expect("the temp dir is absolute");
+        let terminal = Terminal::open(&TerminalLaunch {
+            program: &program,
+            arguments,
+            cwd: &cwd,
+            env: Vec::new(),
+            env_unset: Vec::new(),
+            size: PtySize { cols: 40, rows: 10 },
+        })
+        .expect("a terminal opens");
+        let mut viewer = terminal.attach(ViewerKind::Terminal).await;
+        let script: [&[u8]; 4] = [
+            b"plain \x1b[?10",
+            b"00h\x1b[?1006h\x1b[?1049;1000;25h",
+            b"\x1b[6n\x1b[c tail",
+            b"\x1b[?1000l done",
+        ];
+        for chunk in script {
+            terminal
+                .shared
+                .take_output(Bytes::copy_from_slice(chunk))
+                .await;
+        }
+        let mut matched = 0;
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while matched < script.len() {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            let received = tokio::time::timeout(remaining, viewer.live.recv())
+                .await
+                .expect("the viewer sees every fixture chunk in time")
+                .expect("the ring stays ahead of one viewer");
+            if script.get(matched).copied() == Some(received.as_ref()) {
+                matched += 1;
+            }
+        }
+        assert_eq!(matched, script.len());
+        terminal.kill().expect("the fixture child ends");
     }
 
     #[tokio::test]

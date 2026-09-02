@@ -17,7 +17,14 @@
 //! handoverProbe find-native <home> <identity file> <provider> <native>
 //! handoverProbe attach <home> <identity file> <digest> <terminal id>
 //! handoverProbe stop   <home> <identity file> <digest> <terminal id>
+//! handoverProbe screen <home> <identity file> <digest> <terminal id> <settle ms>
+//! handoverProbe direct-screen <provider> <cwd> <settle ms>
 //! ```
+//!
+//! The two `screen` phases exist for the raw-lane parity journey (`terminalTransportIntegrity`, `TERM-01`): one
+//! renders what a Runtrol viewer received, the other renders what the same program draws on a `ConPTY` that
+//! Runtrol never touched, both through the same terminal model at the same geometry, so the two texts can be
+//! compared line by line.
 //!
 //! Each phase prints one JSON object on stdout and exits non-zero with the failure on stderr.
 
@@ -97,8 +104,9 @@ fn main() -> ExitCode {
         Ok(runtime) => runtime,
         Err(error) => return fail(&format!("tokio runtime: {error}")),
     };
-    let outcome = runtime.block_on(async {
-        match words
+    let outcome =
+        runtime.block_on(async {
+            match words
             .iter()
             .map(String::as_str)
             .collect::<Vec<_>>()
@@ -153,12 +161,16 @@ fn main() -> ExitCode {
             ["parity-navigation", home, identity, digest, terminal] => {
                 parity_navigation(Path::new(home), Path::new(identity), digest, terminal).await
             }
+            ["screen", home, identity, digest, terminal, settle] => {
+                screen(Path::new(home), Path::new(identity), digest, terminal, settle).await
+            }
+            ["direct-screen", provider, cwd, settle] => direct_screen(provider, cwd, settle),
             _ => Err(
                 "usage: handoverProbe enroll|open|open-native|find-native|attach|stop|parity ..."
                     .to_owned(),
             ),
         }
-    });
+        });
     match outcome {
         Ok(line) => {
             if writeln!(std::io::stdout().lock(), "{line}").is_err() {
@@ -503,6 +515,192 @@ async fn find_native(
 }
 
 /// Attach to one terminal in the exact generation that owns it, on a connection that did not exist before.
+/// Whether a byte stream carries any switch that would put a terminal into mouse reporting.
+fn mentions_mouse_mode(bytes: &[u8]) -> bool {
+    [
+        &b"[?1000h"[..],
+        b"[?1002h",
+        b"[?1003h",
+        b"[?1006h",
+        b"[?1000l",
+    ]
+    .iter()
+    .any(|needle| bytes.windows(needle.len()).any(|window| window == *needle))
+}
+
+/// Render bytes through the same terminal model the Core uses, at the probe geometry, as trimmed rows.
+fn rendered_rows(bytes: &[u8]) -> Vec<String> {
+    let mut parser = vt100::Parser::new(GEOMETRY.rows, GEOMETRY.columns, 0);
+    parser.process(bytes);
+    parser
+        .screen()
+        .rows(0, GEOMETRY.columns)
+        .map(|row| row.trim_end().to_owned())
+        .collect()
+}
+
+fn settle_of(settle: &str) -> Result<Duration, String> {
+    settle
+        .parse::<u64>()
+        .map(Duration::from_millis)
+        .map_err(|error| format!("settle ms: {error}"))
+}
+
+/// What a Runtrol viewer receives for one terminal: the checkpoint, then live output for a settle period.
+async fn screen(
+    home: &Path,
+    identity_file: &Path,
+    digest: &str,
+    terminal: &str,
+    settle: &str,
+) -> Result<String, String> {
+    let settle = settle_of(settle)?;
+    let stored = read_stored(identity_file)?;
+    let generation = generation(home, digest)?;
+    let mut client = RuntimeClient::connect_to(generation, options_with(&stored))
+        .await
+        .map_err(|error| format!("connect to generation {digest}: {error}"))?;
+    let terminal_id = terminal
+        .parse::<RuntimeTerminalId>()
+        .map_err(|error| format!("terminal id: {error}"))?;
+    let mut terminals = client.terminals();
+    let mut view = terminals
+        .attach(&TerminalAttachParams { terminal_id })
+        .await
+        .map_err(|error| format!("attach in generation {digest}: {error}"))?;
+    let mut bytes = view.initial_screen().to_vec();
+    let checkpoint_bytes = bytes.len();
+    let deadline = Instant::now() + settle;
+    while Instant::now() < deadline {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        match tokio::time::timeout(remaining, view.next()).await {
+            Ok(Ok(runtrol_runtime_client::TerminalNotification::Output {
+                bytes: chunk, ..
+            })) => {
+                bytes.extend_from_slice(&chunk);
+            }
+            Ok(Ok(runtrol_runtime_client::TerminalNotification::Lagged { screen, .. })) => {
+                bytes = screen;
+            }
+            Ok(Ok(runtrol_runtime_client::TerminalNotification::Exited { .. })) | Err(_) => break,
+            Ok(Err(error)) => return Err(format!("read the view: {error}")),
+        }
+    }
+    Ok(serde_json::json!({
+        "source": "runtrol",
+        "checkpointBytes": checkpoint_bytes,
+        "bytes": bytes.len(),
+        "mouseModeSeen": mentions_mouse_mode(&bytes),
+        "rows": rendered_rows(&bytes),
+    })
+    .to_string())
+}
+
+/// The shipped manifest declaring one provider, or every reason none did.
+fn shipped_manifest(provider: &str) -> Result<runtrol_provider::Manifest, String> {
+    let mut failures = Vec::new();
+    for text in runtrol_drivers::MANIFESTS {
+        match toml::from_str::<runtrol_provider::Manifest>(text) {
+            Ok(manifest) if manifest.id.as_str() == provider => return Ok(manifest),
+            Ok(_) => {}
+            Err(error) => failures.push(error.to_string()),
+        }
+    }
+    Err(format!(
+        "no shipped manifest declares {provider}{}",
+        if failures.is_empty() {
+            String::new()
+        } else {
+            format!("; unreadable manifests: {}", failures.join("; "))
+        }
+    ))
+}
+
+/// What the same provider draws on a `ConPTY` Runtrol never touched, launched exactly as the daemon launches it
+/// (the shipped manifest's program, `[tui] new` words, environment, and unset markers) and answered the way the
+/// Core's host answers, so the two captures differ only by what sits between the PTY and the viewer.
+fn direct_screen(provider: &str, cwd: &str, settle: &str) -> Result<String, String> {
+    let settle = settle_of(settle)?;
+    let manifest = shipped_manifest(provider)?;
+    let tui = manifest
+        .tui
+        .as_ref()
+        .ok_or_else(|| format!("{provider} declares no terminal interface"))?;
+    let program = runtrol_core::locate(&manifest).map_err(|error| error.to_string())?;
+    let arguments: Vec<String> = tui.new.iter().map(ToString::to_string).collect();
+    let env: Vec<(String, String)> = tui
+        .env
+        .iter()
+        .map(|(name, value)| (name.to_string(), value.to_string()))
+        .collect();
+    let env_unset: Vec<String> = tui.env_unset.iter().map(ToString::to_string).collect();
+    let cwd = runtrol_provider::AbsPath::canonicalize(cwd).map_err(|error| error.to_string())?;
+    let size = runtrol_childproc::pty::PtySize {
+        cols: GEOMETRY.columns,
+        rows: GEOMETRY.rows,
+    };
+    let child = runtrol_childproc::pty::PtyChild::spawn(runtrol_childproc::pty::PtySpawn {
+        program: &program,
+        arguments: &arguments,
+        cwd: &cwd,
+        env: &env,
+        env_unset: &env_unset,
+        size,
+    })
+    .map_err(|error| error.to_string())?;
+    let mut reader = child.reader().map_err(|error| error.to_string())?;
+    let mut writer = child.writer().map_err(|error| error.to_string())?;
+    let (sender, receiver) = std::sync::mpsc::channel::<Vec<u8>>();
+    std::thread::spawn(move || {
+        let mut buffer = vec![0u8; 16 * 1024];
+        loop {
+            match std::io::Read::read(&mut reader, &mut buffer) {
+                Ok(0) | Err(_) => break,
+                Ok(count) => {
+                    let Some(read) = buffer.get(..count) else {
+                        break;
+                    };
+                    if sender.send(read.to_vec()).is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+    });
+    let mut parser = vt100::Parser::new(GEOMETRY.rows, GEOMETRY.columns, 0);
+    let mut queries = runtrol_core::terminal::xterm::QueryCarry::default();
+    let mut bytes = Vec::new();
+    let deadline = Instant::now() + settle;
+    while Instant::now() < deadline {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        match receiver.recv_timeout(remaining) {
+            Ok(chunk) => {
+                parser.process(&chunk);
+                let answers = queries.answers(&chunk, parser.screen().cursor_position());
+                if !answers.is_empty() {
+                    writer
+                        .write_all(&answers)
+                        .and_then(|()| writer.flush())
+                        .map_err(|error| format!("answer the program: {error}"))?;
+                }
+                bytes.extend_from_slice(&chunk);
+            }
+            Err(
+                std::sync::mpsc::RecvTimeoutError::Timeout
+                | std::sync::mpsc::RecvTimeoutError::Disconnected,
+            ) => break,
+        }
+    }
+    child.kill().map_err(|error| error.to_string())?;
+    Ok(serde_json::json!({
+        "source": "direct",
+        "bytes": bytes.len(),
+        "mouseModeSeen": mentions_mouse_mode(&bytes),
+        "rows": rendered_rows(&bytes),
+    })
+    .to_string())
+}
+
 async fn attach(
     home: &Path,
     identity_file: &Path,

@@ -6,6 +6,7 @@ import {
   type TerminalView,
 } from "@runtrol/runtime-client";
 import * as vscode from "vscode";
+import { MouseModeFilter } from "./mouseModeFilter";
 import type { Conversation, StartedConversation } from "./conversationList";
 import { projectAccentColor } from "./projectColor";
 import { tabName } from "./tabName";
@@ -489,6 +490,9 @@ class RuntimeTerminal implements vscode.Pseudoterminal {
   private view: TerminalView | null = null;
   private lease: TerminalControlLease | null = null;
   private decoder = new TextDecoder("utf-8");
+  /// The one control family this tab takes out of the service's bytes: the switches that would give the CLI
+  /// this terminal's mouse. Everything else the service drew passes through exactly.
+  private mouseModes = new MouseModeFilter();
   private closed = false;
   private commandTail = Promise.resolve();
   private dimensions = { columns: 120, rows: 40 };
@@ -638,7 +642,8 @@ class RuntimeTerminal implements vscode.Pseudoterminal {
   /// The Runtime answering is not the end of the wait: it hands back a screen that is empty until the CLI
   /// itself writes, and taking the mark down then left the same blank rectangle it exists to prevent
   /// (measured 2026-08-28, one click in a real window).
-  private writeFromService(text: string): void {
+  private writeFromService(raw: string): void {
+    const text = this.mouseModes.filter(raw);
     // Only something a person can see takes the mark down. The Runtime answers with the terminal's screen as
     // it stands, and for a conversation the service has not drawn yet that screen is escape sequences and
     // blanks: taking the mark down on those put the empty rectangle back that the mark exists to prevent
@@ -793,6 +798,7 @@ class RuntimeTerminal implements vscode.Pseudoterminal {
             // The Core re-sends the whole screen next; clear so the redraw lands on a clean page, and start
             // decoding afresh so a multibyte tail cut off by the lag never bleeds into it.
             this.decoder = new TextDecoder("utf-8");
+            this.mouseModes.reset();
             this.writeFromService(`\x1b[2J\x1b[H${this.decoder.decode(notification.screen, { stream: true })}`);
             break;
           case "exited":
@@ -824,6 +830,7 @@ class RuntimeTerminal implements vscode.Pseudoterminal {
         this.connected(view.opened.terminal);
         this.lease = null;
         this.decoder = new TextDecoder("utf-8");
+        this.mouseModes.reset();
         this.writeFromService(`\x1b[2J\x1b[H${this.decoder.decode(view.initialScreen, { stream: true })}`);
       }
     }
