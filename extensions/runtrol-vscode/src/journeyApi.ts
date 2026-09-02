@@ -114,6 +114,14 @@ export type JourneyApi = {
   ): Promise<number>;
   terminalWrite(runtimeGeneration: string, terminalId: string, text: string): Promise<JourneyInputTiming>;
   terminalWriteDirect(runtimeGeneration: string, terminalId: string, text: string): Promise<JourneyInputTiming>;
+  /// Digest the raw output chunks from the one carrying `startText` through the one carrying `endText`.
+  terminalRecordOutput(
+    runtimeGeneration: string,
+    terminalId: string,
+    startText: string,
+    endText: string,
+    deadlineMs: number,
+  ): Promise<{ chunks: number; bytes: number; digest: string }>;
   terminalStop(runtimeGeneration: string, terminalId: string, deadlineMs: number): Promise<void>;
 };
 
@@ -366,6 +374,8 @@ export function journeyApi(
       terminals.writeJourneyInput(runtimeGeneration, terminalId, text),
     terminalWriteDirect: (runtimeGeneration, terminalId, text) =>
       terminals.writeDirectJourneyInput(runtimeGeneration, terminalId, text),
+    terminalRecordOutput: (runtimeGeneration, terminalId, startText, endText, deadlineMs) =>
+      terminals.recordJourneyOutput(runtimeGeneration, terminalId, startText, endText, deadlineMs),
     terminalStop: (runtimeGeneration, terminalId, _deadlineMs) => afterReady(
       () => terminals.stopJourneyTerminal(runtimeGeneration, terminalId),
     ),

@@ -49,6 +49,7 @@ class Evidence:
     """One bounded record for identity, fan-out, writer handoff, lifecycle, and cleanup."""
 
     same_terminal: bool
+    same_stream_digest: bool
     one_owner_pid: bool
     owner_alive_before_mirror: bool
     owner_alive_while_both_open: bool
@@ -78,6 +79,10 @@ def evidenceProblems(evidence: Evidence) -> list[str]:
     problems: list[str] = []
     checks = (
         (evidence.same_terminal, "the two VS Code windows attached to different terminal identities"),
+        (
+            evidence.same_stream_digest,
+            "the two VS Code windows digested different raw output over the same chunk stretch",
+        ),
         (evidence.one_owner_pid, "the journey did not establish one provider owner PID"),
         (evidence.owner_alive_before_mirror, "the provider owner exited before the second window opened"),
         (evidence.owner_alive_while_both_open, "the provider owner was not alive while both windows were open"),
@@ -198,6 +203,7 @@ def selftest() -> int:
     """Prove identity, lifecycle, delivery, latency, and cleanup defects each turn the gate red."""
     valid = Evidence(
         same_terminal=True,
+        same_stream_digest=True,
         one_owner_pid=True,
         owner_alive_before_mirror=True,
         owner_alive_while_both_open=True,
@@ -225,6 +231,7 @@ def selftest() -> int:
         replace(valid, **{field: False})
         for field in (
             "same_terminal",
+            "same_stream_digest",
             "one_owner_pid",
             "owner_alive_before_mirror",
             "owner_alive_while_both_open",
@@ -428,6 +435,7 @@ def exercise() -> Evidence:
             exact_owner_generation_stopped = not process.aliveIdentities({owner_identity})
             evidence = Evidence(
                 same_terminal=result.get("sameTerminal") is True,
+                same_stream_digest=result.get("sameStreamDigest") is True,
                 one_owner_pid=result.get("oneOwnerPid") is True,
                 owner_alive_before_mirror=result.get("ownerAliveBeforeMirror") is True,
                 owner_alive_while_both_open=result.get("ownerAliveWhileBothOpen") is True,

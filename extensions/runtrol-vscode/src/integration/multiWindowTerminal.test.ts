@@ -15,8 +15,11 @@ const INITIALIZATION_DEADLINE_MS = 60_000;
 const SAMPLE_COUNT = requiredSampleCount();
 const WARM_SAMPLE_INTERVAL_MS = 50;
 const NAVIGATION_MODE = process.env.RUNTROL_VSCODE_INPUT_MODE === "navigation";
+const DIGEST_START = "runtrol-digest-start";
+const DIGEST_END = "runtrol-digest-end";
 
 type Role = "owner" | "mirror";
+type StreamDigest = { chunks: number; bytes: number; digest: string };
 
 function requiredSampleCount(): number {
   const raw = requiredEnvironment("RUNTROL_VSCODE_LATENCY_SAMPLE_COUNT");
@@ -107,8 +110,29 @@ async function ownerJourney(coordination: string): Promise<void> {
     DEADLINE_MS,
   );
   const mirrorSamples = requireMirrorSamples(mirrorObserved.observations, sampleStarts);
+  // One ordered raw stream: both windows digest the same chunks between two markers this window types. The
+  // digests are equal exactly when the windows received the same bytes at the same chunk boundaries.
+  let streamDigest: StreamDigest | null = null;
+  if (!NAVIGATION_MODE) {
+    const record = journey.terminalRecordOutput(
+      terminal.runtimeGeneration,
+      terminal.terminalId,
+      DIGEST_START,
+      DIGEST_END,
+      DEADLINE_MS,
+    );
+    await publish(coordination, "owner-digest-armed.json", {});
+    await readPublished(coordination, "mirror-digest-armed.json", DEADLINE_MS);
+    for (const line of [DIGEST_START, "runtrol-digest-line-one", "runtrol-digest-line-two", DIGEST_END]) {
+      const echoed = waitForInputOutput(journey, terminal, line);
+      await writeInput(journey, terminal, line, true);
+      await echoed;
+    }
+    streamDigest = await record;
+  }
   await publish(coordination, "owner-result.json", {
     terminal,
+    streamDigest,
     ownerInputSamplesMs: ownerSamples,
     ownerFirstInputMs: ownerSamples[0],
     ownerWarmInputP95Ms: p95(ownerSamples.slice(1)),
@@ -153,6 +177,19 @@ async function mirrorJourney(coordination: string): Promise<void> {
   await publish(coordination, "mirror-samples-observed.json", {
     observations: observed,
   });
+  let streamDigest: StreamDigest | null = null;
+  if (!NAVIGATION_MODE) {
+    await readPublished(coordination, "owner-digest-armed.json", DEADLINE_MS);
+    const record = journey.terminalRecordOutput(
+      terminal.runtimeGeneration,
+      terminal.terminalId,
+      DIGEST_START,
+      DIGEST_END,
+      DEADLINE_MS,
+    );
+    await publish(coordination, "mirror-digest-armed.json", {});
+    streamDigest = await record;
+  }
 
   await readPublished(coordination, "owner-closed.json", DEADLINE_MS);
   const handoffSamples: number[] = [];
@@ -175,6 +212,7 @@ async function mirrorJourney(coordination: string): Promise<void> {
   await journey.terminalStop(terminal.runtimeGeneration, terminal.terminalId, DEADLINE_MS);
   await publish(coordination, "mirror-result.json", {
     terminal,
+    streamDigest,
     handoffInputSamplesMs: handoffSamples,
     handoffFirstInputMs: handoffSamples[0],
     handoffWarmInputP95Ms: p95(handoffSamples.slice(1)),

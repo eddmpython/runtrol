@@ -7,6 +7,7 @@ import { tabName } from "./tabName";
 import type { StudioRuntimeClient } from "./runtimeClient";
 import {
   type JourneyInputTiming,
+  type OutputRecord,
   RuntimeTerminal,
   type TerminalPresentation,
   targetOf,
@@ -325,6 +326,18 @@ export class TerminalTabs implements vscode.Disposable {
     const found = this.journeyHost({ runtimeGeneration, terminalId });
     if (!found) throw this.journeyUnavailable(runtimeGeneration, terminalId);
     return found[1].waitForOutput(text, deadlineMs);
+  }
+
+  recordJourneyOutput(
+    runtimeGeneration: string,
+    terminalId: string,
+    startText: string,
+    endText: string,
+    deadlineMs: number,
+  ): Promise<OutputRecord> {
+    const found = this.journeyHost({ runtimeGeneration, terminalId });
+    if (!found) throw this.journeyUnavailable(runtimeGeneration, terminalId);
+    return found[1].recordOutput(startText, endText, deadlineMs);
   }
 
   writeJourneyInput(runtimeGeneration: string, terminalId: string, text: string): Promise<JourneyInputTiming> {

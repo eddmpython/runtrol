@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import {
   PUBLIC_LIMITS,
   newMutationRequestId,
@@ -127,6 +129,9 @@ function sameGeometry(
   return left.columns === right.columns && left.rows === right.rows;
 }
 
+/// A journey's digest of one stretch of raw output chunks.
+export type OutputRecord = { chunks: number; bytes: number; digest: string };
+
 export function terminalIdentity(runtimeGeneration: string, terminalId: string): string {
   return `${runtimeGeneration}:${terminalId}`;
 }
@@ -135,9 +140,13 @@ export class RuntimeTerminal implements vscode.Pseudoterminal {
   private readonly writeEmitter = new Emitter<string>();
   private readonly closeEmitter = new Emitter<number | void>();
   private readonly nameEmitter = new Emitter<string>();
+  /// Every output chunk exactly as the service delivered it, before this tab's own mouse-mode filter and before
+  /// decoding: what a journey digests to prove two windows received one ordered raw stream.
+  private readonly receivedEmitter = new Emitter<Uint8Array>();
   readonly onDidWrite = this.writeEmitter.event;
   readonly onDidClose = this.closeEmitter.event;
   readonly onDidChangeName = this.nameEmitter.event;
+  readonly onDidReceive = this.receivedEmitter.event;
   private view: TerminalView | null = null;
   private lease: TerminalControlLease | null = null;
   private decoder = new TextDecoder("utf-8");
@@ -281,6 +290,40 @@ export class RuntimeTerminal implements vscode.Pseudoterminal {
   /// Everything the pane receives goes through here, and it is the service's bytes and nothing else: no
   /// loading frame, no clear before a checkpoint, no exit or error sentence. The checkpoint the Runtime sends
   /// already begins by clearing the screen, so a replacement lands on a clean page by its own bytes.
+  /// Digest the raw output chunks from the one carrying `startText` through the one carrying `endText`, both
+  /// inclusive. Two windows on one terminal receive the same chunks at the same boundaries, so their digests over
+  /// the same two markers are equal exactly when they received one ordered raw stream.
+  recordOutput(startText: string, endText: string, deadlineMs: number): Promise<OutputRecord> {
+    if (!startText || !endText) return Promise.reject(new Error("the output record markers are empty"));
+    return new Promise<OutputRecord>((resolve, reject) => {
+      const hash = createHash("sha256");
+      const decoder = new TextDecoder("utf-8");
+      let tail = "";
+      let recording = false;
+      let chunks = 0;
+      let bytes = 0;
+      let timer: NodeJS.Timeout | undefined;
+      const finish = (result: OutputRecord | Error): void => {
+        if (timer) clearTimeout(timer);
+        subscription.dispose();
+        if (result instanceof Error) reject(result);
+        else resolve(result);
+      };
+      const subscription = this.onDidReceive((chunk) => {
+        const candidate = tail + decoder.decode(chunk, { stream: true });
+        if (!recording && candidate.includes(startText)) recording = true;
+        if (recording) {
+          hash.update(chunk);
+          chunks += 1;
+          bytes += chunk.byteLength;
+          if (candidate.includes(endText)) finish({ chunks, bytes, digest: hash.digest("hex") });
+        }
+        tail = candidate.slice(-Math.max(startText.length, endText.length));
+      });
+      timer = setTimeout(() => finish(new Error(`the output record did not close within ${deadlineMs} ms`)), deadlineMs);
+    });
+  }
+
   private writeFromService(raw: string): void {
     const text = this.mouseModes.filter(raw);
     // Feed VS Code's terminal buffer before rebuilding sidebar state. The activity callback is bookkeeping;
@@ -419,6 +462,7 @@ export class RuntimeTerminal implements vscode.Pseudoterminal {
         const notification = await view.next();
         switch (notification.kind) {
           case "output":
+            this.receivedEmitter.fire(notification.bytes);
             this.writeFromService(this.decoder.decode(notification.bytes, { stream: true }));
             break;
           case "lagged":

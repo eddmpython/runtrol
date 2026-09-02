@@ -97,8 +97,16 @@ try {
   const sameTerminal = sameTerminalIdentity(ownerReady, mirrorArmed)
     && sameTerminalIdentity(ownerReady, ownerResult.terminal)
     && sameTerminalIdentity(ownerReady, mirrorResult.terminal);
+  const ownerDigest = ownerResult.streamDigest ?? null;
+  const mirrorDigest = mirrorResult.streamDigest ?? null;
   process.stdout.write(`RUNTROL_VSCODE_MULTI_WINDOW ${JSON.stringify({
     sameTerminal,
+    // One ordered raw stream: the two windows' digests over the same chunk stretch agree, chunk count included.
+    sameStreamDigest: ownerDigest !== null && mirrorDigest !== null
+      && ownerDigest.digest === mirrorDigest.digest && ownerDigest.chunks === mirrorDigest.chunks
+      && ownerDigest.bytes === mirrorDigest.bytes,
+    streamDigest: ownerDigest,
+    mirrorStreamDigest: mirrorDigest,
     terminalId: ownerReady.terminalId,
     runtimeGeneration: ownerReady.runtimeGeneration,
     terminalGeneration: ownerReady.terminalGeneration,
