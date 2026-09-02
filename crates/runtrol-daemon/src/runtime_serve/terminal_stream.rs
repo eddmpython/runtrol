@@ -525,6 +525,7 @@ pub(super) async fn relay_terminal(
                             view_id: view.opened.view_id.clone(),
                             lost_chunks: lost,
                             screen_base64: base64ct::Base64::encode_string(&fresh.snapshot),
+                            checkpoint_available: fresh.checkpoint_available,
                             next_sequence: sequence,
                         };
                         if send_notification(connection, RuntimeMethod::TerminalsLagged, &notification)

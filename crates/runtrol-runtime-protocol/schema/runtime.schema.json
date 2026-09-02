@@ -4224,6 +4224,11 @@
       "additionalProperties": false,
       "description": "Explicit loss boundary followed atomically by one replacement screen snapshot.",
       "properties": {
+        "checkpointAvailable": {
+          "default": true,
+          "description": "Whether the replacement screen is the provider's current screen (see [`TerminalViewOpened`]).",
+          "type": "boolean"
+        },
         "lostChunks": {
           "description": "Number of broadcast chunks skipped before the replacement snapshot.",
           "format": "uint64",
@@ -4442,6 +4447,11 @@
       "additionalProperties": false,
       "description": "A view starts with one bounded screen snapshot, then receives live output notifications.",
       "properties": {
+        "checkpointAvailable": {
+          "default": true,
+          "description": "Whether `screen_base64` is the provider's current screen. False, with an empty screen, when the Runtime's\ncheckpoint projector was unreachable or reset and the provider has not redrawn since; live bytes still\nbegin exactly at the boundary, and the provider's next full redraw (a resize provokes one) fills the view.",
+          "type": "boolean"
+        },
         "controlLease": {
           "anyOf": [
             {

@@ -50,6 +50,9 @@ and refactoring that no user can observe do not belong here.
 
 ### Added
 
+- The public Runtime protocol's terminal view opened and lagged messages now carry `checkpointAvailable`, which
+  says whether the screen they deliver is the provider's current one; a client built before the field reads it as
+  true, as every earlier Runtime meant.
 - Uninstalling Runtrol Studio and restarting VS Code now runs a hook that stops the daemons Studio started, removes its
   Core images, provider shims, and other storage, and removes the Runtime state root unless a standalone Runtime
   install shares it. Provider profiles and conversations are never touched.

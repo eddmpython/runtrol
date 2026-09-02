@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Added `checkpointAvailable` to the terminal view opened and lagged messages (regenerated bindings).
+
 ## 0.1.1
 
 - Added finalized Runtime revision `2026-08-13` bindings and runtime message validation.

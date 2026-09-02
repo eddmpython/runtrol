@@ -1429,6 +1429,79 @@ mod tests {
         );
     }
 
+    /// The number an active-TUI fixture chunk or screen names, as `n=<number>;`.
+    fn numbered(text: &str) -> Option<u64> {
+        let digits = text.split("n=").nth(1)?.split(';').next()?;
+        if digits.is_empty() {
+            return None;
+        }
+        digits.bytes().try_fold(0u64, |value, byte| {
+            byte.is_ascii_digit().then_some(())?;
+            value
+                .checked_mul(10)?
+                .checked_add(u64::from(byte.wrapping_sub(b'0')))
+        })
+    }
+
+    #[tokio::test]
+    async fn a_late_viewer_checkpoint_and_live_stream_meet_at_one_sequence_boundary() {
+        // An active TUI: a chunk every few hundred microseconds, each overwriting one line with its own number,
+        // so a screen names exactly which chunk it reflects. Late viewers keep arriving while it runs; for each,
+        // the number on its checkpoint plus one must be the number of its first live chunk. No gap, no duplicate,
+        // whatever the projector had reached.
+        let (terminal, _) = echo_fixture();
+        let publisher = Arc::clone(&terminal.shared);
+        let stop = Arc::new(AtomicBool::new(false));
+        let stopping = Arc::clone(&stop);
+        let writer = tokio::spawn(async move {
+            let mut number = 0u64;
+            while !stopping.load(Ordering::Acquire) {
+                number += 1;
+                publisher
+                    .take_output(Bytes::from(format!("\r\x1b[Kn={number};")))
+                    .await;
+                tokio::time::sleep(Duration::from_micros(300)).await;
+            }
+        });
+        let mut checked = 0;
+        for _ in 0..40 {
+            let mut late = terminal.attach().await;
+            assert!(
+                late.checkpoint_available,
+                "a healthy projector is always reached"
+            );
+            let mut screen = vt100::Parser::new(24, 80, 0);
+            screen.process(&late.snapshot);
+            let contents = screen.screen().contents();
+            let on_screen = numbered(&contents);
+            let first_live = tokio::time::timeout(Duration::from_secs(2), late.live.recv())
+                .await
+                .expect("the active TUI keeps writing")
+                .expect("the ring stays ahead of a fresh viewer");
+            let live_number = numbered(&String::from_utf8_lossy(&first_live.bytes))
+                .expect("every chunk names its number");
+            match on_screen {
+                Some(seen) => {
+                    assert_eq!(
+                        live_number,
+                        seen + 1,
+                        "the checkpoint ends at {seen} and live output begins right after: {contents:?}"
+                    );
+                    checked += 1;
+                }
+                // Before the first chunk, the screen is the shell's own and the first live chunk is number one.
+                None => assert_eq!(live_number, 1),
+            }
+            tokio::time::sleep(Duration::from_millis(3)).await;
+        }
+        stop.store(true, Ordering::Release);
+        writer.await.expect("the publisher ends");
+        assert!(
+            checked >= 30,
+            "most late viewers arrived mid-stream: {checked}"
+        );
+    }
+
     #[tokio::test]
     async fn two_viewers_write_to_the_same_hosted_process() {
         let (shell, arguments, line_end) = if cfg!(windows) {

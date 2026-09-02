@@ -612,6 +612,7 @@ async fn screen(
     Ok(serde_json::json!({
         "source": "runtrol",
         "checkpointBytes": checkpoint_bytes,
+        "checkpointAvailable": view.opened().checkpoint_available,
         "bytes": bytes.len(),
         "mouseModeSeen": mentions_mouse_mode(&bytes),
         "exited": exited,

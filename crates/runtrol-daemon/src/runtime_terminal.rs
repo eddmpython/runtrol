@@ -700,6 +700,7 @@ impl TerminalRuntimeAdapter {
             terminal: descriptor(&hosted, runtime_generation()?, &changes)?,
             view_id: RuntimeTerminalViewId::now(),
             screen_base64: Base64::encode_string(&attachment.snapshot),
+            checkpoint_available: attachment.checkpoint_available,
             control_lease,
         };
         Ok(TerminalView {

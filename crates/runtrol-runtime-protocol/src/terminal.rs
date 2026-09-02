@@ -274,6 +274,11 @@ pub struct TerminalViewOpened {
     pub view_id: RuntimeTerminalViewId,
     /// Base64 of the current bounded terminal screen, delivered before live bytes.
     pub screen_base64: String,
+    /// Whether `screen_base64` is the provider's current screen. False, with an empty screen, when the Runtime's
+    /// checkpoint projector was unreachable or reset and the provider has not redrawn since; live bytes still
+    /// begin exactly at the boundary, and the provider's next full redraw (a resize provokes one) fills the view.
+    #[serde(default = "checkpoint_available_by_default")]
+    pub checkpoint_available: bool,
     /// Initial write authority only when `open` was authorized for input.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub control_lease: Option<TerminalControlLease>,
@@ -431,8 +436,16 @@ pub struct TerminalLaggedNotification {
     pub lost_chunks: u64,
     /// Base64 of the bounded replacement screen.
     pub screen_base64: String,
+    /// Whether the replacement screen is the provider's current screen (see [`TerminalViewOpened`]).
+    #[serde(default = "checkpoint_available_by_default")]
+    pub checkpoint_available: bool,
     /// Sequence assigned to the next live output chunk.
     pub next_sequence: u64,
+}
+
+/// A Runtime built before the field always sent a screen it trusted.
+const fn checkpoint_available_by_default() -> bool {
+    true
 }
 
 /// Provider process exit delivered after preceding output has drained.

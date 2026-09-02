@@ -445,7 +445,7 @@ export interface TerminalIndexEndedNotification { readonly reason: TerminalIndex
 export interface TerminalIndexSnapshot { readonly terminals: ReadonlyArray<TerminalDescriptor>; readonly warnings: ReadonlyArray<string>; }
 
 /** Explicit loss boundary followed atomically by one replacement screen snapshot. */
-export interface TerminalLaggedNotification { readonly lostChunks: number; readonly nextSequence: number; readonly screenBase64: string; readonly viewId: RuntimeTerminalViewId; }
+export interface TerminalLaggedNotification { readonly checkpointAvailable?: boolean; readonly lostChunks: number; readonly nextSequence: number; readonly screenBase64: string; readonly viewId: RuntimeTerminalViewId; }
 
 /** Open a fresh terminal or resume one authorized native conversation. */
 export interface TerminalOpenParams { readonly geometry: TerminalGeometry; readonly providerId: ProviderId; readonly requestId: MutationRequestId; readonly target: TerminalOpenTarget; readonly workspace: string; }
@@ -466,7 +466,7 @@ export interface TerminalResizeParams { readonly geometry: TerminalGeometry; rea
 export interface TerminalStopParams { readonly leaseGeneration: number; readonly leaseId: string; readonly requestId: MutationRequestId; readonly terminalId: RuntimeTerminalId; }
 
 /** A view starts with one bounded screen snapshot, then receives live output notifications. */
-export interface TerminalViewOpened { readonly controlLease?: TerminalControlLease | null; readonly screenBase64: string; readonly terminal: TerminalDescriptor; readonly viewId: RuntimeTerminalViewId; }
+export interface TerminalViewOpened { readonly checkpointAvailable?: boolean; readonly controlLease?: TerminalControlLease | null; readonly screenBase64: string; readonly terminal: TerminalDescriptor; readonly viewId: RuntimeTerminalViewId; }
 
 /** Send exact caller-owned bytes once under one current terminal control lease. */
 export interface TerminalWriteParams { readonly bytesBase64: string; readonly leaseGeneration: number; readonly leaseId: string; readonly requestId: MutationRequestId; readonly terminalId: RuntimeTerminalId; }
