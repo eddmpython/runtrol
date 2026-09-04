@@ -64,6 +64,10 @@ and refactoring that no user can observe do not belong here.
 
 ### Fixed
 
+- A row click always does something a person can see (`STATE-04`): it opens the conversation, shows it in the
+  window that runs it, or says in the row's own words why it cannot be opened. A conversation the Runtime is
+  still stopping, one whose owner could not be rechecked, or one its service cannot reopen used to answer the
+  click with a red error; nothing had failed, so the click now answers with that sentence as information.
 - Open tab, closed tab, owner focus, mirror availability and Stop all read one generation record (`STATE-03`),
   measured from two real windows through every lifecycle path. A conversation whose process the Runtime was asked
   to stop keeps that record until the process ends: its row now says `Stopping`, offers neither a view the

@@ -585,6 +585,7 @@ export class Controller implements vscode.Disposable {
     const revealLabel = `Open in ${row.serviceName}`;
     // The row already carries the sentence, so the message says what the tooltip says and cannot drift from it.
     const why = row.blocked ?? `${row.title} cannot be opened here.`;
+    this.lastExplanation = why;
     // Buttons are offered only where they lead somewhere: a conversation with no folder has nowhere to start.
     const offered = [
       ...(panel ? [revealLabel] : []),
@@ -601,6 +602,18 @@ export class Controller implements vscode.Disposable {
 
   /// What the Runtime answered to the last owner reveal this window asked for, for the journey to read.
   lastReveal: WindowRevealResult | null = null;
+  /// The last sentence a click answered with instead of opening anything, for the journey to read.
+  lastExplanation: string | null = null;
+
+  /// Say why a row cannot be opened, where the person is looking. A click never does nothing (`STATE-04`): a
+  /// conversation the Runtime is still stopping, one whose owner could not be rechecked, or one its service
+  /// cannot reopen answers with the row's own sentence, as information rather than as an error, because
+  /// nothing failed; the capability is not there, and the sentence says exactly which.
+  private explain(row: Conversation): void {
+    const why = row.blocked ?? `${row.title} cannot be opened here.`;
+    this.lastExplanation = why;
+    void vscode.window.showInformationMessage(why);
+  }
 
   private async applySelection(
     value: SelectionTarget,
@@ -653,7 +666,9 @@ export class Controller implements vscode.Disposable {
           afterApplied();
           return;
         }
-        throw new Error(target.blocked ?? "that conversation cannot be opened");
+        this.explain(target);
+        afterApplied();
+        return;
       }
       this.terminals.show(target, !reveal);
       if (target.session) this.state.select(target.session.sessionId);
