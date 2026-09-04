@@ -20,3 +20,6 @@ pub(crate) use provider_requests::{observe_native_activity, reconcile_native_act
 #[cfg(test)]
 #[path = "tests/official_attach.rs"]
 mod official_attach_tests;
+#[cfg(test)]
+#[path = "tests/state_replay.rs"]
+mod state_replay_tests;
