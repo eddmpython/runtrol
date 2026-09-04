@@ -242,7 +242,7 @@ try {
     await delay(800);
     pressKeys(viewer.title, viewer.userData, "/exit{ENTER}");
   }
-  await step({ kind: "exit", label: "typed", keys: ["", ""], gapMs: 800 });
+  await step({ kind: "exit", label: "typed", keys: ["\u0003", "\u0003"], gapMs: 800 });
   const finalRows = await snapshotFor("after-exit", 30_000, (rows) => !rows.some((row) => row.key.startsWith("terminal:") || row.key.startsWith("started:") || row.live));
   capture(viewer.title, viewer.userData, path.join(shots, "afterExit.png"));
 
