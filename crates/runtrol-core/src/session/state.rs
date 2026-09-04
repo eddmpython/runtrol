@@ -19,9 +19,10 @@
 //! # Silence is not evidence, and there is no turn timeout
 //!
 //! A turn ends when something says it ended. If nothing arrives for a long time, runtrol still does not know
-//! whether the turn is finished, so it does not decide. What it does instead is [`SessionState::quiet_since`],
-//! which records that nothing has arrived and **leaves the turn running**. A subscriber can show "this looks
-//! stuck" and offer to stop it; what it must not show is a completion runtrol invented.
+//! whether the turn is finished, so it does not decide, and it does not say anything about it either: a
+//! quiet turn is one runtrol knows nothing new about (a long tool call is quiet and not stuck), and a
+//! silence-based "looks stuck" hint is a diagnostic guess, not a proved state. The turn stays running until
+//! the provider says otherwise.
 //!
 //! That is the same rule as not swallowing an error. Reporting an outcome nobody observed is a lie whichever
 //! direction it points.
@@ -334,8 +335,6 @@ pub struct SessionState {
     lifecycle: Lifecycle,
     /// When runtrol last saw anything from it.
     last_seen: WallMs,
-    /// Since when nothing has arrived, once that has gone on long enough to be worth showing.
-    quiet_since: Option<WallMs>,
     /// What the running turn is waiting for, when it is waiting for anything.
     waiting: Option<Waiting>,
     /// Monotonic lifecycle generation for rejecting stale external control actions.
@@ -349,7 +348,6 @@ impl SessionState {
         Self {
             lifecycle: Lifecycle::Detached,
             last_seen: at,
-            quiet_since: None,
             waiting: None,
             generation: 0,
         }
@@ -367,25 +365,10 @@ impl SessionState {
         self.last_seen
     }
 
-    /// Since when it has been silent, when that is worth showing.
-    #[must_use]
-    pub const fn quiet_since(&self) -> Option<WallMs> {
-        self.quiet_since
-    }
-
     /// Monotonic lifecycle generation.
     #[must_use]
     pub const fn generation(&self) -> u64 {
         self.generation
-    }
-
-    /// Whether it looks stuck.
-    ///
-    /// A presentation question, never a lifecycle one. A session can look stuck and have a turn running, which
-    /// is exactly the case this exists for.
-    #[must_use]
-    pub const fn looks_stuck(&self) -> bool {
-        self.quiet_since.is_some()
     }
 
     /// What the running turn is waiting for, when it is waiting for anything.
@@ -432,22 +415,7 @@ impl SessionState {
         };
         self.lifecycle = next;
         self.last_seen = at;
-        self.quiet_since = None;
         Ok(())
-    }
-
-    /// Record that nothing has arrived for a while.
-    ///
-    /// Deliberately cannot change [`SessionState::lifecycle`]. A turn that has gone quiet is a turn runtrol
-    /// knows nothing new about, and there is no honest state to move it to. Inventing a completion here would
-    /// be the same lie as swallowing an error, pointed the other way.
-    ///
-    /// `const` is load bearing rather than decorative. Two of the lifecycle states own a `String`, so replacing
-    /// the current one would have to drop it, and a `const fn` cannot drop. The signature therefore makes this
-    /// function structurally incapable of moving the session, which is a stronger promise than the sentence
-    /// above. Measured: adding the assignment does not compile until `const` is removed with it.
-    pub const fn note_silence(&mut self, since: WallMs) {
-        self.quiet_since = Some(since);
     }
 }
 
@@ -687,36 +655,6 @@ mod tests {
     }
 
     #[test]
-    fn silence_never_ends_a_turn() {
-        // The rule this whole module is arranged around. runtrol does not know whether a quiet turn is
-        // finished, so it does not decide. Showing "this looks stuck" is honest; showing a completion is not.
-        let mut state = SessionState::new(now());
-        state.observe(Observed::Attaching, now()).expect("binding");
-        state.observe(Observed::Attached, now()).expect("bound");
-        state
-            .observe(Observed::TurnStarted { turn: turn(1) }, now())
-            .expect("a turn begins");
-
-        let before = state.lifecycle().clone();
-        state.note_silence(now());
-
-        assert_eq!(
-            state.lifecycle(),
-            &before,
-            "noting silence must not move the session"
-        );
-        assert_eq!(
-            state.lifecycle().turn(),
-            Some(turn(1)),
-            "the turn is running"
-        );
-        assert!(
-            state.looks_stuck(),
-            "and the operator can see it looks stuck"
-        );
-    }
-
-    #[test]
     fn a_blocked_turn_is_still_the_running_turn() {
         // The whole point of the state. Reporting a completion here, or moving the session to idle, would tell
         // the operator the work finished when it is sitting waiting for them.
@@ -841,21 +779,6 @@ mod tests {
 
         assert!(refused.is_err());
         assert_eq!(state.waiting(), None);
-    }
-
-    #[test]
-    fn anything_arriving_is_evidence_of_life() {
-        let mut state = SessionState::new(now());
-        state.observe(Observed::Attaching, now()).expect("binding");
-        state.note_silence(now());
-        assert!(state.looks_stuck());
-
-        state.observe(Observed::Attached, now()).expect("bound");
-        assert!(
-            !state.looks_stuck(),
-            "a frame arriving means it was not stuck after all"
-        );
-        assert_eq!(state.quiet_since(), None);
     }
 
     #[test]

@@ -732,7 +732,9 @@ function providerOwned(
 /// take their working state from `activeNative` above. Terminal bytes are deliberately absent: an open, paused
 /// TUI still paints, and `live` must never be confused with a model turn (operator, 2026-08-31).
 function activityOf(session: SessionLine): ConversationActivity {
-  if (session.lifecycle === "failed" || session.looksStuck) return "attention";
+  // Only what the Runtime proved: a failed lifecycle. A silence-based "looks stuck" used to read as attention
+  // here, and silence is not a state (a long tool call is quiet and not stuck); the Runtime no longer says it.
+  if (session.lifecycle === "failed") return "attention";
   // Waiting outranks running, because a turn that stopped for a person is the one fact worth interrupting them
   // for. Runtime reports it only while a turn is actually running, so it can never outlive its turn.
   if (session.waitingOn === "person") return "needsYou";

@@ -73,7 +73,13 @@ pub(super) async fn relay_watch(
             .await;
             RelayOutcome::CloseConnection
         }
-        Watching::Terminal(view) => relay_terminal(connection, composed, *view).await,
+        Watching::Terminal(view) => {
+            let outcome = relay_terminal(connection, composed, *view).await;
+            // The view was dropped with the relay, whether it detached, its connection closed or it stalled:
+            // one view fewer is a change of the published index.
+            composed.terminals.lock().await.publish_change();
+            outcome
+        }
         Watching::TerminalIndex {
             subscription_id,
             last,

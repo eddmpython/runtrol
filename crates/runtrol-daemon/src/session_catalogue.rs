@@ -19,7 +19,6 @@ pub(crate) struct ManagedSession {
     pub(crate) pid: Option<u32>,
     pub(crate) lifecycle: ManagedLifecycle,
     pub(crate) generation: u64,
-    pub(crate) looks_stuck: bool,
     /// What a running turn is waiting for, when it is waiting for anybody.
     pub(crate) waiting: Option<Waiting>,
 }
@@ -98,7 +97,6 @@ pub(crate) fn read(
                 pid: None,
                 lifecycle: ManagedLifecycle::Detached,
                 generation: 0,
-                looks_stuck: false,
                 // A session with no process cannot be mid-turn, so it cannot be waiting for anybody.
                 waiting: None,
             },
@@ -120,7 +118,6 @@ pub(crate) fn read(
                 pid: one.pid,
                 lifecycle: one.state.lifecycle().into(),
                 generation: one.state.generation(),
-                looks_stuck: one.state.looks_stuck(),
                 waiting: one.state.waiting(),
             },
         );

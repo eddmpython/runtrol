@@ -3721,7 +3721,8 @@
           "description": "Current supervision state."
         },
         "looksStuck": {
-          "description": "Structural stalled-turn hint derived by Core without interpreting conversation content.",
+          "default": false,
+          "description": "Retired, always `false`. It was meant as a silence-based \"looks stuck\" hint, and silence is a diagnostic\nsignal, not a proved state: a turn inside a long tool call is quiet and not stuck (operator, 2026-08-28),\nso the Runtime publishes only what it observed. The field stays on the wire, defaulted, so a client\nwritten against an earlier revision reads exactly what it read before.",
           "type": "boolean"
         },
         "memoryBytes": {
@@ -3776,7 +3777,6 @@
         "workspace",
         "hot",
         "lifecycle",
-        "looksStuck",
         "sessionGeneration"
       ],
       "type": "object"
@@ -4298,6 +4298,13 @@
         "terminalId": {
           "$ref": "#/$defs/RuntimeTerminalId",
           "description": "Runtime-local terminal identity."
+        },
+        "viewerCount": {
+          "default": 0,
+          "description": "How many views are attached to this terminal right now, across every connection and window. A proved\nengine fact (`view_count`): the index changes when a view attaches or ends, so a window can say a\nconversation is being watched elsewhere without inferring it from output. An open view never implies\nmodel work.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
         },
         "workspace": {
           "description": "Exact canonical workspace already filtered through the caller's grant.",

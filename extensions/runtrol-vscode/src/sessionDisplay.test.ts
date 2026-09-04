@@ -21,7 +21,6 @@ function session(overrides: Partial<SessionLine> = {}): SessionLine {
     workspace: "C:\\work\\runtrol",
     hot: true,
     lifecycle: "hotIdle",
-    looksStuck: false,
     sessionGeneration: 1,
     ...overrides,
   };

@@ -64,6 +64,13 @@ and refactoring that no user can observe do not belong here.
 
 ### Fixed
 
+- The Runtime publishes only proved generic states (`STATE-01`), replayed through the public protocol alone:
+  process, owner, views, lease, output flow, checkpoint, lag, pending message and exit, each held to an exact
+  event sequence. The public terminal descriptor now carries `viewerCount`, and the index republishes when a
+  view attaches or ends, so a window can say a conversation is watched elsewhere without inferring it. The
+  silence-based `looksStuck` hint is retired: silence is a diagnostic signal, not a state (a long tool call is
+  quiet and not stuck), so a session row can no longer read as needing attention for being quiet; the field
+  stays on the wire as `false` for older readers.
 - A dead Runtime and a returning one leave no stale conversation behind (`EXT-08`), measured with three real
   owners of one provider (one started from the sidebar's `+`, one typed into a terminal, one on the desktop in
   Windows Terminal), ended, reopened, then the Runtime killed outright and restarted and the window restarted.

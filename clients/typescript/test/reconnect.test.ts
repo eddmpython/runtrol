@@ -382,7 +382,6 @@ test("session index reconnect publishes the replacement authorized snapshot", as
             workspace: "C:\\workspace",
             hot: false,
             lifecycle: "cold",
-            looksStuck: false,
             sessionGeneration: 2,
           }],
           warnings: [],

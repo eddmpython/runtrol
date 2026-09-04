@@ -1057,7 +1057,6 @@ impl SessionManager {
                 };
                 let provider = live.identity.provider();
                 let lifecycle_before = live.state.lifecycle().clone();
-                let stuck_before = live.state.looks_stuck();
                 let waiting_before = live.state.waiting();
                 let published = live.hub.publish(produced.src_end, produced.body);
                 // Waiting is a fact about a running turn. A question that arrives (or goes away) while no turn is
@@ -1086,7 +1085,6 @@ impl SessionManager {
                     published: Some(published),
                     index_changed: native_changed
                         || live.state.lifecycle() != &lifecycle_before
-                        || live.state.looks_stuck() != stuck_before
                         || live.state.waiting() != waiting_before,
                     gauges_changed: false,
                 };

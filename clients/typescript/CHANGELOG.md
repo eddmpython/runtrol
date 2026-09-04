@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Added `viewerCount` to the terminal descriptor: how many views are attached right now, a proved engine fact
+  that changes the index when a view attaches or ends and never implies model work.
+- `SessionDescriptor.looksStuck` is retired and now optional (always `false` from a current Runtime): a
+  silence-based hint is not a proved state, so the Runtime no longer says it.
 - Added `checkpointAvailable` to the terminal view opened and lagged messages (regenerated bindings).
 - Added `controlGeneration` and `controlHeld` to the terminal descriptor: exactly one view holds a terminal's
   control lease, and acquiring it transfers it (an earlier holder's next write answers `controlConflict`).

@@ -205,6 +205,12 @@ pub struct TerminalDescriptor {
     /// Whether some view holds a live control lease right now.
     #[serde(default)]
     pub control_held: bool,
+    /// How many views are attached to this terminal right now, across every connection and window. A proved
+    /// engine fact (`view_count`): the index changes when a view attaches or ends, so a window can say a
+    /// conversation is being watched elsewhere without inferring it from output. An open view never implies
+    /// model work.
+    #[serde(default)]
+    pub viewer_count: u32,
     /// Who owns the process behind this terminal and how the Runtime reaches it.
     #[serde(default)]
     pub origin: TerminalOrigin,
@@ -523,6 +529,7 @@ mod tests {
             },
             control_generation: 1,
             control_held: true,
+            viewer_count: 1,
             origin: TerminalOrigin::Owned,
             owner_window_session_id: None,
             owner_terminal_key: None,

@@ -25,7 +25,8 @@ transport or Studio navigation.
   mirror fed by the VS Code window that owns the terminal (`fed.rs`; `docs/vscodeSurface.md`, observed mirror). That
   renderer has one reader, one bounded output ring, and one `vt100` screen snapshot without scrollback. Adding VS
   Code windows, phone views, or SDK viewers never duplicates those central objects. The descriptor's `origin` names
-  which of the three it is.
+  which of the three it is, and its `viewerCount` says how many views are attached right now: a proved count the
+  index republishes when a view attaches or ends, and one that never implies model work.
 - [`runtrol-core::terminal`](../crates/runtrol-core/src/terminal/mod.rs) owns the executable ring, geometry, screen,
   and shared-state limits. [`terminal_surface.rs`](../crates/runtrol-daemon/src/terminal_surface.rs) binds hosted
   terminal admission to the Core hot-process ceiling and proves the complete-set memory bound. Viewers reuse that

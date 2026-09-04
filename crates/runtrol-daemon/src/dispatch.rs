@@ -1797,7 +1797,8 @@ pub(crate) fn list(composed: &Composed, sessions: &SessionManager, caller: &Call
                 hot: session.hot,
                 doing: session.lifecycle.private_name().into(),
                 waiting_on: session.waiting.map(private_waiting),
-                looks_stuck: session.looks_stuck,
+                // Retired: silence is not a proved state (`SessionLine::looks_stuck`).
+                looks_stuck: false,
             })
             .collect(),
         warnings: catalogue.warnings,

@@ -1450,6 +1450,7 @@ fn descriptor(
         },
         control_generation: control.generation,
         control_held: control.held,
+        viewer_count: u32::try_from(hosted.terminal.viewer_count()).unwrap_or(u32::MAX),
         origin,
         owner_window_session_id: owner.map(|owner| owner.window_session_id.clone()),
         owner_terminal_key: owner.map(|owner| owner.terminal_key.clone()),

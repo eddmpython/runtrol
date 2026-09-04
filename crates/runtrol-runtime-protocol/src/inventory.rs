@@ -415,7 +415,11 @@ pub struct SessionDescriptor {
     pub hot: bool,
     /// Current supervision state.
     pub lifecycle: LifecycleState,
-    /// Structural stalled-turn hint derived by Core without interpreting conversation content.
+    /// Retired, always `false`. It was meant as a silence-based "looks stuck" hint, and silence is a diagnostic
+    /// signal, not a proved state: a turn inside a long tool call is quiet and not stuck (operator, 2026-08-28),
+    /// so the Runtime publishes only what it observed. The field stays on the wire, defaulted, so a client
+    /// written against an earlier revision reads exactly what it read before.
+    #[serde(default)]
     pub looks_stuck: bool,
     /// What the running turn is waiting for, when Core observed it stop for something.
     ///

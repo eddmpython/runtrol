@@ -596,7 +596,8 @@ impl RuntimeControl {
                 workspace: live.workspace.to_string(),
                 hot: true,
                 lifecycle: public_lifecycle(live.state.lifecycle()),
-                looks_stuck: live.state.looks_stuck(),
+                // Retired: silence is not a proved state (`SessionDescriptor::looks_stuck`).
+                looks_stuck: false,
                 waiting_on: live.state.waiting().map(public_waiting),
                 session_generation: live.state.generation(),
                 label: None,

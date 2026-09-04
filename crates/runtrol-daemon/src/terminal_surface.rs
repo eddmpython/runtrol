@@ -539,7 +539,7 @@ impl Terminals {
         self.publish_change();
     }
 
-    fn publish_change(&self) {
+    pub(crate) fn publish_change(&self) {
         let next = self.changes.borrow().wrapping_add(1);
         self.changes.send_replace(next);
     }
@@ -1265,6 +1265,8 @@ pub(crate) async fn attach_current(
     // Keep the table lock until `Terminal::attach` has subscribed under the terminal state lock. Draining takes the
     // same table lock before testing `viewer_count`, which makes attach versus retirement one exact ordering point.
     let attachment = hosted.terminal.attach().await;
+    // The view count is a published fact of the descriptor, so a new view is a change of the index.
+    terminals.publish_change();
     drop(terminals);
     Ok((hosted, attachment))
 }

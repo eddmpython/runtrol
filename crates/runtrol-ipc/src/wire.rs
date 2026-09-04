@@ -1468,10 +1468,10 @@ pub struct SessionLine {
     /// something the operator can answer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub waiting_on: Option<SessionWaiting>,
-    /// It has gone quiet, and the turn is still running.
-    ///
-    /// Both halves matter. A subscriber shows "this looks stuck" and offers to stop it; what it must not show is a
-    /// completion runtrol invented.
+    /// Retired, always `false`. It was meant as a silence-based "looks stuck" hint, and silence is a diagnostic
+    /// signal, not a proved state; the Runtime reports only what it observed. Kept on the wire so an earlier
+    /// reader sees the shape it expects.
+    #[serde(default)]
     pub looks_stuck: bool,
 }
 

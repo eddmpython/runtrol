@@ -64,7 +64,6 @@ function session(overrides: Partial<SessionLine> & Pick<SessionLine, "sessionId"
     workspace: ALPHA,
     hot: false,
     lifecycle: "cold",
-    looksStuck: false,
     sessionGeneration: 1,
     ...overrides,
   } as SessionLine;
@@ -781,17 +780,6 @@ test("a chat the service cannot reopen says so instead of failing on click", () 
   assert.equal(blocked.canOpen, false);
   assert.ok(blocked.blocked);
   assert.equal(conversationDetail(blocked, NOW), "");
-});
-
-test("a stuck session asks for attention without leaving its place", () => {
-  const rows = conversations(
-    [session({ sessionId: "s1", hot: true, lifecycle: "hotIdle", looksStuck: true })],
-    PROVIDERS,
-    [],
-    null,
-  );
-
-  assert.equal(rows[0]?.activity, "attention");
 });
 
 test("duplicate missing titles do not leak session identities", () => {

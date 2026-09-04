@@ -21,7 +21,6 @@ const SESSION: SessionLine = {
   workspace: "C:\\work",
   hot: true,
   lifecycle: "hotRunning",
-  looksStuck: false,
   sessionGeneration: 1,
 };
 
@@ -45,7 +44,6 @@ test("every visible session field invalidates the snapshot", () => {
     { workspace: "C:\\other" },
     { hot: false },
     { lifecycle: "hotIdle" as const },
-    { looksStuck: true },
     { waitingOn: "person" as const },
     { sessionGeneration: 2 },
   ]) {

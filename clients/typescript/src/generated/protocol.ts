@@ -378,7 +378,7 @@ export type RuntimeTerminalViewId = string;
 export interface ServerChallenge { readonly expiresAtMs: number; readonly instanceId: string; readonly nonce: string; readonly nonceId: string; }
 
 /** One Runtime-managed session in the immediate catalogue. */
-export interface SessionDescriptor { readonly hot: boolean; readonly label?: string | null; readonly lifecycle: LifecycleState; readonly looksStuck: boolean; readonly memoryBytes?: number | null; readonly nativeSessionId?: string | null; readonly providerId: ProviderId; readonly sessionGeneration: number; readonly sessionId: RuntimeSessionId; readonly waitingOn?: WaitingOn | null; readonly workspace: string; }
+export interface SessionDescriptor { readonly hot: boolean; readonly label?: string | null; readonly lifecycle: LifecycleState; readonly looksStuck?: boolean; readonly memoryBytes?: number | null; readonly nativeSessionId?: string | null; readonly providerId: ProviderId; readonly sessionGeneration: number; readonly sessionId: RuntimeSessionId; readonly waitingOn?: WaitingOn | null; readonly workspace: string; }
 
 /** A changed authorized managed-session snapshot. */
 export interface SessionIndexChangedNotification { readonly snapshot: ManagedSessionList; readonly subscriptionId: string; }
@@ -436,7 +436,7 @@ export interface TerminalControlLease { readonly expiresAtMs: number; readonly l
 export interface TerminalControlParams { readonly leaseGeneration: number; readonly leaseId: string; readonly requestId: MutationRequestId; readonly terminalId: RuntimeTerminalId; }
 
 /** One live terminal descriptor visible through an approved root. */
-export interface TerminalDescriptor { readonly controlGeneration?: number; readonly controlHeld?: boolean; readonly geometry: TerminalGeometry; readonly memoryBytes?: number | null; readonly nativeSessionId?: string | null; readonly openedAtMs: number; readonly origin?: TerminalOrigin; readonly ownerTerminalKey?: string | null; readonly ownerWindowSessionId?: string | null; readonly processState: TerminalProcessState; readonly providerId: ProviderId; readonly runtimeGeneration: string; readonly terminalGeneration: number; readonly terminalId: RuntimeTerminalId; readonly workspace: string; }
+export interface TerminalDescriptor { readonly controlGeneration?: number; readonly controlHeld?: boolean; readonly geometry: TerminalGeometry; readonly memoryBytes?: number | null; readonly nativeSessionId?: string | null; readonly openedAtMs: number; readonly origin?: TerminalOrigin; readonly ownerTerminalKey?: string | null; readonly ownerWindowSessionId?: string | null; readonly processState: TerminalProcessState; readonly providerId: ProviderId; readonly runtimeGeneration: string; readonly terminalGeneration: number; readonly terminalId: RuntimeTerminalId; readonly viewerCount?: number; readonly workspace: string; }
 
 /** Detach only one connection-bound view without stopping the provider process. */
 export interface TerminalDetachParams { readonly terminalId: RuntimeTerminalId; readonly viewId: RuntimeTerminalViewId; }

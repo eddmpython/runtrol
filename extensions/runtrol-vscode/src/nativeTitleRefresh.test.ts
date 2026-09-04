@@ -13,7 +13,6 @@ function session(overrides: Partial<SessionLine> = {}): SessionLine {
     workspace: "/workspace",
     hot: true,
     lifecycle: "hotIdle",
-    looksStuck: false,
     waitingOn: null,
     sessionGeneration: 1,
     ...overrides,

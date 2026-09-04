@@ -13,7 +13,6 @@ function session(workspace: string, hot = true, id = workspace): SessionLine {
     workspace,
     hot,
     lifecycle: hot ? "hotRunning" : "cold",
-    looksStuck: false,
     sessionGeneration: 1,
   };
 }
