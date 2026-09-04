@@ -93,6 +93,8 @@ export type JourneyApi = {
   rowFacts(key: string): { live: boolean; canOpen: boolean; canFocus: boolean; blocked: string | null } | null;
   /// What the Runtime answered to this window's last owner reveal, or null.
   lastReveal(): { delivered: boolean; foreground: string } | null;
+  /// The last sentence a row click answered with instead of opening anything, or null.
+  lastExplanation(): string | null;
   /// Open the newest stored conversation of a service that has a title (a reopened conversation with history),
   /// returning its session id, or null when the service lists none.
   openStoredWithTitle(providerId: string): Promise<string | null>;
@@ -479,6 +481,7 @@ export function journeyApi(
       return row ? { live: row.live, canOpen: row.canOpen, canFocus: row.canFocus, blocked: row.blocked } : null;
     },
     lastReveal: () => controller.lastReveal,
+    lastExplanation: () => controller.lastExplanation,
     terminalStop: (runtimeGeneration, terminalId, _deadlineMs) => afterReady(
       () => terminals.stopJourneyTerminal(runtimeGeneration, terminalId),
     ),

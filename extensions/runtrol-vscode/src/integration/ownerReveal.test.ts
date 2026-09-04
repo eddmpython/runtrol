@@ -138,8 +138,21 @@ async function journey(coordination: string, role: string): Promise<void> {
       }
       const facts = journey.rowFacts(step.key);
       const started = Date.now();
-      await journey.clickRow(step.key);
-      result = { rowWaitMs: started - waited, facts, clickedMs: Date.now() - started, reveal: journey.lastReveal() };
+      // A click that explains itself with a notification carrying buttons resolves only when the notification
+      // is answered, which nobody here does; the effect is read after a bounded wait instead.
+      const clicked = await Promise.race([
+        journey.clickRow(step.key).then(() => "done", (error: unknown) => `failed: ${error instanceof Error ? error.message : String(error)}`),
+        delay(4_000).then(() => "waiting"),
+      ]);
+      result = {
+        rowWaitMs: started - waited,
+        facts,
+        clickedMs: Date.now() - started,
+        outcome: clicked,
+        reveal: journey.lastReveal(),
+        explanation: journey.lastExplanation(),
+        activeTerminalName: journey.activeTerminalName(),
+      };
     } else if (step.kind === "rows") {
       const publishFailure = journey.windowPublishFailure();
       result = { rows: journey.rows(), atMs: Date.now(), nativeChatCount: journey.nativeChatCount(), publishFailure, updatePayload: publishFailure ? journey.windowUpdatePayload() : null };
