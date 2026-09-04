@@ -922,6 +922,8 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
         () => windowRegistry?.mirrorEvidence() ?? [],
         () => windowRegistry?.knownCommandNames() ?? null,
         (folder) => projectStore.create(folder).then(() => undefined),
+        () => windowRegistry?.lastPublishFailure() ?? null,
+        () => windowRegistry?.currentUpdate() ?? null,
       )
       : undefined,
   };

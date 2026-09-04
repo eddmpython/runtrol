@@ -18,10 +18,13 @@ const DEADLINE_MS = 60_000;
 type Step =
   | { readonly kind: "done" }
   | { readonly kind: "addProject"; readonly folder: string }
-  | { readonly kind: "start"; readonly label: string; readonly commandLine: string }
+  | { readonly kind: "start"; readonly label: string; readonly commandLine: string; readonly cwd?: string }
   | { readonly kind: "startTyped"; readonly label: string; readonly commandLine: string; readonly settleMs: number; readonly setupKeys?: readonly string[]; readonly setupGapMs?: number }
   | { readonly kind: "click"; readonly key: string }
   | { readonly kind: "rowFacts"; readonly key: string }
+  | { readonly kind: "rows" }
+  | { readonly kind: "listed"; readonly provider: string; readonly native: string }
+  | { readonly kind: "startFresh"; readonly provider: string; readonly workspace: string }
   | { readonly kind: "showOther" }
   | { readonly kind: "report" }
   | { readonly kind: "exit"; readonly label: string; readonly keys: readonly string[]; readonly gapMs: number };
@@ -88,7 +91,7 @@ async function journey(coordination: string, role: string): Promise<void> {
     if (step.kind === "addProject") {
       await journey.addProject(step.folder);
     } else if (step.kind === "start") {
-      const terminal = vscode.window.createTerminal({ name: `${role}-${step.label}` });
+      const terminal = vscode.window.createTerminal({ name: `${role}-${step.label}`, cwd: step.cwd });
       terminals.set(step.label, terminal);
       terminal.show(false);
       await terminal.processId;
@@ -132,6 +135,17 @@ async function journey(coordination: string, role: string): Promise<void> {
       const started = Date.now();
       await journey.clickRow(step.key);
       result = { rowWaitMs: started - waited, facts, clickedMs: Date.now() - started, reveal: journey.lastReveal() };
+    } else if (step.kind === "rows") {
+      const publishFailure = journey.windowPublishFailure();
+      result = { rows: journey.rows(), atMs: Date.now(), nativeChatCount: journey.nativeChatCount(), publishFailure, updatePayload: publishFailure ? journey.windowUpdatePayload() : null };
+    } else if (step.kind === "listed") {
+      // Whether the provider's own catalogue, as this window last read it, lists that conversation.
+      result = { listed: journey.nativeChatListed(step.provider, step.native), nativeChatCount: journey.nativeChatCount(), atMs: Date.now() };
+    } else if (step.kind === "startFresh") {
+      // The `+` button's path: a placeholder row and a tab appear at once, before the Runtime has answered.
+      const started = Date.now();
+      await journey.startFresh(step.provider, step.workspace);
+      result = { startedMs: Date.now() - started, rows: journey.rows() };
     } else if (step.kind === "rowFacts") {
       // What the row says it can do, read without clicking: a click on a stored conversation would resume it.
       result = { facts: journey.rowFacts(step.key), present: journey.rowKeys().includes(step.key) };

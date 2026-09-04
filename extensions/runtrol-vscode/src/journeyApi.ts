@@ -69,8 +69,18 @@ export type JourneyApi = {
   activeTerminalName(): string | null;
   /// This window's registered session identity.
   windowSessionId(): string;
+  /// The last refusal the Runtime gave this window's publish, or null while every publish held.
+  windowPublishFailure(): string | null;
+  /// Exactly what this window's next registry publish would send, for holding against a refusal.
+  windowUpdatePayload(): unknown;
   /// The keys of the rows the sidebar lists right now.
   rowKeys(): string[];
+  /// Every row as the sidebar holds it right now, reduced to what row identity is judged by: a snapshot the
+  /// row-identity eye pass takes many times while a launch promotes from placeholder to terminal to conversation.
+  rows(): { key: string; title: string; presence: string; hostedKey: string | null; origin: string | null; native: string | null; workspace: string; open: boolean; live: boolean }[];
+  /// The `+` button's own path: a placeholder row and its tab at once, the Runtime open still pending. Returns as
+  /// soon as the tab exists so a caller can watch the placeholder promote.
+  startFresh(providerId: string, workspace: string): Promise<void>;
   /// What one row says it can do, as the click path decides it: the words on the row follow these facts.
   rowFacts(key: string): { live: boolean; canOpen: boolean; canFocus: boolean; blocked: string | null } | null;
   /// What the Runtime answered to this window's last owner reveal, or null.
@@ -158,6 +168,8 @@ export function journeyApi(
   windowMirrors: () => MirrorEvidence[] = () => [],
   windowCommandNames: () => string[] | null = () => null,
   addProject: (folder: string) => Promise<void> = async () => {},
+  windowPublishFailure: () => string | null = () => null,
+  windowUpdatePayload: () => unknown = () => null,
 ): JourneyApi | undefined {
   if (
     extensionMode !== vscode.ExtensionMode.Test
@@ -412,7 +424,22 @@ export function journeyApi(
     addProject,
     activeTerminalName: () => vscode.window.activeTerminal?.name ?? null,
     windowSessionId: () => vscode.env.sessionId,
+    windowPublishFailure: () => windowPublishFailure(),
+    windowUpdatePayload: () => windowUpdatePayload(),
     rowKeys: () => state.conversations.map((row) => row.key),
+    rows: () => state.conversations.map((row) => ({
+      key: row.key,
+      title: row.title,
+      presence: row.presence.kind,
+      hostedKey: row.hostedKey,
+      origin: row.hostedTerminal?.origin ?? null,
+      native: row.native?.nativeSessionId ?? null,
+      workspace: row.workspace,
+      // Open as the sidebar decides it: a tab filed under the row's own key or under the terminal it claims.
+      open: terminals.isOpen(row.key) || (row.hostedKey !== null && terminals.isOpen(row.hostedKey)),
+      live: row.live,
+    })),
+    startFresh: (providerId, workspace) => afterReady(() => controller.startSessionWith(providerId, workspace)),
     rowFacts: (key) => {
       const row = state.conversations.find((candidate) => candidate.key === key);
       return row ? { live: row.live, canOpen: row.canOpen, canFocus: row.canFocus, blocked: row.blocked } : null;

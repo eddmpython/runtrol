@@ -188,11 +188,14 @@ fn main() -> ExitCode {
             ["windows-probe", home, identity, digest] => {
                 windows_probe(Path::new(home), Path::new(identity), digest).await
             }
-            ["windows-list", home, identity, digest] => {
-                windows_list(Path::new(home), Path::new(identity), digest).await
-            }
             ["terminals-list", home, identity, digest] => {
                 terminals_list(Path::new(home), Path::new(identity), digest).await
+            }
+            ["native-list", home, identity, digest, provider, root] => {
+                native_list(Path::new(home), Path::new(identity), digest, provider, root).await
+            }
+            ["windows-list", home, identity, digest] => {
+                windows_list(Path::new(home), Path::new(identity), digest).await
             }
             ["native-activity", home, identity, digest, provider] => {
                 native_activity(Path::new(home), Path::new(identity), digest, provider).await
@@ -674,7 +677,35 @@ async fn terminals_list(home: &Path, identity_file: &Path, digest: &str) -> Resu
             })
         })
         .collect();
-    Ok(serde_json::json!({ "terminals": terminals }).to_string())
+    Ok(serde_json::json!({ "terminals": terminals, "warnings": listed.warnings }).to_string())
+}
+
+/// The first page of the provider's stored-conversation catalogue under one root, exactly as the Runtime answers
+/// it (`EXT-07`): whether the Runtime lists a conversation tells a Studio discovery gap from a listing gap.
+async fn native_list(
+    home: &Path,
+    identity_file: &Path,
+    digest: &str,
+    provider: &str,
+    root: &str,
+) -> Result<String, String> {
+    let stored = read_stored(identity_file)?;
+    let generation = generation(home, digest)?;
+    let mut client = RuntimeClient::connect_to(generation, options_with(&stored))
+        .await
+        .map_err(|error| format!("connect to generation {digest}: {error}"))?;
+    let provider_id = ProviderId::new(provider);
+    let catalogue = client
+        .providers()
+        .list_native_sessions(runtrol_runtime_client::protocol::ListNativeSessionsParams {
+            provider_id,
+            // `-` asks the way Studio asks first: the whole machine, no folder boundary.
+            root: (root != "-").then(|| root.to_owned()),
+            cursor: None,
+        })
+        .await
+        .map_err(|error| format!("list native sessions: {error}"))?;
+    serde_json::to_string(&catalogue).map_err(|error| error.to_string())
 }
 
 /// The exact live bytes a viewer receives after attaching, as hex, for the observed-mirror journey (`EXT-02`):
