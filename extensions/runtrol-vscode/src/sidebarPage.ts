@@ -32,6 +32,8 @@ export type SidebarConversationRow = {
   readonly canOpen: boolean;
   /// The window that runs it can show it, even though it cannot be opened here.
   readonly canFocus: boolean;
+  /// The Runtime was asked to stop its process and is waiting for it to exit.
+  readonly stopping: boolean;
   readonly blocked: string | null;
   readonly pinned: boolean;
   readonly signIn: boolean;
@@ -301,6 +303,9 @@ function conversationStateHtml(row: SidebarConversationRow): string {
         ? { label: "Limit", tone: "error" }
         : row.activity === "attention"
           ? { label: "Error", tone: "error" }
+          : row.stopping
+            // A stop the Runtime accepted and is waiting out is neither running elsewhere nor unavailable.
+            ? { label: "Stopping", tone: "muted" }
           : !row.canOpen
             // Three different truths used to share one word. A row that can be shown where it runs says so, a live
             // row that cannot says only that much, and a row with no live process is unavailable.

@@ -15,7 +15,7 @@ import * as vscode from "vscode";
 
 import { accentedConversationIcon, conversationIcon } from "./conversationIcon";
 import { canDelete } from "./conversationDeletion";
-import { loose, projects, type Conversation, type ProjectGroup } from "./conversationList";
+import { loose, projects, stopping, type Conversation, type ProjectGroup } from "./conversationList";
 import type { ProjectRecord } from "./projects";
 import { projectAccentColor } from "./projectColor";
 import { readGitBranch } from "./gitBranch";
@@ -453,6 +453,7 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
       canStop: row.canStop,
       canOpen: row.canOpen,
       canFocus: row.canFocus,
+      stopping: stopping(row),
       blocked: row.blocked,
       pinned: row.pinned,
       signIn: row.signInNeeded,

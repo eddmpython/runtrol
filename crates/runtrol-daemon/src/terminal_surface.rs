@@ -112,6 +112,18 @@ impl TerminalOrigin {
             Self::ObservedMirror(owner) => (Public::ObservedMirror, Some(owner)),
         }
     }
+
+    /// Whether the provider's own process roster can name the conversation this terminal runs.
+    ///
+    /// The proof is the process tree under the terminal's root process: the provider is that root or runs under
+    /// it. An owned PTY's root is the launcher the Runtime started; an observed mirror's root is the shell the
+    /// owner window registered, which the provider a person typed into runs under just the same. Without this
+    /// a mirror never learned its conversation, so the conversation's row and the mirror's row were two rows for
+    /// one thing (measured 2026-09-05, the second window of the lifecycle journey). An official attachment's
+    /// process is a presentation client, not the conversation's owner, and names nothing.
+    pub(crate) const fn binds_native_processes(&self) -> bool {
+        matches!(self, Self::Owned | Self::ObservedMirror(_))
+    }
 }
 
 /// The window that owns an observed mirror, by the identities it registered.
@@ -209,9 +221,11 @@ impl Terminals {
         provider: ProviderId,
         activity: &runtrol_provider::NativeProcessActivity,
     ) -> bool {
-        for open in self.by_id.values().filter(|open| {
-            open.provider == provider && matches!(open.origin, TerminalOrigin::Owned)
-        }) {
+        for open in self
+            .by_id
+            .values()
+            .filter(|open| open.provider == provider && open.origin.binds_native_processes())
+        {
             let root = open.terminal.pid();
             if activity.processes.iter().any(|process| process.pid == root) {
                 continue;
@@ -250,7 +264,7 @@ impl Terminals {
                 .iter()
                 .filter(|(_, open)| {
                     open.provider == provider
-                        && matches!(open.origin, TerminalOrigin::Owned)
+                        && open.origin.binds_native_processes()
                         && (open.terminal.pid() == pid
                             || process_tree
                                 .is_some_and(|tree| tree.contains(open.terminal.pid(), pid)))
@@ -1098,6 +1112,24 @@ pub(crate) async fn open_observed_mirror(
         retire_observed(composed, &previous).await;
     }
     let terminal_id = TerminalId::now();
+    // A mirror holds a terminal claim like an owned terminal, so the provider's roster can bind its conversation
+    // to it and a second owner of that conversation is refused everywhere (`STATE-03`). Until the roster names
+    // it, the claim guards nothing: a mirror the roster never names (a provider without a process roster) must
+    // not hold its whole folder hostage the way an unnamed owned terminal deliberately does for a moment.
+    let reservation = match composed.native_claims.reserve_terminal(
+        terminal_id,
+        provider.as_str(),
+        None,
+        cwd.as_str(),
+        true,
+    )? {
+        TerminalClaimAdmission::Reserved(reservation) => reservation,
+        TerminalClaimAdmission::Join(_) => {
+            return Err(TerminalOpenError::Provider(
+                "an unnamed mirror cannot join an existing conversation".to_owned(),
+            ));
+        }
+    };
     let (terminal, open) = {
         let mut terminals = composed.terminals.lock().await;
         if terminals.len() >= MAX_HOSTED_TERMINALS {
@@ -1131,6 +1163,13 @@ pub(crate) async fn open_observed_mirror(
     composed
         .open_terminals
         .store(open, std::sync::atomic::Ordering::Release);
+    if let Err(error) = reservation.commit() {
+        // ok: a mirror that never held a claim ends here with nothing left to end; the table removal in
+        // `forget` is what matters.
+        drop(terminal.end_feed(None));
+        forget(composed, terminal_id).await;
+        return Err(TerminalOpenError::Claim(error));
+    }
     forget_on_exit(Arc::clone(composed), terminal_id, &terminal);
     Ok(terminal_id)
 }
@@ -1465,6 +1504,96 @@ mod tests {
                 rows: 24,
             },
         }
+    }
+
+    /// The provider's roster names the conversation an observed mirror runs, by the same process proof an owned
+    /// terminal uses, and the mirror then carries that identity as its own record: one row for the conversation
+    /// and its mirror, a claim that refuses a second owner, and no stop through the mirror.
+    #[tokio::test]
+    async fn an_observed_mirror_is_named_by_the_roster_and_holds_its_conversations_claim() {
+        let (composed, home) = composed_for("observed-mirror-named");
+        let feeder = ConnectionToken::next();
+        let provider = ProviderId::parse("claude").expect("a valid provider identifier");
+        let params = mirror_params(&home, "t1", "claude", Some(4242));
+        let id = open_observed_mirror(&composed, feeder, "window-1".to_owned(), params)
+            .await
+            .expect("the mirror opens");
+        let claims = composed.native_claims.snapshot_except(None);
+        assert_eq!(
+            claims.len(),
+            1,
+            "an unnamed mirror holds its terminal claim"
+        );
+        assert!(
+            claims
+                .first()
+                .is_some_and(|claim| claim.native_session_id.is_none())
+        );
+
+        let roster = runtrol_provider::NativeProcessActivity {
+            live: vec![runtrol_provider::NativeSessionId::new("native-m").expect("valid")],
+            active: Vec::new(),
+            processes: vec![runtrol_provider::NativeProcessBinding {
+                pid: 4242,
+                native: runtrol_provider::NativeSessionId::new("native-m").expect("valid"),
+                cwd: None,
+                terminal_access: runtrol_provider::NativeTerminalAccess::Unavailable,
+            }],
+        };
+        let conflicts = {
+            let mut terminals = composed.terminals.lock().await;
+            // The roster names the mirror's own root process: no ancestry walk is needed.
+            assert!(!terminals.needs_process_tree(provider, &roster));
+            terminals.bind_native_processes(
+                &composed.native_claims,
+                None,
+                provider,
+                roster
+                    .processes
+                    .iter()
+                    .map(|process| (process.pid, process.native.as_str())),
+            )
+        };
+        assert!(
+            conflicts.is_empty(),
+            "the mirror binds without a claim conflict"
+        );
+        let hosted = composed
+            .terminals
+            .lock()
+            .await
+            .open_for(provider, "native-m")
+            .expect("the conversation finds its mirror by identity");
+        assert_eq!(hosted.id, id);
+        let (origin, owner) = hosted.origin.projection();
+        assert_eq!(
+            origin,
+            runtrol_runtime_protocol::TerminalOrigin::ObservedMirror
+        );
+        assert_eq!(
+            owner.map(|owner| owner.window_session_id.as_str()),
+            Some("window-1")
+        );
+        let claims = composed.native_claims.snapshot_except(None);
+        assert_eq!(
+            claims
+                .first()
+                .and_then(|claim| claim.native_session_id.as_deref()),
+            Some("native-m"),
+            "the claim now names the conversation, so a second owner is refused"
+        );
+        assert!(matches!(
+            stop_hosted(&hosted).await,
+            Err(message) if message.contains("owns this terminal")
+        ));
+
+        // The window ends the mirror: its record and its claim go with it.
+        end_observed_mirrors_of(&composed, feeder).await;
+        assert!(gone(&composed, id).await, "the mirror is retired");
+        assert!(
+            composed.native_claims.snapshot_except(None).is_empty(),
+            "ending the mirror ends its claim"
+        );
     }
 
     /// An observed mirror is a hosted terminal fed by one connection: its viewers get exactly the fed bytes,

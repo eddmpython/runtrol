@@ -15,6 +15,8 @@ const RUNNING_ELSEWHERE =
   "This conversation is already running, but its live terminal is not available in this window.";
 const PROCESS_STATUS_UNAVAILABLE =
   "Runtrol could not confirm whether this conversation is still running, so it will not open a second owner.";
+/// The one sentence a row carries while the Runtime waits for a process it was asked to stop.
+const STOPPING = "Runtrol asked this conversation's process to stop and is waiting for it to exit.";
 
 /// What a conversation is doing, said the way a person would say it.
 ///
@@ -62,6 +64,18 @@ function facts(presence: Presence): {
 } {
   switch (presence.kind) {
     case "hosted":
+      // A terminal the Runtime was asked to stop is still this conversation's terminal until its process ends:
+      // the row keeps the same generation record its tab, its owner and its Stop used (`STATE-03`), reads as
+      // alive, and offers nothing that the Runtime would refuse while it waits.
+      if (presence.terminal.processState === "stopping") {
+        return { live: true, canOpen: false, canFocus: false, canStop: false, blocked: STOPPING };
+      }
+      // A mirror is fed by the window that owns its terminal, and that window is what stops it (the Runtime
+      // refuses a stop through the mirror), so no Stop is offered here; a view of it can still be opened.
+      if (presence.terminal.origin === "observedMirror") {
+        return { live: true, canOpen: true, canFocus: false, canStop: false, blocked: null };
+      }
+      return { live: true, canOpen: true, canFocus: false, canStop: true, blocked: null };
     case "supervised":
       return { live: true, canOpen: true, canFocus: false, canStop: true, blocked: null };
     case "starting":
@@ -221,7 +235,9 @@ export function conversations(
   }
   const terminalByConversation = new Map<string, TerminalDescriptor>();
   for (const terminal of terminals) {
-    if (terminal.processState !== "running" || !terminal.nativeSessionId) continue;
+    // A stopping terminal is still the conversation's terminal: dropping it here made the row forget its
+    // record the moment Stop was pressed and, with the process still in the roster, read as running elsewhere.
+    if (!terminal.nativeSessionId) continue;
     const key = conversationKey(terminal.providerId, terminal.nativeSessionId);
     const prior = terminalByConversation.get(key);
     if (!prior || terminal.openedAtMs > prior.openedAtMs) terminalByConversation.set(key, terminal);
@@ -751,6 +767,11 @@ function activityOf(session: SessionLine): ConversationActivity {
 /// to open it, which is the truth rather than a tab that would fight the terminal already driving it.
 export function runningElsewhere(row: Conversation): boolean {
   return row.presence.kind === "external" && !row.presence.openable;
+}
+
+/// Whether the Runtime was asked to stop this conversation's process and is waiting for it to exit.
+export function stopping(row: Conversation): boolean {
+  return row.presence.kind === "hosted" && row.presence.terminal.processState === "stopping";
 }
 
 /// Whether this conversation has stopped and cannot continue until the reader does something.

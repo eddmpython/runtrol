@@ -64,6 +64,15 @@ and refactoring that no user can observe do not belong here.
 
 ### Fixed
 
+- Open tab, closed tab, owner focus, mirror availability and Stop all read one generation record (`STATE-03`),
+  measured from two real windows through every lifecycle path. A conversation whose process the Runtime was asked
+  to stop keeps that record until the process ends: its row now says `Stopping`, offers neither a view the
+  Runtime would refuse nor a second Stop, and no longer flips to `Observed only` for the second or two the
+  provider's roster still lists the exiting process. A provider typed by absolute path into an ordinary VS Code
+  terminal is one row everywhere: the Runtime now binds the provider's own process roster to the observed
+  mirror by the same process-tree proof it uses for its own terminals, so the conversation's row carries the
+  mirror's record and its owner window instead of standing beside an unnamed terminal row; that row offers no
+  Stop, since the window that owns the terminal is what stops it.
 - The Runtime publishes only proved generic states (`STATE-01`), replayed through the public protocol alone:
   process, owner, views, lease, output flow, checkpoint, lag, pending message and exit, each held to an exact
   event sequence. The public terminal descriptor now carries `viewerCount`, and the index republishes when a
