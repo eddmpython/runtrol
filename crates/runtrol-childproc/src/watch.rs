@@ -176,7 +176,9 @@ mod tests {
 
     #[test]
     fn a_path_that_is_not_a_directory_cannot_be_watched() {
-        assert!(watch_directory(&scratch().join("absent")).is_none());
+        let root = scratch();
+        assert!(watch_directory(&root.join("absent")).is_none());
+        drop(fs::remove_dir_all(&root));
     }
 
     /// A file appearing is what "a session started" looks like, and it must arrive without anybody asking.

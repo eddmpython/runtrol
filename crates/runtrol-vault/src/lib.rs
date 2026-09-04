@@ -307,6 +307,14 @@ mod tests {
             .expect("valid vault file name")
     }
 
+    fn remove(file: &AbsPath) {
+        let root = file
+            .as_std_path()
+            .parent()
+            .expect("the vault file has a directory");
+        std::fs::remove_dir_all(root).expect("remove the vault test directory");
+    }
+
     #[test]
     fn envelope_rejects_wrong_magic_version_and_empty_payload() {
         let file = path("envelope");
@@ -321,6 +329,7 @@ mod tests {
         assert!(decode_envelope(&file, &wrong_version).is_err());
 
         assert!(decode_envelope(&file, &encode(&[])).is_err());
+        remove(&file);
     }
 
     #[cfg(windows)]
@@ -343,6 +352,7 @@ mod tests {
 
         let restored = MachineSecret::load_or_create(&file).expect("restore protected identity");
         assert_eq!(restored.as_bytes(), &expected);
+        remove(&file);
     }
 
     #[cfg(windows)]
@@ -359,6 +369,7 @@ mod tests {
         assert!(!file.as_std_path().exists());
         ProtectedSecret::delete(&file).expect("repeated deletion is settled");
         assert!(ProtectedSecret::load(&file).is_err());
+        remove(&file);
     }
 
     #[cfg(windows)]
@@ -371,5 +382,6 @@ mod tests {
             std::fs::read(file.as_std_path()).expect("read unchanged damage"),
             b"damaged"
         );
+        remove(&file);
     }
 }

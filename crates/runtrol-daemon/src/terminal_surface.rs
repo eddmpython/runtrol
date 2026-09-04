@@ -1594,6 +1594,7 @@ mod tests {
             composed.native_claims.snapshot_except(None).is_empty(),
             "ending the mirror ends its claim"
         );
+        std::fs::remove_dir_all(&home).expect("remove the scratch home");
     }
 
     /// An observed mirror is a hosted terminal fed by one connection: its viewers get exactly the fed bytes,
