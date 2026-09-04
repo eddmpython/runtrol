@@ -25,6 +25,8 @@ type Step =
   | { readonly kind: "rows" }
   | { readonly kind: "listing" }
   | { readonly kind: "reopenStored"; readonly provider: string }
+  | { readonly kind: "closeTab"; readonly key: string }
+  | { readonly kind: "stopRow"; readonly key: string }
   | { readonly kind: "listed"; readonly provider: string; readonly native: string }
   | { readonly kind: "startFresh"; readonly provider: string; readonly workspace: string }
   | { readonly kind: "showOther" }
@@ -141,6 +143,13 @@ async function journey(coordination: string, role: string): Promise<void> {
     } else if (step.kind === "rows") {
       const publishFailure = journey.windowPublishFailure();
       result = { rows: journey.rows(), atMs: Date.now(), nativeChatCount: journey.nativeChatCount(), publishFailure, updatePayload: publishFailure ? journey.windowUpdatePayload() : null };
+    } else if (step.kind === "closeTab") {
+      // The tab's own close: the view detaches, the process is not touched.
+      result = { closed: journey.closeTab(step.key) };
+    } else if (step.kind === "stopRow") {
+      // The row's Stop, after its confirmation: the Runtime is asked to end the process under the exact record.
+      await journey.stopRow(step.key);
+      result = { stopped: true };
     } else if (step.kind === "reopenStored") {
       // A stored conversation of that service reopened the way a click on its row does: the resume path.
       result = { sessionId: await journey.openStoredWithTitle(step.provider) };

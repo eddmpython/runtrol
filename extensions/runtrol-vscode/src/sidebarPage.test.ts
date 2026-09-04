@@ -25,6 +25,7 @@ function conversation(overrides: Partial<SidebarConversationRow>): SidebarConver
     canStop: false,
     canOpen: true,
     canFocus: false,
+    stopping: false,
     blocked: null,
     pinned: false,
     signIn: false,
@@ -151,6 +152,19 @@ test("the service choice withdraws on a click elsewhere, on Escape, and when foc
   assert.ok(script.includes('if (!event.target.closest(".choice")) dismissChoice();'), "a click outside withdraws it");
   assert.ok(script.includes('if (event.key === "Escape") { dismissChoice(); return; }'), "Escape withdraws it");
   assert.ok(script.includes('window.addEventListener("blur", dismissChoice);'), "focus leaving withdraws it");
+});
+
+test("a conversation the Runtime is stopping says so, and is neither running elsewhere nor unavailable", () => {
+  const html = sidebarHtml(model({
+    projects: [project({
+      rows: [conversation({ key: "claude:stopping", live: true, canOpen: false, canStop: false, stopping: true, blocked: "waiting for the process to exit" })],
+    })],
+    loose: [],
+  }), assets);
+  assert.ok(html.includes('class="conv-state muted" title="waiting for the process to exit">Stopping</span>'));
+  assert.ok(!html.includes(">Observed only</span>"));
+  assert.ok(!html.includes(">Unavailable</span>"));
+  assert.ok(!html.includes('data-command="stop"'), "no Stop is offered for a stop already under way");
 });
 
 test("a conversation alive where Runtrol cannot reach its process is not offered a Stop that would fail", () => {

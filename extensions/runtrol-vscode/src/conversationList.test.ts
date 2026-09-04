@@ -356,6 +356,85 @@ test("a daemon-owned terminal is the exact attach target and keeps the provider 
   assert.equal(row?.canOpen, true);
 });
 
+test("a terminal the Runtime is stopping keeps its row's record and never reads as running elsewhere", () => {
+  const terminal = {
+    terminalId: "terminal-1",
+    runtimeGeneration: "generation-1",
+    providerId: "codex",
+    workspace: BETA,
+    nativeSessionId: "n9",
+    processState: "stopping",
+    openedAtMs: NOW,
+    terminalGeneration: 7,
+    geometry: { columns: 120, rows: 40 },
+  } as TerminalDescriptor;
+  // The provider's roster still lists the process while it exits, which used to turn the row into a conversation
+  // running outside Runtrol the moment Stop was pressed.
+  const [row] = conversations(
+    [],
+    PROVIDERS,
+    [nativeChat({ nativeSessionId: "n9", title: "Provider supplied title" })],
+    null,
+    null,
+    new Map(),
+    new Map(),
+    new Set(),
+    new Map(),
+    [],
+    new Set(),
+    new Set(),
+    new Set([nativeProcessKey("codex", "n9")]),
+    [terminal],
+  );
+
+  assert.equal(row?.presence.kind, "hosted");
+  assert.equal(row?.hostedTerminal, terminal, "the same generation record its tab and its Stop used");
+  assert.equal(row?.live, true);
+  assert.equal(row?.canOpen, false, "a stopping terminal refuses a view");
+  assert.equal(row?.canStop, false, "a stop already under way is not offered again");
+  assert.equal(row?.canFocus, false);
+  assert.match(row?.blocked ?? "", /waiting for it to exit/u);
+});
+
+test("a conversation running in another window's observed mirror keeps that record, opens a view, and offers no Stop", () => {
+  const terminal = {
+    terminalId: "terminal-mirror",
+    runtimeGeneration: "generation-1",
+    providerId: "claude",
+    workspace: BETA,
+    nativeSessionId: "n7",
+    processState: "running",
+    openedAtMs: NOW,
+    terminalGeneration: 1,
+    geometry: { columns: 120, rows: 40 },
+    origin: "observedMirror",
+    ownerWindowSessionId: "window-alpha",
+    ownerTerminalKey: "alpha:terminal:1",
+  } as TerminalDescriptor;
+  const [row] = conversations(
+    [],
+    PROVIDERS,
+    [nativeChat({ nativeSessionId: "n7", title: "Mirrored conversation" })],
+    null,
+    null,
+    new Map(),
+    new Map(),
+    new Set(),
+    new Map(),
+    [],
+    new Set(),
+    new Set([nativeProcessKey("claude", "n7")]),
+    new Set(),
+    [terminal],
+  );
+
+  assert.equal(row?.presence.kind, "hosted", "one row, carrying the mirror's own record");
+  assert.equal(row?.hostedTerminal?.ownerWindowSessionId, "window-alpha");
+  assert.equal(row?.canOpen, true, "a view of the mirror can be opened");
+  assert.equal(row?.canStop, false, "the owner window stops it, so no Stop that would fail is offered");
+  assert.equal(row?.live, true);
+});
+
 test("a terminal an earlier Runtime generation still owns opens there, even while the roster sees its process", () => {
   // An update leaves the old generation draining with this conversation's PTY. The provider's own roster keeps
   // naming the process alive. The row must attach in that generation, not refuse as running outside Runtrol.

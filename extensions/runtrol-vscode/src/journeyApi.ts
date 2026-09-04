@@ -1,6 +1,7 @@
 import type { MirrorEvidence } from "./windowRegistry";
 import * as vscode from "vscode";
 
+import { stopping } from "./conversationList";
 import { Controller } from "./controller";
 import type { IsolatedWorkspaceLine } from "./protocol";
 import type { ProviderLine, SessionLine } from "./runtimeTypes";
@@ -77,7 +78,11 @@ export type JourneyApi = {
   rowKeys(): string[];
   /// Every row as the sidebar holds it right now, reduced to what row identity is judged by: a snapshot the
   /// row-identity eye pass takes many times while a launch promotes from placeholder to terminal to conversation.
-  rows(): { key: string; title: string; presence: string; hostedKey: string | null; origin: string | null; native: string | null; workspace: string; open: boolean; live: boolean; canOpen: boolean; canFocus: boolean; canStop: boolean; blocked: string | null; activity: string }[];
+  rows(): { key: string; title: string; presence: string; hostedKey: string | null; origin: string | null; ownerWindow: string | null; native: string | null; workspace: string; open: boolean; live: boolean; canOpen: boolean; canFocus: boolean; canStop: boolean; stopping: boolean; blocked: string | null; activity: string }[];
+  /// Close a conversation's tab in this window by its row key, the way the tab's close button does.
+  closeTab(key: string): boolean;
+  /// Stop a hosted conversation's process from its row, the way the row's Stop does after its confirmation.
+  stopRow(key: string): Promise<void>;
   /// What the sidebar knows beside its rows: whether the Core answers, the terminal listing's own warnings (the
   /// "why is the list incomplete" answer), and the Runtime's managed session records as this window lists them.
   listing(): { coreReach: string; warnings: string[]; incomplete: string | null; sessions: { sessionId: string; providerId: string; native: string | null; lifecycle: string; hot: boolean; workspace: string }[] };
@@ -436,6 +441,7 @@ export function journeyApi(
       presence: row.presence.kind,
       hostedKey: row.hostedKey,
       origin: row.hostedTerminal?.origin ?? null,
+      ownerWindow: row.hostedTerminal?.ownerWindowSessionId ?? null,
       native: row.native?.nativeSessionId ?? null,
       workspace: row.workspace,
       // Open as the sidebar decides it: a tab filed under the row's own key or under the terminal it claims.
@@ -444,9 +450,16 @@ export function journeyApi(
       canOpen: row.canOpen,
       canFocus: row.canFocus,
       canStop: row.canStop,
+      stopping: stopping(row),
       blocked: row.blocked,
       activity: row.activity,
     })),
+    closeTab: (key) => terminals.closeTab(key),
+    stopRow: (key) => afterReady(async () => {
+      const row = state.conversations.find((candidate) => candidate.key === key);
+      if (!row) throw new Error(`no sidebar row has key ${key}`);
+      await controller.stopHostedResolved(row);
+    }),
     listing: () => ({
       coreReach: state.coreReach,
       warnings: [...state.listingWarnings],

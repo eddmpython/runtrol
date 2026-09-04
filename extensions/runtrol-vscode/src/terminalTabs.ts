@@ -258,6 +258,14 @@ export class TerminalTabs implements vscode.Disposable {
     return this.open.has(conversationKey);
   }
 
+  /// Close this conversation's tab here, the way the tab's own close does. The process is not touched.
+  closeTab(conversationKey: string): boolean {
+    const terminal = this.open.get(conversationKey);
+    if (!terminal) return false;
+    terminal.dispose();
+    return true;
+  }
+
   /// The conversations this window opened that no service has described yet.
   startedConversations(): StartedConversation[] {
     return [...this.started.values()];
