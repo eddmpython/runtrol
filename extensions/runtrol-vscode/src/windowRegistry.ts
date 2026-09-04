@@ -12,6 +12,7 @@ import type {
 
 import { mirrorChunks, providerOfCommand } from "./observedMirrorState";
 import { DEFAULT_VIEW_GEOMETRY } from "./runtimeTerminal";
+import { errorKindOf } from "./serviceHelp";
 import { WindowRegistryState } from "./windowRegistryState";
 
 /// Where the window's record and its observed mirrors go.
@@ -229,6 +230,11 @@ export class WindowRegistry implements vscode.Disposable {
   }
 
   private track(terminal: vscode.Terminal): void {
+    // Only ordinary shells are observed terminals. A pseudoterminal is some extension's own surface (Runtrol's
+    // conversation tabs among them): it has no shell process, VS Code answers its process id as -1, and the
+    // Runtime rightly refused a window update carrying that (measured 2026-09-05: the refusal cost the window its
+    // registration and every conversation tab on the connection).
+    if ("pty" in terminal.creationOptions) return;
     this.state.opened(terminal, terminal.name);
     if (terminal.shellIntegration) {
       this.state.shellIntegrationChanged(terminal, terminal.shellIntegration.cwd?.fsPath ?? null);
@@ -327,7 +333,7 @@ export class WindowRegistry implements vscode.Disposable {
           ...(mirror.exitCode === null ? {} : { exitCode: mirror.exitCode }),
         });
       } catch (error) {
-        this.reportOnce(error);
+        this.reportMirrorEnd(error);
       }
     })();
   }
@@ -340,8 +346,25 @@ export class WindowRegistry implements vscode.Disposable {
     this.mirrors.delete(terminal);
     if (closed && mirror.terminalId !== null) {
       mirror.endSent = true;
-      void this.publisher.mirrorEnd({ terminalId: mirror.terminalId }).catch((error: unknown) => this.reportOnce(error));
+      void this.publisher.mirrorEnd({ terminalId: mirror.terminalId }).catch((error: unknown) => this.reportMirrorEnd(error));
     }
+  }
+
+  /// The last refusal the Runtime gave this window's publish, for the eye passes; null while every publish held.
+  lastPublishFailure(): string | null {
+    return this.lastReported;
+  }
+
+  /// Exactly what the next publish would send, for the eye passes to hold against a refusal.
+  currentUpdate(): WindowUpdateParams {
+    return this.state.update();
+  }
+
+  /// A mirror the Runtime already retired (the transparent shim's brokered open replaced it, `docs/vscodeSurface.md`)
+  /// answers its end with `terminalNotFound`: nothing to report, the row moved on. Any other refusal is reported.
+  private reportMirrorEnd(error: unknown): void {
+    if (errorKindOf(error) === "terminalNotFound") return;
+    this.reportOnce(error);
   }
 
   private reportOnce(error: unknown): void {

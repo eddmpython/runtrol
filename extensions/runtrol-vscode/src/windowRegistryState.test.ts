@@ -76,3 +76,15 @@ test("an unknown terminal is ignored and the published record stays inside the r
   const last = state.update().terminals.find((terminal) => terminal.command !== undefined);
   assert.equal(last, undefined, "the terminal past the bound is not published");
 });
+
+test("a process id below one is no shell process and is never published", () => {
+  const state = new WindowRegistryState(identity, ["C:\work"]);
+  const tab = {};
+  state.opened(tab, "conversation tab");
+  // VS Code answers -1 for a pseudoterminal; the Runtime's record has no place for it.
+  assert.equal(state.processResolved(tab, -1), false);
+  assert.equal(state.processResolved(tab, 0), false);
+  assert.deepEqual(state.update().terminals.map((terminal) => "processId" in terminal), [false]);
+  assert.equal(state.processResolved(tab, 4242), true);
+  assert.deepEqual(state.update().terminals.map((terminal) => terminal.processId), [4242]);
+});

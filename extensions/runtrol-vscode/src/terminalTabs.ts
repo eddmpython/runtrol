@@ -87,6 +87,7 @@ export class TerminalTabs implements vscode.Disposable {
       const key = named.get(pending.id);
       if (key === undefined) continue;
       this.started.delete(terminal);
+      this.open.delete(`started:${encodeURIComponent(pending.id)}`);
       this.open.set(key, terminal);
       moved.push(terminal);
     }
@@ -243,6 +244,9 @@ export class TerminalTabs implements vscode.Disposable {
       startedAtMs: Date.now(),
     });
     this.hosts.set(terminal, pty);
+    // Filed under the placeholder's own key from the first moment, so a click on the placeholder row shows this
+    // tab rather than starting a second provider (measured 2026-09-05: the row's click opened a second Claude).
+    this.open.set(startedKey, terminal);
     this.startedChanged();
     this.changedEmitter.fire();
     terminal.show(false);
@@ -400,6 +404,7 @@ export class TerminalTabs implements vscode.Disposable {
   /// The terminal index is published before the provider store has a title. When that title arrives the row changes
   /// identity, but the PTY does not: this rekeys the existing tab instead of opening a second viewer.
   reconcileHosted(rows: readonly Conversation[]): void {
+    let moved = false;
     for (const row of rows) {
       let terminal = this.open.get(row.key);
       if (!terminal && row.hostedKey && row.hostedKey !== row.key) {
@@ -409,9 +414,12 @@ export class TerminalTabs implements vscode.Disposable {
       if (!this.open.has(row.key)) {
         if (row.hostedKey) this.open.delete(row.hostedKey);
         this.open.set(row.key, terminal);
+        moved = true;
       }
       this.correctName(terminal);
     }
+    // A tab now filed under another key changes what the sidebar says is open.
+    if (moved) this.changedEmitter.fire();
   }
 
   /// Spread the open conversation tabs over editor groups: each tab after the first moves to a group of

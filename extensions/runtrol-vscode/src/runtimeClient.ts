@@ -54,6 +54,7 @@ import {
 import { collectNativeChats } from "./nativeChatCatalogue";
 import { providerCommandNames } from "./observedMirrorState";
 import { TerminalFleet } from "./terminalFleet";
+import { errorKindOf } from "./serviceHelp";
 import { workspaceIdentity } from "./workspaceCollision";
 import type { NativeChatCatalogue, NativeChatLine } from "./runtimeTypes";
 
@@ -1168,8 +1169,14 @@ export class StudioRuntimeClient implements vscode.Disposable {
       try {
         return await operation(runtime);
       } catch (error) {
-        runtime.close();
-        this.command = null;
+        // An answered refusal keeps the connection: the Runtime said no to one request, and the window
+        // registration and the control this connection holds are still good. Only a failure with no Runtime
+        // answer replaces it (measured 2026-09-05: one refused window update closed the connection, the
+        // Runtime forgot the window, and the conversation tabs reopened fresh providers of their own).
+        if (errorKindOf(error) === undefined) {
+          runtime.close();
+          this.command = null;
+        }
         throw error;
       }
     });

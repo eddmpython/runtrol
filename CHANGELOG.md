@@ -64,6 +64,18 @@ and refactoring that no user can observe do not belong here.
 
 ### Fixed
 
+- One command generation is one row (`EXT-07`), measured with a real provider started from the sidebar's own `+`
+  and another typed by name into a terminal of the same project. Clicking the placeholder row of a conversation the
+  provider has not named yet now shows its own tab instead of starting a second provider. Studio no longer publishes
+  its own conversation tabs (pseudoterminals) as observed terminals: VS Code answers their process id as `-1`, the
+  Runtime refused the whole window update, and Studio treated the refusal as a lost connection, so the window's
+  registration and every conversation tab on that connection were torn down and the tabs reopened fresh providers of
+  their own. A refusal the Runtime answers now keeps the command connection; only a failure with no answer replaces it.
+  A forced catalogue read asked while another forced read is in flight runs after it instead of being folded into a
+  read that began before the change; a live conversation a Runtrol-owned terminal holds is asked for again like any
+  other until the catalogue names it, so its placeholder promotes in place, and the placeholder's tab now follows
+  the named row (the row reads as open and its click reveals that tab instead of opening a second one). The end
+  of a mirror the transparent shim already replaced is no longer reported as a failed window publish.
 - A conversation started in an ordinary terminal and first written down after its process was noticed (the usual
   case: a person opens the CLI, then types) reached the sidebar of no window, because the only catalogue refresh
   was the one its discovery had triggered. While a live conversation no row lists exists, its provider's catalogue

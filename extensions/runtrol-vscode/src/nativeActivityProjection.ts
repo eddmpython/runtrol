@@ -24,17 +24,17 @@ export type NativeActivityProjection = {
 /// A process that has not written its first message yet has no stored conversation, and one whose first message
 /// came after the single refresh its discovery triggered has one that nobody has read. Nothing else would ever
 /// ask again (measured 2026-09-04: a provider started in a terminal and answering its first message stayed on no
-/// row in any window for as long as the journey waited). A conversation held by a daemon-owned terminal is left
-/// out: its placeholder row already exists and acquires its title on its own path.
+/// row in any window for as long as the journey waited). A conversation held by a daemon-owned terminal is asked
+/// for the same way: its placeholder stands until the catalogue names it, and the terminal's own binding fired one
+/// refresh that could still predate the provider's write (measured 2026-09-05).
 export function unlistedLiveProviders(
   liveByProvider: ReadonlyMap<string, ReadonlySet<string>>,
   listed: ReadonlySet<string>,
-  hostedNative: ReadonlySet<string>,
 ): ReadonlyMap<string, string> {
   const unlisted = new Map<string, string>();
   for (const [providerId, live] of liveByProvider) {
     const missing = [...live]
-      .filter((nativeId) => !hostedNative.has(nativeId) && !listed.has(nativeProcessKey(providerId, nativeId)))
+      .filter((nativeId) => !listed.has(nativeProcessKey(providerId, nativeId)))
       .sort();
     if (missing.length > 0) unlisted.set(providerId, missing.join(" "));
   }

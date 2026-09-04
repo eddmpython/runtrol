@@ -15,16 +15,19 @@ function activity(
   return { providerId, live, active, attachable };
 }
 
-test("a live conversation no row lists is asked for again; listed and daemon-hosted ones are not", () => {
+test("a live conversation no row lists is asked for again, hosted or not; listed ones are not", () => {
   const live = new Map<string, ReadonlySet<string>>([
     ["claude", new Set(["n1", "n2", "n3"])],
     ["codex", new Set(["c1"])],
   ]);
   const listed = new Set([nativeProcessKey("claude", "n1"), nativeProcessKey("codex", "c1")]);
-  const unlisted = unlistedLiveProviders(live, listed, new Set(["n2"]));
+  const unlisted = unlistedLiveProviders(live, listed);
 
-  assert.deepEqual([...unlisted], [["claude", "n3"]]);
-  assert.equal(unlistedLiveProviders(live, new Set([...listed, nativeProcessKey("claude", "n3")]), new Set(["n2"])).size, 0);
+  assert.deepEqual([...unlisted], [["claude", "n2 n3"]]);
+  assert.equal(
+    unlistedLiveProviders(live, new Set([...listed, nativeProcessKey("claude", "n2"), nativeProcessKey("claude", "n3")])).size,
+    0,
+  );
 });
 
 test("a focus target is kept only while the same round proves the process live", () => {

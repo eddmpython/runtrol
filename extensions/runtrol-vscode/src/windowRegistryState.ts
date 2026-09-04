@@ -85,7 +85,9 @@ export class WindowRegistryState {
 
   processResolved(handle: object, processId: number | undefined): boolean {
     const terminal = this.terminals.get(handle);
-    if (!terminal || processId === undefined || terminal.processId === processId) return false;
+    // A process id below one is VS Code saying there is no shell process (a pseudoterminal answers -1), and the
+    // Runtime's record has no place for it.
+    if (!terminal || processId === undefined || processId < 1 || terminal.processId === processId) return false;
     terminal.processId = processId;
     return true;
   }

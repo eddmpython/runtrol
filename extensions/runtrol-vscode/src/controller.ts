@@ -33,7 +33,7 @@ import { abortableDelay } from "./abortableDelay";
 /// deleted. The Core sees an exit within a few hundred milliseconds; ten seconds covers a slow machine.
 const STOP_SETTLE_MS = 10_000;
 import type { Conversation } from "./conversationList";
-import { attentionCount, nextNeedingYou, projects, runningElsewhere, nativeProcessKey } from "./conversationList";
+import { attentionCount, nextNeedingYou, projects, runningElsewhere, nativeProcessKey, namedPlaceholders } from "./conversationList";
 import { conversationDeletion, deletionQuestion } from "./conversationDeletion";
 import { editorPanelFor } from "./editorPanels";
 import { archivalQuestion, conversationArchival } from "./conversationArchival";
@@ -152,7 +152,9 @@ export class Controller implements vscode.Disposable {
       this.status,
       state.onDidChange(() => this.updateStatus()),
       state.onDidChange((change) => {
-        if (change === "rows") void this.rememberKnownProjects();
+        if (change !== "rows") return;
+        void this.rememberKnownProjects();
+        this.followRowIdentity();
       }),
     );
     this.state.setPinnedKeys(this.pinnedFromStorage());
@@ -836,6 +838,17 @@ export class Controller implements vscode.Disposable {
     } finally {
       this.endForegroundAction(pausedDiscoveries);
     }
+  }
+
+  /// Keep the open tabs filed under the rows they are: a placeholder the service has just named hands its tab to
+  /// the conversation row, and a hosted terminal row that gained its conversation identity does the same. The list
+  /// already made these judgements (`namedPlaceholders`, the hosted claim); the tabs must follow them in the same
+  /// moment, or the row a person just watched get its name opens a second tab on the next click (measured
+  /// 2026-09-05: the named row read as not open while its tab kept the folder's name).
+  private followRowIdentity(): void {
+    const rows = this.state.conversations;
+    this.terminals.retire(namedPlaceholders(rows, this.terminals.startedConversations()));
+    this.terminals.reconcileHosted(rows);
   }
 
   /// Say what a coding service could not do, and offer that service's own commands for fixing it.
@@ -1793,10 +1806,7 @@ export class Controller implements vscode.Disposable {
     const listed = new Set(
       this.state.nativeChats.map((chat) => nativeProcessKey(chat.providerId, chat.nativeSessionId)),
     );
-    const hostedNative = new Set(
-      [...this.hostedTerminalIdentities.values()].filter((native): native is string => native !== null),
-    );
-    const unlisted = unlistedLiveProviders(projected.liveByProvider, listed, hostedNative);
+    const unlisted = unlistedLiveProviders(projected.liveByProvider, listed);
     for (const providerId of [...this.unlistedReask.keys()]) {
       if (!unlisted.has(providerId)) this.unlistedReask.delete(providerId);
     }
@@ -1859,7 +1869,11 @@ export class Controller implements vscode.Disposable {
   private loadNativeChats(providerId: string, force: boolean): Promise<void> {
     const active = this.nativeDiscoveries.get(providerId);
     if (active) {
-      if (!force || active.force) return active.pending;
+      // A forced ask means "read again after whatever is in flight", whether or not that read was forced too:
+      // the read already running began before the change that forced this one (measured 2026-09-05: the read
+      // that started when a terminal appeared was still running when its provider wrote the conversation down,
+      // the ask made at that moment was folded into it, and the conversation stayed unlisted).
+      if (!force) return active.pending;
       if (active.queuedForce) return active.queuedForce;
       const generation = this.nativeDiscoveryGeneration;
       active.queuedForce = active.pending.then(() => {
