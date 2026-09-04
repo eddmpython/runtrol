@@ -77,7 +77,10 @@ export type JourneyApi = {
   rowKeys(): string[];
   /// Every row as the sidebar holds it right now, reduced to what row identity is judged by: a snapshot the
   /// row-identity eye pass takes many times while a launch promotes from placeholder to terminal to conversation.
-  rows(): { key: string; title: string; presence: string; hostedKey: string | null; origin: string | null; native: string | null; workspace: string; open: boolean; live: boolean }[];
+  rows(): { key: string; title: string; presence: string; hostedKey: string | null; origin: string | null; native: string | null; workspace: string; open: boolean; live: boolean; canOpen: boolean; canFocus: boolean; canStop: boolean; blocked: string | null; activity: string }[];
+  /// What the sidebar knows beside its rows: whether the Core answers, the terminal listing's own warnings (the
+  /// "why is the list incomplete" answer), and the Runtime's managed session records as this window lists them.
+  listing(): { coreReach: string; warnings: string[]; incomplete: string | null; sessions: { sessionId: string; providerId: string; native: string | null; lifecycle: string; hot: boolean; workspace: string }[] };
   /// The `+` button's own path: a placeholder row and its tab at once, the Runtime open still pending. Returns as
   /// soon as the tab exists so a caller can watch the placeholder promote.
   startFresh(providerId: string, workspace: string): Promise<void>;
@@ -438,7 +441,25 @@ export function journeyApi(
       // Open as the sidebar decides it: a tab filed under the row's own key or under the terminal it claims.
       open: terminals.isOpen(row.key) || (row.hostedKey !== null && terminals.isOpen(row.hostedKey)),
       live: row.live,
+      canOpen: row.canOpen,
+      canFocus: row.canFocus,
+      canStop: row.canStop,
+      blocked: row.blocked,
+      activity: row.activity,
     })),
+    listing: () => ({
+      coreReach: state.coreReach,
+      warnings: [...state.listingWarnings],
+      incomplete: state.incompleteDiscovery,
+      sessions: state.sessions.map((session) => ({
+        sessionId: session.sessionId,
+        providerId: session.providerId,
+        native: session.nativeSessionId ?? null,
+        lifecycle: session.lifecycle,
+        hot: session.hot,
+        workspace: session.workspace,
+      })),
+    }),
     startFresh: (providerId, workspace) => afterReady(() => controller.startSessionWith(providerId, workspace)),
     rowFacts: (key) => {
       const row = state.conversations.find((candidate) => candidate.key === key);

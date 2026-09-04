@@ -23,10 +23,13 @@ type Step =
   | { readonly kind: "click"; readonly key: string }
   | { readonly kind: "rowFacts"; readonly key: string }
   | { readonly kind: "rows" }
+  | { readonly kind: "listing" }
+  | { readonly kind: "reopenStored"; readonly provider: string }
   | { readonly kind: "listed"; readonly provider: string; readonly native: string }
   | { readonly kind: "startFresh"; readonly provider: string; readonly workspace: string }
   | { readonly kind: "showOther" }
   | { readonly kind: "report" }
+  | { readonly kind: "type"; readonly label: string; readonly keys: readonly string[]; readonly gapMs: number }
   | { readonly kind: "exit"; readonly label: string; readonly keys: readonly string[]; readonly gapMs: number };
 
 export async function run(): Promise<void> {
@@ -138,6 +141,12 @@ async function journey(coordination: string, role: string): Promise<void> {
     } else if (step.kind === "rows") {
       const publishFailure = journey.windowPublishFailure();
       result = { rows: journey.rows(), atMs: Date.now(), nativeChatCount: journey.nativeChatCount(), publishFailure, updatePayload: publishFailure ? journey.windowUpdatePayload() : null };
+    } else if (step.kind === "reopenStored") {
+      // A stored conversation of that service reopened the way a click on its row does: the resume path.
+      result = { sessionId: await journey.openStoredWithTitle(step.provider) };
+    } else if (step.kind === "listing") {
+      // Beside the rows: whether the Core answers, the listing's own warnings and the managed session records.
+      result = { ...journey.listing(), atMs: Date.now() };
     } else if (step.kind === "listed") {
       // Whether the provider's own catalogue, as this window last read it, lists that conversation.
       result = { listed: journey.nativeChatListed(step.provider, step.native), nativeChatCount: journey.nativeChatCount(), atMs: Date.now() };
@@ -161,6 +170,15 @@ async function journey(coordination: string, role: string): Promise<void> {
       result = { activeTerminalName: journey.activeTerminalName() };
     } else if (step.kind === "report") {
       result = { activeTerminalName: journey.activeTerminalName(), rowKeys: journey.rowKeys() };
+    } else if (step.kind === "type") {
+      // Keys into a terminal this window started, the way a person answers a provider's question in it.
+      const terminal = terminals.get(step.label);
+      if (!terminal) throw new Error(`${step.label}: no terminal of that label was started here`);
+      terminal.show(false);
+      for (const key of step.keys) {
+        terminal.sendText(key, false);
+        await delay(step.gapMs);
+      }
     } else if (step.kind === "exit") {
       const terminal = terminals.get(step.label);
       if (terminal) {
