@@ -1622,10 +1622,13 @@ export class Controller implements vscode.Disposable {
           return;
         }
         // The watch is how this window stays in touch. Losing it is losing the Core, and the tree says so
-        // rather than letting an empty list be read as an empty machine.
+        // rather than letting an empty list be read as an empty machine. The banner is the whole message: a
+        // watch dies with a raw transport phrase ("Runtime closed during a frame"), and toasting that on top of
+        // the banner put a protocol sentence in front of the person for something they can only wait out
+        // (measured 2026-09-05, the daemon killed under an open window). Reachability is the banner's to say,
+        // and the loop retries on its own; nothing is toasted here.
         this.state.setCoreReach("unreachable");
         this.revokeNativeActivityProofs();
-        this.say(error instanceof Error ? error.message : String(error), "error");
       }
       await abortableDelay(retryMs, signal);
       retryMs = Math.min(retryMs * 2, 5_000);

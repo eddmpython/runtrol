@@ -278,7 +278,15 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     if (change !== "rows") return;
     if (state.coreReach !== "reached") {
       releasesAsked = false;
+      coreLeft = true;
       return;
+    }
+    // The Core reached anew after being away is a Runtime generation that has never heard of this window
+    // (measured 2026-09-05: after a Runtime restart the registry listed no window until the window itself
+    // restarted, so no other window could reveal a terminal here). Say the registration again.
+    if (coreLeft) {
+      coreLeft = false;
+      windowRegistry?.resync();
     }
     void help.refresh(state.providers.filter(isUsable).map((provider) => provider.providerId));
     // Each time the Core is reached anew (activation, or a reconnect after an update), read what its
@@ -701,6 +709,8 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
   });
   const readyInitialization = controllerInitialization;
   let windowRegistry: WindowRegistry | null = null;
+  // Whether the Core has been away since this window last registered with it.
+  let coreLeft = false;
   readyInitialization.then(
     () => {
       initializationStage = "ready";

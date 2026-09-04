@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 
 import {
   PUBLIC_LIMITS,
+  RuntimeTransportError,
   newMutationRequestId,
   type TerminalControlLease,
   type TerminalDescriptor,
@@ -590,6 +591,15 @@ export class RuntimeTerminal implements vscode.Pseudoterminal {
   private fail(error: unknown): void {
     if (this.closed) return;
     const message = error instanceof Error ? error.message : String(error);
+    // The Runtime going away is not this conversation failing. When the daemon stops, an attached tab's stream
+    // ends with a raw transport phrase ("Runtime closed during a frame"), and raising it as a red toast put a
+    // protocol sentence in front of the person on top of the sidebar's own "Cannot reach the Runtime Core"
+    // notice (measured 2026-09-05, the daemon killed under an open tab). Reachability is the index watch's to
+    // say; here the view only detaches quietly, and the tab reattaches to whatever generation answers next.
+    if (error instanceof RuntimeTransportError) {
+      this.detach(false, `Runtime terminal lost its transport: ${message}`);
+      return;
+    }
     this.presentation.failed(message);
     this.detach(false, `Runtime terminal failed: ${message}`);
   }

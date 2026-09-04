@@ -64,6 +64,14 @@ and refactoring that no user can observe do not belong here.
 
 ### Fixed
 
+- A dead Runtime and a returning one leave no stale conversation behind (`EXT-08`), measured with three real
+  owners of one provider (one started from the sidebar's `+`, one typed into a terminal, one on the desktop in
+  Windows Terminal), ended, reopened, then the Runtime killed outright and restarted and the window restarted.
+  When the Runtime stops, a conversation's RAM figure is a process's, so a row with no live process now shows
+  none instead of keeping the last poll's number; and an attached tab whose transport was lost no longer raises a
+  raw "Runtime closed during a frame" error over the sidebar's own "Cannot reach the Runtime Core" notice. When a
+  new Runtime generation takes over, a window that the old generation knew re-registers itself with it, so another
+  window can again reveal a terminal this one owns.
 - One command generation is one row (`EXT-07`), measured with a real provider started from the sidebar's own `+`
   and another typed by name into a terminal of the same project. Clicking the placeholder row of a conversation the
   provider has not named yet now shows its own tab instead of starting a second provider. Studio no longer publishes

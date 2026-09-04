@@ -137,6 +137,11 @@ export class RuntimeState implements vscode.Disposable {
     return incompleteDiscovery([...this.nativeCatalogues.values()], this.providerRows, this.terminalWarnings);
   }
 
+  /// The terminal listing's own warnings: the Runtime generations this window could not follow.
+  get listingWarnings(): readonly string[] {
+    return this.terminalWarnings;
+  }
+
   /// The click-free coverage summary printed directly above the list.
   get discoveryNotice(): string | null {
     return discoveryNotice([...this.nativeCatalogues.values()], this.providerRows);
@@ -181,6 +186,9 @@ export class RuntimeState implements vscode.Disposable {
   /// Both figures come from the memory poll, which asks the Runtime on a short clock because a figure moves
   /// without any structural change the watches would carry.
   memoryFor(row: Conversation): number | null {
+    // A figure is a process's, and the poll that refreshes it stops when the Core is away: the last figure of a
+    // conversation whose process ended stayed on its stored row while the Core was down (measured 2026-09-05).
+    if (!row.live) return null;
     const session = row.session ? this.memoryBySession.get(row.session.sessionId) : undefined;
     if (session !== undefined) return session;
     const native = row.native?.nativeSessionId;

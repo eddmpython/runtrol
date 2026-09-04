@@ -104,6 +104,14 @@ export class WindowRegistry implements vscode.Disposable {
     );
   }
 
+  /// Register again with the Runtime that answers now. A generation that just started holds no window at all,
+  /// so the registration this window published to its predecessor has to be said again, with every terminal it
+  /// holds now; a failure that was already reported once is reported again if it repeats against the new one.
+  resync(): void {
+    this.lastReported = null;
+    this.schedule();
+  }
+
   /// Register now, with every terminal the window already holds, and follow the events from here on.
   start(): void {
     for (const terminal of vscode.window.terminals) this.track(terminal);
@@ -382,22 +390,45 @@ export class WindowRegistry implements vscode.Disposable {
     }
     this.inFlight = true;
     void (async () => {
-      try {
-        do {
-          this.dirty = false;
-          // Names settle after the shell starts and VS Code raises no event for that; read them at publish time.
-          for (const terminal of vscode.window.terminals) this.state.renamed(terminal, terminal.name);
-          await this.publisher.publishWindow(this.state.register(), this.state.update());
-        } while (this.dirty && !this.disposed);
-      } catch (error) {
-        // The Runtime is not there or refused the record; the next event tries again. Nothing here may throw
-        // into a VS Code event handler, and the same failure is reported once, not on every event.
-        this.reportOnce(error);
-      } finally {
-        this.inFlight = false;
+      // A registration lives as long as its Runtime connection. When the Runtime restarts, that connection is
+      // replaced on its next use, so the first publish after a restart lands on the dead one and throws; a window
+      // with no terminal event to follow it would then never register with the new generation (measured 2026-09-05:
+      // after a Runtime restart the new generation listed no window until the window itself restarted, so no other
+      // window could reveal a terminal here). A failed publish is therefore retried on a short backoff until it
+      // holds or the retries run out, rather than waiting for an event that a quiet window never gets.
+      let backoffMs = PUBLISH_RETRY_FIRST_MS;
+      for (let attempt = 0; !this.disposed; attempt += 1) {
+        try {
+          do {
+            this.dirty = false;
+            // Names settle after the shell starts and VS Code raises no event for that; read them at publish time.
+            for (const terminal of vscode.window.terminals) this.state.renamed(terminal, terminal.name);
+            await this.publisher.publishWindow(this.state.register(), this.state.update());
+          } while (this.dirty && !this.disposed);
+          break;
+        } catch (error) {
+          // Nothing here may throw into a VS Code event handler, and the same failure is reported once, not on
+          // every attempt. After the last attempt the next VS Code event is what tries again.
+          this.reportOnce(error);
+          if (attempt + 1 >= PUBLISH_RETRY_ATTEMPTS || this.disposed) break;
+          await delay(backoffMs);
+          backoffMs = Math.min(backoffMs * 2, PUBLISH_RETRY_MAX_MS);
+          this.dirty = true;
+        }
       }
+      this.inFlight = false;
     })();
   }
+}
+
+/// A publish that failed on a just-replaced Runtime connection is retried this many times before it waits for
+/// the next VS Code event, on a backoff from the first delay up to the cap.
+const PUBLISH_RETRY_ATTEMPTS = 8;
+const PUBLISH_RETRY_FIRST_MS = 400;
+const PUBLISH_RETRY_MAX_MS = 4_000;
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
 async function drain(stream: AsyncIterable<string>): Promise<void> {
