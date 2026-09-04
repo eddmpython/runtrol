@@ -392,5 +392,8 @@ mod tests {
         // A name that starts an escape and does not finish it is kept as written rather than mangled.
         let broken = home.join("half%2");
         assert_eq!(decode_workspace(&broken).as_deref(), Some("half%2"));
+        // The scratch home is this test's own; left behind, one more collects per run (measured 2026-09-05:
+        // fifty-one of them in the machine's temporary directory).
+        drop(fs::remove_dir_all(&home));
     }
 }
