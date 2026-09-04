@@ -354,6 +354,12 @@ pub struct Composed {
     pub(crate) runtime_terminals: crate::runtime_terminal::TerminalRuntimeAdapter,
     /// Every VS Code window that registered itself and the terminals it observes, bound to its connection.
     pub(crate) windows: crate::window_registry::WindowRegistry,
+    /// Which live conversations a registered window can show, by provider and native identity, as the last
+    /// provider observation proved from process ancestry. A conversation leaves this map the moment its process
+    /// stops being live, so no row can offer to show a terminal that has nothing in it.
+    pub(crate) focus_targets: tokio::sync::Mutex<
+        std::collections::BTreeMap<(ProviderId, String), crate::native_focus::FocusTarget>,
+    >,
     /// Bounds filesystem identity checks moved off latency-sensitive terminal relay tasks.
     pub(crate) terminal_root_checks: Arc<tokio::sync::Semaphore>,
     /// How many terminals are open, readable without the table's lock: a draining generation stays alive
@@ -466,6 +472,7 @@ impl Composed {
             terminals: tokio::sync::Mutex::new(crate::terminal_surface::Terminals::default()),
             runtime_terminals: crate::runtime_terminal::TerminalRuntimeAdapter::default(),
             windows: crate::window_registry::WindowRegistry::default(),
+            focus_targets: tokio::sync::Mutex::default(),
             terminal_root_checks: Arc::new(tokio::sync::Semaphore::new(
                 crate::runtime_terminal::ROOT_CHECK_SLOTS,
             )),
@@ -535,6 +542,7 @@ impl Composed {
             terminals: tokio::sync::Mutex::new(crate::terminal_surface::Terminals::default()),
             runtime_terminals: crate::runtime_terminal::TerminalRuntimeAdapter::default(),
             windows: crate::window_registry::WindowRegistry::default(),
+            focus_targets: tokio::sync::Mutex::default(),
             terminal_root_checks: Arc::new(tokio::sync::Semaphore::new(
                 crate::runtime_terminal::ROOT_CHECK_SLOTS,
             )),

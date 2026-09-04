@@ -69,11 +69,25 @@ function namesTheOuterHost(name) {
   return HOST_IDENTITY_VARIABLES.includes(name) || name.startsWith("VSCODE_");
 }
 
-/// A copy of an environment with the outer extension host's identity removed.
+/// Whether a variable is a marker a running coding agent stamps on its children. A journey started from inside an
+/// agent session would otherwise hand that session's markers to the real provider it launches, and the provider then
+/// behaves as a child of that session instead of as one a person started (measured 2026-09-04 in a journey window
+/// running the Claude Code CLI 2.1.259: "Transcript saving is off, inherited CLAUDE_CODE_CHILD_SESSION marker", and no
+/// process roster record, so the Runtime never saw the conversation at all).
+function namesTheLaunchingAgent(name) {
+  return name === "CLAUDECODE"
+    || name.startsWith("CLAUDE_CODE_")
+    || name === "CLAUDE_PID"
+    || name === "CLAUDE_EFFORT"
+    || name === "CLAUDE_AGENT_SDK_VERSION"
+    || name.startsWith("ANTHROPIC_CUSTOM_MODEL_OPTION");
+}
+
+/// A copy of an environment with the outer extension host's identity and any launching agent's markers removed.
 export function withoutHostIdentity(baseEnvironment = process.env) {
   const environment = { ...baseEnvironment };
   for (const name of Object.keys(environment)) {
-    if (namesTheOuterHost(name)) delete environment[name];
+    if (namesTheOuterHost(name) || namesTheLaunchingAgent(name)) delete environment[name];
   }
   return environment;
 }
@@ -89,7 +103,7 @@ export function withoutHostIdentity(baseEnvironment = process.env) {
 // On import because the only reason to import this module is to launch an isolated VS Code, and the cost of one
 // harness forgetting is three gates red with a message that names a folder and never mentions an environment.
 for (const name of Object.keys(process.env)) {
-  if (namesTheOuterHost(name)) delete process.env[name];
+  if (namesTheOuterHost(name) || namesTheLaunchingAgent(name)) delete process.env[name];
 }
 
 export function isolatedHostEnvironment(root, baseEnvironment = process.env) {

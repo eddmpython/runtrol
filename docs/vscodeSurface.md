@@ -69,7 +69,10 @@ open model turn spins the provider glyph. Opening a tab applies its project acce
 or paused TUI stays static even when it repaints its prompt, menu, or cursor. `Needs you` and `Error` remain static
 worded states. Only a state that changes what the operator can do
 spends width: `Needs you`, `Sign in`, `Limit`, `Error`,
-`Elsewhere`, or `Unavailable`. On hover the row shows its actions: pin, rename, stop when running, archive and delete
+`Focus owner`, `Observed only`, or `Unavailable`. The last three used to be one word, and one word for three
+different truths is how a row ends up promising what it cannot do: `Focus owner` means a registered window is proved
+to own the terminal this conversation runs in and clicking shows it there; `Observed only` means the process is
+live and nothing here can reach it; `Unavailable` means there is no live process at all. On hover the row shows its actions: pin, rename, stop when running, archive and delete
 when the service reports those surfaces, allow and decline when a turn waits for the person. Rows are reached with
 Tab and the arrow keys; Enter opens the conversation's terminal tab.
 

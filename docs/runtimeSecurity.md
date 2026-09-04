@@ -45,9 +45,11 @@ each acknowledgement means the corresponding batch append completed. A full admi
 append, or failed acknowledgement returns `auditUnavailable` rather than running without the required record. Normal
 generation retirement closes admission, waits for every active pair and the writer, then waits for the relay receipt.
 
-Bringing a window forward is a desktop action, not a data request: `windows/reveal` is refused unless the calling
-connection has registered a VS Code window on this machine, so a paired device that holds the same `session.list`
-scope cannot raise or move anything the operator is looking at.
+Bringing a window forward is a desktop action, not a data request: `windows/reveal` and `providers/focusNative`
+are refused unless the calling connection has registered a VS Code window on this machine, so a paired device
+that holds the same scope cannot raise or move anything the operator is looking at. `providers/focusNative` also
+never tells the caller which window owns the conversation: the Runtime resolves the window itself and answers
+only whether the request was delivered and what happened on the desktop.
 
 Terminal attachment changes the connection into a bounded data plane. The public open or attach admission is audited,
 but provider output notifications and view-bound input, resize, and lease frames are not appended to redb per frame or

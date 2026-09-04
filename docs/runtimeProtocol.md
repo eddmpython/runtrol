@@ -94,6 +94,7 @@ optional GUI. A public connection cannot approve itself.
 | `windows/mirrorOpen`, `windows/mirrorOutput`, `windows/mirrorEnd` | `session.list` and a registered window named by the open; a mirror is fed only by the connection that opened it and ends with it. `windows/mirrorOutput` is the one method that carries bytes rather than an authority decision and is not journaled (`docs/runtimeSecurity.md`) |
 | `windows/reveal` | `session.list` and a caller that registered a window on this machine; a reveal moves a window on the operator's desktop, so a paired device holding the same scope is refused with `presenceRequired` |
 | `windows/watchReveals` | `session.list`; the watch names a registered window and receives only its terminal keys, which `windows/list` already exposes |
+| `providers/focusNative` | `session.native.discover` and a caller that registered a window on this machine (the same presence rule as `windows/reveal`). The caller names a live conversation; the Runtime alone knows which registered window's terminal it runs in and asks that window to show it |
 | `terminals/renewControl`, `terminals/releaseControl`, `terminals/detach` | The current terminal view or lease generation |
 | `approvals/respond` | `approval.respond.low` or `approval.respond.high`, plus the current lease |
 | `sessions/renewControl`, `sessions/releaseControl` | The current lease generation |
@@ -115,8 +116,15 @@ because their own listing treats the working directory as a filter rather than a
 Each returned row carries its own folder, so grouping stays a fact the provider reported.
 
 `providers/nativeActivity` returns the native identities owned by live processes, the subset whose model is
-answering now, and the subset whose exact live terminal has a structurally proven attachment route. These are
-`live`, `active`, and `attachable`, respectively. It is separate from the catalogue because a panel asks it on a
+answering now, the subset whose exact live terminal has a structurally proven attachment route, and the subset
+whose process is proved to run inside a terminal a registered VS Code window observes. These are `live`,
+`active`, `attachable`, and `focusable`, respectively. `focusable` is decided by process ancestry, not by shell
+integration: a window publishes each observed terminal's shell process, and a live provider process found
+under one of those shells belongs to that terminal (the nearest shell when they nest). A focusable conversation
+is one `providers/focusNative` can show where it runs; it says nothing about attaching or mirroring. A console
+route yields to that window: a live process whose console could be joined but whose terminal a registered window
+is proved to own is `focusable` and not `attachable`, so one console never gets a second viewer sharing its
+input while its own window can show it. An official attachment stays `attachable` whoever owns the terminal. It is separate from the catalogue because a panel asks it on a
 250 ms compatibility clock and a
 catalogue is not cheap. A listing reads every stored conversation's head; the activity request reads only the
 provider's bounded process roster. The measured driver validates both PID and kernel process-start identity, so a

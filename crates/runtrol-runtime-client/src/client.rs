@@ -9,17 +9,17 @@ use runtrol_runtime_protocol::{
     GetProviderCapabilitiesParams, GetSessionParams, InitializeParams, InitializeResult,
     IntegrationAuthentication, IntegrationGrant, JsonRpcId, JsonRpcNotification, JsonRpcRequest,
     JsonRpcResponse, LaggedNotification, ListModelsParams, ListNativeSessionsParams,
-    ListPendingApprovalsParams, ManagedSessionList, MutationRequestId, NativeSessionCatalogue,
-    PendingApprovalList, PendingEnrollmentId, ProviderId, ProviderList, ProviderUsageList,
-    ProviderWatchEndedNotification, ProvidersChangedNotification,
-    ProvidersUsageChangedNotification, RequestEnrollmentParams, RespondApprovalParams,
-    ResumeSessionParams, RotateIntegrationKeyParams, RuntimeError, RuntimeErrorKind,
-    RuntimeEventNotification, RuntimeMethod, RuntimeModelCatalog, RuntimeProviderCapabilities,
-    RuntimeSessionId, ServerChallenge, SessionDescriptor, SessionIndexChangedNotification,
-    SessionIndexEndedNotification, SessionOpenResult, SetModeParams, SetModelParams,
-    StartSessionParams, SubmitBlocksParams, SubmitInputParams, SuccessResponse,
-    WatchEnrollmentParams, WatchEventsParams, WatchEventsResult, WatchProvidersParams,
-    WatchProvidersResult, WatchSessionIndexParams, WatchSessionIndexResult,
+    ListPendingApprovalsParams, ManagedSessionList, MutationRequestId, NativeActivity,
+    NativeActivityParams, NativeSessionCatalogue, PendingApprovalList, PendingEnrollmentId,
+    ProviderId, ProviderList, ProviderUsageList, ProviderWatchEndedNotification,
+    ProvidersChangedNotification, ProvidersUsageChangedNotification, RequestEnrollmentParams,
+    RespondApprovalParams, ResumeSessionParams, RotateIntegrationKeyParams, RuntimeError,
+    RuntimeErrorKind, RuntimeEventNotification, RuntimeMethod, RuntimeModelCatalog,
+    RuntimeProviderCapabilities, RuntimeSessionId, ServerChallenge, SessionDescriptor,
+    SessionIndexChangedNotification, SessionIndexEndedNotification, SessionOpenResult,
+    SetModeParams, SetModelParams, StartSessionParams, SubmitBlocksParams, SubmitInputParams,
+    SuccessResponse, WatchEnrollmentParams, WatchEventsParams, WatchEventsResult,
+    WatchProvidersParams, WatchProvidersResult, WatchSessionIndexParams, WatchSessionIndexResult,
     enrollment_signing_payload, initialization_signing_payload, key_rotation_signing_payload,
 };
 use serde::Serialize;
@@ -899,6 +899,20 @@ impl ProviderClient<'_> {
     ) -> Result<NativeSessionCatalogue, ClientError> {
         self.runtime
             .call(RuntimeMethod::ProvidersListNativeSessions, &params)
+            .await
+    }
+
+    /// What the provider's own process roster says is live right now, and what Runtime proved it can reach.
+    ///
+    /// # Errors
+    ///
+    /// Transport, protocol, scope, or Runtime failure.
+    pub async fn native_activity(
+        &mut self,
+        params: NativeActivityParams,
+    ) -> Result<NativeActivity, ClientError> {
+        self.runtime
+            .call(RuntimeMethod::ProvidersNativeActivity, &params)
             .await
     }
 }

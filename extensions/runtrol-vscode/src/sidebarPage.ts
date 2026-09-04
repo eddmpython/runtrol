@@ -30,6 +30,8 @@ export type SidebarConversationRow = {
   /// alive outside both is shown, and not offered a Stop that would fail.
   readonly canStop: boolean;
   readonly canOpen: boolean;
+  /// The window that runs it can show it, even though it cannot be opened here.
+  readonly canFocus: boolean;
   readonly blocked: string | null;
   readonly pinned: boolean;
   readonly signIn: boolean;
@@ -300,7 +302,12 @@ function conversationStateHtml(row: SidebarConversationRow): string {
         : row.activity === "attention"
           ? { label: "Error", tone: "error" }
           : !row.canOpen
-            ? { label: row.live ? "Elsewhere" : "Unavailable", tone: "muted" }
+            // Three different truths used to share one word. A row that can be shown where it runs says so, a live
+            // row that cannot says only that much, and a row with no live process is unavailable.
+            ? {
+              label: row.canFocus ? "Focus owner" : row.live ? "Observed only" : "Unavailable",
+              tone: "muted",
+            }
             : null;
   return state
     ? `<span class="conv-state ${state.tone}" title="${escapeHtml(row.blocked ?? state.label)}">${state.label}</span>`

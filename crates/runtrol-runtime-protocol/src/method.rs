@@ -52,6 +52,9 @@ pub enum RuntimeMethod {
     /// turn is running in a conversation this Runtime did not start.
     #[serde(rename = "providers/nativeActivity")]
     ProvidersNativeActivity,
+    /// Ask the window that owns a live conversation's terminal to show it and come forward.
+    #[serde(rename = "providers/focusNative")]
+    ProvidersFocusNative,
     /// Read the Runtime-managed session catalogue.
     #[serde(rename = "sessions/list")]
     SessionsList,
@@ -247,6 +250,7 @@ impl RuntimeMethod {
             Self::ProvidersListModels => "providers/listModels",
             Self::ProvidersListNativeSessions => "providers/listNativeSessions",
             Self::ProvidersNativeActivity => "providers/nativeActivity",
+            Self::ProvidersFocusNative => "providers/focusNative",
             Self::SessionsList => "sessions/list",
             Self::SessionsWatchIndex => "sessions/watchIndex",
             Self::SessionsGet => "sessions/get",
@@ -334,6 +338,7 @@ impl FromStr for RuntimeMethod {
             "providers/listModels" => Ok(Self::ProvidersListModels),
             "providers/listNativeSessions" => Ok(Self::ProvidersListNativeSessions),
             "providers/nativeActivity" => Ok(Self::ProvidersNativeActivity),
+            "providers/focusNative" => Ok(Self::ProvidersFocusNative),
             "sessions/list" => Ok(Self::SessionsList),
             "sessions/watchIndex" => Ok(Self::SessionsWatchIndex),
             "sessions/get" => Ok(Self::SessionsGet),
@@ -422,6 +427,7 @@ mod tests {
             RuntimeMethod::ProvidersListModels,
             RuntimeMethod::ProvidersListNativeSessions,
             RuntimeMethod::ProvidersNativeActivity,
+            RuntimeMethod::ProvidersFocusNative,
             RuntimeMethod::SessionsList,
             RuntimeMethod::SessionsWatchIndex,
             RuntimeMethod::SessionsGet,

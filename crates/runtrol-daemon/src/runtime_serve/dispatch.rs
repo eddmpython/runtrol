@@ -17,8 +17,8 @@ use super::integration_requests::{
     grant, initialize, request_integration, rotate_integration_key, watch_integration,
 };
 use super::provider_requests::{
-    get_provider_capabilities, list_models, list_native_sessions, native_activity, providers_list,
-    providers_usage, providers_watch,
+    focus_native, get_provider_capabilities, list_models, list_native_sessions, native_activity,
+    providers_list, providers_usage, providers_watch,
 };
 use super::response::{Answer, EmptyParams, EmptyResult};
 use super::session_control::{open_session, session_operation};
@@ -107,6 +107,7 @@ pub(super) async fn dispatch_public(
             RuntimeMethod::ProvidersNativeActivity => {
                 native_activity(state, composed, discovering, id, params).await
             }
+            RuntimeMethod::ProvidersFocusNative => focus_native(state, composed, id, params).await,
             RuntimeMethod::SessionsList => sessions_list(state, composed, sessions, id, params),
             RuntimeMethod::SessionsWatchIndex => {
                 sessions_watch_index(state, composed, sessions, id, params)

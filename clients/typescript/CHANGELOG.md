@@ -10,6 +10,8 @@
 - Added `WindowClient.mirrorOpen`, `mirrorOutput` and `mirrorEnd`; `TerminalDescriptor.origin`,
   `ownerWindowSessionId` and `ownerTerminalKey`; `ProviderDescriptor.commandNames`.
 - Added `WindowClient.reveal` and `watchReveals` with `WindowRevealSubscription`, and `WindowRegisterParams.hostPid`.
+- Added `NativeActivity.focusable` and `ProviderClient.focusNative` (`providers/focusNative`, answering
+  `NativeFocusResult`).
 
 ## 0.1.1
 

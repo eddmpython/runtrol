@@ -1446,8 +1446,13 @@ fn only_live_processes_with_a_safe_route_are_publicly_attachable() {
     };
 
     assert_eq!(
-        attachable_native_sessions(&activity),
+        attachable_native_sessions(&activity, &[]),
         vec!["console".to_owned(), "official".to_owned()]
+    );
+    // A console the owning window can show is that window's to show; an official attachment stays offered.
+    assert_eq!(
+        attachable_native_sessions(&activity, &["console".to_owned(), "official".to_owned()]),
+        vec!["official".to_owned()]
     );
 }
 

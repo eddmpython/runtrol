@@ -24,6 +24,7 @@ function conversation(overrides: Partial<SidebarConversationRow>): SidebarConver
     live: false,
     canStop: false,
     canOpen: true,
+    canFocus: false,
     blocked: null,
     pinned: false,
     signIn: false,
@@ -186,7 +187,15 @@ test("only actual working state rotates while attention remains a static labelle
   assert.ok(html.includes('<span class="glyph-slot"><img class="glyph"'), "an idle row carries no mark");
   assert.ok(!html.includes('class="dot'), "no unexplained status dot is drawn");
   assert.ok(html.includes('class="conv-state attention" title="Needs you">Needs you</span>'));
-  assert.ok(html.includes('class="conv-state muted" title="running outside runtrol">Elsewhere</span>'));
+  // A live conversation Runtrol cannot open and cannot show anywhere says only that much.
+  assert.ok(html.includes('class="conv-state muted" title="running outside runtrol">Observed only</span>'));
+  // The same row, once a window is proved to own its terminal, offers that window instead.
+  const focusable = sidebarHtml(model({
+    projects: [project({ rows: [conversation({ key: "claude:focus", live: true, canOpen: false, canFocus: true, blocked: null })] })],
+    loose: [],
+  }), assets);
+  assert.ok(focusable.includes('class="conv-state muted" title="Focus owner">Focus owner</span>'));
+  assert.ok(!focusable.includes("Observed only"));
   assert.ok(html.includes(".conv.open .glyph, .conv.working .glyph { filter: none; opacity: 1; }"));
   assert.ok(html.includes(".conv.working .glyph { animation: spin"));
   assert.ok(!html.includes(".glyph-slot.working::after"), "no ring is drawn around a turning icon");

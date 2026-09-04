@@ -61,6 +61,11 @@ pub struct NativeActivity {
     /// client should guess one from the provider or operating system.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachable: Vec<String>,
+    /// Live conversations a registered VS Code window can show and be brought forward for, proved from process
+    /// ancestry rather than from shell integration. A conversation can be focusable without being attachable: the
+    /// window owns the terminal it runs in either way. Absence means no proof, never a client guess.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub focusable: Vec<String>,
     /// Native identities answering now, in no particular order.
     pub active: Vec<String>,
 }
@@ -188,4 +193,24 @@ mod tests {
         assert!(!text.contains("preview"));
         assert!(!text.contains("transcript"));
     }
+}
+
+/// Ask the window that owns a live conversation's terminal to show it and come forward.
+#[derive(Clone, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NativeFocusParams {
+    /// Which service the conversation belongs to.
+    pub provider_id: ProviderId,
+    /// The provider's own identity for the conversation, as `NativeActivity.focusable` listed it.
+    pub native_session_id: String,
+}
+
+/// The focus as far as the Runtime could take it. Which window it was, and how it was proved, stay private.
+#[derive(Clone, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NativeFocusResult {
+    /// Whether the owner was watching for reveals and was told which terminal to show.
+    pub delivered: bool,
+    /// What became of the owner's window on the desktop.
+    pub foreground: crate::WindowForeground,
 }

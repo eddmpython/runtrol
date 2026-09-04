@@ -1145,6 +1145,13 @@
           },
           "type": "array"
         },
+        "focusable": {
+          "description": "Live conversations a registered VS Code window can show and be brought forward for, proved from process\nancestry rather than from shell integration. A conversation can be focusable without being attachable: the\nwindow owns the terminal it runs in either way. Absence means no proof, never a client guess.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "live": {
           "default": [],
           "description": "Native identities owned by a still-running provider process, in no particular order.",
@@ -1175,6 +1182,44 @@
       },
       "required": [
         "providerId"
+      ],
+      "type": "object"
+    },
+    "NativeFocusParams": {
+      "additionalProperties": false,
+      "description": "Ask the window that owns a live conversation's terminal to show it and come forward.",
+      "properties": {
+        "nativeSessionId": {
+          "description": "The provider's own identity for the conversation, as `NativeActivity.focusable` listed it.",
+          "type": "string"
+        },
+        "providerId": {
+          "$ref": "#/$defs/ProviderId",
+          "description": "Which service the conversation belongs to."
+        }
+      },
+      "required": [
+        "providerId",
+        "nativeSessionId"
+      ],
+      "type": "object"
+    },
+    "NativeFocusResult": {
+      "additionalProperties": false,
+      "description": "The focus as far as the Runtime could take it. Which window it was, and how it was proved, stay private.",
+      "properties": {
+        "delivered": {
+          "description": "Whether the owner was watching for reveals and was told which terminal to show.",
+          "type": "boolean"
+        },
+        "foreground": {
+          "$ref": "#/$defs/WindowForeground",
+          "description": "What became of the owner's window on the desktop."
+        }
+      },
+      "required": [
+        "delivered",
+        "foreground"
       ],
       "type": "object"
     },
@@ -3017,6 +3062,11 @@
         {
           "const": "providers/nativeActivity",
           "description": "Name the conversations of one provider written in the last few seconds, which is how a caller knows a\nturn is running in a conversation this Runtime did not start.",
+          "type": "string"
+        },
+        {
+          "const": "providers/focusNative",
+          "description": "Ask the window that owns a live conversation's terminal to show it and come forward.",
           "type": "string"
         },
         {
@@ -5461,6 +5511,12 @@
     "native_activity_params": {
       "$ref": "#/$defs/NativeActivityParams"
     },
+    "native_focus": {
+      "$ref": "#/$defs/NativeFocusParams"
+    },
+    "native_focus_result": {
+      "$ref": "#/$defs/NativeFocusResult"
+    },
     "native_session_catalogue": {
       "$ref": "#/$defs/NativeSessionCatalogue"
     },
@@ -5789,7 +5845,9 @@
     "watch_window_reveals",
     "watch_window_reveals_result",
     "window_reveal_requested",
-    "window_reveals_ended"
+    "window_reveals_ended",
+    "native_focus",
+    "native_focus_result"
   ],
   "title": "PublicProtocolSchema",
   "type": "object",

@@ -224,6 +224,63 @@ test("an externally running terminal with a proven route opens without a second 
   assert.equal(row ? runningElsewhere(row) : true, false);
 });
 
+test("a conversation running in a window's own terminal offers that window, and never an open", () => {
+  const key = nativeProcessKey("claude", "n11");
+  const [row] = conversations(
+    [],
+    PROVIDERS,
+    [nativeChat({ providerId: "claude", nativeSessionId: "n11", title: "Typed in another window" })],
+    null,
+    null,
+    new Map(),
+    new Map(),
+    new Set(),
+    new Map(),
+    [],
+    new Set(),
+    new Set(),
+    new Set([key]),
+    [],
+    new Set(),
+    // Not attachable: with no shell integration there is no route to attach, only the window that owns it.
+    new Set(),
+    new Set([key]),
+  );
+
+  assert.equal(row?.live, true);
+  assert.equal(row?.canOpen, false, "focus is never a way to open a second owner");
+  assert.equal(row?.canFocus, true);
+  assert.equal(row?.blocked, null, "a row that can be shown where it runs is not blocked");
+});
+
+test("a live conversation nothing can reach says only that much", () => {
+  const key = nativeProcessKey("claude", "n12");
+  const [row] = conversations(
+    [],
+    PROVIDERS,
+    [nativeChat({ providerId: "claude", nativeSessionId: "n12", title: "Somewhere else entirely" })],
+    null,
+    null,
+    new Map(),
+    new Map(),
+    new Set(),
+    new Map(),
+    [],
+    new Set(),
+    new Set(),
+    new Set([key]),
+    [],
+    new Set(),
+    new Set(),
+    new Set(),
+  );
+
+  assert.equal(row?.live, true);
+  assert.equal(row?.canOpen, false);
+  assert.equal(row?.canFocus, false);
+  assert.equal(row ? runningElsewhere(row) : false, true);
+});
+
 test("only a conversation running outside Runtrol answers to running elsewhere", () => {
   // Every other reason a row cannot open leaves it not live, which is what makes the one predicate exact.
   const [saved] = conversations(

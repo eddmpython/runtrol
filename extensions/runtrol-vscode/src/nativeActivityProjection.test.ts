@@ -3,7 +3,8 @@ import test from "node:test";
 
 import type { NativeActivity } from "@runtrol/runtime-client";
 
-import { projectNativeActivity } from "./nativeActivityProjection";
+import { nativeProcessKey } from "./conversationList";
+import { projectNativeActivity, unlistedLiveProviders } from "./nativeActivityProjection";
 
 function activity(
   providerId: string,
@@ -13,6 +14,28 @@ function activity(
 ): NativeActivity {
   return { providerId, live, active, attachable };
 }
+
+test("a live conversation no row lists is asked for again; listed and daemon-hosted ones are not", () => {
+  const live = new Map<string, ReadonlySet<string>>([
+    ["claude", new Set(["n1", "n2", "n3"])],
+    ["codex", new Set(["c1"])],
+  ]);
+  const listed = new Set([nativeProcessKey("claude", "n1"), nativeProcessKey("codex", "c1")]);
+  const unlisted = unlistedLiveProviders(live, listed, new Set(["n2"]));
+
+  assert.deepEqual([...unlisted], [["claude", "n3"]]);
+  assert.equal(unlistedLiveProviders(live, new Set([...listed, nativeProcessKey("claude", "n3")]), new Set(["n2"])).size, 0);
+});
+
+test("a focus target is kept only while the same round proves the process live", () => {
+  const projected = projectNativeActivity(
+    [["claude", { ...activity("claude", ["n1"], []), focusable: ["n1", "n2"] }]],
+    new Map(),
+  );
+
+  assert.deepEqual([...(projected.focusableByProvider.get("claude") ?? [])], ["n1"]);
+  assert.equal(projected.focusable.size, 1);
+});
 
 test("a failed roster read revokes its old live proof instead of leaving Elsewhere forever", () => {
   const previous = new Map<string, ReadonlySet<string>>([

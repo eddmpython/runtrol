@@ -44,8 +44,9 @@ export type Presence =
   /// Runtrol started it a moment ago and the service has not described it yet.
   | { readonly kind: "starting" }
   /// A provider process is proven alive outside the terminal table. `openable` means its exact process also
-  /// published a safe route that the first viewer can attach lazily.
-  | { readonly kind: "external"; readonly openable: boolean }
+  /// published a safe route that the first viewer can attach lazily; `focusable` means a registered VS Code window
+  /// is proved to own the terminal it runs in, so that window can show it even when nothing can be opened here.
+  | { readonly kind: "external"; readonly openable: boolean; readonly focusable: boolean }
   /// The last live owner could not be rechecked. It is not called live, but duplicate ownership stays denied.
   | { readonly kind: "unconfirmed" }
   /// No live process. The service stores it, and `openable` says whether the service can reopen it.
@@ -55,28 +56,39 @@ export type Presence =
 function facts(presence: Presence): {
   readonly live: boolean;
   readonly canOpen: boolean;
+  readonly canFocus: boolean;
   readonly canStop: boolean;
   readonly blocked: string | null;
 } {
   switch (presence.kind) {
     case "hosted":
     case "supervised":
-      return { live: true, canOpen: true, canStop: true, blocked: null };
+      return { live: true, canOpen: true, canFocus: false, canStop: true, blocked: null };
     case "starting":
-      return { live: true, canOpen: true, canStop: false, blocked: null };
+      return { live: true, canOpen: true, canFocus: false, canStop: false, blocked: null };
     case "external":
+      // Focus is never a way to open: a window showing its own terminal is the whole of it, and nothing here
+      // starts a second owner of the conversation.
       return {
         live: true,
         canOpen: presence.openable,
+        canFocus: !presence.openable && presence.focusable,
         canStop: false,
-        blocked: presence.openable ? null : RUNNING_ELSEWHERE,
+        blocked: presence.openable || presence.focusable ? null : RUNNING_ELSEWHERE,
       };
     case "unconfirmed":
-      return { live: false, canOpen: false, canStop: false, blocked: PROCESS_STATUS_UNAVAILABLE };
+      return {
+        live: false,
+        canOpen: false,
+        canFocus: false,
+        canStop: false,
+        blocked: PROCESS_STATUS_UNAVAILABLE,
+      };
     case "stored":
       return {
         live: false,
         canOpen: presence.openable,
+        canFocus: false,
         canStop: false,
         blocked: presence.openable ? null : "This coding service cannot reopen this conversation.",
       };
@@ -142,6 +154,9 @@ export type Conversation = {
   /// The transient row key this hosted process had before the provider published its conversation identity.
   readonly hostedKey: string | null;
   readonly canOpen: boolean;
+  /// A registered VS Code window is proved to own the terminal this conversation runs in, so that window can
+  /// show it and be brought forward. Never a way to open it here.
+  readonly canFocus: boolean;
   /// Why it cannot be opened, for the one row where that is true.
   readonly blocked: string | null;
 };
@@ -197,6 +212,8 @@ export function conversations(
   unconfirmedNative: ReadonlySet<string> = new Set(),
   /// Live provider owners whose exact process publishes a safe terminal route.
   attachableNative: ReadonlySet<string> = new Set(),
+  /// Live provider owners whose terminal a registered VS Code window is proved to own.
+  focusableNative: ReadonlySet<string> = new Set(),
 ): Conversation[] {
   const nativeByKey = new Map<string, NativeChatLine>();
   for (const chat of nativeChats) {
@@ -243,6 +260,7 @@ export function conversations(
       hosted,
       observed,
       externalKey !== null && attachableNative.has(externalKey),
+      externalKey !== null && focusableNative.has(externalKey),
       unconfirmed,
     ));
   }
@@ -263,6 +281,7 @@ export function conversations(
       hosted,
       observedNative.has(nativeProcessKey(chat.providerId, chat.nativeSessionId)) && hosted === null,
       attachableNative.has(nativeProcessKey(chat.providerId, chat.nativeSessionId)) && hosted === null,
+      focusableNative.has(nativeProcessKey(chat.providerId, chat.nativeSessionId)) && hosted === null,
       unconfirmedNative.has(nativeProcessKey(chat.providerId, chat.nativeSessionId)) && hosted === null,
     ));
   }
@@ -614,6 +633,7 @@ function supervised(
   hosted: TerminalDescriptor | null,
   observedExternal: boolean,
   attachableExternal: boolean,
+  focusableExternal: boolean,
   unconfirmedOwner: boolean,
 ): Conversation {
   const homeWorkspace = isolatedWorkspaceHomes.get(workspaceIdentity(session.workspace)) ?? session.workspace;
@@ -622,7 +642,7 @@ function supervised(
   const presence: Presence = hosted
     ? { kind: "hosted", terminal: hosted }
     : observedExternal
-      ? { kind: "external", openable: attachableExternal }
+      ? { kind: "external", openable: attachableExternal, focusable: focusableExternal }
       : unconfirmedOwner
         ? { kind: "unconfirmed" }
       : session.hot
@@ -667,6 +687,7 @@ function providerOwned(
   hosted: TerminalDescriptor | null,
   observedExternal: boolean,
   attachableExternal: boolean,
+  focusableExternal: boolean,
   unconfirmedOwner: boolean,
 ): Conversation {
   const resumable = chat.resume === "available" && Boolean(chat.adoptionToken);
@@ -674,7 +695,7 @@ function providerOwned(
   const presence: Presence = hosted
     ? { kind: "hosted", terminal: hosted }
     : observedExternal
-      ? { kind: "external", openable: attachableExternal }
+      ? { kind: "external", openable: attachableExternal, focusable: focusableExternal }
       : unconfirmedOwner
         ? { kind: "unconfirmed" }
       : { kind: "stored", openable: resumable };

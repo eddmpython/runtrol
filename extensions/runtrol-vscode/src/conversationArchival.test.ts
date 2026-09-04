@@ -37,6 +37,7 @@ function row(overrides: Partial<Conversation> = {}): Conversation {
     hostedTerminal: null,
     hostedKey: null,
     canOpen: true,
+    canFocus: false,
     blocked: null,
     ...overrides,
   };

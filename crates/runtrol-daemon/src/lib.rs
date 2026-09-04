@@ -30,6 +30,7 @@ mod legacy_mcp;
 mod legacy_slots;
 mod native_claims;
 mod native_deletions;
+mod native_focus;
 mod pairing_admin;
 mod provider_prepare;
 mod provider_update;

@@ -38,8 +38,9 @@ use std::time::{Duration, Instant};
 
 use runtrol_runtime_client::protocol::{
     AppScope, EnrollmentDecision, InstallationState, IntegrationGrant, MutationRequestId,
-    RuntimeTerminalId, TerminalAcquireControlParams, TerminalAttachParams, TerminalGeometry,
-    TerminalOpenParams, TerminalOpenTarget, TerminalStopParams, TerminalWriteParams,
+    NativeActivityParams, ProviderId, RuntimeTerminalId, TerminalAcquireControlParams,
+    TerminalAttachParams, TerminalGeometry, TerminalOpenParams, TerminalOpenTarget,
+    TerminalStopParams, TerminalWriteParams,
 };
 use runtrol_runtime_client::{
     ClientOptions, EnrollmentProposal, IntegrationCredentials, IntegrationIdentity, LocatorState,
@@ -192,6 +193,9 @@ fn main() -> ExitCode {
             }
             ["terminals-list", home, identity, digest] => {
                 terminals_list(Path::new(home), Path::new(identity), digest).await
+            }
+            ["native-activity", home, identity, digest, provider] => {
+                native_activity(Path::new(home), Path::new(identity), digest, provider).await
             }
             ["write-twice", home, identity, digest, terminal, hex] => {
                 write_twice(Path::new(home), Path::new(identity), digest, terminal, hex).await
@@ -609,6 +613,36 @@ fn settle_of(settle: &str) -> Result<Duration, String> {
         .parse::<u64>()
         .map(Duration::from_millis)
         .map_err(|error| format!("settle ms: {error}"))
+}
+
+/// What the provider's own process roster says about live conversations, and what Runtime proved it can reach.
+/// This is the evidence a row's capability word must come from, so a journey can hold the word against it.
+async fn native_activity(
+    home: &Path,
+    identity_file: &Path,
+    digest: &str,
+    provider: &str,
+) -> Result<String, String> {
+    let stored = read_stored(identity_file)?;
+    let generation = generation(home, digest)?;
+    let mut client = RuntimeClient::connect_to(generation, options_with(&stored))
+        .await
+        .map_err(|error| format!("connect to generation {digest}: {error}"))?;
+    let activity = client
+        .providers()
+        .native_activity(NativeActivityParams {
+            provider_id: ProviderId::new(provider),
+        })
+        .await
+        .map_err(|error| format!("read the {provider} roster: {error}"))?;
+    Ok(serde_json::json!({
+        "providerId": activity.provider_id.as_str(),
+        "live": activity.live,
+        "attachable": activity.attachable,
+        "focusable": activity.focusable,
+        "active": activity.active,
+    })
+    .to_string())
 }
 
 /// Every terminal the Runtime lists for this grant, with its origin and owner: what a sidebar row is made of.

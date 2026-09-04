@@ -27,6 +27,15 @@ pub(crate) struct RevealRequest {
     pub(crate) from_window_session_id: Option<String>,
 }
 
+/// One observed terminal's shell as an exact process incarnation, so a provider process can be attributed to the
+/// window that owns its terminal without a recycled process id pointing at a stranger's window.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ObservedShell {
+    pub(crate) window_session_id: String,
+    pub(crate) terminal_key: String,
+    pub(crate) shell: runtrol_provider::ProcessIdentity,
+}
+
 /// What a reveal needs to know about the owner window besides delivery.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct RevealTarget {
@@ -60,6 +69,9 @@ const fn refused(kind: RuntimeErrorKind, message: &'static str) -> WindowRegistr
 struct Registered {
     connection: ConnectionToken,
     descriptor: WindowDescriptor,
+    /// The exact incarnation of each observed terminal's shell, by terminal key, stamped when the window published
+    /// the process id. The window sends a bare number; a number alone can be reused by an unrelated process.
+    shells: BTreeMap<String, runtrol_provider::ProcessIdentity>,
     /// Reveal requests for this window; a sender exists from registration so a request before the window watches
     /// is counted as undelivered rather than lost silently.
     reveals: broadcast::Sender<RevealRequest>,
@@ -138,6 +150,7 @@ impl WindowRegistry {
                     terminals: Vec::new(),
                 },
                 reveals: broadcast::channel(REVEAL_QUEUE).0,
+                shells: BTreeMap::new(),
             },
         );
         drop(state);
@@ -176,6 +189,14 @@ impl WindowRegistry {
         if entry.descriptor.terminals == params.terminals {
             return Ok(());
         }
+        entry.shells = params
+            .terminals
+            .iter()
+            .filter_map(|terminal| {
+                let identity = runtrol_childproc::process_identity(terminal.process_id?)?;
+                Some((terminal.terminal_key.clone(), identity))
+            })
+            .collect();
         entry.descriptor.terminals = params.terminals;
         drop(state);
         self.publish();
@@ -219,6 +240,28 @@ impl WindowRegistry {
             host_pid: entry.descriptor.host_pid,
             workspace_folders: entry.descriptor.workspace_folders.clone(),
         })
+    }
+
+    /// Every observed terminal whose shell the registry could stamp, across every registered window.
+    ///
+    /// This is what makes a provider process attributable to the window that owns its terminal: shell integration
+    /// decides whether output can be mirrored, ancestry decides whose terminal it is, and the two are independent.
+    pub(crate) async fn observed_shells(&self) -> Vec<ObservedShell> {
+        let state = self.state.lock().await;
+        state
+            .windows
+            .iter()
+            .flat_map(|(window_session_id, entry)| {
+                entry
+                    .shells
+                    .iter()
+                    .map(move |(terminal_key, shell)| ObservedShell {
+                        window_session_id: window_session_id.clone(),
+                        terminal_key: terminal_key.clone(),
+                        shell: *shell,
+                    })
+            })
+            .collect()
     }
 
     /// Whether a window with that session identity is registered right now.

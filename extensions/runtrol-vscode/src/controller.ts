@@ -33,7 +33,7 @@ import { abortableDelay } from "./abortableDelay";
 /// deleted. The Core sees an exit within a few hundred milliseconds; ten seconds covers a slow machine.
 const STOP_SETTLE_MS = 10_000;
 import type { Conversation } from "./conversationList";
-import { attentionCount, nextNeedingYou, projects, runningElsewhere } from "./conversationList";
+import { attentionCount, nextNeedingYou, projects, runningElsewhere, nativeProcessKey } from "./conversationList";
 import { conversationDeletion, deletionQuestion } from "./conversationDeletion";
 import { editorPanelFor } from "./editorPanels";
 import { archivalQuestion, conversationArchival } from "./conversationArchival";
@@ -59,6 +59,7 @@ import { nativeCatalogueAfterFailure } from "./nativeChatCatalogue";
 import {
   projectNativeActivity,
   type NativeActivityProjection,
+  unlistedLiveProviders,
 } from "./nativeActivityProjection";
 import {
   readStartDefaults,
@@ -120,6 +121,8 @@ export class Controller implements vscode.Disposable {
   private readonly isolatedWorkspaces: IsolatedWorkspaces;
   /// Native identity last seen for each pushed hosted terminal, used to refresh a catalogue only on discovery.
   private hostedTerminalIdentities = new Map<string, string | null>();
+  /// Providers asked again for a live conversation no row lists, with the wait each one is on.
+  private readonly unlistedReask = new Map<string, { members: string; askedAt: number; waitMs: number }>();
   private nativeActivityByProvider = new Map<string, ReadonlySet<string>>();
   private nativeAttachableByProvider = new Map<string, ReadonlySet<string>>();
   private nativeActiveByProvider = new Map<string, ReadonlySet<string>>();
@@ -616,6 +619,23 @@ export class Controller implements vscode.Disposable {
         this.say(
           outcome.delivered
             ? `Shown in its own window (${outcome.foreground})`
+            : `Its window is not listening for that (${outcome.foreground})`,
+          outcome.delivered ? "info" : "warning",
+        );
+        afterApplied();
+        return;
+      }
+      // A conversation running in a terminal another window owns is shown there, not opened here: the same
+      // desktop answer as a hosted row owned elsewhere, for the tier that has no mirror at all.
+      if (target.canFocus && target.native?.nativeSessionId) {
+        const outcome = await this.runtime.focusNative({
+          providerId: target.providerId,
+          nativeSessionId: target.native.nativeSessionId,
+        });
+        this.lastReveal = outcome;
+        this.say(
+          outcome.delivered
+            ? `Shown in the window that runs it (${outcome.foreground})`
             : `Its window is not listening for that (${outcome.foreground})`,
           outcome.delivered ? "info" : "warning",
         );
@@ -1762,7 +1782,39 @@ export class Controller implements vscode.Disposable {
     );
     this.applyNativeActivityProjection(projected);
     for (const providerId of projected.discoveredProviders) this.deferNativeDiscovery(providerId, true);
-    if (projected.discoveredProviders.size > 0) this.scheduleNativeDiscoveries();
+    this.deferUnlistedDiscoveries(projected);
+    this.scheduleNativeDiscoveries();
+  }
+
+  /// Ask a provider's catalogue again while it owns a live conversation no row lists. The first ask is quick and
+  /// each wait after it doubles up to a cap; the wait restarts whenever the set of unlisted conversations changes
+  /// and the asking ends by itself once the row exists or the process is gone.
+  private deferUnlistedDiscoveries(projected: NativeActivityProjection): void {
+    const listed = new Set(
+      this.state.nativeChats.map((chat) => nativeProcessKey(chat.providerId, chat.nativeSessionId)),
+    );
+    const hostedNative = new Set(
+      [...this.hostedTerminalIdentities.values()].filter((native): native is string => native !== null),
+    );
+    const unlisted = unlistedLiveProviders(projected.liveByProvider, listed, hostedNative);
+    for (const providerId of [...this.unlistedReask.keys()]) {
+      if (!unlisted.has(providerId)) this.unlistedReask.delete(providerId);
+    }
+    const now = Date.now();
+    for (const [providerId, members] of unlisted) {
+      const prior = this.unlistedReask.get(providerId);
+      if (prior && prior.members === members) {
+        if (now < prior.askedAt + prior.waitMs) continue;
+        this.unlistedReask.set(providerId, {
+          members,
+          askedAt: now,
+          waitMs: Math.min(prior.waitMs * 2, UNLISTED_REASK_MAX_MS),
+        });
+      } else {
+        this.unlistedReask.set(providerId, { members, askedAt: now, waitMs: UNLISTED_REASK_FIRST_MS });
+      }
+      this.deferNativeDiscovery(providerId, true);
+    }
   }
 
   private applyNativeActivityProjection(projected: NativeActivityProjection): void {
@@ -1773,6 +1825,7 @@ export class Controller implements vscode.Disposable {
     this.state.setNativeActivity(projected.active);
     this.state.setObservedNative(projected.live);
     this.state.setAttachableNative(projected.attachable);
+    this.state.setFocusableNative(projected.focusable);
     this.state.setUnconfirmedNative(projected.unconfirmed);
   }
 
@@ -1799,6 +1852,7 @@ export class Controller implements vscode.Disposable {
     this.state.setNativeActivity(new Set());
     this.state.setObservedNative(new Set());
     this.state.setAttachableNative(new Set());
+    this.state.setFocusableNative(new Set());
     this.state.setUnconfirmedNative(new Set());
   }
 
@@ -2222,6 +2276,9 @@ function normalizePath(value: string): string {
 
 const MEMORY_POLL_MS = 5_000;
 const NATIVE_ACTIVITY_POLL_MS = 250;
+/// How soon a provider is asked again for a live conversation no row lists, and the most it waits between asks.
+const UNLISTED_REASK_FIRST_MS = 1_000;
+const UNLISTED_REASK_MAX_MS = 15_000;
 
 function delay(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));

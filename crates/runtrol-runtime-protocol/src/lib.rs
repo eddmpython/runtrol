@@ -60,6 +60,7 @@ pub use native_sessions::{
     MAX_NATIVE_PUBLIC_CURSOR_BYTES, NATIVE_CURSOR_LIFETIME_MS, NativeActivity,
     NativeActivityParams, NativeResumeCapability, NativeSessionCatalogue, NativeSessionDescriptor,
 };
+pub use native_sessions::{NativeFocusParams, NativeFocusResult};
 pub use revision::{
     FINALIZED_REVISIONS, ProtocolRevision, REVISION_2026_08_13, REVISION_2026_08_27, RevisionError,
     negotiate,

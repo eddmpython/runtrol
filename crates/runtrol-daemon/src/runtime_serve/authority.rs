@@ -169,9 +169,9 @@ pub(super) fn required_scope(method: RuntimeMethod) -> Option<AppScope> {
         | RuntimeMethod::ProvidersUsage
         | RuntimeMethod::ProvidersGetCapabilities => Some(AppScope::ProviderRead),
         RuntimeMethod::ProvidersListModels => Some(AppScope::ModelRead),
-        RuntimeMethod::ProvidersListNativeSessions | RuntimeMethod::ProvidersNativeActivity => {
-            Some(AppScope::SessionNativeDiscover)
-        }
+        RuntimeMethod::ProvidersListNativeSessions
+        | RuntimeMethod::ProvidersNativeActivity
+        | RuntimeMethod::ProvidersFocusNative => Some(AppScope::SessionNativeDiscover),
         RuntimeMethod::SessionsList
         | RuntimeMethod::SessionsWatchIndex
         | RuntimeMethod::SessionsGet

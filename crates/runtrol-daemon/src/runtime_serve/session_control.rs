@@ -1086,6 +1086,7 @@ fn parse_session_operation(
         | RuntimeMethod::SessionsIndexChanged
         | RuntimeMethod::SessionsIndexEnded
         | RuntimeMethod::ProvidersUsage
+        | RuntimeMethod::ProvidersFocusNative
         | RuntimeMethod::PanicStop => Err("the method is not a session operation"),
     }
 }

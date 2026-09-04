@@ -71,6 +71,8 @@ export type JourneyApi = {
   windowSessionId(): string;
   /// The keys of the rows the sidebar lists right now.
   rowKeys(): string[];
+  /// What one row says it can do, as the click path decides it: the words on the row follow these facts.
+  rowFacts(key: string): { live: boolean; canOpen: boolean; canFocus: boolean; blocked: string | null } | null;
   /// What the Runtime answered to this window's last owner reveal, or null.
   lastReveal(): { delivered: boolean; foreground: string } | null;
   /// Open the newest stored conversation of a service that has a title (a reopened conversation with history),
@@ -411,6 +413,10 @@ export function journeyApi(
     activeTerminalName: () => vscode.window.activeTerminal?.name ?? null,
     windowSessionId: () => vscode.env.sessionId,
     rowKeys: () => state.conversations.map((row) => row.key),
+    rowFacts: (key) => {
+      const row = state.conversations.find((candidate) => candidate.key === key);
+      return row ? { live: row.live, canOpen: row.canOpen, canFocus: row.canFocus, blocked: row.blocked } : null;
+    },
     lastReveal: () => controller.lastReveal,
     terminalStop: (runtimeGeneration, terminalId, _deadlineMs) => afterReady(
       () => terminals.stopJourneyTerminal(runtimeGeneration, terminalId),

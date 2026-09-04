@@ -28,6 +28,8 @@ import {
   type TerminalDescriptor,
   type TerminalIndexSnapshot,
   type WindowMirrorEndParams,
+  type NativeFocusParams,
+  type NativeFocusResult,
   type WindowRevealParams,
   type WindowRevealResult,
   type WindowMirrorOpenParams,
@@ -360,6 +362,12 @@ export class StudioRuntimeClient implements vscode.Disposable {
   /// Ask the window that owns a terminal to show it and come forward.
   revealAtOwner(params: WindowRevealParams): Promise<WindowRevealResult> {
     return this.read((runtime) => runtime.windows().reveal(params));
+  }
+
+  /// Ask the window that owns a live conversation's terminal to show it and come forward. The Runtime knows which
+  /// window that is; this window never learns it.
+  focusNative(params: NativeFocusParams): Promise<NativeFocusResult> {
+    return this.read((runtime) => runtime.providers().focusNative(params));
   }
 
   /// Follow reveal requests for this window on a dedicated connection until `signal` aborts, reconnecting after

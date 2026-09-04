@@ -19,6 +19,7 @@ type Step =
   | { readonly kind: "done" }
   | { readonly kind: "addProject"; readonly folder: string }
   | { readonly kind: "start"; readonly label: string; readonly commandLine: string }
+  | { readonly kind: "startTyped"; readonly label: string; readonly commandLine: string; readonly settleMs: number; readonly setupKeys?: readonly string[]; readonly setupGapMs?: number }
   | { readonly kind: "click"; readonly key: string }
   | { readonly kind: "showOther" }
   | { readonly kind: "report" }
@@ -94,10 +95,42 @@ async function journey(coordination: string, role: string): Promise<void> {
       terminal.shellIntegration?.executeCommand(step.commandLine);
       const mirror = await waitForMirror(journey, 30_000);
       result = { terminalId: mirror.terminalId, refusal: mirror.refusal, terminalName: terminal.name };
+    } else if (step.kind === "startTyped") {
+      // Typed the way a person types it, with no shell integration to hand the command over: nothing here may
+      // depend on `shellIntegration`, and no mirror is expected.
+      const terminal = vscode.window.createTerminal({ name: `${role}-${step.label}` });
+      terminals.set(step.label, terminal);
+      terminal.show(false);
+      const processId = await terminal.processId;
+      const before = journey.windowMirrors().length;
+      terminal.sendText(step.commandLine, true);
+      // A provider opened in a fresh folder asks its first-run questions before it is in a conversation at all,
+      // and a conversation is what a row is. The keys answer those questions the way a person does.
+      for (const key of step.setupKeys ?? []) {
+        await delay(step.setupGapMs ?? 4_000);
+        terminal.sendText(key, false);
+      }
+      await delay(step.settleMs);
+      result = {
+        terminalName: terminal.name,
+        shellProcessId: processId ?? null,
+        shellIntegration: terminal.shellIntegration !== undefined,
+        mirrorsOpenedAfterwards: journey.windowMirrors().length - before,
+        mirrors: journey.windowMirrors().slice(before),
+      };
     } else if (step.kind === "click") {
+      // A row is a conversation the provider has to write down first; wait for it rather than click a guess.
+      const waited = Date.now();
+      while (!journey.rowKeys().includes(step.key)) {
+        if (Date.now() - waited > 90_000) {
+          throw new Error(`no sidebar row has key ${step.key} after 90 s; rows ${JSON.stringify(journey.rowKeys())}`);
+        }
+        await delay(250);
+      }
+      const facts = journey.rowFacts(step.key);
       const started = Date.now();
       await journey.clickRow(step.key);
-      result = { clickedMs: Date.now() - started, reveal: journey.lastReveal() };
+      result = { rowWaitMs: started - waited, facts, clickedMs: Date.now() - started, reveal: journey.lastReveal() };
     } else if (step.kind === "showOther") {
       // A second terminal takes the panel, so a reveal has to bring the provider's terminal back.
       let other = terminals.get("other");

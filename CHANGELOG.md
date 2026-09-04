@@ -21,6 +21,14 @@ and refactoring that no user can observe do not belong here.
   terminal and brings the window forward as far as Windows permits (flashing its taskbar button otherwise). Public
   protocol: `windows/reveal`, `windows/watchReveals` with `windows/revealRequested` and `windows/revealsEnded`, and
   `hostPid` on a window registration.
+- Owner focus without shell integration: a provider typed into a Studio window's terminal that has shell
+  integration turned off cannot be mirrored, but the Runtime still proves by process ancestry which window's
+  terminal it runs in. Its row says `Focus owner`, and clicking it shows the terminal in that window and brings
+  the window forward; nothing is opened or attached. A live conversation no window can reach now says
+  `Observed only` instead of sharing `Elsewhere` with it, and a row with no live process says `Unavailable`.
+  Public protocol: `NativeActivity.focusable` and `providers/focusNative`.
+  A console route yields to that window: such a conversation is focusable, not attachable, so a second viewer
+  never shares one console's input with the person typing in it.
 
 ### Removed
 
@@ -50,6 +58,10 @@ and refactoring that no user can observe do not belong here.
 
 ### Fixed
 
+- A conversation started in an ordinary terminal and first written down after its process was noticed (the usual
+  case: a person opens the CLI, then types) reached the sidebar of no window, because the only catalogue refresh
+  was the one its discovery had triggered. While a live conversation no row lists exists, its provider's catalogue
+  is now asked again on a doubling wait (1 s to 15 s) until the row appears or the process ends.
 - Pressing Escape alone in a conversation tab now reaches the provider at once. The Core's input boundary used to
   hold a lone Escape as an unfinished sequence and deliver it glued to the next key, which a CLI reads as an Alt
   chord. A mouse report a viewer sends is now forwarded to the provider exactly as written instead of dropped.

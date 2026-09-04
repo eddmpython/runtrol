@@ -32,6 +32,8 @@ import type {
   MutationRequestId,
   NativeActivity,
   NativeActivityParams,
+  NativeFocusParams,
+  NativeFocusResult,
   NativeSessionCatalogue,
   PendingEnrollmentId,
   PendingApprovalList,
@@ -474,6 +476,10 @@ export class ProviderClient {
   public nativeActivity(providerId: ProviderId): Promise<NativeActivity> {
     const params: NativeActivityParams = { providerId };
     return callRuntime(this.runtime, "providers/nativeActivity", params, "NativeActivity");
+  }
+
+  public focusNative(params: NativeFocusParams): Promise<NativeFocusResult> {
+    return callRuntime(this.runtime, "providers/focusNative", params, "NativeFocusResult");
   }
 }
 

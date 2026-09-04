@@ -72,6 +72,7 @@ export class RuntimeState implements vscode.Disposable {
   private observedNative: ReadonlySet<string> = new Set();
   /// Live provider owners with an exact route into their terminal surface.
   private attachableNative: ReadonlySet<string> = new Set();
+  private focusableNative: ReadonlySet<string> = new Set();
   /// Prior live owners whose current process proof could not be refreshed. They are blocked but not called live.
   private unconfirmedNative: ReadonlySet<string> = new Set();
   /// Daemon-owned terminals delivered by the structural terminal-index watch.
@@ -169,6 +170,7 @@ export class RuntimeState implements vscode.Disposable {
       this.terminalRows,
       this.unconfirmedNative,
       this.attachableNative,
+      this.focusableNative,
     );
     return this.conversationRows;
   }
@@ -218,6 +220,14 @@ export class RuntimeState implements vscode.Disposable {
   setAttachableNative(identities: ReadonlySet<string>): void {
     if (sameMembers(identities, this.attachableNative)) return;
     this.attachableNative = identities;
+    this.conversationRows = null;
+    this.changedEmitter.fire("rows");
+  }
+
+  /// Replace the live owners whose terminal a registered VS Code window is proved to own.
+  setFocusableNative(identities: ReadonlySet<string>): void {
+    if (sameMembers(identities, this.focusableNative)) return;
+    this.focusableNative = identities;
     this.conversationRows = null;
     this.changedEmitter.fire("rows");
   }

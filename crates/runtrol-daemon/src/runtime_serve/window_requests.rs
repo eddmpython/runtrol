@@ -143,10 +143,13 @@ async fn reveal(
             "only a VS Code window registered on this machine can ask for a reveal",
         );
     };
-    let Some(target) = composed
-        .windows
-        .reveal(&params.window_session_id, &params.terminal_key, Some(from))
-        .await
+    let Some(result) = show_at_owner(
+        composed,
+        Some(from),
+        &params.window_session_id,
+        &params.terminal_key,
+    )
+    .await
     else {
         return Answer::plain(
             id,
@@ -154,14 +157,26 @@ async fn reveal(
             "no window with that identity is registered",
         );
     };
+    Answer::success(id, &result)
+}
+
+/// Tell one registered window to show one of its terminals, then bring its editor window forward. None when no
+/// window with that identity is registered. This is the whole of a reveal, and the only way to perform one.
+pub(super) async fn show_at_owner(
+    composed: &Arc<Composed>,
+    from: Option<String>,
+    window_session_id: &str,
+    terminal_key: &str,
+) -> Option<WindowRevealResult> {
+    let target = composed
+        .windows
+        .reveal(window_session_id, terminal_key, from)
+        .await?;
     let foreground = bring_forward(target.host_pid, &target.workspace_folders).await;
-    Answer::success(
-        id,
-        &WindowRevealResult {
-            delivered: target.delivered,
-            foreground,
-        },
-    )
+    Some(WindowRevealResult {
+        delivered: target.delivered,
+        foreground,
+    })
 }
 
 /// The editor window belongs to an ancestor of the Extension Host; among those processes' visible windows the one

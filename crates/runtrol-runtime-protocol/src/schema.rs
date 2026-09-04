@@ -9,9 +9,9 @@ use crate::{
     InitializeParams, InitializeResult, IntegrationGrant, JsonRpcNotification, JsonRpcRequest,
     JsonRpcResponse, LaggedNotification, ListModelsParams, ListNativeSessionsParams,
     ListPendingApprovalsParams, ListTerminalsParams, ListWindowsParams, ManagedSessionList,
-    NativeActivity, NativeActivityParams, NativeSessionCatalogue, ObservedCommand,
-    ObservedTerminal, PendingApprovalList, ProviderList, ProviderUsageList,
-    ProviderWatchEndedNotification, ProvidersChangedNotification,
+    NativeActivity, NativeActivityParams, NativeFocusParams, NativeFocusResult,
+    NativeSessionCatalogue, ObservedCommand, ObservedTerminal, PendingApprovalList, ProviderList,
+    ProviderUsageList, ProviderWatchEndedNotification, ProvidersChangedNotification,
     ProvidersUsageChangedNotification, RequestEnrollmentParams, RespondApprovalParams,
     ResumeSessionParams, RotateIntegrationKeyParams, RuntimeEventNotification,
     RuntimeLocatorRecord, RuntimeMethod, RuntimeModelCatalog, RuntimeProviderCapabilities,
@@ -146,6 +146,8 @@ struct PublicProtocolSchema {
     watch_window_reveals_result: WatchWindowRevealsResult,
     window_reveal_requested: WindowRevealRequestedNotification,
     window_reveals_ended: WindowRevealsEndedNotification,
+    native_focus: NativeFocusParams,
+    native_focus_result: NativeFocusResult,
 }
 
 /// Generate the language-neutral public schema from the Rust DTOs.

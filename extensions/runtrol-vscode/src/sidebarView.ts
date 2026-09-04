@@ -452,6 +452,7 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
       live: row.live,
       canStop: row.canStop,
       canOpen: row.canOpen,
+      canFocus: row.canFocus,
       blocked: row.blocked,
       pinned: row.pinned,
       signIn: row.signInNeeded,
