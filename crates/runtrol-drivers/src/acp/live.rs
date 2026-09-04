@@ -277,6 +277,48 @@ mod tests {
         drop(fs::remove_dir_all(&home));
     }
 
+    /// A held file proves a conversation open and binds it to the process holding it, never that a model is
+    /// answering in it. This driver has no structural turn boundary to read, so it claims none: a row it feeds
+    /// shows no running animation rather than a guess (`STATE-02`).
+    #[cfg(windows)]
+    #[test]
+    fn a_held_conversation_is_open_and_bound_but_never_answering() {
+        use std::fs::OpenOptions;
+        use std::os::windows::fs::OpenOptionsExt as _;
+
+        #[expect(
+            clippy::unnecessary_wraps,
+            reason = "the driver's holder question may answer nobody; this fixture always knows"
+        )]
+        fn holder_pid(_held: &Path) -> Option<u32> {
+            Some(4242)
+        }
+
+        let home = scratch();
+        let open = conversation(&home, Some("C%3A%5Cwork%5Capp"), OPEN);
+        let holder = OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(open.join("events.jsonl"))
+            .expect("this process takes the file");
+
+        let answer = activity(&home, &spec(true), holder_pid);
+        let live: Vec<&str> = answer.live.iter().map(NativeSessionId::as_str).collect();
+        assert_eq!(live, vec![OPEN], "the held conversation is live");
+        assert_eq!(
+            answer.processes.first().map(|process| process.pid),
+            Some(4242),
+            "and bound to the process holding its file"
+        );
+        assert!(
+            answer.active.is_empty(),
+            "a driver without a turn boundary never reports a conversation as answering"
+        );
+
+        drop(holder);
+        drop(fs::remove_dir_all(&home));
+    }
+
     /// What this reads on the machine it is run on, printed rather than asserted.
     ///
     /// Ignored by default because it depends on whether the person has the agent open right now. It is how the
