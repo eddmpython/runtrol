@@ -14,7 +14,10 @@
 param(
     # Not mandatory: dot-sourcing passes nothing, and a mandatory parameter would prompt.
     [string]$TitleMatch = "",
-    [string]$CommandLineMatch = ""
+    [string]$CommandLineMatch = "",
+    # The exact process that owns the window, when the caller knows it: a console window belongs to its shell and
+    # a Windows Terminal window to WindowsTerminal.exe (measured 2026-09-05), and a provider retitles both.
+    [int]$ProcessId = 0
 )
 
 $ErrorActionPreference = "Stop"
@@ -27,6 +30,7 @@ public class RuntrolWindowWin32 {
     public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
     [DllImport("user32.dll")] public static extern bool EnumWindows(EnumWindowsProc callback, IntPtr lParam);
     [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr hWnd);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetWindowText(IntPtr hWnd, StringBuilder text, int capacity);
     [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
@@ -111,16 +115,20 @@ function Get-RuntrolProcessFamily([string]$CommandLineMatch) {
 
 # The first visible top-level window whose title contains $TitleMatch (case-insensitive), within the family
 # when one is named. Returns $null when nothing matches; the caller decides what that means.
-function Find-RuntrolWindow([string]$TitleMatch, [string]$CommandLineMatch) {
+function Find-RuntrolWindow([string]$TitleMatch, [string]$CommandLineMatch, [int]$ProcessId = 0) {
+    # Never "any window": a lookup with neither a title nor a process would hand back whatever is on top, and keys
+    # typed into that window are keys typed into the operator's work (measured 2026-09-05, once).
+    if (-not $TitleMatch -and $ProcessId -le 0) { return $null }
     $allowedProcessIds = Get-RuntrolProcessFamily $CommandLineMatch
     return [RuntrolWindowWin32]::Visible() | Where-Object {
-        $_.Title.IndexOf($TitleMatch, [StringComparison]::OrdinalIgnoreCase) -ge 0 -and
+        ((($ProcessId -gt 0) -and ($_.ProcessId -eq $ProcessId)) -or
+         (($ProcessId -le 0) -and ($_.Title.IndexOf($TitleMatch, [StringComparison]::OrdinalIgnoreCase) -ge 0))) -and
         ($null -eq $allowedProcessIds -or $allowedProcessIds -contains $_.ProcessId)
     } | Select-Object -First 1
 }
 
 # Script face: print the matched title so callers can probe for a window's existence.
-if ($TitleMatch) {
-    $found = Find-RuntrolWindow $TitleMatch $CommandLineMatch
+if ($TitleMatch -or $ProcessId -gt 0) {
+    $found = Find-RuntrolWindow $TitleMatch $CommandLineMatch $ProcessId
     if ($found) { Write-Output $found.Title }
 }

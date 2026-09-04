@@ -167,8 +167,6 @@ pub enum TerminalOrigin {
     /// The Runtime started the provider on its own pseudo terminal: the fully supervised tier.
     #[default]
     Owned,
-    /// The Runtime joined a Windows console some other process owns through its helper.
-    ConsoleMirror,
     /// The Runtime started only the provider's official attachment client; the owner is elsewhere.
     OfficialAttach,
     /// A VS Code window observes the terminal through shell integration and feeds its raw execution output here;

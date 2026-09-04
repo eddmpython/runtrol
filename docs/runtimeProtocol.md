@@ -120,11 +120,12 @@ answering now, the subset whose exact live terminal has a structurally proven at
 whose process is proved to run inside a terminal a registered VS Code window observes. These are `live`,
 `active`, `attachable`, and `focusable`, respectively. `focusable` is decided by process ancestry, not by shell
 integration: a window publishes each observed terminal's shell process, and a live provider process found
-under one of those shells belongs to that terminal (the nearest shell when they nest). A focusable conversation
-is one `providers/focusNative` can show where it runs; it says nothing about attaching or mirroring. A console
-route yields to that window: a live process whose console could be joined but whose terminal a registered window
-is proved to own is `focusable` and not `attachable`, so one console never gets a second viewer sharing its
-input while its own window can show it. An official attachment stays `attachable` whoever owns the terminal. It is separate from the catalogue because a panel asks it on a
+under one of those shells belongs to that terminal (the nearest shell when they nest). A live process no
+registered window owns is focusable when its own process chain owns a window on this desktop (Windows Terminal,
+a console window), proved by the same search the click repeats; the Runtime brings that window forward and cannot
+pick a tab inside it. A focusable conversation is one `providers/focusNative` can show where it runs; it says
+nothing about attaching or mirroring, and `attachable` names only the provider's own attachment, so the two never
+overlap. It is separate from the catalogue because a panel asks it on a
 250 ms compatibility clock and a
 catalogue is not cheap. A listing reads every stored conversation's head; the activity request reads only the
 provider's bounded process roster. The measured driver validates both PID and kernel process-start identity, so a

@@ -201,6 +201,22 @@ async fn bring_forward(host_pid: Option<u32>, workspace_folders: &[String]) -> W
         runtrol_childproc::os_window::reveal_window(&processes, &fragment)
     })
     .await;
+    foreground_of(&outcome)
+}
+
+/// Bring forward the window the nearest of `process_ids` owns: a terminal host's own window for a conversation no
+/// registered VS Code window observes. The chain was proved by the roster round; the click repeats the same search.
+pub(super) async fn bring_forward_processes(process_ids: Vec<u32>) -> WindowForeground {
+    let outcome = tokio::task::spawn_blocking(move || {
+        runtrol_childproc::os_window::reveal_window(&process_ids, "")
+    })
+    .await;
+    foreground_of(&outcome)
+}
+
+fn foreground_of(
+    outcome: &Result<runtrol_childproc::os_window::RevealOutcome, tokio::task::JoinError>,
+) -> WindowForeground {
     match outcome {
         Ok(runtrol_childproc::os_window::RevealOutcome::Raised) => WindowForeground::Raised,
         Ok(runtrol_childproc::os_window::RevealOutcome::Flashed) => WindowForeground::Flashed,

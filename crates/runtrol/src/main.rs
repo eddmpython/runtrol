@@ -40,8 +40,6 @@ enum Personality {
         /// Exact words after the provider command.
         arguments: Vec<String>,
     },
-    /// Join one other process's console for the daemon that spawned this helper, until that process ends.
-    ConsoleMirror(u32),
     /// Say which live process holds one file, for the Runtime that spawned this helper, and end.
     WhoHolds(std::path::PathBuf),
     /// Materialize runtime-discovered transparent provider launchers.
@@ -127,14 +125,6 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         }
-        // Attached to one console for its whole life: no runtime, no daemon, just the mirror loop.
-        Personality::ConsoleMirror(pid) => match runtrol_childproc::run_mirror(pid) {
-            Ok(code) => ExitCode::from(u8::try_from(code).unwrap_or(1)),
-            Err(error) => {
-                report(&format!("console mirror of {pid}: {error}"));
-                ExitCode::FAILURE
-            }
-        },
         Personality::ProviderShims(directory) => run(shimming(&directory)),
         Personality::Administration(words) => run(administering(&words)),
         Personality::Command(words) => run(commanding(&words)),
@@ -180,12 +170,6 @@ fn choose(words: &[String]) -> Personality {
             Some(path) => Personality::WhoHolds(path.into()),
             None => Personality::Usage(format!("runtrol {word} <path>")),
         },
-        Some(word) if word == runtrol_childproc::console_mirror::SUBCOMMAND => {
-            match words.get(1).map(|pid| pid.parse::<u32>()) {
-                Some(Ok(pid)) => Personality::ConsoleMirror(pid),
-                Some(Err(_)) | None => Personality::Usage(format!("runtrol {word} <pid>")),
-            }
-        }
         Some(_) if runtrol_cli::is_administration(words) => {
             Personality::Administration(words.to_vec())
         }

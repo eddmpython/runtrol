@@ -21,6 +21,7 @@ type Step =
   | { readonly kind: "start"; readonly label: string; readonly commandLine: string }
   | { readonly kind: "startTyped"; readonly label: string; readonly commandLine: string; readonly settleMs: number; readonly setupKeys?: readonly string[]; readonly setupGapMs?: number }
   | { readonly kind: "click"; readonly key: string }
+  | { readonly kind: "rowFacts"; readonly key: string }
   | { readonly kind: "showOther" }
   | { readonly kind: "report" }
   | { readonly kind: "exit"; readonly label: string; readonly keys: readonly string[]; readonly gapMs: number };
@@ -131,6 +132,9 @@ async function journey(coordination: string, role: string): Promise<void> {
       const started = Date.now();
       await journey.clickRow(step.key);
       result = { rowWaitMs: started - waited, facts, clickedMs: Date.now() - started, reveal: journey.lastReveal() };
+    } else if (step.kind === "rowFacts") {
+      // What the row says it can do, read without clicking: a click on a stored conversation would resume it.
+      result = { facts: journey.rowFacts(step.key), present: journey.rowKeys().includes(step.key) };
     } else if (step.kind === "showOther") {
       // A second terminal takes the panel, so a reveal has to bring the provider's terminal back.
       let other = terminals.get("other");

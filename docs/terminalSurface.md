@@ -21,11 +21,11 @@ transport or Studio navigation.
 
 - `runtrol-childproc::pty` owns ConPTY on Microsoft Windows and `openpty` on Unix.
 - One live conversation has one provider-owned conversation owner. Runtime exposes at most one central terminal
-  renderer for it: either the owner TUI, one official attachment client, one Windows console mirror, or one observed
+  renderer for it: either the owner TUI, one official attachment client, or one observed
   mirror fed by the VS Code window that owns the terminal (`fed.rs`; `docs/vscodeSurface.md`, observed mirror). That
   renderer has one reader, one bounded output ring, and one `vt100` screen snapshot without scrollback. Adding VS
   Code windows, phone views, or SDK viewers never duplicates those central objects. The descriptor's `origin` names
-  which of the four it is.
+  which of the three it is.
 - [`runtrol-core::terminal`](../crates/runtrol-core/src/terminal/mod.rs) owns the executable ring, geometry, screen,
   and shared-state limits. [`terminal_surface.rs`](../crates/runtrol-daemon/src/terminal_surface.rs) binds hosted
   terminal admission to the Core hot-process ceiling and proves the complete-set memory bound. Viewers reuse that
@@ -98,20 +98,21 @@ Runtime selects the strongest structurally proven route for each live process, n
 2. If the provider roster publishes a complete official target and the manifest declares paired `attach` and `stop`
    commands, Runtime starts one provider TUI attachment client only when the first viewer opens the conversation.
    `attach` is not `resume`: the original owner remains the only conversation owner.
-3. On Microsoft Windows, an interactive console process can be joined through `AttachConsole`. Runtime starts one
-   bounded helper only when the first viewer opens the conversation. It reads the visible `CONOUT$` buffer and writes
-   viewer input to `CONIN$` without replacing the owner.
+3. A console another terminal host owns is never joined. Windows exposes `AttachConsole`, and an earlier build used
+   it as a screen mirror; the accepted capability table makes an arbitrary external terminal focus-only (`PLAN-02`,
+   2026-09-01), so the Runtime proves the window that owns the terminal instead and brings it forward on request
+   (`providers/focusNative`).
 4. Without one of those proofs, the process is observe-only. Runtime shows that it is live, blocks duplicate resume
    and deletion, and refuses to pretend that it can stream the session.
 
-The provider driver reports this per-process fact as unavailable, console, or official with an opaque target. Core
+The provider driver reports this per-process fact as unavailable or official with an opaque target. Core
 does not infer an attachment command from a provider name, a session identifier, terminal text, or a path. The opaque
 official target may differ from the durable native conversation identity and is never persisted as transcript state.
 
 Every external attachment is lazy for memory and process efficiency. Merely listing a live conversation retains only
-its bounded roster record. Before the first open an official route allocates no renderer process or PTY, and a console
-route allocates no helper. Neither allocates a screen model or output ring. Once opened, all viewers share the same
-renderer and the executable per-terminal shared-state ceiling. Official attachments and console mirrors hold a
+its bounded roster record. Before the first open an official route allocates no renderer process, PTY, screen model
+or output ring. Once opened, all viewers share the same
+renderer and the executable per-terminal shared-state ceiling. Official attachments hold a
 content-free terminal-surface admission claim while their renderer is live. The external CLI still owns the
 conversation and transcript; the claim only prevents another Runtime generation from allocating a second renderer,
 ring, and screen for that owner.
@@ -229,8 +230,8 @@ and replace its screen from the returned snapshot. It must not redirect to the c
 resize, stop, control acquisition, and approval mutations are never retried after an uncertain outcome.
 
 One atomic live-admission registry prevents a native conversation from having both a structured owner and a terminal
-surface, including during generation handover. Runtime-owned TUI processes, official attachment renderers, and console
-mirrors all export their terminal-surface claim. A terminal reservation is exported before process startup completes,
+surface, including during generation handover. Runtime-owned TUI processes and official attachment renderers
+export their terminal-surface claim. A terminal reservation is exported before process startup completes,
 so a generation handoff cannot lose the launch interval. A draining generation may serve terminals it already owns
 but cannot open new ones.
 
@@ -253,9 +254,9 @@ generation-pinned public attach and the `legacyGenerationBusy` barrier rather th
 ## Lifetime
 
 A terminal lives while its provider CLI runs. Closing a Studio tab or SDK view detaches that viewer only. When the
-provider exits, Runtime drains the final frame before releasing the terminal. An explicit stop ends an owned PTY or
-Windows console owner directly; an official attachment invokes the paired provider stop command and then releases only
-its attachment renderer. A draining Runtime generation releases a quiet console mirror without stopping its external
+provider exits, Runtime drains the final frame before releasing the terminal. An explicit stop ends an owned PTY
+directly; an official attachment invokes the paired provider stop command and then releases only
+its attachment renderer. A draining Runtime generation releases a quiet observed mirror without stopping its external
 owner and ends an official attachment renderer without claiming ownership of the provider transcript. Idle retirement
 rechecks viewer count and output age at the same lock boundary where attach subscribes, then marks the renderer
 stopping. A reconnect either installs its receiver first and keeps the renderer or receives `terminalGone`. The process
@@ -275,9 +276,9 @@ windows share the bounded daemon roster cache owned by
 count. While the original process is live, Runtime blocks duplicate resume and permanent deletion.
 
 Microsoft Windows is the operating-system capture layer here. A VS Code window is only a viewer. Windows does not
-expose another terminal host's original ConPTY byte pipes, but `AttachConsole` does expose the current console screen
-and input queue for a compatible interactive process. Runtime represents that honest screen mirror as terminal bytes.
-It does not call the result the original raw byte stream. On Unix, an arbitrary pre-existing PTY remains unattached
+expose another terminal host's original ConPTY byte pipes. `AttachConsole` exposes a console's current screen and
+input queue, and an earlier build mirrored that screen; it is no longer joined, because an arbitrary external terminal
+is focus-only: the Runtime proves the window that owns the terminal and brings it forward (`providers/focusNative`). On Unix, an arbitrary pre-existing PTY remains unattached
 unless the provider or original terminal host exposes a supported official channel. Every unsupported row stays
 observable rather than being restarted, migrated, or silently resumed.
 

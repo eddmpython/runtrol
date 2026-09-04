@@ -586,9 +586,25 @@ pub(crate) async fn reconcile_native_activity(
         .await
         .needs_process_tree(provider, activity);
     // The same walk answers which window owns which live process, so the focus targets are computed from this
-    // capture rather than a second one.
+    // capture rather than a second one. The proof is repeated when the live process set changed or the last one
+    // aged out, never on every quarter-second round: a process-table capture and a window walk each round would be
+    // idle work the CPU ratchet forbids.
     let shells = composed.windows.observed_shells().await;
-    let wants_focus = !shells.is_empty() && !activity.live.is_empty();
+    let live_pids: std::collections::BTreeSet<u32> = activity
+        .processes
+        .iter()
+        .filter(|process| activity.live.contains(&process.native))
+        .map(|process| process.pid)
+        .collect();
+    let now_ms = runtrol_provider::WallMs::now().as_millis();
+    let wants_focus = !live_pids.is_empty() && {
+        let proofs = composed.focus_proofs.lock().await;
+        proofs.get(&provider).is_none_or(|proof| {
+            proof.live_pids != live_pids
+                || now_ms.saturating_sub(proof.taken_at_ms)
+                    >= crate::native_focus::FOCUS_PROOF_MAX_AGE_MS
+        })
+    };
     let process_tree = if needs_process_tree || wants_focus {
         match runtrol_childproc::ProcessTree::capture() {
             Ok(tree) => Some(tree),
@@ -600,17 +616,35 @@ pub(crate) async fn reconcile_native_activity(
     } else {
         None
     };
-    {
+    if live_pids.is_empty() || wants_focus {
         let targets = process_tree
             .as_ref()
             .map_or_else(std::collections::BTreeMap::new, |tree| {
-                crate::native_focus::window_targets(activity, &shells, tree)
+                let mut targets = crate::native_focus::window_targets(activity, &shells, tree);
+                // A conversation no registered window owns may still sit in a terminal host with a window of its
+                // own on this desktop; the nearest ancestor owning one is what a click brings forward.
+                let desktop =
+                    crate::native_focus::desktop_targets(activity, tree, &targets, &|chain| {
+                        match runtrol_childproc::os_window::locate_window(chain, "") {
+                            runtrol_childproc::os_window::Located::Found(owner) => Some(owner),
+                            _ => None,
+                        }
+                    });
+                targets.extend(desktop);
+                targets
             });
         let mut focus = composed.focus_targets.lock().await;
         focus.retain(|(owner, _), _| *owner != provider);
         for (native, target) in targets {
             focus.insert((provider, native), target);
         }
+        composed.focus_proofs.lock().await.insert(
+            provider,
+            crate::native_focus::FocusProof {
+                live_pids,
+                taken_at_ms: now_ms,
+            },
+        );
     }
     // One process can structurally own several provider conversations, as a multiplexed editor app server does. A
     // single-screen terminal cannot be assigned to an arbitrary one of them. Bind only an unambiguous process-to-
@@ -692,8 +726,8 @@ pub(super) async fn native_activity(
     match walked {
         Ok(Ok(activity)) => {
             reconcile_native_activity(composed, provider, &activity).await;
+            let attachable = attachable_native_sessions(&activity);
             let focusable = focusable_native_sessions(composed, provider).await;
-            let attachable = attachable_native_sessions(&activity, &focusable);
             Answer::success(
                 id,
                 &runtrol_runtime_protocol::NativeActivity {
@@ -761,16 +795,29 @@ pub(super) async fn focus_native(
         .await
         .get(&(provider, params.native_session_id.clone()))
         .cloned();
-    let Some(crate::native_focus::FocusTarget::Window {
-        window_session_id,
-        terminal_key,
-    }) = target
-    else {
-        return Answer::plain(
-            id,
-            RuntimeErrorKind::CapabilityUnavailable,
-            "no window is proved to own that conversation's terminal",
-        );
+    let (window_session_id, terminal_key) = match target {
+        Some(crate::native_focus::FocusTarget::Window {
+            window_session_id,
+            terminal_key,
+        }) => (window_session_id, terminal_key),
+        // The terminal host's own window: brought forward directly, no window to ask and nothing to deliver.
+        Some(crate::native_focus::FocusTarget::Desktop { process_ids }) => {
+            let foreground = super::window_requests::bring_forward_processes(process_ids).await;
+            return Answer::success(
+                id,
+                &runtrol_runtime_protocol::NativeFocusResult {
+                    delivered: true,
+                    foreground,
+                },
+            );
+        }
+        None => {
+            return Answer::plain(
+                id,
+                RuntimeErrorKind::CapabilityUnavailable,
+                "no window is proved to own that conversation's terminal",
+            );
+        }
     };
     let Some(result) = super::window_requests::show_at_owner(
         composed,
@@ -819,26 +866,21 @@ async fn focusable_native_sessions(
 /// The route itself remains daemon-private. Public clients need only the provider-qualified native identity
 /// so they can offer `terminals/open` without guessing a process, command, or provider capability.
 ///
-/// A console route yields to the window that owns the terminal: joining the console of a process a registered
-/// VS Code window is proved to run would give one console a second viewer sharing its input with the person
-/// typing in that window, when the window itself can show the exact terminal (`providers/focusNative`). An
-/// official attachment is the provider's own second client and is kept whoever owns the terminal.
+/// The only route is the provider's own attachment: a console another terminal host owns is never joined (an
+/// arbitrary external terminal is focus-only, `PLAN-02`), so `attachable` and `focusable` never name the same
+/// conversation for the same reason.
 pub(super) fn attachable_native_sessions(
     activity: &runtrol_provider::NativeProcessActivity,
-    focusable: &[String],
 ) -> Vec<String> {
     activity
         .processes
         .iter()
         .filter(|process| {
             activity.live.contains(&process.native)
-                && match process.terminal_access {
-                    runtrol_provider::NativeTerminalAccess::Unavailable => false,
-                    runtrol_provider::NativeTerminalAccess::Console => !focusable
-                        .iter()
-                        .any(|native| native == process.native.as_str()),
-                    runtrol_provider::NativeTerminalAccess::Official { .. } => true,
-                }
+                && matches!(
+                    process.terminal_access,
+                    runtrol_provider::NativeTerminalAccess::Official { .. }
+                )
         })
         .map(|process| process.native.to_string())
         .collect::<std::collections::BTreeSet<_>>()

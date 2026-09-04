@@ -469,7 +469,7 @@ export interface TerminalOpenParams { readonly geometry: TerminalGeometry; reado
 export type TerminalOpenTarget = { readonly kind: "fresh"; } | { readonly adoptionToken: string; readonly kind: "native"; readonly nativeSessionId: string; };
 
 /** How the Runtime reaches the process behind a terminal (`docs/terminalSurface.md`, live capture ladder). */
-export type TerminalOrigin = "owned" | "consoleMirror" | "officialAttach" | "observedMirror";
+export type TerminalOrigin = "owned" | "officialAttach" | "observedMirror";
 
 /** One bounded exact output chunk for a terminal view. */
 export interface TerminalOutputNotification { readonly bytesBase64: string; readonly sequence: number; readonly viewId: RuntimeTerminalViewId; }

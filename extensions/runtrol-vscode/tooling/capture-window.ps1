@@ -6,15 +6,17 @@
 # surface, occluded or not, so the picture is always the window that was asked for. PW_RENDERFULLCONTENT makes
 # that work for GPU-composited windows like editors.
 param(
-    [Parameter(Mandatory = $true)][string]$TitleMatch,
+    [string]$TitleMatch = "",
     [Parameter(Mandatory = $true)][string]$OutPath,
-    [string]$CommandLineMatch = ""
+    [string]$CommandLineMatch = "",
+    [int]$ProcessId = 0
 )
 
 $ErrorActionPreference = "Stop"
 # Kept before dot-sourcing: the shared file's own param() block resets these names in this scope.
 $wantedTitle = $TitleMatch
 $wantedFamily = $CommandLineMatch
+$wantedProcess = $ProcessId
 . (Join-Path $PSScriptRoot "find-window.ps1")
 Add-Type -AssemblyName System.Drawing
 Add-Type @"
@@ -27,7 +29,7 @@ public class RuntrolCaptureWin32 {
 }
 "@
 
-$window = Find-RuntrolWindow $wantedTitle $wantedFamily
+$window = Find-RuntrolWindow $wantedTitle $wantedFamily $wantedProcess
 if (-not $window) {
     Write-Error "no window has a title matching '$wantedTitle'"
     exit 2

@@ -90,8 +90,6 @@ struct Open {
 pub(crate) enum TerminalOrigin {
     /// Runtime started and owns the provider TUI process on this PTY.
     Owned,
-    /// Runtime joined an operating-system console owned elsewhere.
-    ConsoleMirror,
     /// Runtime started only the provider's official TUI attachment client. The conversation owner remains
     /// elsewhere and is stopped through the paired provider command.
     OfficialAttach(Box<OfficialStop>),
@@ -110,7 +108,6 @@ impl TerminalOrigin {
         use runtrol_runtime_protocol::TerminalOrigin as Public;
         match self {
             Self::Owned => (Public::Owned, None),
-            Self::ConsoleMirror => (Public::ConsoleMirror, None),
             Self::OfficialAttach(_) => (Public::OfficialAttach, None),
             Self::ObservedMirror(owner) => (Public::ObservedMirror, Some(owner)),
         }
@@ -390,12 +387,6 @@ impl Terminals {
         removed
     }
 
-    /// Whether any hosted terminal already runs on this process. A mirror is never opened for a process the
-    /// daemon already hosts as its own PTY child.
-    pub(crate) fn hosts_pid(&self, pid: u32) -> bool {
-        self.by_id.values().any(|open| open.terminal.pid() == pid)
-    }
-
     /// Register a terminal renderer onto a process some other owner started.
     ///
     /// The caller reserves a terminal-surface claim before reaching this insertion. That claim does not own the
@@ -450,9 +441,7 @@ impl Terminals {
                 TerminalOrigin::ObservedMirror(owner) => {
                     owner.shell_pid.is_some_and(|pid| shells.contains(&pid))
                 }
-                TerminalOrigin::Owned
-                | TerminalOrigin::ConsoleMirror
-                | TerminalOrigin::OfficialAttach(_) => false,
+                TerminalOrigin::Owned | TerminalOrigin::OfficialAttach(_) => false,
             })
             .map(|(id, open)| HostedTerminal::from_open(*id, open))
             .collect()
@@ -469,9 +458,7 @@ impl Terminals {
                 TerminalOrigin::ObservedMirror(owner) => {
                     owner.feeder == feeder && owner.terminal_key == terminal_key
                 }
-                TerminalOrigin::Owned
-                | TerminalOrigin::ConsoleMirror
-                | TerminalOrigin::OfficialAttach(_) => false,
+                TerminalOrigin::Owned | TerminalOrigin::OfficialAttach(_) => false,
             })
             .map(|(id, open)| HostedTerminal::from_open(*id, open))
             .collect()
@@ -486,7 +473,6 @@ impl Terminals {
             }
             TerminalOrigin::ObservedMirror(_)
             | TerminalOrigin::Owned
-            | TerminalOrigin::ConsoleMirror
             | TerminalOrigin::OfficialAttach(_) => None,
         }
     }
@@ -497,9 +483,7 @@ impl Terminals {
             .iter()
             .filter(|(_, open)| match &open.origin {
                 TerminalOrigin::ObservedMirror(owner) => owner.feeder == feeder,
-                TerminalOrigin::Owned
-                | TerminalOrigin::ConsoleMirror
-                | TerminalOrigin::OfficialAttach(_) => false,
+                TerminalOrigin::Owned | TerminalOrigin::OfficialAttach(_) => false,
             })
             .map(|(id, open)| HostedTerminal::from_open(*id, open))
             .collect()
@@ -596,11 +580,11 @@ const DRAINING_IDLE_GRACE_MS: u64 = 15_000;
 /// 2026-08-29). Only a terminal with no viewer and no output for the grace is closed; one a person is watching,
 /// or one a turn is still writing to, is left alone.
 ///
-/// A mirror is let go, never killed. Its process belongs to whoever started it (the operator's Claude Code
-/// window, another tool), and killing it ended the operator's own sessions with `0xC0000001` at every Runtime
-/// update, minutes after each new generation started (five times on 2026-08-29, two sessions at once each
-/// time). Releasing the mirror ends only its console helper; the current generation observes the still-running
-/// process again and mirrors it afresh.
+/// An observed mirror is let go, never killed. Its process belongs to whoever started it (the operator's own
+/// window, another tool), and killing a mirrored process ended the operator's own sessions with `0xC0000001` at
+/// every Runtime update, minutes after each new generation started (five times on 2026-08-29, two sessions at once
+/// each time). Releasing the mirror ends only this generation's feed; the owner window feeds the current generation
+/// afresh.
 pub(crate) async fn close_idle_while_draining(composed: &Arc<Composed>) {
     close_idle_at(composed, WallMs::now().as_millis(), DRAINING_IDLE_GRACE_MS).await;
 }
@@ -679,7 +663,7 @@ fn drain_action(
         return DrainAction::Keep;
     }
     match origin {
-        TerminalOrigin::ConsoleMirror | TerminalOrigin::ObservedMirror(_) => DrainAction::Release,
+        TerminalOrigin::ObservedMirror(_) => DrainAction::Release,
         TerminalOrigin::Owned | TerminalOrigin::OfficialAttach(_) => DrainAction::Kill,
     }
 }
@@ -905,100 +889,6 @@ async fn open_with_arguments(
         })
         .map_err(|error| TerminalOpenError::Provider(error.to_string()))?;
         terminals.insert(terminal_id, id, key, terminal.clone(), cwd, native);
-        let open = terminals.len();
-        (terminal, open)
-    };
-    composed
-        .open_terminals
-        .store(open, std::sync::atomic::Ordering::Release);
-    if let Err(error) = reservation.commit() {
-        drop(terminal.kill());
-        forget(composed, terminal_id).await;
-        return Err(error.into());
-    }
-    forget_on_exit(Arc::clone(composed), terminal_id, &terminal);
-    let attachment = terminal.attach().await;
-    Ok((terminal_id, terminal, attachment))
-}
-
-/// Open a mirror of a process the daemon did not start, and attach the requesting viewer.
-///
-/// This is the door for "a session started anywhere is still one session, streamed to every viewer": the
-/// process keeps running wherever it was started (another window, another app, an older Runtime generation
-/// that no longer answers), and a helper joins its console so every Runtrol window sees the same screen and
-/// can type into it. The row becomes a hosted one, so a click attaches rather than resuming a second copy.
-///
-/// It opens nothing new for the conversation. It does reserve the one terminal-surface claim while the mirror is
-/// live: that claim owns no transcript or conversation, but it prevents another Runtime generation from allocating a
-/// second renderer for the same external owner. Observation alone never reaches this function. The first viewer
-/// allocates the helper, screen model and output ring, and later viewers attach to those same bounded objects.
-pub(crate) async fn open_console_mirror(
-    composed: &Arc<Composed>,
-    provider: ProviderId,
-    native: &str,
-    pid: u32,
-    cwd: AbsPath,
-    cols: u16,
-    rows: u16,
-) -> Result<(TerminalId, Terminal, Attachment), TerminalOpenError> {
-    let helper = runtrol_childproc::console_mirror::helper_program()
-        .map_err(|error| TerminalOpenError::Provider(error.to_string()))?;
-    if let Some(existing) = composed.terminals.lock().await.open_for(provider, native) {
-        if existing.workspace != cwd {
-            return Err(TerminalClaimError::WorkspaceConflict.into());
-        }
-        let attachment = existing.terminal.attach().await;
-        return Ok((existing.id, existing.terminal, attachment));
-    }
-    // A session another Runtime generation already hosts is already a conversation, not a new one. Its terminal
-    // reaches this window through the fleet. The reservation also covers an external mirror already hosted by a
-    // peer, so two generations cannot allocate two helpers, rings, and screen models for one owner.
-    let terminal_id = TerminalId::now();
-    let reservation = match composed.native_claims.reserve_terminal(
-        terminal_id,
-        provider.as_str(),
-        Some(native),
-        cwd.as_str(),
-        false,
-    )? {
-        TerminalClaimAdmission::Join(existing) => {
-            let (hosted, attachment) = attach_current(composed, existing)
-                .await
-                .map_err(TerminalOpenError::Provider)?;
-            return Ok((hosted.id, hosted.terminal, attachment));
-        }
-        TerminalClaimAdmission::Reserved(reservation) => reservation,
-    };
-    let (terminal, open) = {
-        let mut terminals = composed.terminals.lock().await;
-        if let Some(existing) = terminals.open_for(provider, native) {
-            if existing.workspace != cwd {
-                return Err(TerminalClaimError::WorkspaceConflict.into());
-            }
-            let attachment = existing.terminal.attach().await;
-            return Ok((existing.id, existing.terminal, attachment));
-        }
-        if terminals.hosts_pid(pid) {
-            return Err(TerminalOpenError::Provider(
-                "the selected process is already hosted without this native binding".to_owned(),
-            ));
-        }
-        if terminals.len() >= MAX_HOSTED_TERMINALS {
-            return Err(TerminalOpenError::NoRoom {
-                held: terminals.len(),
-                limit: MAX_HOSTED_TERMINALS,
-            });
-        }
-        let terminal = Terminal::mirror(&helper, pid, runtrol_childproc::PtySize { cols, rows })
-            .map_err(|error| TerminalOpenError::Provider(error.to_string()))?;
-        terminals.insert_external(
-            terminal_id,
-            provider,
-            native,
-            terminal.clone(),
-            cwd,
-            TerminalOrigin::ConsoleMirror,
-        );
         let open = terminals.len();
         (terminal, open)
     };
@@ -1293,13 +1183,11 @@ pub(crate) async fn end_observed_mirrors_of(composed: &Arc<Composed>, feeder: Co
 
 /// Stop the live conversation behind a terminal, not merely its renderer.
 ///
-/// Owned PTYs and console mirrors already point at the owner process. An official attachment points at a
-/// presentation client, so its paired provider command stops the owner first and the renderer is then released.
+/// An owned PTY already points at the owner process. An official attachment points at a presentation client,
+/// so its paired provider command stops the owner first and the renderer is then released.
 pub(crate) async fn stop_hosted(hosted: &HostedTerminal) -> Result<(), String> {
     match &hosted.origin {
-        TerminalOrigin::Owned | TerminalOrigin::ConsoleMirror => {
-            hosted.terminal.kill().map_err(|error| error.to_string())
-        }
+        TerminalOrigin::Owned => hosted.terminal.kill().map_err(|error| error.to_string()),
         TerminalOrigin::OfficialAttach(stop) => {
             run_official_stop(stop).await?;
             hosted.terminal.kill().map_err(|error| error.to_string())
@@ -1847,19 +1735,6 @@ mod tests {
         );
         assert_eq!(
             drain_action(&TerminalOrigin::Owned, 0, grace - 1, grace),
-            DrainAction::Keep
-        );
-        // The operator's own Claude Code process, joined by a mirror: let go, never killed.
-        assert_eq!(
-            drain_action(&TerminalOrigin::ConsoleMirror, 0, grace, grace),
-            DrainAction::Release
-        );
-        assert_eq!(
-            drain_action(&TerminalOrigin::ConsoleMirror, 0, grace * 100, grace),
-            DrainAction::Release
-        );
-        assert_eq!(
-            drain_action(&TerminalOrigin::ConsoleMirror, 1, grace, grace),
             DrainAction::Keep
         );
         let official = TerminalOrigin::OfficialAttach(Box::new(super::OfficialStop {

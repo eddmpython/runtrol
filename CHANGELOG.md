@@ -27,11 +27,17 @@ and refactoring that no user can observe do not belong here.
   the window forward; nothing is opened or attached. A live conversation no window can reach now says
   `Observed only` instead of sharing `Elsewhere` with it, and a row with no live process says `Unavailable`.
   Public protocol: `NativeActivity.focusable` and `providers/focusNative`.
-  A console route yields to that window: such a conversation is focusable, not attachable, so a second viewer
-  never shares one console's input with the person typing in it.
+- Focus for an arbitrary external terminal: a provider running in Windows Terminal or a console window no VS Code
+  window observes is `Focus owner` when the Runtime proves that its own process chain owns a desktop window, and
+  clicking the row brings that window forward; `Observed only` otherwise. The proof repeats only when the live
+  process set changes or after five seconds, never on every roster round.
 
 ### Removed
 
+- The Windows console mirror: the `runtrol console-mirror` helper, the `consoleMirror` terminal origin, and the
+  console route behind `attachable` in `providers/nativeActivity`. An arbitrary external terminal is focus-only under
+  the accepted capability table: its row says `Focus owner` when a registered window is proved to own its terminal
+  and `Observed only` otherwise, and nothing joins its console.
 - The project actions and commands that turned Agent Tools on or off, the `tools enable` command, the `consult wire`
   command, and every Core request that could register an MCP entry in a provider's configuration. Runtrol no longer
   registers itself or one CLI inside another; only inventory, cleanup, and removal of earlier registrations remain.

@@ -29,7 +29,7 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use runtrol_childproc::pty::TerminalRead;
-use runtrol_childproc::{MirrorChild, Program, PtyChild, PtySize, PtySpawn, SpawnError};
+use runtrol_childproc::{Program, PtyChild, PtySize, PtySpawn, SpawnError};
 use runtrol_provider::AbsPath;
 use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore, broadcast, mpsc, oneshot, watch};
 
@@ -174,13 +174,11 @@ pub struct Terminal {
     shared: Arc<Shared>,
 }
 
-/// What is on the other side of the host: a pseudo terminal this process created, a helper that joined
-/// a console some other process owns, or a feed from a window that owns the terminal and observes it. The
-/// host asks all three the same five things.
+/// What is on the other side of the host: a pseudo terminal this process created, or a feed from a window
+/// that owns the terminal and observes it. The host asks both the same five things.
 #[derive(Debug)]
 enum Child {
     Pty(PtyChild),
-    Mirror(MirrorChild),
     Fed(FedChild),
 }
 
@@ -188,7 +186,6 @@ impl Child {
     fn pid(&self) -> u32 {
         match self {
             Self::Pty(child) => child.pid(),
-            Self::Mirror(child) => child.pid(),
             Self::Fed(child) => child.pid(),
         }
     }
@@ -196,7 +193,6 @@ impl Child {
     fn reader(&self) -> Result<Box<dyn TerminalRead>, runtrol_childproc::SpawnError> {
         match self {
             Self::Pty(child) => child.reader(),
-            Self::Mirror(child) => child.reader(),
             Self::Fed(child) => child.reader(),
         }
     }
@@ -204,24 +200,21 @@ impl Child {
     fn writer(&self) -> Result<Box<dyn Write + Send>, runtrol_childproc::SpawnError> {
         match self {
             Self::Pty(child) => child.writer(),
-            Self::Mirror(child) => child.writer(),
             Self::Fed(_) => Ok(FedChild::writer()),
         }
     }
 
-    /// A mirrored console keeps the size its own host gave it, and an observed terminal the size its
-    /// window gave it; asking is not refused, it is simply not ours.
+    /// An observed terminal keeps the size its window gave it; asking is not refused, it is simply not ours.
     fn resize(&self, size: PtySize) -> Result<(), runtrol_childproc::SpawnError> {
         match self {
             Self::Pty(child) => child.resize(size),
-            Self::Mirror(_) | Self::Fed(_) => Ok(()),
+            Self::Fed(_) => Ok(()),
         }
     }
 
     fn try_wait(&self) -> Result<Option<i32>, runtrol_childproc::SpawnError> {
         match self {
             Self::Pty(child) => child.try_wait(),
-            Self::Mirror(child) => child.try_wait(),
             Self::Fed(child) => Ok(child.try_wait()),
         }
     }
@@ -229,7 +222,6 @@ impl Child {
     fn kill(&self) -> Result<(), runtrol_childproc::SpawnError> {
         match self {
             Self::Pty(child) => child.kill(),
-            Self::Mirror(child) => child.kill(),
             Self::Fed(child) => {
                 child.kill();
                 Ok(())
@@ -240,7 +232,6 @@ impl Child {
     fn finish(&self) {
         match self {
             Self::Pty(child) => child.finish(),
-            Self::Mirror(child) => child.finish(),
             Self::Fed(child) => child.kill(),
         }
     }
@@ -445,25 +436,6 @@ impl Terminal {
         Self::host(Child::Pty(child), size)
     }
 
-    /// Join a console some other process owns and host it as if it were ours.
-    ///
-    /// The session keeps its own process; a helper (`helper` is this executable, answering
-    /// `console-mirror`) attaches to that process's console and relays its screen and input. From here on
-    /// the terminal is a hosted one: viewers, leases, the sidebar row and Stop all apply. Windows only; on
-    /// other platforms the spawn refuses and says why.
-    ///
-    /// # Errors
-    ///
-    /// [`TerminalError::Spawn`] when the helper cannot start; [`TerminalError::Runtime`] outside a runtime.
-    pub fn mirror(
-        helper: &std::path::Path,
-        target_pid: u32,
-        size: PtySize,
-    ) -> Result<Self, TerminalError> {
-        let child = MirrorChild::spawn(helper, target_pid)?;
-        Self::host(Child::Mirror(child), bounded_size(size))
-    }
-
     /// Host a terminal some VS Code window owns and observes: the window feeds the raw bytes it captured
     /// through [`Self::feed`] and ends the feed through [`Self::end_feed`]. `pid` is the observed shell's, or
     /// zero when the window could not resolve one. Nothing is spawned.
@@ -652,7 +624,7 @@ impl Terminal {
     pub fn feed(&self, bytes: Vec<u8>) -> Result<(), TerminalError> {
         match &self.shared.child {
             Child::Fed(child) => Ok(child.feed(bytes)?),
-            Child::Pty(_) | Child::Mirror(_) => Err(TerminalError::NotFed),
+            Child::Pty(_) => Err(TerminalError::NotFed),
         }
     }
 
@@ -667,13 +639,13 @@ impl Terminal {
                 child.end(exit_code);
                 Ok(())
             }
-            Child::Pty(_) | Child::Mirror(_) => Err(TerminalError::NotFed),
+            Child::Pty(_) => Err(TerminalError::NotFed),
         }
     }
 
-    /// Let go of the child without ending its process: what a mirror does when the Runtime stops watching a
-    /// process it never started. The helper that relayed the console exits; the mirrored process runs on.
-    /// For a process the Runtime started this only releases the console handles, which is what exit does.
+    /// Let go of the child without ending its process: what an observed mirror does when its window stops
+    /// feeding a process the Runtime never started; that process runs on. For a process the Runtime started this
+    /// only releases the console handles, which is what exit does.
     pub fn release(&self) {
         self.shared.finish();
     }

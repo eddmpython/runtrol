@@ -45,11 +45,10 @@ use crate::native_catalogue::{
 /// route and never infers one from a provider name or terminal output.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum NativeTerminalAccess {
-    /// The process is live, but no safe terminal attachment is known.
+    /// The process is live, but no safe terminal attachment is known. A console the process may own is not a
+    /// route: an arbitrary external terminal is focus-only, and its owning window is proved and raised instead.
     #[default]
     Unavailable,
-    /// The process owns an operating-system console that can be mirrored after launch.
-    Console,
     /// The provider publishes an official command that attaches its TUI to this live conversation.
     Official {
         /// Provider-owned opaque target accepted by that attachment command. It may differ from the durable

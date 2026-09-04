@@ -19,8 +19,8 @@
 >   it. The order is yours, and the list is the same in every window.
 > - A new conversation asks which service where you pressed, never at the top of the window.
 > - Pressing a conversation opens that CLI's own screen as an editor tab, and typing there is answered. A live
->   conversation joins its exact Runtime PTY, an official provider attachment, or a Windows console mirror instead
->   of running `resume`. The tab carries the conversation's name and its project's colour.
+>   conversation joins its exact Runtime PTY or an official provider attachment instead of running `resume`,
+>   and otherwise brings forward the window that owns its terminal. The tab carries the conversation's name and its project's colour.
 > - Pin, rename and delete live on the row. Delete calls the service's own deletion, so it really deletes.
 > - Each service has one primary seven-day usage line. Hover or the vertical menu reveals every limit window and
 >   reset the service reported. A missing number is explained, never invented.

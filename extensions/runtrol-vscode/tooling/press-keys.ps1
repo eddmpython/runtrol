@@ -5,15 +5,17 @@
 # Keys use the SendKeys vocabulary (^ = Ctrl, + = Shift, {ENTER}). Nothing is typed unless the target window is
 # verified to be the foreground window first: keys that land in somebody else's window are worse than no keys.
 param(
-    [Parameter(Mandatory = $true)][string]$TitleMatch,
+    [string]$TitleMatch = "",
     [Parameter(Mandatory = $true)][string]$Keys,
-    [string]$CommandLineMatch = ""
+    [string]$CommandLineMatch = "",
+    [int]$ProcessId = 0
 )
 
 $ErrorActionPreference = "Stop"
 # Kept before dot-sourcing: the shared file's own param() block resets these names in this scope.
 $wantedTitle = $TitleMatch
 $wantedFamily = $CommandLineMatch
+$wantedProcess = $ProcessId
 . (Join-Path $PSScriptRoot "find-window.ps1")
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type @"
@@ -30,9 +32,9 @@ public class RuntrolPressWin32 {
 }
 "@
 
-$window = Find-RuntrolWindow $wantedTitle $wantedFamily
+$window = Find-RuntrolWindow $wantedTitle $wantedFamily $wantedProcess
 if (-not $window) {
-    Write-Error "no window has a title matching '$wantedTitle'"
+    Write-Error "no window has a title matching '$wantedTitle' (process $wantedProcess)"
     exit 2
 }
 $handle = [IntPtr]::new([long]$window.Handle)

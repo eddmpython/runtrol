@@ -61,6 +61,36 @@ pub fn reveal_window(process_ids: &[u32], title_fragment: &str) -> RevealOutcome
     }
 }
 
+/// Whether one of `process_ids` owns a window `reveal_window` would act on, without touching it.
+///
+/// The roster round proves a focus target with this and the click raises it with [`reveal_window`]; a proof that
+/// raised the window would steal the desktop every quarter second.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Located {
+    /// This process owns the window that would be raised.
+    Found(u32),
+    /// None of the processes owns a visible titled top-level window.
+    NotFound,
+    /// The owning process has several windows and the title tells none apart.
+    Ambiguous,
+    /// This platform has no window system to ask.
+    Unsupported,
+}
+
+/// Which of `process_ids`, nearest first, owns the window [`reveal_window`] would raise for `title_fragment`.
+#[must_use]
+pub fn locate_window(process_ids: &[u32], title_fragment: &str) -> Located {
+    #[cfg(windows)]
+    {
+        windows::locate(process_ids, title_fragment)
+    }
+    #[cfg(not(windows))]
+    {
+        let (_unused_processes, _unused_fragment) = (process_ids, title_fragment);
+        Located::Unsupported
+    }
+}
+
 #[cfg(windows)]
 #[expect(
     unsafe_code,
@@ -86,6 +116,22 @@ mod windows {
     }
 
     pub(super) fn reveal(process_ids: &[u32], title_fragment: &str) -> RevealOutcome {
+        match find(process_ids, title_fragment) {
+            Ok((_, window)) => raise(window),
+            Err(outcome) => outcome,
+        }
+    }
+
+    pub(super) fn locate(process_ids: &[u32], title_fragment: &str) -> super::Located {
+        match find(process_ids, title_fragment) {
+            Ok((owner, _)) => super::Located::Found(owner),
+            Err(RevealOutcome::Ambiguous) => super::Located::Ambiguous,
+            Err(_) => super::Located::NotFound,
+        }
+    }
+
+    /// The window to act on, with the process that owns it, or why there is none.
+    fn find(process_ids: &[u32], title_fragment: &str) -> Result<(u32, HWND), RevealOutcome> {
         let mut search = Search {
             process_ids,
             candidates: Vec::new(),
@@ -99,7 +145,7 @@ mod windows {
             .iter()
             .find(|pid| search.candidates.iter().any(|(owner, _, _)| owner == *pid))
         else {
-            return RevealOutcome::NotFound;
+            return Err(RevealOutcome::NotFound);
         };
         let fragment = folded(title_fragment);
         let owned: Vec<HWND> = search
@@ -118,9 +164,9 @@ mod windows {
         // editor owns exactly one window there is nothing to tell apart and the title is not needed.
         let window = match (matches.as_slice(), owned.as_slice()) {
             ([one], _) | ([], [one]) => *one,
-            _ => return RevealOutcome::Ambiguous,
+            _ => return Err(RevealOutcome::Ambiguous),
         };
-        raise(window)
+        Ok((*editor, window))
     }
 
     unsafe extern "system" fn collect(window: HWND, parameter: LPARAM) -> windows_sys::core::BOOL {
@@ -226,5 +272,14 @@ mod tests {
             }
         );
         assert_eq!(RevealOutcome::Flashed.as_str(), "flashed");
+        // Proving is the same search as raising, minus the raise.
+        assert_eq!(
+            locate_window(&[std::process::id()], "runtrol-no-such-window-title-7f3a"),
+            if cfg!(windows) {
+                Located::NotFound
+            } else {
+                Located::Unsupported
+            }
+        );
     }
 }

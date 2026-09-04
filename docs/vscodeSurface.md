@@ -133,9 +133,9 @@ A process already running outside the broker appears as live only while the curr
 it. A failed roster read revokes `Elsewhere` and shows the prior owner as `Unavailable` until a successful round
 resolves it; that deny-only state prevents a duplicate resume without claiming the process is still live. A terminal
 descriptor is valid only while its exact generation stream remains connected. Studio does not attempt a duplicate resume.
-Runtime marks the row openable when the provider publishes an official live target or when Microsoft Windows exposes
-a compatible interactive console. The first click allocates the one shared attachment renderer; observation alone
-allocates none. Otherwise the row states that it is running elsewhere and cannot be opened from this surface. VS Code
+Runtime marks the row openable only when the provider publishes an official live target; the first click allocates
+the one shared attachment renderer, and observation alone allocates none. A row whose terminal a registered window is
+proved to own says `Focus owner`, and a live row nothing can reach says `Observed only`. VS Code
 windows are independent viewers, not process owners or operating-system capture boundaries. The extension polling interval in
 [`controller.ts`](../extensions/runtrol-vscode/src/controller.ts) and Runtime cache window in
 [`serve.rs`](../crates/runtrol-daemon/src/serve.rs) are deliberately paired, so adding windows does not multiply

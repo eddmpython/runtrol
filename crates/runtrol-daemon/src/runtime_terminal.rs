@@ -540,23 +540,6 @@ impl TerminalRuntimeAdapter {
             })
         };
         let opened = match live_route {
-            Some(LiveTerminalRoute::Console { pid }) => {
-                crate::terminal_surface::open_console_mirror(
-                    composed,
-                    provider,
-                    native.ok_or_else(|| {
-                        TerminalRuntimeFailure::new(
-                            RuntimeErrorKind::InvalidRequest,
-                            "a console attachment requires one native conversation",
-                        )
-                    })?,
-                    pid,
-                    workspace,
-                    params.geometry.columns,
-                    params.geometry.rows,
-                )
-                .await
-            }
             Some(LiveTerminalRoute::Official(attach_target)) => {
                 crate::terminal_surface::open_official_attach(
                     composed,
@@ -1227,8 +1210,6 @@ fn resume_would_fork(held: &[runtrol_provider::NativeSessionId], native: &str) -
 /// The provider-neutral route to one exact live terminal owner.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum LiveTerminalRoute {
-    /// Join the operating-system console of the exact process the provider roster bound.
-    Console { pid: u32 },
     /// Launch the provider's official TUI attachment command with its opaque target.
     Official(NativeTerminalTarget),
 }
@@ -1236,8 +1217,7 @@ enum LiveTerminalRoute {
 /// Select the provider's exact terminal route for one native conversation and workspace.
 ///
 /// The route is deliberately not inferred from the durable native identity. Some providers publish a shorter
-/// live-job identity for attachment, while a console route must preserve the exact process binding. Confusing
-/// any of these either fails closed or starts the wrong renderer.
+/// live-job identity for attachment, and confusing the two either fails closed or starts the wrong renderer.
 fn live_terminal_route_for(
     activity: &runtrol_provider::NativeProcessActivity,
     native: &str,
@@ -1253,7 +1233,6 @@ fn live_terminal_route_for(
         }
         match &process.terminal_access {
             NativeTerminalAccess::Unavailable => None,
-            NativeTerminalAccess::Console => Some(LiveTerminalRoute::Console { pid: process.pid }),
             NativeTerminalAccess::Official { target } => {
                 Some(LiveTerminalRoute::Official(target.clone()))
             }
@@ -2059,18 +2038,11 @@ mod tests {
             .expect("the current directory is canonical");
         let native = runtrol_provider::NativeSessionId::new("aaaaaaaa-0000-4000-8000-000000000001")
             .expect("a well-formed native identity parses");
-        let console_native =
-            runtrol_provider::NativeSessionId::new("aaaaaaaa-0000-4000-8000-000000000002")
-                .expect("a well-formed native identity parses");
         let unavailable_native =
             runtrol_provider::NativeSessionId::new("aaaaaaaa-0000-4000-8000-000000000003")
                 .expect("a well-formed native identity parses");
         let activity = runtrol_provider::NativeProcessActivity {
-            live: vec![
-                native.clone(),
-                console_native.clone(),
-                unavailable_native.clone(),
-            ],
+            live: vec![native.clone(), unavailable_native.clone()],
             active: Vec::new(),
             processes: vec![
                 runtrol_provider::NativeProcessBinding {
@@ -2081,12 +2053,6 @@ mod tests {
                         target: runtrol_provider::NativeTerminalTarget::new("job-opaque-1")
                             .expect("a valid opaque target"),
                     },
-                },
-                runtrol_provider::NativeProcessBinding {
-                    pid: 44,
-                    native: console_native,
-                    cwd: Some(workspace.as_str().to_owned()),
-                    terminal_access: NativeTerminalAccess::Console,
                 },
                 runtrol_provider::NativeProcessBinding {
                     pid: 45,
@@ -2105,14 +2071,6 @@ mod tests {
             ),
             Some(LiveTerminalRoute::Official(target)) if target.as_str() == "job-opaque-1"
         ));
-        assert_eq!(
-            live_terminal_route_for(
-                &activity,
-                "aaaaaaaa-0000-4000-8000-000000000002",
-                &workspace,
-            ),
-            Some(LiveTerminalRoute::Console { pid: 44 })
-        );
         assert!(
             live_terminal_route_for(
                 &activity,

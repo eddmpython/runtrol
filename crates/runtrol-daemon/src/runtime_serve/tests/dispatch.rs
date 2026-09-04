@@ -1429,10 +1429,9 @@ fn only_live_processes_with_a_safe_route_are_publicly_attachable() {
         terminal_access,
     };
     let activity = NativeProcessActivity {
-        live: vec![native("console"), native("official"), native("unavailable")],
+        live: vec![native("official"), native("unavailable")],
         active: Vec::new(),
         processes: vec![
-            process("console", NativeTerminalAccess::Console),
             process(
                 "official",
                 NativeTerminalAccess::Official {
@@ -1441,17 +1440,19 @@ fn only_live_processes_with_a_safe_route_are_publicly_attachable() {
                 },
             ),
             process("unavailable", NativeTerminalAccess::Unavailable),
-            process("stale", NativeTerminalAccess::Console),
+            process(
+                "stale",
+                NativeTerminalAccess::Official {
+                    target: NativeTerminalTarget::new("job-opaque-2")
+                        .expect("a valid opaque target"),
+                },
+            ),
         ],
     };
 
+    // Only a live process with the provider's own attachment target is offered; a stale record is not live.
     assert_eq!(
-        attachable_native_sessions(&activity, &[]),
-        vec!["console".to_owned(), "official".to_owned()]
-    );
-    // A console the owning window can show is that window's to show; an official attachment stays offered.
-    assert_eq!(
-        attachable_native_sessions(&activity, &["console".to_owned(), "official".to_owned()]),
+        attachable_native_sessions(&activity),
         vec!["official".to_owned()]
     );
 }
