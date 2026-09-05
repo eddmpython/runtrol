@@ -266,13 +266,13 @@ function conversationHtml(row: SidebarConversationRow, assets: SidebarAssets): s
     row.canArchive ? action("runtrol.archiveConversation", "Archive", "archive") : "",
     row.canDelete ? action("runtrol.deleteConversation", "Delete", "trash") : "",
   ].join("");
-  // A native tooltip only where it says the one thing the row cannot show: why an open would be refused.
+  // A native tooltip holds details the row cannot show, including a worker's lead and an open refusal.
   // Everything else the tooltip used to repeat (service, activity, model) is already on the row, and a
   // tooltip floating beside the hover actions reads as clutter (operator, 2026-08-27).
   // Running is a state of the whole row, said once on the row: the provider icon turns.
   const visibleTitle = conversationTitle(row.title);
   const titleDetail = visibleTitle === row.title ? null : row.title;
-  const tooltip = row.blocked ?? [titleDetail, row.spawnedBy ? `Started by lead ${row.spawnedBy}` : null]
+  const tooltip = [row.blocked, titleDetail, row.spawnedBy ? `Started by lead ${row.spawnedBy}` : null]
     .filter(Boolean).join("\n");
   return `<div class="row conv${row.canOpen ? "" : " blocked"}${row.pinned ? " pinned" : ""}${row.open ? " open" : ""}${state ? " stateful" : ""}${signal}" role="button" tabindex="0" data-kind="conversation" data-key="${escapeHtml(row.key)}"${tooltip ? ` title="${escapeHtml(tooltip)}"` : ""}>
 <span class="glyph-slot"><img class="glyph" src="${escapeHtml(iconUri)}" alt="${escapeHtml(row.serviceName)}" draggable="false"></span>

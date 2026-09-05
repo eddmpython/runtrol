@@ -79,7 +79,7 @@ export type JourneyApi = {
   rowKeys(): string[];
   /// Every row as the sidebar holds it right now, reduced to what row identity is judged by: a snapshot the
   /// row-identity eye pass takes many times while a launch promotes from placeholder to terminal to conversation.
-  rows(): { key: string; title: string; presence: string; hostedKey: string | null; origin: string | null; ownerWindow: string | null; native: string | null; workspace: string; open: boolean; live: boolean; canOpen: boolean; canFocus: boolean; canStop: boolean; stopping: boolean; blocked: string | null; activity: string }[];
+  rows(): { key: string; title: string; presence: string; hostedKey: string | null; spawnedBy: string | null; origin: string | null; ownerWindow: string | null; native: string | null; workspace: string; open: boolean; live: boolean; canOpen: boolean; canFocus: boolean; canStop: boolean; stopping: boolean; blocked: string | null; activity: string }[];
   /// Close a conversation's tab in this window by its row key, the way the tab's close button does.
   closeTab(key: string): boolean;
   /// Stop a hosted conversation's process from its row, the way the row's Stop does after its confirmation.
@@ -444,6 +444,7 @@ export function journeyApi(
       title: row.title,
       presence: row.presence.kind,
       hostedKey: row.hostedKey,
+      spawnedBy: row.spawnedBy ?? null,
       origin: row.hostedTerminal?.origin ?? null,
       ownerWindow: row.hostedTerminal?.ownerWindowSessionId ?? null,
       native: row.native?.nativeSessionId ?? null,

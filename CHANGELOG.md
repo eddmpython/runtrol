@@ -14,7 +14,7 @@ and refactoring that no user can observe do not belong here.
 
 - Courier help and visible activation explain the PowerShell encoding setup needed to prevent an added BOM.
 - An enabled lead session can start workers in isolated worktrees, with discovered provider and model choices.
-  Workers receive their initial request only after visible dialogue activation. Their rows identify the lead,
+  Workers receive their initial request only after visible dialogue activation. Their rows identify the lead even while stopping,
   remain available after it ends, and preserve edited or committed files on exit.
 - Managed sessions can open a bounded room, explicitly select its speaker, and exchange exact requests and replies.
   The last allowed reply stays readable. Closing the room or ending a participant releases its unread mail without

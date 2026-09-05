@@ -157,11 +157,12 @@ test("the service choice withdraws on a click elsewhere, on Escape, and when foc
 test("a conversation the Runtime is stopping says so, and is neither running elsewhere nor unavailable", () => {
   const html = sidebarHtml(model({
     projects: [project({
-      rows: [conversation({ key: "claude:stopping", live: true, canOpen: false, canStop: false, stopping: true, blocked: "waiting for the process to exit" })],
+      rows: [conversation({ key: "claude:stopping", live: true, canOpen: false, canStop: false, stopping: true, blocked: "waiting for the process to exit", spawnedBy: "lead-one" })],
     })],
     loose: [],
   }), assets);
   assert.ok(html.includes('class="conv-state muted" title="waiting for the process to exit">Stopping</span>'));
+  assert.ok(html.includes('title="waiting for the process to exit\nStarted by lead lead-one"'), "stopping retains the worker's lead identity");
   assert.ok(!html.includes(">Observed only</span>"));
   assert.ok(!html.includes(">Unavailable</span>"));
   assert.ok(!html.includes('data-command="stop"'), "no Stop is offered for a stop already under way");
