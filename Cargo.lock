@@ -1649,6 +1649,7 @@ name = "runtrol-cli"
 version = "0.1.1"
 dependencies = [
  "runtrol-childproc",
+ "runtrol-courier",
  "runtrol-ipc",
  "runtrol-provider",
  "serde_json",

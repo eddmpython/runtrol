@@ -85,7 +85,12 @@ const ALLOWED_EDGES: &[(&str, &[&str])] = &[
     // knows which shell invoked it; it starts no process of its own.
     (
         "runtrol-cli",
-        &["runtrol-provider", "runtrol-ipc", "runtrol-childproc"],
+        &[
+            "runtrol-provider",
+            "runtrol-ipc",
+            "runtrol-childproc",
+            "runtrol-courier",
+        ],
     ),
     // L4. The thin binary. It links everything, which is the one exception to all of the above, and
     // confining that exception to one short file is what lets this table be strict about everything else. The

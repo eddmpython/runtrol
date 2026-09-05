@@ -14,6 +14,8 @@ runtrol-provider = { workspace = true }
 runtrol-ipc = { workspace = true }
 # The bridge reads its own parent so the Runtime knows which shell invoked the provider command.
 runtrol-childproc = { workspace = true }
+# The courier command speaks the dialogue hello and reads its answer. It carries the shapes; the Runtime decides.
+runtrol-courier = { workspace = true }
 
 thiserror = { workspace = true }
 # The requests and answers on the connection. This crate carries them and never decides what they mean.

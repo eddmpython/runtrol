@@ -46,6 +46,8 @@ enum Personality {
     ProviderShims(std::path::PathBuf),
     /// Administer public Runtime integrations from an owner terminal.
     Administration(Vec<String>),
+    /// Say hello on the courier endpoint as this managed session and report whether it was admitted.
+    Courier,
     /// Ask the daemon something and print the answer.
     Command(Vec<String>),
     /// Say what the words could have been.
@@ -63,6 +65,9 @@ const STATUS_ARGUMENT: &str = "status";
 
 /// The private entry point used by transparent provider command shims.
 const TERMINAL_BRIDGE_ARGUMENT: &str = "bridge";
+
+/// The word a managed session uses to reach its courier.
+const COURIER_ARGUMENT: &str = "courier";
 
 /// Blocking pipe operations admitted by the daemon at one time on Windows.
 ///
@@ -127,6 +132,7 @@ fn main() -> ExitCode {
         }
         Personality::ProviderShims(directory) => run(shimming(&directory)),
         Personality::Administration(words) => run(administering(&words)),
+        Personality::Courier => run(couriering()),
         Personality::Command(words) => run(commanding(&words)),
         Personality::Usage(message) => {
             report(&message);
@@ -170,6 +176,9 @@ fn choose(words: &[String]) -> Personality {
             Some(path) => Personality::WhoHolds(path.into()),
             None => Personality::Usage(format!("runtrol {word} <path>")),
         },
+        // A managed session reaches its courier by this word. A process the Runtime did not start has none of
+        // the birth values it needs and is told so.
+        Some(word) if word == COURIER_ARGUMENT => Personality::Courier,
         Some(_) if runtrol_cli::is_administration(words) => {
             Personality::Administration(words.to_vec())
         }
@@ -447,6 +456,25 @@ fn endpoint_past_a_draining_own(
         .filter(|status| status.answering && !status.generation.draining)
         .max_by_key(|status| status.generation.started_at_ms)
         .map(|status| status.generation.control_endpoint.clone())
+}
+
+/// Say hello on the courier endpoint as this managed session, print the one word the Runtime answered, and
+/// end. A refusal is a real answer and prints too, with a failing code; a process that is not a managed
+/// session cannot ask and says why on standard error.
+fn couriering() -> impl FnOnce(&tokio::runtime::Runtime) -> ExitCode {
+    |runtime| match runtime.block_on(runtrol_cli::courier()) {
+        Ok(admission) => {
+            say(&format!("courier: {}", admission.word()));
+            match admission {
+                runtrol_cli::Admission::Welcomed => ExitCode::SUCCESS,
+                runtrol_cli::Admission::Refused => ExitCode::FAILURE,
+            }
+        }
+        Err(error) => {
+            report(&format!("courier: {error}"));
+            ExitCode::FAILURE
+        }
+    }
 }
 
 fn endpointing() -> impl FnOnce(&tokio::runtime::Runtime) -> ExitCode {
