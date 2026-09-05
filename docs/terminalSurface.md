@@ -208,7 +208,7 @@ views and indexes. A quiet output-only view also receives a background root proo
 after one second, and a failure, timeout, or blocking-task failure closes the affected view or index. A successful
 result whose key, grant, or terminal generation changed while the check ran authorizes nothing and is discarded. The
 exact scheduling, timeout, and concurrency limits are executable constants in
-[`runtime_terminal.rs`](../crates/runtrol-daemon/src/runtime_terminal.rs) and the relay ordering lives in
+[`runtime_terminal`](../crates/runtrol-daemon/src/runtime_terminal/mod.rs) and the relay ordering lives in
 the Runtime serving modules.
 
 During a Runtime upgrade, the old generation freezes its last committed ceiling and accepts only monotonic

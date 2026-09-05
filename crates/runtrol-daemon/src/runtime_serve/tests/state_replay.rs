@@ -2,10 +2,11 @@
 //!
 //! Every state transition a hosted terminal can make is replayed through the public protocol alone, and the
 //! event sequence a client sees is held against the vocabulary the engine may publish
-//! (`mainPlan/terminalTransportIntegrity`, observable state): `process_alive`, `owner_reachable`,
+//! (`docs/terminalSurface.md`, observable state): `process_alive`, `owner_reachable`,
 //! `view_count`, `lease_holder`, `output_flowing`, `checkpoint_available`, `lagged`, `message_pending` and
 //! `process_exited`. Nothing else may appear: no working, stuck or turn state is derived from output, silence
-//! or timing here, and a view's sequence is exact across an announced loss boundary.
+//! or timing here, and a view's sequence is exact across an announced loss boundary. Explicit courier
+//! activation is a proved control fact governed by `docs/sessionDialogue.md`.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -79,6 +80,7 @@ const DESCRIPTOR_KEYS: &[&str] = &[
     "geometry",
     "controlGeneration",
     "controlHeld",
+    "dialogueEnabled",
     "viewerCount",
     "origin",
     "ownerWindowSessionId",

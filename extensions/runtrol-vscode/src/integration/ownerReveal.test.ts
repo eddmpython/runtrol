@@ -27,6 +27,7 @@ type Step =
   | { readonly kind: "reopenStored"; readonly provider: string }
   | { readonly kind: "closeTab"; readonly key: string }
   | { readonly kind: "stopRow"; readonly key: string }
+  | { readonly kind: "setDialogue"; readonly key: string; readonly enabled: boolean }
   | { readonly kind: "listed"; readonly provider: string; readonly native: string }
   | { readonly kind: "startFresh"; readonly provider: string; readonly workspace: string }
   | { readonly kind: "showOther" }
@@ -163,6 +164,9 @@ async function journey(coordination: string, role: string): Promise<void> {
       // The row's Stop, after its confirmation: the Runtime is asked to end the process under the exact record.
       await journey.stopRow(step.key);
       result = { stopped: true };
+    } else if (step.kind === "setDialogue") {
+      await journey.setDialogue(step.key, step.enabled);
+      result = { dialogueEnabled: step.enabled };
     } else if (step.kind === "reopenStored") {
       // A stored conversation of that service reopened the way a click on its row does: the resume path.
       result = { sessionId: await journey.openStoredWithTitle(step.provider) };

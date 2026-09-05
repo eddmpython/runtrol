@@ -145,6 +145,9 @@ pub enum RuntimeMethod {
     /// Stop one hosted provider CLI process under the current terminal lease.
     #[serde(rename = "terminals/stop")]
     TerminalsStop,
+    /// Arm or disarm process-local dialogue under the current terminal input lease.
+    #[serde(rename = "terminals/setDialogue")]
+    TerminalsSetDialogue,
     /// A VS Code window registers itself and its observed terminals.
     #[serde(rename = "windows/register")]
     WindowsRegister,
@@ -281,6 +284,7 @@ impl RuntimeMethod {
             Self::TerminalsResize => "terminals/resize",
             Self::TerminalsDetach => "terminals/detach",
             Self::TerminalsStop => "terminals/stop",
+            Self::TerminalsSetDialogue => "terminals/setDialogue",
             Self::WindowsRegister => "windows/register",
             Self::WindowsUpdate => "windows/update",
             Self::WindowsList => "windows/list",
@@ -369,6 +373,7 @@ impl FromStr for RuntimeMethod {
             "terminals/resize" => Ok(Self::TerminalsResize),
             "terminals/detach" => Ok(Self::TerminalsDetach),
             "terminals/stop" => Ok(Self::TerminalsStop),
+            "terminals/setDialogue" => Ok(Self::TerminalsSetDialogue),
             "windows/register" => Ok(Self::WindowsRegister),
             "windows/update" => Ok(Self::WindowsUpdate),
             "windows/list" => Ok(Self::WindowsList),
@@ -458,6 +463,7 @@ mod tests {
             RuntimeMethod::TerminalsResize,
             RuntimeMethod::TerminalsDetach,
             RuntimeMethod::TerminalsStop,
+            RuntimeMethod::TerminalsSetDialogue,
             RuntimeMethod::WindowsRegister,
             RuntimeMethod::WindowsUpdate,
             RuntimeMethod::WindowsList,

@@ -114,6 +114,9 @@ class AsyncTerminalView:
     async def stop(self, params: JsonObject) -> None:
         await self.call("stop", params)
 
+    async def setDialogue(self, params: JsonObject) -> None:
+        await self.call("setDialogue", params)
+
     async def detach(self, params: JsonObject) -> None:
         await self.call("detach", params)
 
@@ -324,6 +327,9 @@ class TerminalView:
 
     def stop(self, params: JsonObject) -> None:
         self.call("stop", params)
+
+    def setDialogue(self, params: JsonObject) -> None:
+        self.call("setDialogue", params)
 
     def detach(self, params: JsonObject) -> None:
         self.call("detach", params)

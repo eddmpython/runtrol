@@ -249,6 +249,16 @@
         "category": "Runtrol"
       },
       {
+        "command": "runtrol.enableDialogue",
+        "title": "Enable Dialogue for This Live Session",
+        "category": "Runtrol"
+      },
+      {
+        "command": "runtrol.disableDialogue",
+        "title": "Disable Dialogue for This Live Session",
+        "category": "Runtrol"
+      },
+      {
         "command": "runtrol.archiveConversation",
         "title": "Archive Conversation",
         "icon": "$(archive)",

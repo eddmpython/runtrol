@@ -80,6 +80,8 @@ MAY_MUTATE_PREFIXES = {
 TEST_ONLY_SOURCE = {
     "crates/runtrol-daemon/src/runtime_serve/tests/dispatch.rs",
     "crates/runtrol-daemon/src/runtime_serve/tests/official_attach.rs",
+    "crates/runtrol-daemon/src/runtime_serve/tests/state_replay.rs",
+    "crates/runtrol-daemon/src/runtime_terminal/tests/dialogue.rs",
 }
 
 MUTATION = [

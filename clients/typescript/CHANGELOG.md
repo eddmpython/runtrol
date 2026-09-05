@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Added `TerminalView.setDialogue` and `TerminalDescriptor.dialogueEnabled` for local input-lease control of a
+  live process's courier lifetime.
 - Added `viewerCount` to the terminal descriptor: how many views are attached right now, a proved engine fact
   that changes the index when a view attaches or ends and never implies model work.
 - `SessionDescriptor.looksStuck` is retired and now optional (always `false` from a current Runtime): a

@@ -253,6 +253,19 @@ export class TerminalTabs implements vscode.Disposable {
     return terminal;
   }
 
+  async setDialogue(conversation: Conversation | null, enabled: boolean): Promise<void> {
+    const target = conversation ? this.open.get(conversation.key) : vscode.window.activeTerminal;
+    const targetKey = target ? this.journeyTargetByTab.get(target) : undefined;
+    const descriptor = conversation?.hostedTerminal
+      ?? (targetKey ? this.journeyTargets.get(targetKey) : undefined);
+    if (!descriptor || descriptor.origin === "observedMirror" || descriptor.processState !== "running") {
+      throw new Error("Open a live Runtrol-managed conversation to change dialogue.");
+    }
+    const tab = conversation ? this.show(conversation, false) : target;
+    tab?.show(false);
+    await this.runtime.setTerminalDialogue(descriptor, enabled);
+  }
+
   /// Whether this conversation already has its tab open here.
   isOpen(conversationKey: string): boolean {
     return this.open.has(conversationKey);

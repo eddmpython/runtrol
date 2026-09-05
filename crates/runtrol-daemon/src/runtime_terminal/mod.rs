@@ -39,6 +39,8 @@ use crate::runtime_inventory::{AuthorizedRoot, RuntimeSessionCatalogue, authoriz
 use crate::runtime_native_sessions::NativeCursorCodec;
 use crate::terminal_surface::HostedTerminal;
 
+mod dialogue;
+
 const LEASE_LIFETIME_MS: u64 = runtrol_runtime_protocol::CONTROL_LEASE_LIFETIME_MS;
 /// Filesystem identity checks may block in the operating system, so they get a small separate global lane.
 pub(crate) const ROOT_CHECK_SLOTS: usize = 2;
@@ -314,6 +316,7 @@ impl TerminalRuntimeAdapter {
                 generation,
                 &changes,
                 control.get(&terminal.id).copied().unwrap_or_default(),
+                composed.courier_gate.dialogue_enabled(terminal.id).await,
             )?);
         }
         let warnings = if omitted == 0 {
@@ -715,7 +718,13 @@ impl TerminalRuntimeAdapter {
             .copied()
             .unwrap_or_default();
         let opened = TerminalViewOpened {
-            terminal: descriptor(&hosted, runtime_generation()?, &changes, control)?,
+            terminal: descriptor(
+                &hosted,
+                runtime_generation()?,
+                &changes,
+                control,
+                composed.courier_gate.dialogue_enabled(hosted.id).await,
+            )?,
             view_id: RuntimeTerminalViewId::now(),
             screen_base64: Base64::encode_string(&attachment.snapshot),
             checkpoint_available: attachment.checkpoint_available,
@@ -1423,6 +1432,7 @@ fn descriptor(
     runtime_generation: &str,
     changes: &tokio::sync::watch::Sender<u64>,
     control: ControlView,
+    dialogue_enabled: bool,
 ) -> Result<TerminalDescriptor, TerminalRuntimeFailure> {
     let size = hosted.terminal.size();
     let (origin, owner) = hosted.origin.projection();
@@ -1450,6 +1460,7 @@ fn descriptor(
         },
         control_generation: control.generation,
         control_held: control.held,
+        dialogue_enabled,
         viewer_count: u32::try_from(hosted.terminal.viewer_count()).unwrap_or(u32::MAX),
         origin,
         owner_window_session_id: owner.map(|owner| owner.window_session_id.clone()),

@@ -1093,6 +1093,11 @@
       "description": "Read the visible terminal index in the connected Runtime generation.",
       "type": "object"
     },
+    "ListWindowsParams": {
+      "additionalProperties": false,
+      "description": "Read every registered window.",
+      "type": "object"
+    },
     "ManagedSessionList": {
       "additionalProperties": false,
       "description": "A bounded Runtime-managed session snapshot.",
@@ -1140,6 +1145,13 @@
           },
           "type": "array"
         },
+        "focusable": {
+          "description": "Live conversations a registered VS Code window can show and be brought forward for, proved from process\nancestry rather than from shell integration. A conversation can be focusable without being attachable: the\nwindow owns the terminal it runs in either way. Absence means no proof, never a client guess.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "live": {
           "default": [],
           "description": "Native identities owned by a still-running provider process, in no particular order.",
@@ -1170,6 +1182,44 @@
       },
       "required": [
         "providerId"
+      ],
+      "type": "object"
+    },
+    "NativeFocusParams": {
+      "additionalProperties": false,
+      "description": "Ask the window that owns a live conversation's terminal to show it and come forward.",
+      "properties": {
+        "nativeSessionId": {
+          "description": "The provider's own identity for the conversation, as `NativeActivity.focusable` listed it.",
+          "type": "string"
+        },
+        "providerId": {
+          "$ref": "#/$defs/ProviderId",
+          "description": "Which service the conversation belongs to."
+        }
+      },
+      "required": [
+        "providerId",
+        "nativeSessionId"
+      ],
+      "type": "object"
+    },
+    "NativeFocusResult": {
+      "additionalProperties": false,
+      "description": "The focus as far as the Runtime could take it. Which window it was, and how it was proved, stay private.",
+      "properties": {
+        "delivered": {
+          "description": "Whether the owner was watching for reveals and was told which terminal to show.",
+          "type": "boolean"
+        },
+        "foreground": {
+          "$ref": "#/$defs/WindowForeground",
+          "description": "What became of the owner's window on the desktop."
+        }
+      },
+      "required": [
+        "delivered",
+        "foreground"
       ],
       "type": "object"
     },
@@ -1288,6 +1338,91 @@
         "cwd",
         "additionalDirectories",
         "resume"
+      ],
+      "type": "object"
+    },
+    "ObservedCommand": {
+      "additionalProperties": false,
+      "description": "The command a shell-integrated terminal is running right now, as VS Code's shell integration reported it.",
+      "properties": {
+        "commandLine": {
+          "description": "The command line as the shell reported it.",
+          "type": "string"
+        },
+        "confidence": {
+          "description": "VS Code's confidence in the command line: 0 low, 1 medium, 2 high.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "executionId": {
+          "description": "One value per started execution in the owning window: the command generation.",
+          "type": "string"
+        },
+        "startedAtMs": {
+          "description": "When the execution started, in the window's Unix milliseconds.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "executionId",
+        "commandLine",
+        "confidence",
+        "startedAtMs"
+      ],
+      "type": "object"
+    },
+    "ObservedTerminal": {
+      "additionalProperties": false,
+      "description": "One terminal a window observes: an ordinary VS Code terminal, not one the Runtime hosts.",
+      "properties": {
+        "command": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ObservedCommand"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The command running now, when shell integration reported one that has not ended."
+        },
+        "cwd": {
+          "description": "The shell's current working directory when shell integration reports it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "description": "The terminal's name as VS Code shows it.",
+          "type": "string"
+        },
+        "processId": {
+          "description": "The shell process id, once VS Code has resolved it; a terminal keeps it across a host restart.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "shellIntegration": {
+          "description": "Whether VS Code's shell integration is attached, which is what makes command observation possible.",
+          "type": "boolean"
+        },
+        "terminalKey": {
+          "description": "The window's own key for the terminal, stable for the terminal's life in that window.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "terminalKey",
+        "name",
+        "shellIntegration"
       ],
       "type": "object"
     },
@@ -1536,6 +1671,13 @@
             }
           ],
           "description": "Where the operator's account with this service stands, by the service's own status surface.\n\nAbsent until Runtime has asked the service once; a surface then says \"not checked yet\" rather than\ninventing a green light. Present for every installed service afterwards, including one whose\nservice publishes no way to ask, which the report says in so many words."
+        },
+        "commandNames": {
+          "description": "The command names this service answers to on a shell's search path, as its manifest declares them. A window\nuses them to recognise a provider started in an ordinary terminal; nothing here runs them.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
         "displayName": {
           "description": "Provider or manifest supplied label for presentation only.",
@@ -2923,6 +3065,11 @@
           "type": "string"
         },
         {
+          "const": "providers/focusNative",
+          "description": "Ask the window that owns a live conversation's terminal to show it and come forward.",
+          "type": "string"
+        },
+        {
           "const": "sessions/list",
           "description": "Read the Runtime-managed session catalogue.",
           "type": "string"
@@ -3073,6 +3220,56 @@
           "type": "string"
         },
         {
+          "const": "terminals/setDialogue",
+          "description": "Arm or disarm process-local dialogue under the current terminal input lease.",
+          "type": "string"
+        },
+        {
+          "const": "windows/register",
+          "description": "A VS Code window registers itself and its observed terminals.",
+          "type": "string"
+        },
+        {
+          "const": "windows/update",
+          "description": "A registered window publishes the terminals it observes now.",
+          "type": "string"
+        },
+        {
+          "const": "windows/list",
+          "description": "Read every registered window.",
+          "type": "string"
+        },
+        {
+          "const": "windows/watchIndex",
+          "description": "Subscribe to the window index.",
+          "type": "string"
+        },
+        {
+          "const": "windows/mirrorOpen",
+          "description": "A window opens a mirror of a terminal it observes.",
+          "type": "string"
+        },
+        {
+          "const": "windows/mirrorOutput",
+          "description": "A window feeds one chunk of an observed execution's raw output.",
+          "type": "string"
+        },
+        {
+          "const": "windows/mirrorEnd",
+          "description": "The observed execution ended or the window stops mirroring.",
+          "type": "string"
+        },
+        {
+          "const": "windows/reveal",
+          "description": "Ask the window that owns a terminal to show it and come forward.",
+          "type": "string"
+        },
+        {
+          "const": "windows/watchReveals",
+          "description": "A window subscribes to reveal requests for its own terminals.",
+          "type": "string"
+        },
+        {
           "const": "approvals/listPending",
           "description": "Read pending structured provider approvals for one controlled session.",
           "type": "string"
@@ -3140,6 +3337,26 @@
         {
           "const": "terminals/exited",
           "description": "Provider process exit after preceding output drained.",
+          "type": "string"
+        },
+        {
+          "const": "windows/indexChanged",
+          "description": "The window index changed.",
+          "type": "string"
+        },
+        {
+          "const": "windows/indexEnded",
+          "description": "The window index subscription ended.",
+          "type": "string"
+        },
+        {
+          "const": "windows/revealRequested",
+          "description": "Notification: someone asked the subscribed window to show one of its terminals.",
+          "type": "string"
+        },
+        {
+          "const": "windows/revealsEnded",
+          "description": "Notification: the reveal subscription ended.",
           "type": "string"
         },
         {
@@ -3509,7 +3726,8 @@
           "description": "Current supervision state."
         },
         "looksStuck": {
-          "description": "Structural stalled-turn hint derived by Core without interpreting conversation content.",
+          "default": false,
+          "description": "Retired, always `false`. It was meant as a silence-based \"looks stuck\" hint, and silence is a diagnostic\nsignal, not a proved state: a turn inside a long tool call is quiet and not stuck (operator, 2026-08-28),\nso the Runtime publishes only what it observed. The field stays on the wire, defaulted, so a client\nwritten against an earlier revision reads exactly what it read before.",
           "type": "boolean"
         },
         "memoryBytes": {
@@ -3564,7 +3782,6 @@
         "workspace",
         "hot",
         "lifecycle",
-        "looksStuck",
         "sessionGeneration"
       ],
       "type": "object"
@@ -4008,6 +4225,23 @@
       "additionalProperties": false,
       "description": "One live terminal descriptor visible through an approved root.",
       "properties": {
+        "controlGeneration": {
+          "default": 0,
+          "description": "Monotonic count of control transfers and renewals on this terminal: exactly one view holds input and\nresize authority at a time, and a view whose lease generation is below this number no longer holds it.\nZero until control was first held.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "controlHeld": {
+          "default": false,
+          "description": "Whether some view holds a live control lease right now.",
+          "type": "boolean"
+        },
+        "dialogueEnabled": {
+          "default": false,
+          "description": "Whether local terminal control enabled courier commands for this live process incarnation.",
+          "type": "boolean"
+        },
         "geometry": {
           "$ref": "#/$defs/TerminalGeometry",
           "description": "Current shared PTY geometry."
@@ -4034,6 +4268,25 @@
           "minimum": 0,
           "type": "integer"
         },
+        "origin": {
+          "$ref": "#/$defs/TerminalOrigin",
+          "default": "owned",
+          "description": "Who owns the process behind this terminal and how the Runtime reaches it."
+        },
+        "ownerTerminalKey": {
+          "description": "For an observed mirror: the owner window's key for that terminal in the window registry.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ownerWindowSessionId": {
+          "description": "For an observed mirror: the VS Code window that owns the terminal, by its registered session identity.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "processState": {
           "$ref": "#/$defs/TerminalProcessState",
           "description": "Structural live process state."
@@ -4055,6 +4308,13 @@
         "terminalId": {
           "$ref": "#/$defs/RuntimeTerminalId",
           "description": "Runtime-local terminal identity."
+        },
+        "viewerCount": {
+          "default": 0,
+          "description": "How many views are attached to this terminal right now, across every connection and window. A proved\nengine fact (`view_count`): the index changes when a view attaches or ends, so a window can say a\nconversation is being watched elsewhere without inferring it from output. An open view never implies\nmodel work.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
         },
         "workspace": {
           "description": "Exact canonical workspace already filtered through the caller's grant.",
@@ -4224,6 +4484,11 @@
       "additionalProperties": false,
       "description": "Explicit loss boundary followed atomically by one replacement screen snapshot.",
       "properties": {
+        "checkpointAvailable": {
+          "default": true,
+          "description": "Whether the replacement screen is the provider's current screen (see [`TerminalViewOpened`]).",
+          "type": "boolean"
+        },
         "lostChunks": {
           "description": "Number of broadcast chunks skipped before the replacement snapshot.",
           "format": "uint64",
@@ -4330,6 +4595,26 @@
         }
       ]
     },
+    "TerminalOrigin": {
+      "description": "How the Runtime reaches the process behind a terminal (`docs/terminalSurface.md`, live capture ladder).",
+      "oneOf": [
+        {
+          "const": "owned",
+          "description": "The Runtime started the provider on its own pseudo terminal: the fully supervised tier.",
+          "type": "string"
+        },
+        {
+          "const": "officialAttach",
+          "description": "The Runtime started only the provider's official attachment client; the owner is elsewhere.",
+          "type": "string"
+        },
+        {
+          "const": "observedMirror",
+          "description": "A VS Code window observes the terminal through shell integration and feeds its raw execution output here;\ninput reaches it only through that window and only with explicit authority.",
+          "type": "string"
+        }
+      ]
+    },
     "TerminalOutputNotification": {
       "additionalProperties": false,
       "description": "One bounded exact output chunk for a terminal view.",
@@ -4407,6 +4692,42 @@
       ],
       "type": "object"
     },
+    "TerminalSetDialogueParams": {
+      "additionalProperties": false,
+      "description": "Enable or disable process-local dialogue under the exact current terminal input lease.",
+      "properties": {
+        "enabled": {
+          "description": "False retires the current dialogue lifetime, including pending messages and calls.",
+          "type": "boolean"
+        },
+        "leaseGeneration": {
+          "description": "Exact current lease generation.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "leaseId": {
+          "description": "Opaque lease identity returned on acquisition.",
+          "type": "string"
+        },
+        "requestId": {
+          "$ref": "#/$defs/MutationRequestId",
+          "description": "Caller-minted idempotency identity."
+        },
+        "terminalId": {
+          "$ref": "#/$defs/RuntimeTerminalId",
+          "description": "Exact controlled terminal."
+        }
+      },
+      "required": [
+        "requestId",
+        "terminalId",
+        "leaseId",
+        "leaseGeneration",
+        "enabled"
+      ],
+      "type": "object"
+    },
     "TerminalStopParams": {
       "additionalProperties": false,
       "description": "Stop one hosted provider CLI under the exact current lease.",
@@ -4442,6 +4763,11 @@
       "additionalProperties": false,
       "description": "A view starts with one bounded screen snapshot, then receives live output notifications.",
       "properties": {
+        "checkpointAvailable": {
+          "default": true,
+          "description": "Whether `screen_base64` is the provider's current screen. False, with an empty screen, when the Runtime's\ncheckpoint projector was unreachable or reset and the provider has not redrawn since; live bytes still\nbegin exactly at the boundary, and the provider's next full redraw (a resize provokes one) fills the view.",
+          "type": "boolean"
+        },
         "controlLease": {
           "anyOf": [
             {
@@ -4674,6 +5000,479 @@
         "snapshot"
       ],
       "type": "object"
+    },
+    "WatchWindowIndexParams": {
+      "additionalProperties": false,
+      "description": "Install one bounded window index subscription.",
+      "type": "object"
+    },
+    "WatchWindowIndexResult": {
+      "additionalProperties": false,
+      "description": "Initial window index and the connection-local subscription identity.",
+      "properties": {
+        "snapshot": {
+          "$ref": "#/$defs/WindowIndexSnapshot",
+          "description": "Initial snapshot."
+        },
+        "subscriptionId": {
+          "description": "Opaque connection-local subscription identity.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "subscriptionId",
+        "snapshot"
+      ],
+      "type": "object"
+    },
+    "WatchWindowRevealsParams": {
+      "additionalProperties": false,
+      "description": "A window asks to be told when someone wants one of its terminals shown.",
+      "properties": {
+        "windowSessionId": {
+          "description": "The window's own registered session identity.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "windowSessionId"
+      ],
+      "type": "object"
+    },
+    "WatchWindowRevealsResult": {
+      "additionalProperties": false,
+      "description": "The reveal subscription.",
+      "properties": {
+        "subscriptionId": {
+          "description": "Identity of this subscription, echoed on every notification.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "subscriptionId"
+      ],
+      "type": "object"
+    },
+    "WindowDescriptor": {
+      "additionalProperties": false,
+      "description": "One registered window as every reader sees it.",
+      "properties": {
+        "hostGeneration": {
+          "description": "The Extension Host activation that holds the registration.",
+          "type": "string"
+        },
+        "hostPid": {
+          "description": "The Extension Host's process id, when the window reported one.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "registrationGeneration": {
+          "description": "Which registration this is; higher is newer.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "terminals": {
+          "description": "Every terminal the window published, in the order it published them.",
+          "items": {
+            "$ref": "#/$defs/ObservedTerminal"
+          },
+          "type": "array"
+        },
+        "vscodeVersion": {
+          "description": "The VS Code version the window runs.",
+          "type": "string"
+        },
+        "windowSessionId": {
+          "description": "The window's identity, as registered.",
+          "type": "string"
+        },
+        "workspaceFolders": {
+          "description": "The workspace folders open in the window.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "windowSessionId",
+        "hostGeneration",
+        "registrationGeneration",
+        "vscodeVersion",
+        "workspaceFolders",
+        "terminals"
+      ],
+      "type": "object"
+    },
+    "WindowForeground": {
+      "description": "What became of the owner's window on the desktop.",
+      "oneOf": [
+        {
+          "const": "raised",
+          "description": "The owner's window is in the foreground now.",
+          "type": "string"
+        },
+        {
+          "const": "flashed",
+          "description": "Windows refused the foreground change; the owner's taskbar button flashes.",
+          "type": "string"
+        },
+        {
+          "const": "notFound",
+          "description": "The owner registered no host process, or none of its windows could be found.",
+          "type": "string"
+        },
+        {
+          "const": "ambiguous",
+          "description": "More than one of the owner's windows matched; none was raised.",
+          "type": "string"
+        },
+        {
+          "const": "unsupported",
+          "description": "This platform has no window to raise.",
+          "type": "string"
+        }
+      ]
+    },
+    "WindowIndexChangedNotification": {
+      "additionalProperties": false,
+      "description": "The window index after a registration, an update, or a window going away.",
+      "properties": {
+        "snapshot": {
+          "$ref": "#/$defs/WindowIndexSnapshot",
+          "description": "Complete new snapshot."
+        },
+        "subscriptionId": {
+          "description": "Opaque connection-local subscription identity.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "subscriptionId",
+        "snapshot"
+      ],
+      "type": "object"
+    },
+    "WindowIndexEndReason": {
+      "description": "Final typed reason for retiring a window index subscription.",
+      "oneOf": [
+        {
+          "const": "authorityChanged",
+          "description": "The integration's authority changed or was revoked.",
+          "type": "string"
+        },
+        {
+          "const": "runtimeUnavailable",
+          "description": "The Runtime generation is going away.",
+          "type": "string"
+        }
+      ]
+    },
+    "WindowIndexEndedNotification": {
+      "additionalProperties": false,
+      "description": "The window index subscription ended.",
+      "properties": {
+        "reason": {
+          "$ref": "#/$defs/WindowIndexEndReason",
+          "description": "Structural end reason."
+        },
+        "subscriptionId": {
+          "description": "Opaque connection-local subscription identity.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "subscriptionId",
+        "reason"
+      ],
+      "type": "object"
+    },
+    "WindowIndexSnapshot": {
+      "additionalProperties": false,
+      "description": "Every registered window, in registration order.",
+      "properties": {
+        "windows": {
+          "description": "The registered windows, oldest registration first.",
+          "items": {
+            "$ref": "#/$defs/WindowDescriptor"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "windows"
+      ],
+      "type": "object"
+    },
+    "WindowMirrorEndParams": {
+      "additionalProperties": false,
+      "description": "The observed execution ended, or the window stops mirroring it.",
+      "properties": {
+        "exitCode": {
+          "description": "The exit code shell integration reported, when it reported one.",
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "terminalId": {
+          "$ref": "#/$defs/RuntimeTerminalId",
+          "description": "The mirror."
+        }
+      },
+      "required": [
+        "terminalId"
+      ],
+      "type": "object"
+    },
+    "WindowMirrorOpenParams": {
+      "additionalProperties": false,
+      "description": "A window opens a mirror of a terminal it observes: from now on it feeds that terminal's raw execution output\nhere, and the terminal appears in the terminal index as an observed mirror other windows may attach to.",
+      "properties": {
+        "commandLine": {
+          "description": "The command line as shell integration reported it.",
+          "type": "string"
+        },
+        "cwd": {
+          "description": "The shell's working directory when shell integration reported one; the mirror's folder.",
+          "type": "string"
+        },
+        "executionId": {
+          "description": "The command generation being mirrored.",
+          "type": "string"
+        },
+        "geometry": {
+          "$ref": "#/$defs/TerminalGeometry",
+          "description": "The observed terminal's geometry, so a viewer renders the same width and height."
+        },
+        "processId": {
+          "description": "The shell process id of the observed terminal, when VS Code resolved it.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "providerId": {
+          "$ref": "#/$defs/ProviderId",
+          "description": "The provider whose command the window recognised, from the inventory's command names."
+        },
+        "terminalKey": {
+          "description": "The window's key for the terminal, as published to the registry.",
+          "type": "string"
+        },
+        "windowSessionId": {
+          "description": "The window that owns the terminal, by its registered session identity. The mirror is fed on whichever\nconnection opened it, which is deliberately not the connection that holds the window's registration: a\nrefused chunk must never take the registration down with it.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "windowSessionId",
+        "terminalKey",
+        "executionId",
+        "providerId",
+        "commandLine",
+        "cwd",
+        "geometry"
+      ],
+      "type": "object"
+    },
+    "WindowMirrorOpened": {
+      "additionalProperties": false,
+      "description": "The mirror the Runtime opened.",
+      "properties": {
+        "terminalId": {
+          "$ref": "#/$defs/RuntimeTerminalId",
+          "description": "The terminal the mirror appears as in the terminal index."
+        }
+      },
+      "required": [
+        "terminalId"
+      ],
+      "type": "object"
+    },
+    "WindowMirrorOutputParams": {
+      "additionalProperties": false,
+      "description": "One chunk of the observed execution's raw output, exactly as `execution.read()` yielded it.",
+      "properties": {
+        "bytesBase64": {
+          "description": "Base64 of the exact bytes.",
+          "type": "string"
+        },
+        "terminalId": {
+          "$ref": "#/$defs/RuntimeTerminalId",
+          "description": "The mirror."
+        }
+      },
+      "required": [
+        "terminalId",
+        "bytesBase64"
+      ],
+      "type": "object"
+    },
+    "WindowRegisterParams": {
+      "additionalProperties": false,
+      "description": "A window announcing itself: once per Extension Host activation, on the connection it keeps open.",
+      "properties": {
+        "hostGeneration": {
+          "description": "One value per Extension Host activation, so a restarted host is told apart from the one before it.",
+          "type": "string"
+        },
+        "hostPid": {
+          "description": "The Extension Host's process id. The editor's own window belongs to an ancestor of it, which is how a reveal\nfinds the window to bring forward.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "vscodeVersion": {
+          "description": "The VS Code version the window runs.",
+          "type": "string"
+        },
+        "windowSessionId": {
+          "description": "The window's own identity: VS Code's session id, one per window, kept across an Extension Host restart and\nrenewed by a window reload.",
+          "type": "string"
+        },
+        "workspaceFolders": {
+          "description": "The workspace folders open in the window, as absolute paths.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "windowSessionId",
+        "hostGeneration",
+        "vscodeVersion",
+        "workspaceFolders"
+      ],
+      "type": "object"
+    },
+    "WindowRegistration": {
+      "additionalProperties": false,
+      "description": "The Runtime's record of a registration.",
+      "properties": {
+        "registrationGeneration": {
+          "description": "Monotonic across every registration this Runtime generation accepted; a later registration of the same\nwindow has a higher number, so readers can tell which one is current.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "registrationGeneration"
+      ],
+      "type": "object"
+    },
+    "WindowRevealParams": {
+      "additionalProperties": false,
+      "description": "Ask the window that owns a terminal to show it and come forward.",
+      "properties": {
+        "terminalKey": {
+          "description": "The owner's key for the terminal in the window registry.",
+          "type": "string"
+        },
+        "windowSessionId": {
+          "description": "The owner window, by its registered session identity.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "windowSessionId",
+        "terminalKey"
+      ],
+      "type": "object"
+    },
+    "WindowRevealRequestedNotification": {
+      "additionalProperties": false,
+      "description": "Someone asked the subscribed window to show one of its terminals.",
+      "properties": {
+        "fromWindowSessionId": {
+          "description": "The asking window's registered session identity, when the asker is a registered window.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "subscriptionId": {
+          "description": "The subscription this belongs to.",
+          "type": "string"
+        },
+        "terminalKey": {
+          "description": "The window's own key for the terminal to show.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "subscriptionId",
+        "terminalKey"
+      ],
+      "type": "object"
+    },
+    "WindowRevealResult": {
+      "additionalProperties": false,
+      "description": "The reveal as far as the Runtime could take it.",
+      "properties": {
+        "delivered": {
+          "description": "Whether the owner window was watching for reveals and was told which terminal to show.",
+          "type": "boolean"
+        },
+        "foreground": {
+          "$ref": "#/$defs/WindowForeground",
+          "description": "What became of the owner's window on the desktop."
+        }
+      },
+      "required": [
+        "delivered",
+        "foreground"
+      ],
+      "type": "object"
+    },
+    "WindowRevealsEndedNotification": {
+      "additionalProperties": false,
+      "description": "The reveal subscription ended.",
+      "properties": {
+        "reason": {
+          "$ref": "#/$defs/WindowIndexEndReason",
+          "description": "Why it ended."
+        },
+        "subscriptionId": {
+          "description": "The subscription this belongs to.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "subscriptionId",
+        "reason"
+      ],
+      "type": "object"
+    },
+    "WindowUpdateParams": {
+      "additionalProperties": false,
+      "description": "A window publishing the terminals it observes: the whole set, every time something changed.",
+      "properties": {
+        "terminals": {
+          "description": "Every terminal the window observes right now.",
+          "items": {
+            "$ref": "#/$defs/ObservedTerminal"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "terminals"
+      ],
+      "type": "object"
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -4742,6 +5541,9 @@
     "list_terminals": {
       "$ref": "#/$defs/ListTerminalsParams"
     },
+    "list_windows": {
+      "$ref": "#/$defs/ListWindowsParams"
+    },
     "managed_session_list": {
       "$ref": "#/$defs/ManagedSessionList"
     },
@@ -4757,11 +5559,23 @@
     "native_activity_params": {
       "$ref": "#/$defs/NativeActivityParams"
     },
+    "native_focus": {
+      "$ref": "#/$defs/NativeFocusParams"
+    },
+    "native_focus_result": {
+      "$ref": "#/$defs/NativeFocusResult"
+    },
     "native_session_catalogue": {
       "$ref": "#/$defs/NativeSessionCatalogue"
     },
     "notification": {
       "$ref": "#/$defs/JsonRpcNotification"
+    },
+    "observed_command": {
+      "$ref": "#/$defs/ObservedCommand"
+    },
+    "observed_terminal": {
+      "$ref": "#/$defs/ObservedTerminal"
     },
     "pending_approvals": {
       "$ref": "#/$defs/PendingApprovalList"
@@ -4883,6 +5697,9 @@
     "terminal_resize": {
       "$ref": "#/$defs/TerminalResizeParams"
     },
+    "terminal_set_dialogue": {
+      "$ref": "#/$defs/TerminalSetDialogueParams"
+    },
     "terminal_stop": {
       "$ref": "#/$defs/TerminalStopParams"
     },
@@ -4918,6 +5735,63 @@
     },
     "watch_terminal_index_result": {
       "$ref": "#/$defs/WatchTerminalIndexResult"
+    },
+    "watch_window_index": {
+      "$ref": "#/$defs/WatchWindowIndexParams"
+    },
+    "watch_window_index_result": {
+      "$ref": "#/$defs/WatchWindowIndexResult"
+    },
+    "watch_window_reveals": {
+      "$ref": "#/$defs/WatchWindowRevealsParams"
+    },
+    "watch_window_reveals_result": {
+      "$ref": "#/$defs/WatchWindowRevealsResult"
+    },
+    "window_descriptor": {
+      "$ref": "#/$defs/WindowDescriptor"
+    },
+    "window_index": {
+      "$ref": "#/$defs/WindowIndexSnapshot"
+    },
+    "window_index_changed": {
+      "$ref": "#/$defs/WindowIndexChangedNotification"
+    },
+    "window_index_ended": {
+      "$ref": "#/$defs/WindowIndexEndedNotification"
+    },
+    "window_mirror_end": {
+      "$ref": "#/$defs/WindowMirrorEndParams"
+    },
+    "window_mirror_open": {
+      "$ref": "#/$defs/WindowMirrorOpenParams"
+    },
+    "window_mirror_opened": {
+      "$ref": "#/$defs/WindowMirrorOpened"
+    },
+    "window_mirror_output": {
+      "$ref": "#/$defs/WindowMirrorOutputParams"
+    },
+    "window_register": {
+      "$ref": "#/$defs/WindowRegisterParams"
+    },
+    "window_registration": {
+      "$ref": "#/$defs/WindowRegistration"
+    },
+    "window_reveal": {
+      "$ref": "#/$defs/WindowRevealParams"
+    },
+    "window_reveal_requested": {
+      "$ref": "#/$defs/WindowRevealRequestedNotification"
+    },
+    "window_reveal_result": {
+      "$ref": "#/$defs/WindowRevealResult"
+    },
+    "window_reveals_ended": {
+      "$ref": "#/$defs/WindowRevealsEndedNotification"
+    },
+    "window_update": {
+      "$ref": "#/$defs/WindowUpdateParams"
     }
   },
   "required": [
@@ -4996,11 +5870,36 @@
     "terminal_resize",
     "terminal_detach",
     "terminal_stop",
+    "terminal_set_dialogue",
     "terminal_index_changed",
     "terminal_index_ended",
     "terminal_output",
     "terminal_lagged",
-    "terminal_exited"
+    "terminal_exited",
+    "window_register",
+    "window_registration",
+    "window_update",
+    "observed_terminal",
+    "observed_command",
+    "window_descriptor",
+    "list_windows",
+    "window_index",
+    "watch_window_index",
+    "watch_window_index_result",
+    "window_index_changed",
+    "window_index_ended",
+    "window_mirror_open",
+    "window_mirror_opened",
+    "window_mirror_output",
+    "window_mirror_end",
+    "window_reveal",
+    "window_reveal_result",
+    "watch_window_reveals",
+    "watch_window_reveals_result",
+    "window_reveal_requested",
+    "window_reveals_ended",
+    "native_focus",
+    "native_focus_result"
   ],
   "title": "PublicProtocolSchema",
   "type": "object",

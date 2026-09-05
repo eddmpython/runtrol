@@ -14,6 +14,16 @@ use runtrol_provider::TerminalId;
 
 use super::{CourierGate, gate, session_id};
 
+async fn admission(gate: &CourierGate, session: ManagedSessionId) -> super::super::Admitted {
+    gate.state
+        .lock()
+        .await
+        .sessions
+        .get(&session)
+        .expect("registered session")
+        .admission(session)
+}
+
 struct Fleet {
     gate: CourierGate,
     alpha: ManagedSessionId,
@@ -28,6 +38,9 @@ async fn start(gate: &CourierGate) -> (TerminalId, ManagedSessionId) {
     gate.launch(minted, || Ok::<_, ()>(((), None)))
         .await
         .expect("register a mailbox without launching a process");
+    gate.set_dialogue(terminal, true)
+        .await
+        .expect("explicitly arm test session");
     (terminal, session_id(terminal))
 }
 
@@ -85,6 +98,137 @@ async fn receive(gate: &CourierGate, session: ManagedSessionId) -> Answer {
         },
     )
     .await
+}
+
+#[tokio::test]
+async fn launch_is_disabled_and_disabling_releases_calls_and_mail() {
+    let gate = gate();
+    let terminal = TerminalId::now();
+    let session = session_id(terminal);
+    gate.launch(gate.mint(terminal).expect("mint"), || {
+        Ok::<_, ()>(((), None))
+    })
+    .await
+    .expect("launch");
+    assert!(!gate.dialogue_enabled(terminal).await);
+    assert!(matches!(
+        gate.command(session, Request::List { after: None }).await,
+        Answer::Refused { .. }
+    ));
+    let (peer_terminal, peer) = start(&gate).await;
+    let ask = CallEnvelope::ask(peer, session, body("question"), now().plus(5_000));
+    assert!(matches!(
+        gate.command(
+            peer,
+            Request::Send {
+                envelope: ask.clone()
+            }
+        )
+        .await,
+        Answer::Refused { .. }
+    ));
+    gate.set_dialogue(terminal, true).await.expect("arm");
+    assert!(matches!(
+        gate.command(peer, Request::Send { envelope: ask }).await,
+        Answer::Accepted { .. }
+    ));
+    gate.set_dialogue(terminal, false).await.expect("disarm");
+    let state = gate.state.lock().await;
+    assert_eq!(state.courier.charged_bytes(), 0);
+    assert_eq!(state.courier.active_calls(), 0);
+    drop(state);
+    gate.set_dialogue(terminal, true).await.expect("rearm");
+    assert!(matches!(
+        receive(&gate, session).await,
+        Answer::Received { envelope: None }
+    ));
+    gate.forget(terminal).await;
+    assert!(gate.set_dialogue(terminal, true).await.is_err());
+    assert!(gate.dialogue_enabled(peer_terminal).await);
+}
+
+#[tokio::test]
+async fn an_old_wait_cannot_take_mail_after_disable_and_reenable() {
+    let Fleet {
+        gate,
+        alpha,
+        bravo,
+        alpha_terminal,
+        ..
+    } = fleet().await;
+    let mut waiting = Box::pin(gate.command(
+        alpha,
+        Request::Receive {
+            source: None,
+            call: None,
+            timeout_ms: 5_000,
+        },
+    ));
+    pending_once(waiting.as_mut()).await;
+    gate.set_dialogue(alpha_terminal, false)
+        .await
+        .expect("disarm");
+    gate.set_dialogue(alpha_terminal, true)
+        .await
+        .expect("rearm");
+    let message = CallEnvelope::tell(bravo, alpha, body("new activation"), now().plus(5_000));
+    assert!(matches!(
+        gate.command(bravo, Request::Send { envelope: message })
+            .await,
+        Answer::Accepted { .. }
+    ));
+    assert!(matches!(waiting.await, Answer::Refused { .. }));
+    assert!(matches!(
+        receive(&gate, alpha).await,
+        Answer::Received { envelope: Some(_) }
+    ));
+}
+
+#[tokio::test]
+async fn stale_cleanup_cannot_cancel_a_new_activation_reusing_the_same_call() {
+    let Fleet {
+        gate,
+        alpha,
+        bravo,
+        alpha_terminal,
+        ..
+    } = fleet().await;
+    let ask = CallEnvelope::ask(alpha, bravo, body("question"), now().plus(5_000));
+    let mut pending = None;
+    let mut waiting = Box::pin(gate.command_owned(
+        admission(&gate, alpha).await,
+        Request::Ask {
+            envelope: ask.clone(),
+        },
+        &mut pending,
+    ));
+    pending_once(waiting.as_mut()).await;
+    drop(waiting);
+    let stale = pending.expect("owned call");
+    gate.set_dialogue(alpha_terminal, false)
+        .await
+        .expect("disarm");
+    gate.set_dialogue(alpha_terminal, true)
+        .await
+        .expect("rearm");
+    // Replay memory is bounded. An old command may remain unpolled while later traffic rotates that memory.
+    for _ in 0..Limits::INITIAL.remembered_messages {
+        let note = CallEnvelope::tell(alpha, bravo, body("rotate"), now().plus(5_000));
+        assert!(matches!(
+            gate.command(alpha, Request::Send { envelope: note }).await,
+            Answer::Accepted { .. }
+        ));
+        assert!(matches!(
+            receive(&gate, bravo).await,
+            Answer::Received { envelope: Some(_) }
+        ));
+    }
+    assert!(matches!(
+        gate.command(alpha, Request::Send { envelope: ask }).await,
+        Answer::Accepted { .. }
+    ));
+    gate.abandon(alpha, stale).await;
+    assert_eq!(gate.state.lock().await.courier.active_calls(), 1);
 }
 
 #[tokio::test]
@@ -229,13 +373,19 @@ async fn session_wait_slots_are_bounded_independent_and_released_on_drop() {
         alpha_terminal,
         ..
     } = fleet().await;
+    let alpha_admitted = admission(&gate, alpha).await;
+    let bravo_admitted = admission(&gate, bravo).await;
     let mut held = Vec::new();
     for _ in 0..SESSION_WAIT_SLOTS {
-        held.push(gate.wait_slot(alpha).await.expect("one bounded wait slot"));
+        held.push(
+            gate.wait_slot(alpha_admitted)
+                .await
+                .expect("one bounded wait slot"),
+        );
     }
-    assert!(gate.wait_slot(alpha).await.is_none());
+    assert!(gate.wait_slot(alpha_admitted).await.is_none());
     let other = gate
-        .wait_slot(bravo)
+        .wait_slot(bravo_admitted)
         .await
         .expect("another session has its own allowance");
     let mail = CallEnvelope::tell(bravo, alpha, body("wake"), now().plus(5_000));
@@ -245,24 +395,24 @@ async fn session_wait_slots_are_bounded_independent_and_released_on_drop() {
     ));
     drop(held.pop().expect("release exactly one slot"));
     let replacement = gate
-        .wait_slot(alpha)
+        .wait_slot(alpha_admitted)
         .await
         .expect("the released slot is reusable");
-    assert!(gate.wait_slot(alpha).await.is_none());
+    assert!(gate.wait_slot(alpha_admitted).await.is_none());
     drop(replacement);
     drop(held);
     drop(other);
     let mut restored = Vec::new();
     for _ in 0..SESSION_WAIT_SLOTS {
         restored.push(
-            gate.wait_slot(alpha)
+            gate.wait_slot(alpha_admitted)
                 .await
                 .expect("all wait slots were returned"),
         );
     }
     gate.forget(alpha_terminal).await;
     assert!(
-        gate.wait_slot(alpha).await.is_none(),
+        gate.wait_slot(alpha_admitted).await.is_none(),
         "an ended session acquires no fresh lease"
     );
     drop(restored);
@@ -276,7 +426,7 @@ async fn cancelling_an_owned_ask_wait_releases_queued_and_received_call_state() 
         } = fleet().await;
         let ask = CallEnvelope::ask(alpha, bravo, body("question"), now().plus(5_000));
         let slot = gate
-            .wait_slot(alpha)
+            .wait_slot(admission(&gate, alpha).await)
             .await
             .expect("the connection's wait lease");
         let mut waiting = Box::pin(gate.command(
@@ -295,7 +445,22 @@ async fn cancelling_an_owned_ask_wait_releases_queued_and_received_call_state() 
         }
         drop(waiting);
         // The serving connection performs this exact cleanup when its peer leaves or sends a second frame.
-        gate.abandon(alpha, reference(&ask)).await;
+        let activation = gate
+            .state
+            .lock()
+            .await
+            .sessions
+            .get(&alpha)
+            .expect("registered")
+            .activation;
+        gate.abandon(
+            alpha,
+            super::super::PendingCall {
+                activation,
+                call: reference(&ask),
+            },
+        )
+        .await;
         drop(slot);
         let state = gate.state.lock().await;
         assert_eq!(state.courier.active_calls(), 0);
@@ -368,7 +533,7 @@ async fn a_refused_duplicate_ask_does_not_acquire_cleanup_of_the_original_call()
     let mut pending = None;
     let answer = gate
         .command_owned(
-            alpha,
+            admission(&gate, alpha).await,
             Request::Ask {
                 envelope: ask.clone(),
             },
@@ -380,4 +545,213 @@ async fn a_refused_duplicate_ask_does_not_acquire_cleanup_of_the_original_call()
     let state = gate.state.lock().await;
     assert_eq!(state.courier.active_calls(), 1);
     assert_eq!(state.courier.charged_bytes(), ask.body.len());
+}
+
+#[tokio::test]
+async fn commands_delayed_after_hello_cannot_enter_a_later_activation() {
+    let Fleet {
+        gate,
+        alpha,
+        bravo,
+        alpha_terminal,
+        ..
+    } = fleet().await;
+    let stale = admission(&gate, alpha).await;
+    gate.set_dialogue(alpha_terminal, false)
+        .await
+        .expect("disable");
+    gate.set_dialogue(alpha_terminal, true)
+        .await
+        .expect("enable a fresh mailbox");
+    let mail = CallEnvelope::tell(bravo, alpha, body("new lifetime"), now().plus(5_000));
+    assert!(matches!(
+        gate.command(
+            bravo,
+            Request::Send {
+                envelope: mail.clone()
+            }
+        )
+        .await,
+        Answer::Accepted { .. }
+    ));
+    let requests = [
+        Request::Send {
+            envelope: CallEnvelope::tell(alpha, bravo, body("old send"), now().plus(5_000)),
+        },
+        Request::Ask {
+            envelope: CallEnvelope::ask(alpha, bravo, body("old ask"), now().plus(5_000)),
+        },
+        Request::Receive {
+            source: None,
+            call: None,
+            timeout_ms: 0,
+        },
+        Request::List { after: None },
+    ];
+    for request in requests {
+        let mut pending = None;
+        assert!(matches!(
+            gate.command_owned(stale, request, &mut pending).await,
+            Answer::Refused { .. }
+        ));
+        assert!(pending.is_none());
+    }
+    assert_eq!(gate.state.lock().await.courier.waiting(bravo), Some(0));
+    let Answer::Received {
+        envelope: Some(received),
+    } = receive(&gate, alpha).await
+    else {
+        panic!("new mailbox retains its mail");
+    };
+    assert_eq!(received.message_id, mail.message_id);
+}
+
+#[tokio::test]
+async fn a_disabled_hello_never_gains_wait_or_command_authority_from_later_enablement() {
+    let gate = gate();
+    let terminal = TerminalId::now();
+    gate.launch(gate.mint(terminal).expect("mint"), || {
+        Ok::<_, ()>(((), None))
+    })
+    .await
+    .expect("register disabled");
+    let session = session_id(terminal);
+    let disabled = admission(&gate, session).await;
+    assert!(gate.wait_slot(disabled).await.is_none());
+    gate.set_dialogue(terminal, true).await.expect("enable");
+    assert!(gate.wait_slot(disabled).await.is_none());
+    let mut pending = None;
+    assert!(matches!(
+        gate.command_owned(disabled, Request::List { after: None }, &mut pending)
+            .await,
+        Answer::Refused { .. }
+    ));
+    assert!(pending.is_none());
+    let current = admission(&gate, session).await;
+    assert!(gate.wait_slot(current).await.is_some());
+}
+
+#[tokio::test]
+async fn old_wait_permits_neither_block_nor_replenish_a_new_activations_allowance() {
+    let Fleet {
+        gate,
+        alpha,
+        alpha_terminal,
+        ..
+    } = fleet().await;
+    let stale = admission(&gate, alpha).await;
+    let mut old = Vec::new();
+    for _ in 0..SESSION_WAIT_SLOTS {
+        old.push(gate.wait_slot(stale).await.expect("old allowance"));
+    }
+    gate.set_dialogue(alpha_terminal, false)
+        .await
+        .expect("disable");
+    assert!(gate.wait_slot(stale).await.is_none());
+    gate.set_dialogue(alpha_terminal, true)
+        .await
+        .expect("re-enable");
+    let current = admission(&gate, alpha).await;
+    let mut fresh = Vec::new();
+    for _ in 0..SESSION_WAIT_SLOTS {
+        fresh.push(
+            gate.wait_slot(current)
+                .await
+                .expect("new allowance despite old held leases"),
+        );
+    }
+    assert!(gate.wait_slot(current).await.is_none());
+    drop(old);
+    assert!(
+        gate.wait_slot(current).await.is_none(),
+        "old lease drops cannot mint new-generation permits"
+    );
+    drop(fresh);
+    assert!(gate.wait_slot(current).await.is_some());
+    assert!(gate.wait_slot(stale).await.is_none());
+}
+
+#[tokio::test]
+async fn an_invalid_wait_cannot_acquire_cleanup_of_an_existing_call() {
+    let Fleet {
+        gate, alpha, bravo, ..
+    } = fleet().await;
+    let ask = CallEnvelope::ask(alpha, bravo, body("original"), now().plus(5_000));
+    assert!(matches!(
+        gate.command(
+            alpha,
+            Request::Send {
+                envelope: ask.clone()
+            }
+        )
+        .await,
+        Answer::Accepted { .. }
+    ));
+    let mut pending = None;
+    let answer = gate
+        .command_owned(
+            admission(&gate, alpha).await,
+            Request::Receive {
+                source: Some(bravo),
+                call: Some(reference(&ask)),
+                timeout_ms: Limits::INITIAL.max_deadline_millis + 1,
+            },
+            &mut pending,
+        )
+        .await;
+    assert!(matches!(answer, Answer::Refused { .. }));
+    assert!(
+        pending.is_none(),
+        "a rejected wait must not retire another invocation's ask"
+    );
+    assert_eq!(gate.state.lock().await.courier.active_calls(), 1);
+}
+
+#[tokio::test]
+async fn list_contains_only_enabled_bound_mailboxes_and_ignores_disabled_cursors() {
+    let gate = gate();
+    let caller_terminal = TerminalId::now();
+    let hidden_terminal = TerminalId::now();
+    let later_terminal = TerminalId::now();
+    for terminal in [caller_terminal, hidden_terminal, later_terminal] {
+        gate.launch(gate.mint(terminal).expect("mint"), || {
+            Ok::<_, ()>(((), Some(super::here())))
+        })
+        .await
+        .expect("register root identity");
+    }
+    gate.set_dialogue(caller_terminal, true)
+        .await
+        .expect("caller enabled");
+    gate.set_dialogue(later_terminal, true)
+        .await
+        .expect("later enabled");
+    let caller = session_id(caller_terminal);
+    let hidden = session_id(hidden_terminal);
+    let later = session_id(later_terminal);
+    let Answer::Sessions { sessions, next } =
+        gate.command(caller, Request::List { after: None }).await
+    else {
+        panic!("listing");
+    };
+    assert_eq!(
+        sessions.iter().map(|row| row.session).collect::<Vec<_>>(),
+        vec![caller, later]
+    );
+    assert!(next.is_none());
+    let Answer::Sessions { sessions, .. } = gate
+        .command(
+            caller,
+            Request::List {
+                after: Some(hidden),
+            },
+        )
+        .await
+    else {
+        panic!("listing after disabled row");
+    };
+    assert_eq!(
+        sessions.iter().map(|row| row.session).collect::<Vec<_>>(),
+        vec![later]
+    );
 }

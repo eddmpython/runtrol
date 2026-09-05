@@ -8,7 +8,7 @@ use runtrol_courier::wire::{Answer, Hello, HelloAnswer, Invocation, MAX_FRAME_BY
 use runtrol_courier::{BoundedUtf8, CallEnvelope, Limits, ManagedSessionId, MessageId, UnixMillis};
 use tokio::io::AsyncReadExt as _;
 
-use super::words::{Command, HELP, parse};
+use super::words::{Command, guide, help, parse};
 use super::{Admission, CourierFailure, birth_value, courier};
 
 const EXCHANGE_MARGIN: Duration = Duration::from_secs(10);
@@ -119,13 +119,11 @@ pub async fn execute(words: Vec<OsString>) -> Result<CommandOutput, CourierFailu
             })
         })
         .collect::<Result<_, _>>()?;
-    if words.len() == 1
-        && words
-            .first()
-            .is_some_and(|word| matches!(word.as_str(), "--help" | "help"))
+    if let [word] = words.as_slice()
+        && matches!(word.as_str(), "--help" | "help" | "--guide")
     {
         return Ok(CommandOutput {
-            stdout: HELP.to_owned(),
+            stdout: if word == "--guide" { guide() } else { help() },
             success: true,
         });
     }

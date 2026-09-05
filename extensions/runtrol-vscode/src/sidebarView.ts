@@ -263,6 +263,9 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
       const { command, target } = message as { command?: unknown; target?: unknown };
       if (typeof command !== "string" || !command.startsWith("runtrol.")) return;
       const item = this.targetOf(target);
+      if (target !== undefined && item === undefined) {
+        throw new Error("This sidebar item is no longer available. Refresh the list and try again.");
+      }
       if (item === undefined) await vscode.commands.executeCommand(command);
       else await vscode.commands.executeCommand(command, item);
     }
@@ -454,6 +457,8 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
       canOpen: row.canOpen,
       canFocus: row.canFocus,
       stopping: stopping(row),
+      dialogue: row.hostedTerminal && row.hostedTerminal.origin !== "observedMirror"
+        && row.hostedTerminal.processState === "running" ? row.hostedTerminal.dialogueEnabled ?? false : undefined,
       blocked: row.blocked,
       pinned: row.pinned,
       signIn: row.signInNeeded,

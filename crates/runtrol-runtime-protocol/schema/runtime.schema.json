@@ -3220,6 +3220,11 @@
           "type": "string"
         },
         {
+          "const": "terminals/setDialogue",
+          "description": "Arm or disarm process-local dialogue under the current terminal input lease.",
+          "type": "string"
+        },
+        {
           "const": "windows/register",
           "description": "A VS Code window registers itself and its observed terminals.",
           "type": "string"
@@ -4232,6 +4237,11 @@
           "description": "Whether some view holds a live control lease right now.",
           "type": "boolean"
         },
+        "dialogueEnabled": {
+          "default": false,
+          "description": "Whether local terminal control enabled courier commands for this live process incarnation.",
+          "type": "boolean"
+        },
         "geometry": {
           "$ref": "#/$defs/TerminalGeometry",
           "description": "Current shared PTY geometry."
@@ -4679,6 +4689,42 @@
         "leaseId",
         "leaseGeneration",
         "geometry"
+      ],
+      "type": "object"
+    },
+    "TerminalSetDialogueParams": {
+      "additionalProperties": false,
+      "description": "Enable or disable process-local dialogue under the exact current terminal input lease.",
+      "properties": {
+        "enabled": {
+          "description": "False retires the current dialogue lifetime, including pending messages and calls.",
+          "type": "boolean"
+        },
+        "leaseGeneration": {
+          "description": "Exact current lease generation.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "leaseId": {
+          "description": "Opaque lease identity returned on acquisition.",
+          "type": "string"
+        },
+        "requestId": {
+          "$ref": "#/$defs/MutationRequestId",
+          "description": "Caller-minted idempotency identity."
+        },
+        "terminalId": {
+          "$ref": "#/$defs/RuntimeTerminalId",
+          "description": "Exact controlled terminal."
+        }
+      },
+      "required": [
+        "requestId",
+        "terminalId",
+        "leaseId",
+        "leaseGeneration",
+        "enabled"
       ],
       "type": "object"
     },
@@ -5651,6 +5697,9 @@
     "terminal_resize": {
       "$ref": "#/$defs/TerminalResizeParams"
     },
+    "terminal_set_dialogue": {
+      "$ref": "#/$defs/TerminalSetDialogueParams"
+    },
     "terminal_stop": {
       "$ref": "#/$defs/TerminalStopParams"
     },
@@ -5821,6 +5870,7 @@
     "terminal_resize",
     "terminal_detach",
     "terminal_stop",
+    "terminal_set_dialogue",
     "terminal_index_changed",
     "terminal_index_ended",
     "terminal_output",

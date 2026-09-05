@@ -34,6 +34,8 @@ export type SidebarConversationRow = {
   readonly canFocus: boolean;
   /// The Runtime was asked to stop its process and is waiting for it to exit.
   readonly stopping: boolean;
+  /// Absent when this row has no live managed terminal that can own dialogue.
+  readonly dialogue?: boolean;
   readonly blocked: string | null;
   readonly pinned: boolean;
   readonly signIn: boolean;
@@ -253,6 +255,8 @@ function conversationHtml(row: SidebarConversationRow, assets: SidebarAssets): s
         ? " working"
         : "";
   const actions = [
+    row.dialogue !== undefined ? action(row.dialogue ? "runtrol.disableDialogue" : "runtrol.enableDialogue",
+      row.dialogue ? "Disable dialogue for this live session" : "Enable dialogue for this live session", "dialogue") : "",
     row.activity === "needsYou" ? action("runtrol.allowFromRow", "Allow", "check") + action("runtrol.declineFromRow", "Decline", "circle-slash") : "",
     row.signIn ? action("runtrol.signInFromRow", "Sign in", "key") : "",
     action(row.pinned ? "runtrol.unpinConversation" : "runtrol.pinConversation", row.pinned ? "Unpin" : "Pin to the top", row.pinned ? "pinned" : "pin"),
@@ -272,6 +276,7 @@ function conversationHtml(row: SidebarConversationRow, assets: SidebarAssets): s
 <span class="title">${escapeHtml(visibleTitle)}</span>
 ${state}
 <span class="tail">
+${row.dialogue === true ? '<span class="dialogue-on" title="Dialogue enabled" aria-label="Dialogue enabled"><i class="ci ci-dialogue" aria-hidden="true"></i></span>' : ""}
 <span class="actions">${actions}</span>
 ${row.memory ? `<span class="memory" title="Memory the provider process holds now">${escapeHtml(row.memory)}</span>` : ""}
 </span>
@@ -439,6 +444,7 @@ button { font: inherit; color: inherit; }
    Appearing actions used to relayout the row and shift the name under the cursor (operator, 2026-08-28), and
    on hover the actions are what the person came for. */
 .tail { flex: none; display: inline-flex; align-items: center; gap: 4px; justify-content: flex-end; margin-left: 2px; }
+.dialogue-on { display: inline-flex; color: var(--vscode-charts-green); }
 /* The figure stays in the flow. It was taken out of it so the hover buttons could sit on top of it, and in a
    box that had shrunk to nothing it broke "306 MB" across two lines and printed the running dot through it
    (measured 2026-08-28). The buttons now overlay the whole row instead, so nothing has to hide here. */
@@ -477,6 +483,7 @@ button { font: inherit; color: inherit; }
 .ci-trash { --ci: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M6 1h4l1 1h3v2H2V2h3zM3 5h10l-1 10H4z'/></svg>"); }
 .ci-archive { --ci: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M1 2h14v4H1zM2 7h12v8H2zm4 2v1h4V9z'/></svg>"); }
 .ci-debug-stop { --ci: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect x='3' y='3' width='10' height='10' rx='1'/></svg>"); }
+.ci-dialogue { --ci: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M1 2h10v7H5l-3 3V9H1zm2 2v3h1v1l1-1h4V4zm9 2h3v7h-2v2l-3-2H7v-3h2v1h2l1 1v-1h1V8h-1z'/></svg>"); }
 .ci-check { --ci: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M6 11L2.5 7.5l1.4-1.4L6 8.2l6.1-6.1 1.4 1.4z'/></svg>"); }
 .ci-circle-slash { --ci: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M8 1a7 7 0 110 14A7 7 0 018 1zm0 2a5 5 0 00-4 8l7-7a5 5 0 00-3-1zm4 2l-7 7a5 5 0 007-7z'/></svg>"); }
 .ci-key { --ci: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M10 1a5 5 0 00-4.7 6.7L1 12v3h3v-2h2v-2h2l.3-.3A5 5 0 1010 1zm1 3a1.5 1.5 0 110 3 1.5 1.5 0 010-3z'/></svg>"); }

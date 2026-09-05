@@ -205,6 +205,9 @@ pub struct TerminalDescriptor {
     /// Whether some view holds a live control lease right now.
     #[serde(default)]
     pub control_held: bool,
+    /// Whether local terminal control enabled courier commands for this live process incarnation.
+    #[serde(default)]
+    pub dialogue_enabled: bool,
     /// How many views are attached to this terminal right now, across every connection and window. A proved
     /// engine fact (`view_count`): the index changes when a view attaches or ends, so a window can say a
     /// conversation is being watched elsewhere without inferring it from output. An open view never implies
@@ -419,6 +422,22 @@ pub struct TerminalStopParams {
     pub lease_generation: u64,
 }
 
+/// Enable or disable process-local dialogue under the exact current terminal input lease.
+#[derive(Clone, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TerminalSetDialogueParams {
+    /// Caller-minted idempotency identity.
+    pub request_id: MutationRequestId,
+    /// Exact controlled terminal.
+    pub terminal_id: RuntimeTerminalId,
+    /// Opaque lease identity returned on acquisition.
+    pub lease_id: String,
+    /// Exact current lease generation.
+    pub lease_generation: u64,
+    /// False retires the current dialogue lifetime, including pending messages and calls.
+    pub enabled: bool,
+}
+
 /// Why a terminal index subscription ended.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -529,6 +548,7 @@ mod tests {
             },
             control_generation: 1,
             control_held: true,
+            dialogue_enabled: false,
             viewer_count: 1,
             origin: TerminalOrigin::Owned,
             owner_window_session_id: None,

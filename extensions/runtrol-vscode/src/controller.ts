@@ -183,6 +183,10 @@ export class Controller implements vscode.Disposable {
     return sessionId ? this.state.conversationOf(sessionId) : null;
   }
 
+  async setDialogue(value: ConversationItem | undefined, enabled: boolean): Promise<void> {
+    await this.terminals.setDialogue(value?.conversation ?? null, enabled);
+  }
+
   /// Pin or unpin one conversation, remember it for next time, and repaint so it moves at once.
   async togglePin(value: ConversationItem | Conversation): Promise<void> {
     const row = value instanceof ConversationItem ? value.conversation : value;

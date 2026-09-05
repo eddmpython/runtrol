@@ -164,7 +164,8 @@ pub(super) async fn dispatch_public(
             | RuntimeMethod::TerminalsWrite
             | RuntimeMethod::TerminalsResize
             | RuntimeMethod::TerminalsDetach
-            | RuntimeMethod::TerminalsStop => {
+            | RuntimeMethod::TerminalsStop
+            | RuntimeMethod::TerminalsSetDialogue => {
                 terminal_operation(
                     state,
                     composed,

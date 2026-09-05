@@ -5,7 +5,14 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use runtrol_courier::wire::{Answer, Request, SESSION_PAGE, Session};
 use runtrol_courier::{CallEnvelope, CallKind, CallRef, Limits, ManagedSessionId, UnixMillis};
 
-use super::CourierGate;
+use super::{Admitted, CourierGate, GateState, PendingCall};
+
+fn active(state: &GateState, session: ManagedSessionId, activation: u64) -> bool {
+    state
+        .sessions
+        .get(&session)
+        .is_some_and(|registered| registered.enabled && registered.activation == activation)
+}
 
 fn now() -> UnixMillis {
     match SystemTime::now().duration_since(UNIX_EPOCH) {
@@ -25,9 +32,17 @@ fn refused(reason: impl Into<String>) -> Answer {
 impl CourierGate {
     pub(super) async fn wait_slot(
         &self,
-        session: ManagedSessionId,
+        admitted: Admitted,
     ) -> Option<tokio::sync::OwnedSemaphorePermit> {
-        let waits = std::sync::Arc::clone(&self.state.lock().await.sessions.get(&session)?.waits);
+        let activation = admitted.activation?;
+        let waits = {
+            let state = self.state.lock().await;
+            let registered = state.sessions.get(&admitted.session)?;
+            if !registered.enabled || registered.activation != activation {
+                return None;
+            }
+            std::sync::Arc::clone(&registered.waits)
+        };
         let Ok(slot) = waits.try_acquire_owned() else {
             return None;
         };
@@ -36,17 +51,28 @@ impl CourierGate {
 
     #[cfg(test)]
     pub(super) async fn command(&self, session: ManagedSessionId, request: Request) -> Answer {
-        self.command_owned(session, request, &mut None).await
+        let admitted = {
+            let state = self.state.lock().await;
+            let Some(registered) = state.sessions.get(&session) else {
+                return refused("the managed session ended");
+            };
+            registered.admission(session)
+        };
+        self.command_owned(admitted, request, &mut None).await
     }
 
     pub(super) async fn command_owned(
         &self,
-        session: ManagedSessionId,
+        admitted: Admitted,
         request: Request,
-        pending: &mut Option<CallRef>,
+        pending: &mut Option<PendingCall>,
     ) -> Answer {
+        let session = admitted.session;
+        let Some(activation) = admitted.activation else {
+            return refused("dialogue was disabled when this connection was admitted");
+        };
         if let Request::Ask { envelope } = request {
-            return self.ask(session, envelope, pending).await;
+            return self.ask(session, activation, envelope, pending).await;
         }
         if let Request::Receive {
             source,
@@ -54,12 +80,17 @@ impl CourierGate {
             timeout_ms,
         } = request
         {
-            *pending = call;
-            return self.receive(session, source, call, timeout_ms).await;
+            if timeout_ms > Limits::INITIAL.max_deadline_millis {
+                return refused("wait exceeds the courier deadline ceiling");
+            }
+            *pending = call.map(|call| PendingCall { activation, call });
+            return self
+                .receive(session, activation, source, call, timeout_ms)
+                .await;
         }
         let mut state = self.state.lock().await;
-        if !state.courier.is_live(session) {
-            return refused("the managed session ended");
+        if !active(&state, session, activation) {
+            return refused("this dialogue activation ended");
         }
         let now = now();
         state.courier.sweep(now);
@@ -68,6 +99,7 @@ impl CourierGate {
                 let mut rows = state
                     .sessions
                     .iter()
+                    .filter(|(_, registered)| registered.enabled)
                     .filter(|(id, _)| after.is_none_or(|after| **id > after))
                     .filter_map(|(session, registered)| {
                         registered.root.map(|root| Session {
@@ -111,8 +143,9 @@ impl CourierGate {
     async fn ask(
         &self,
         session: ManagedSessionId,
+        activation: u64,
         envelope: CallEnvelope,
-        pending: &mut Option<CallRef>,
+        pending: &mut Option<PendingCall>,
     ) -> Answer {
         if envelope.source != session || envelope.kind != CallKind::Ask {
             return refused("an ask must name its admitted source and ask kind");
@@ -124,6 +157,9 @@ impl CourierGate {
         let source = envelope.target;
         let timeout_ms = {
             let mut state = self.state.lock().await;
+            if !active(&state, session, activation) {
+                return refused("this dialogue activation ended");
+            }
             let now = now();
             state.courier.sweep(now);
             let timeout_ms = envelope.deadline.since(now);
@@ -132,17 +168,18 @@ impl CourierGate {
             }
             // Only a successfully admitted ask belongs to this connection. Refusing a duplicate must not
             // let its cleanup cancel the original connection's still-live ask.
-            *pending = Some(call);
+            *pending = Some(PendingCall { activation, call });
             self.changed.notify_waiters();
             timeout_ms
         };
-        self.receive(session, Some(source), Some(call), timeout_ms)
+        self.receive(session, activation, Some(source), Some(call), timeout_ms)
             .await
     }
 
     async fn receive(
         &self,
         session: ManagedSessionId,
+        activation: u64,
         source: Option<ManagedSessionId>,
         call: Option<CallRef>,
         timeout_ms: u64,
@@ -158,8 +195,8 @@ impl CourierGate {
             changed.as_mut().enable();
             {
                 let mut state = self.state.lock().await;
-                if !state.courier.is_live(session) {
-                    return refused("the managed session ended");
+                if !active(&state, session, activation) {
+                    return refused("this dialogue activation ended");
                 }
                 let now = now();
                 let swept = state.courier.sweep(now);
@@ -189,10 +226,13 @@ impl CourierGate {
         }
     }
 
-    pub(super) async fn abandon(&self, session: ManagedSessionId, call: CallRef) {
+    pub(super) async fn abandon(&self, session: ManagedSessionId, pending: PendingCall) {
         let mut state = self.state.lock().await;
+        if !active(&state, session, pending.activation) {
+            return;
+        }
         state.courier.sweep(now());
-        state.courier.abandon_call(session, call);
+        state.courier.abandon_call(session, pending.call);
         self.changed.notify_waiters();
     }
 

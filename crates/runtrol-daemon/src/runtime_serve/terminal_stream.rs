@@ -11,8 +11,8 @@ use runtrol_runtime_protocol::{
     TerminalControlParams, TerminalDetachParams, TerminalExitedNotification,
     TerminalIndexChangedNotification, TerminalIndexEndReason, TerminalIndexEndedNotification,
     TerminalLaggedNotification, TerminalOpenParams, TerminalOutputNotification,
-    TerminalResizeParams, TerminalStopParams, TerminalWriteParams, WatchTerminalIndexParams,
-    WatchTerminalIndexResult,
+    TerminalResizeParams, TerminalSetDialogueParams, TerminalStopParams, TerminalWriteParams,
+    WatchTerminalIndexParams, WatchTerminalIndexResult,
 };
 use tokio::sync::watch;
 
@@ -306,6 +306,28 @@ pub(super) async fn terminal_operation(
             match composed
                 .runtime_terminals
                 .stop(composed, &authority, &params)
+                .await
+            {
+                Ok(()) => Answer::success(id, &EmptyResult {}),
+                Err(failure) => terminal_failure(id, failure),
+            }
+        }
+        RuntimeMethod::TerminalsSetDialogue => {
+            let Ok(params) = serde_json::from_value::<TerminalSetDialogueParams>(params) else {
+                return Answer::plain(
+                    id,
+                    RuntimeErrorKind::InvalidRequest,
+                    "terminal dialogue parameters are invalid",
+                );
+            };
+            let authority = match authorized_scopes(state, composed, &[AppScope::SessionInputWrite])
+            {
+                Ok(authority) => authority.clone(),
+                Err(failure) => return Answer::failure(id, failure),
+            };
+            match composed
+                .runtime_terminals
+                .set_dialogue(composed, &authority, &params)
                 .await
             {
                 Ok(()) => Answer::success(id, &EmptyResult {}),
@@ -626,7 +648,8 @@ async fn terminal_view_request(
         | RuntimeMethod::TerminalsRenewControl
         | RuntimeMethod::TerminalsReleaseControl
         | RuntimeMethod::TerminalsWrite
-        | RuntimeMethod::TerminalsResize => &[AppScope::SessionInputWrite],
+        | RuntimeMethod::TerminalsResize
+        | RuntimeMethod::TerminalsSetDialogue => &[AppScope::SessionInputWrite],
         RuntimeMethod::TerminalsStop => &[AppScope::SessionStop, AppScope::SessionInputWrite],
         _ => {
             return TerminalViewResponse::continuing(failure_response(
@@ -774,6 +797,24 @@ async fn terminal_view_request(
             match composed
                 .runtime_terminals
                 .stop(composed, &view.authority, &params)
+                .await
+            {
+                Ok(()) => success(id, &EmptyResult {}),
+                Err(failure) => failure_response(id, failure.kind, failure.message),
+            }
+        }
+        RuntimeMethod::TerminalsSetDialogue => {
+            let Ok(params) = serde_json::from_value::<TerminalSetDialogueParams>(request.params)
+            else {
+                return TerminalViewResponse::continuing(failure_response(
+                    id,
+                    RuntimeErrorKind::InvalidRequest,
+                    "terminal dialogue parameters are invalid",
+                ));
+            };
+            match composed
+                .runtime_terminals
+                .set_dialogue(composed, &view.authority, &params)
                 .await
             {
                 Ok(()) => success(id, &EmptyResult {}),

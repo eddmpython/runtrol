@@ -17,7 +17,7 @@ use runtrol_ipc::transport::PeerProcess;
 use runtrol_ipc::{Connection, Listener, TransportError};
 use runtrol_provider::ProcessIdentity;
 
-use super::CourierGate;
+use super::{Admitted, CourierGate};
 
 /// How long a connection has to say hello before it is dropped unadmitted.
 pub(crate) const HELLO_WAIT: Duration = Duration::from_secs(5);
@@ -115,7 +115,8 @@ async fn greet(
     };
     drop(frame);
     match gate.admit(containment, peer, &invocation.hello).await {
-        Ok(session) => {
+        Ok(admitted) => {
+            let session = admitted.session;
             drop(greeting);
             let Some(request) = invocation.request else {
                 welcome(&mut connection, session).await;
@@ -124,7 +125,7 @@ async fn greet(
             let waiting = matches!(&request, Request::Ask { .. })
                 || matches!(&request, Request::Receive { timeout_ms, .. } if *timeout_ms > 0);
             let _session_slot = if waiting {
-                let Some(slot) = gate.wait_slot(session).await else {
+                let Some(slot) = gate.wait_slot(admitted).await else {
                     refuse(&mut connection).await;
                     return;
                 };
@@ -137,7 +138,7 @@ async fn greet(
                 return;
             };
             if welcome(&mut connection, session).await {
-                command(gate, session, &mut connection, request).await;
+                command(gate, admitted, &mut connection, request).await;
             }
         }
         Err(denied) => {
@@ -161,20 +162,20 @@ async fn welcome(connection: &mut Connection, session: ManagedSessionId) -> bool
 
 async fn command(
     gate: &CourierGate,
-    session: ManagedSessionId,
+    admitted: Admitted,
     connection: &mut Connection,
     request: Request,
 ) {
     let mut call = None;
     let answer = tokio::select! {
-        answer = gate.command_owned(session, request, &mut call) => Some(answer),
+        answer = gate.command_owned(admitted, request, &mut call) => Some(answer),
         // One command per connection. Closing it or sending another frame cancels its pending wait.
         _closed = connection.recv_bounded(MAX_FRAME_BYTES) => None,
     };
     if let Some(call) = call
         && !matches!(&answer, Some(Answer::Received { envelope: Some(_) }))
     {
-        gate.abandon(session, call).await;
+        gate.abandon(admitted.session, call).await;
     }
     if let Some(answer) = answer
         && let Ok(bytes) = serde_json::to_vec(&answer)

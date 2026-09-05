@@ -42,6 +42,7 @@ const server = net.createServer((socket) => {
 });
 const extraTerminals = [];
 const viewers = [];
+let sdk;
 let bodyMarker;
 try {
   server.listen(pipeName);
@@ -78,18 +79,33 @@ try {
     windowsHide: true, timeout: 10_000 });
   assert.notEqual(stale.status, 0, "a stale generation endpoint is not admitted");
   if (process.argv.includes("--commands")) {
+    const view = (await watch([opened]))[0];
+    assert.equal(view.opened.terminal.dialogueEnabled, false, "new processes start with dialogue disabled");
+    const disabled = await peer.ask({ kind: "cli", words: ["list"], body: "" });
+    assert.equal(disabled.status, 1);
+    assert.equal(JSON.parse(disabled.stdout).answer, "refused");
+    await activate(view, true);
     bodyMarker = await commandJourney(peer, birth.RUNTROL_MANAGED_SESSION, async () => {
       const opened = command(probe, ["open", home, identity, "courier-fixture", workspace]);
       extraTerminals.push(opened);
       const peer = connected.shift() ?? await deadline(new Promise((resolve) => { pendingPeer = resolve; }), "another fixture");
       const born = await peer.read();
       assert.equal(born.first.answer, "welcome");
+      await activate((await watch([opened]))[0], true);
       return { peer, session: born.birth.RUNTROL_MANAGED_SESSION };
     });
+    await activate(view, false);
+    const disarmed = await peer.ask({ kind: "cli", words: ["list"], body: "" });
+    assert.equal(disarmed.status, 1);
+    await activate(view, true);
+    const rearmed = await peer.ask({ kind: "cli", words: ["list"], body: "" });
+    assert.equal(rearmed.status, 0);
+    process.stdout.write("RUNTROL_COURIER_ACTIVATION defaultDeny=true enable=true disable=true reenable=true\n");
+  } else {
+    await watch([opened]);
   }
   // This long journey has no Studio window. Hold real SDK views across handover so the existing policy for
   // retiring unwatched, quiet terminals does not legitimately end these fixture processes during the check.
-  await watch([opened, ...extraTerminals]);
   await start(nextCore, "next");
   await waitFor(async () => (await status()).some((generation) => generation.digest === opened.generation && generation.draining),
     "first generation draining");
@@ -145,23 +161,38 @@ async function noResidue(directory, marker) {
 }
 
 async function watch(terminals) {
-  const bundle = path.join(temporary, "runtimeClient.cjs");
-  await build({ entryPoints: [path.join(root, "clients/typescript/src/index.ts")], outfile: bundle,
-    bundle: true, platform: "node", format: "cjs", target: "node22", logLevel: "silent" });
-  const { RuntimeConnector, RuntimeLocator, IntegrationIdentity, IntegrationCredentials } = createRequire(import.meta.url)(bundle);
+  if (!sdk) {
+    const bundle = path.join(temporary, "runtimeClient.cjs");
+    await build({ entryPoints: [path.join(root, "clients/typescript/src/index.ts")], outfile: bundle,
+      bundle: true, platform: "node", format: "cjs", target: "node22", logLevel: "silent" });
+    sdk = createRequire(import.meta.url)(bundle);
+  }
+  const { RuntimeConnector, RuntimeLocator, IntegrationIdentity, IntegrationCredentials } = sdk;
   const stored = JSON.parse(await readFile(identity, "utf8"));
   const key = IntegrationIdentity.fromPkcs8(Buffer.concat([
     Buffer.from("302e020100300506032b657004220420", "hex"), Buffer.from(stored.secret),
   ]));
   const credentials = new IntegrationCredentials(key, stored.grant);
   process.env.RUNTROL_HOME = home;
+  const views = [];
   for (const terminal of terminals) {
     const state = await RuntimeLocator.system({ runtimeExecutable: core, preferDigest: terminal.generation }).inspect();
     assert.equal(state.state, "running");
     const client = await new RuntimeConnector().connect(state.locator, { name: "runtrol-handover-probe", version: "0.0.0", credentials });
     viewers.push(client);
-    await client.terminals().attach({ terminalId: terminal.terminalId });
+    const view = await client.terminals().attach({ terminalId: terminal.terminalId });
+    viewers.push(view);
+    views.push(view);
   }
+  return views;
+}
+
+async function activate(view, enabled) {
+  const terminal = view.opened.terminal;
+  const lease = await view.acquireControl({ requestId: sdk.newMutationRequestId(),
+    terminalId: terminal.terminalId, expectedTerminalGeneration: terminal.terminalGeneration });
+  await view.setDialogue({ requestId: sdk.newMutationRequestId(), terminalId: terminal.terminalId,
+    leaseId: lease.leaseId, leaseGeneration: lease.leaseGeneration, enabled });
 }
 
 function option(name) {

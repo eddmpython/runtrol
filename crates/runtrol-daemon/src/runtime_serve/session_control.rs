@@ -1063,6 +1063,7 @@ fn parse_session_operation(
         | RuntimeMethod::TerminalsResize
         | RuntimeMethod::TerminalsDetach
         | RuntimeMethod::TerminalsStop
+        | RuntimeMethod::TerminalsSetDialogue
         | RuntimeMethod::TerminalsIndexChanged
         | RuntimeMethod::TerminalsIndexEnded
         | RuntimeMethod::TerminalsOutput

@@ -10,8 +10,8 @@ use runtrol_runtime_protocol::{
     TerminalControlParams, TerminalDetachParams, TerminalExitedNotification,
     TerminalIndexChangedNotification, TerminalIndexEndedNotification, TerminalIndexSnapshot,
     TerminalLaggedNotification, TerminalOpenParams, TerminalOutputNotification,
-    TerminalResizeParams, TerminalStopParams, TerminalViewOpened, TerminalWriteParams,
-    WatchTerminalIndexParams, WatchTerminalIndexResult,
+    TerminalResizeParams, TerminalSetDialogueParams, TerminalStopParams, TerminalViewOpened,
+    TerminalWriteParams, WatchTerminalIndexParams, WatchTerminalIndexResult,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -386,6 +386,25 @@ impl<'runtime> TerminalView<'runtime> {
         let _: EmptyResult = self
             .command(
                 RuntimeMethod::TerminalsStop,
+                params,
+                Some(&params.request_id),
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// Enable or disable dialogue for this live terminal under the current input lease.
+    ///
+    /// # Errors
+    ///
+    /// Transport, protocol, scope, stale-lease, visibility, or Runtime failure.
+    pub async fn set_dialogue(
+        &mut self,
+        params: &TerminalSetDialogueParams,
+    ) -> Result<(), ClientError> {
+        let _: EmptyResult = self
+            .command(
+                RuntimeMethod::TerminalsSetDialogue,
                 params,
                 Some(&params.request_id),
             )

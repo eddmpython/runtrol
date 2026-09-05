@@ -4,6 +4,23 @@ The courier carries explicit, opaque UTF-8 messages between processes managed by
 never reads a provider transcript, chooses work, interprets an answer, or starts another model request.
 The provider's normal shell tool and permission rules own execution of each courier command.
 
+## Visible activation
+
+A newly launched process has no dialogue mailbox. In the sidebar, choose **Enable dialogue for this live session**
+on a live managed conversation. Its normal terminal opens and receives one ordinary visible instruction. The
+installed command generates that instruction with `courier --guide`, using the same command help and executable
+limits as `courier --help`. No provider configuration, hook, registration, or project instruction file is written.
+The provider owns the instruction in its usual transcript and applies its own shell permissions.
+
+The row shows when dialogue is enabled. **Disable dialogue for this live session** retires that mailbox, its calls,
+and its pending waits. Starting the process again begins disabled. Re-enabling creates a fresh activation lifetime;
+connections authenticated before that change cannot send, receive, or cancel work in the new lifetime. A failed
+instruction write is disarmed under the same input lease, and any failure to disarm is reported explicitly.
+
+The local public `terminals/setDialogue` operation requires the exact terminal input lease and current root grant.
+It changes structural authority only. The Studio client sends the visible instruction through ordinary terminal
+writes. The courier endpoint itself has no operation that can enable dialogue.
+
 ## Commands
 
 Run the executable inherited as `RUNTROL_COURIER_EXE` with `courier --help` for the command syntax. The parser and
@@ -22,7 +39,7 @@ The receiver explicitly invokes `courier wait`, reads the returned envelope, the
 `courier reply MESSAGE_ID`. An idle model cannot be awakened through a mailbox alone. It must already be running a
 bounded wait or receive a new visible user instruction in its normal terminal.
 
-`list` pages through live managed process identifiers and root PIDs. Its cursor is exclusive. These are process
+`list` pages through enabled live managed process identifiers and root PIDs. Its cursor is exclusive. These are process
 facts, not provider conversation IDs or inferred model states. `tell` returns the exact admission receipt. `inbox`
 consumes one message immediately; `wait` consumes at most one before its deadline. A source filter leaves other
 mail in order. `ask` admits a request and waits for its exact reply on one connection. `reply` names the received

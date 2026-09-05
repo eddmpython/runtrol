@@ -14,6 +14,38 @@ runtrol courier cancel CALL\n\
 Bodies are opaque UTF-8 read from stdin. Each inbox or wait consumes at most one envelope.\n\
 A receipt confirms admission, not model understanding. An idle agent must explicitly wait to receive.";
 
+pub(super) fn help() -> String {
+    let limits = Limits::INITIAL;
+    format!(
+        "{HELP}\nLimits: body {} UTF-8 bytes; mailbox {} envelopes / {} body bytes; \
+        Runtime {} body bytes / {} active calls; default deadline {} seconds, maximum {} seconds; \
+        forwarding {} hops / {} visited sessions.",
+        limits.body_bytes,
+        limits.mailbox_envelopes,
+        limits.mailbox_bytes,
+        limits.runtime_bytes,
+        limits.active_calls,
+        limits.default_deadline_millis / 1000,
+        limits.max_deadline_millis / 1000,
+        limits.hop_count,
+        limits.visited_sessions
+    )
+}
+
+pub(super) fn guide() -> String {
+    use runtrol_courier::env::{COURIER_EXE_ENV, COURIER_TOKEN_ENV, MANAGED_SESSION_ENV};
+    format!(
+        "I am enabling managed-session dialogue for this live process. Use your normal shell tool \
+        to run the executable from the {COURIER_EXE_ENV} environment value with the arguments shown below. \
+        Your own session identity is in {MANAGED_SESSION_ENV}. Never print or copy {COURIER_TOKEN_ENV}. \
+        Use list to find an enabled peer and its exact identity. Bodies go through UTF-8 stdin, never arguments. \
+        Reply to the received message_id. A wait is bounded and does not wake an idle model. \
+        Follow my task; do not start a repeated wait loop without a bounded task. \
+        Use courier --help for the current command reference.\n{}",
+        help()
+    )
+}
+
 pub(super) enum Command {
     List {
         after: Option<ManagedSessionId>,

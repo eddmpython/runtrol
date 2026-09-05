@@ -44,6 +44,7 @@ import {
 import * as vscode from "vscode";
 
 import { abortableDelay } from "./abortableDelay";
+import { readDialogueGuide, setTerminalDialogue } from "./dialogueActivation";
 import {
   cachedControlAction,
   restorableControls,
@@ -1087,6 +1088,18 @@ export class StudioRuntimeClient implements vscode.Disposable {
         leaseId: lease.leaseId,
         leaseGeneration: lease.leaseGeneration,
       });
+    } finally {
+      view.close();
+    }
+  }
+
+  async setTerminalDialogue(terminal: TerminalDescriptor, enabled: boolean): Promise<void> {
+    await this.commandClient();
+    const source = await this.locateRuntime();
+    const guide = enabled ? await readDialogueGuide(source.runtimeExecutable) : null;
+    const view = await this.attachTerminal(terminal.runtimeGeneration, terminal.terminalId);
+    try {
+      await setTerminalDialogue(view, enabled, guide);
     } finally {
       view.close();
     }

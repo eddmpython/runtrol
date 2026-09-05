@@ -194,5 +194,6 @@ async fn a_childs_first_hello_waits_for_its_launch_to_register() {
         caller.await.expect("hello finished"),
         Err(Denied::OutsideContainment)
     );
-    assert!(gate.state.lock().await.courier.is_live(session));
+    assert!(gate.state.lock().await.sessions.contains_key(&session));
+    assert!(!gate.state.lock().await.courier.is_live(session));
 }

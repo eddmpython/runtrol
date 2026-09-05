@@ -103,7 +103,7 @@ export function targetOf(conversation: Conversation): Target {
   };
 }
 
-/// The Runtime's own words when a row's resume proof no longer verifies (`runtime_terminal.rs`).
+/// The Runtime's own words when a row's resume proof no longer verifies (`runtime_terminal/mod.rs`).
 const STALE_PROOF = "native catalogue observation expired";
 
 /// A VS Code pseudoterminal whose other end is the Core's hosted terminal.

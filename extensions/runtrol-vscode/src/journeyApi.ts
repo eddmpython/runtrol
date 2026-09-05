@@ -6,6 +6,7 @@ import { Controller } from "./controller";
 import type { IsolatedWorkspaceLine } from "./protocol";
 import type { ProviderLine, SessionLine } from "./runtimeTypes";
 import { RuntimeState } from "./state";
+import { ConversationItem } from "./sidebarTargets";
 import type { JourneyInputTiming, TerminalTabs } from "./terminalTabs";
 import { workspaceCollisions } from "./workspaceCollision";
 
@@ -83,6 +84,7 @@ export type JourneyApi = {
   closeTab(key: string): boolean;
   /// Stop a hosted conversation's process from its row, the way the row's Stop does after its confirmation.
   stopRow(key: string): Promise<void>;
+  setDialogue(key: string, enabled: boolean): Promise<void>;
   /// What the sidebar knows beside its rows: whether the Core answers, the terminal listing's own warnings (the
   /// "why is the list incomplete" answer), and the Runtime's managed session records as this window lists them.
   listing(): { coreReach: string; warnings: string[]; incomplete: string | null; sessions: { sessionId: string; providerId: string; native: string | null; lifecycle: string; hot: boolean; workspace: string }[] };
@@ -461,6 +463,11 @@ export function journeyApi(
       const row = state.conversations.find((candidate) => candidate.key === key);
       if (!row) throw new Error(`no sidebar row has key ${key}`);
       await controller.stopHostedResolved(row);
+    }),
+    setDialogue: (key, enabled) => afterReady(async () => {
+      const row = state.conversations.find((candidate) => candidate.key === key);
+      if (!row) throw new Error(`no sidebar row has key ${key}`);
+      await controller.setDialogue(new ConversationItem(row), enabled);
     }),
     listing: () => ({
       coreReach: state.coreReach,

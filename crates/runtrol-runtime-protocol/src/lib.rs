@@ -93,8 +93,8 @@ pub use terminal::{
     TerminalGeometry, TerminalIdError, TerminalIndexChangedNotification, TerminalIndexEndReason,
     TerminalIndexEndedNotification, TerminalIndexSnapshot, TerminalLaggedNotification,
     TerminalOpenParams, TerminalOpenTarget, TerminalOrigin, TerminalOutputNotification,
-    TerminalProcessState, TerminalResizeParams, TerminalStopParams, TerminalViewOpened,
-    TerminalWriteParams, WatchTerminalIndexParams, WatchTerminalIndexResult,
+    TerminalProcessState, TerminalResizeParams, TerminalSetDialogueParams, TerminalStopParams,
+    TerminalViewOpened, TerminalWriteParams, WatchTerminalIndexParams, WatchTerminalIndexResult,
 };
 pub use windows::{
     ListWindowsParams, MAX_OBSERVED_TERMINALS, MAX_REGISTERED_WINDOWS, MAX_WINDOW_FOLDERS,

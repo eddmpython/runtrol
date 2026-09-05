@@ -12,6 +12,9 @@ and refactoring that no user can observe do not belong here.
 
 ### Added
 
+- Enable dialogue from a live conversation's sidebar row. The terminal receives a visible instruction with the
+  courier's current commands and limits. Dialogue starts disabled, shows its enabled state on the row, and can be
+  disabled without stopping the conversation or leaving provider configuration behind.
 - Managed sessions can list peers, send opaque messages, wait for mail, ask for an exact reply, and cancel a call
   through the inherited courier executable. Bodies use stdin and stdout; bounded mailboxes and deadlines leave no
   Runtime transcript. Long waits have separate connection slots so sends and replies remain available.

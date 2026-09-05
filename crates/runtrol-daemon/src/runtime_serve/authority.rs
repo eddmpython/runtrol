@@ -103,7 +103,7 @@ fn authenticate_current(
     authenticate_against_row(context, authentication, key, &row)
 }
 
-pub(super) fn refresh_current(
+pub(crate) fn refresh_current(
     composed: &Composed,
     current: &AuthorizedIntegration,
 ) -> Result<AuthorizedIntegration, AuthorizationFailure> {
@@ -200,6 +200,7 @@ pub(super) fn required_scope(method: RuntimeMethod) -> Option<AppScope> {
         | RuntimeMethod::TerminalsReleaseControl
         | RuntimeMethod::TerminalsWrite
         | RuntimeMethod::TerminalsResize
+        | RuntimeMethod::TerminalsSetDialogue
         | RuntimeMethod::TerminalsStop => Some(AppScope::SessionInputWrite),
         RuntimeMethod::SessionsWatchEvents
         | RuntimeMethod::ApprovalsListPending

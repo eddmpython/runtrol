@@ -76,6 +76,7 @@ import type {
   TerminalOutputNotification,
   TerminalResizeParams,
   TerminalStopParams,
+  TerminalSetDialogueParams,
   TerminalViewOpened,
   TerminalWriteParams,
   WatchEventsParams,
@@ -1000,6 +1001,10 @@ export class TerminalView {
 
   public async stop(params: TerminalStopParams): Promise<void> {
     requireEmpty(await this.#command("terminals/stop", params, undefined, params.requestId));
+  }
+
+  public async setDialogue(params: TerminalSetDialogueParams): Promise<void> {
+    requireEmpty(await this.#command("terminals/setDialogue", params, undefined, params.requestId));
   }
 
   public async detach(params: TerminalDetachParams): Promise<void> {

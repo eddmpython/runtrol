@@ -590,6 +590,12 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
       )),
     ),
     vscode.commands.registerCommand("runtrol.interrupt", () => run(() => afterReady(() => controller.interrupt()))),
+    vscode.commands.registerCommand("runtrol.enableDialogue", (item?: unknown) => run(() => afterReady(
+      () => controller.setDialogue(item instanceof ConversationItem ? item : undefined, true),
+    ))),
+    vscode.commands.registerCommand("runtrol.disableDialogue", (item?: unknown) => run(() => afterReady(
+      () => controller.setDialogue(item instanceof ConversationItem ? item : undefined, false),
+    ))),
     vscode.commands.registerCommand(
       "runtrol.closeSession",
       (item) => run(() => afterReady(() => controller.close(item))),

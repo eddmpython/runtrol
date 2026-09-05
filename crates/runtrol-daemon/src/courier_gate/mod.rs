@@ -31,6 +31,37 @@ struct Registered {
     token: Zeroizing<[u8; TOKEN_BYTES]>,
     root: Option<ProcessIdentity>,
     waits: std::sync::Arc<tokio::sync::Semaphore>,
+    activation: u64,
+    enabled: bool,
+}
+
+/// The exact mailbox lifetime observed while authenticating this connection's hello.
+/// A disabled hello proves process identity only and cannot gain command authority after later activation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Admitted {
+    pub(crate) session: ManagedSessionId,
+    activation: Option<u64>,
+}
+
+impl Registered {
+    fn admission(&self, session: ManagedSessionId) -> Admitted {
+        Admitted {
+            session,
+            activation: self.enabled.then_some(self.activation),
+        }
+    }
+}
+
+/// A connection can retire only work admitted during its own activation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct PendingCall {
+    activation: u64,
+    call: runtrol_courier::CallRef,
+}
+
+pub(crate) enum DialogueFailure<E> {
+    Session(&'static str),
+    Control(E),
 }
 
 /// A token and the environment for a process about to launch, minted without touching any shared state.
@@ -183,14 +214,75 @@ impl CourierGate {
             Registered {
                 token: minted.token,
                 root,
+                activation: 0,
+                enabled: false,
                 waits: std::sync::Arc::new(tokio::sync::Semaphore::new(
                     runtrol_courier::wire::SESSION_WAIT_SLOTS,
                 )),
             },
         );
-        state.courier.session_started(session);
         self.changed.notify_waiters();
         Ok(started)
+    }
+
+    /// Local terminal control arms a live session. Disarming retires its entire mailbox lifetime.
+    #[cfg(test)]
+    pub(crate) async fn set_dialogue(
+        &self,
+        terminal: TerminalId,
+        enabled: bool,
+    ) -> Result<(), &'static str> {
+        self.set_dialogue_checked(terminal, enabled, || Ok(()))
+            .await
+            .map_err(|error| match error {
+                DialogueFailure::Session(message) | DialogueFailure::Control(message) => message,
+            })
+    }
+
+    /// The caller rechecks terminal authority after the final asynchronous lock and before any state change.
+    pub(crate) async fn set_dialogue_checked<E>(
+        &self,
+        terminal: TerminalId,
+        enabled: bool,
+        check: impl FnOnce() -> Result<(), E>,
+    ) -> Result<(), DialogueFailure<E>> {
+        let session = session_of(terminal)
+            .map_err(|_| DialogueFailure::Session("invalid managed terminal"))?;
+        let mut state = self.state.lock().await;
+        check().map_err(DialogueFailure::Control)?;
+        let registered = state
+            .sessions
+            .get_mut(&session)
+            .ok_or(DialogueFailure::Session("the managed session ended"))?;
+        if registered.enabled == enabled {
+            return Ok(());
+        }
+        registered.activation =
+            registered
+                .activation
+                .checked_add(1)
+                .ok_or(DialogueFailure::Session(
+                    "the session exhausted its activation generations",
+                ))?;
+        registered.enabled = enabled;
+        registered.waits.close();
+        if enabled {
+            registered.waits = std::sync::Arc::new(tokio::sync::Semaphore::new(
+                runtrol_courier::wire::SESSION_WAIT_SLOTS,
+            ));
+            state.courier.session_started(session);
+        } else {
+            state.courier.session_ended(session);
+        }
+        self.changed.notify_waiters();
+        Ok(())
+    }
+
+    pub(crate) async fn dialogue_enabled(&self, terminal: TerminalId) -> bool {
+        let Ok(session) = session_of(terminal) else {
+            return false;
+        };
+        self.state.lock().await.courier.is_live(session)
     }
 
     /// The terminal is gone: its token admits nobody, and its mail and calls are released now.
@@ -217,18 +309,22 @@ impl CourierGate {
         containment: &Containment,
         peer: Option<ProcessIdentity>,
         hello: &Hello,
-    ) -> Result<ManagedSessionId, Denied> {
+    ) -> Result<Admitted, Denied> {
         if hello.protocol_version != PROTOCOL_VERSION {
             return Err(Denied::Version(hello.protocol_version));
         }
         let peer = peer.ok_or(Denied::NoPeer)?;
-        let (expected, root) = {
+        let (expected, root, admitted) = {
             let state = self.state.lock().await;
             let registered = state
                 .sessions
                 .get(&hello.session)
                 .ok_or(Denied::UnknownSession)?;
-            (registered.token.clone(), registered.root)
+            (
+                registered.token.clone(),
+                registered.root,
+                registered.admission(hello.session),
+            )
         };
         let root = root.ok_or(Denied::RootUnbound)?;
         let offered =
@@ -245,7 +341,7 @@ impl CourierGate {
         if !tree.contains_identity(root, peer) {
             return Err(Denied::OutsideTree);
         }
-        Ok(hello.session)
+        Ok(admitted)
     }
 }
 

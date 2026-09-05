@@ -7,8 +7,8 @@ use pyo3::types::PyBytes;
 use runtrol_runtime_client::{ClientError, TerminalNotification};
 use runtrol_runtime_protocol::{
     TerminalAcquireControlParams, TerminalAttachParams, TerminalControlParams,
-    TerminalDetachParams, TerminalOpenParams, TerminalResizeParams, TerminalStopParams,
-    TerminalWriteParams,
+    TerminalDetachParams, TerminalOpenParams, TerminalResizeParams, TerminalSetDialogueParams,
+    TerminalStopParams, TerminalWriteParams,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -357,6 +357,11 @@ async fn terminal_call(
         "stop" => {
             let params = decode::<TerminalStopParams>(params_json)?;
             view.stop(&params).await?;
+            Ok("{}".to_owned())
+        }
+        "setDialogue" => {
+            let params = decode::<TerminalSetDialogueParams>(params_json)?;
+            view.set_dialogue(&params).await?;
             Ok("{}".to_owned())
         }
         _ => Err(ClientError::Protocol(format!(
