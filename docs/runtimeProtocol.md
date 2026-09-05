@@ -89,6 +89,7 @@ optional GUI. A public connection cannot approve itself.
 | `terminals/list`, `terminals/watchIndex`, `terminals/attach` | `session.output.read` and authorized terminal visibility |
 | `terminals/open` | `session.start` for a fresh target or `session.resume` for a native target, plus an approved root |
 | `terminals/acquireControl`, `terminals/write`, `terminals/resize` | `session.input.write` and the current terminal lease where applicable |
+| `terminals/setDialogue` | `session.input.write`, the current terminal lease and current approved root; enables or retires the exact managed process's mailbox lifetime |
 | `terminals/stop` | `session.stop` and the current terminal lease |
 | `windows/register`, `windows/update`, `windows/list`, `windows/watchIndex` | `session.list`; a registration is bound to the connection that made it and leaves with it |
 | `windows/mirrorOpen`, `windows/mirrorOutput`, `windows/mirrorEnd` | `session.list` and a registered window named by the open; a mirror is fed only by the connection that opened it and ends with it. `windows/mirrorOutput` is the one method that carries bytes rather than an authority decision and is not journaled (`docs/runtimeSecurity.md`) |
@@ -106,6 +107,11 @@ provider subscription starts and again on every change), `providers/watchEnded`,
 `sessions/indexEnded`, `sessions/event`, `sessions/lagged`, `terminals/indexChanged`, `terminals/indexEnded`,
 `windows/indexChanged`, `windows/indexEnded`, `windows/revealRequested`, `windows/revealsEnded`,
 `terminals/output`, `terminals/lagged`, and `terminals/exited`. Notification names cannot be invoked as requests.
+
+Managed worker lineage and its project binding are optional structural fields on the
+[`TerminalDescriptor`](../crates/runtrol-runtime-protocol/src/terminal.rs). Their activation, delivery and cleanup
+semantics are owned by [Managed session dialogue](sessionDialogue.md#isolated-workers). They do not contain a task
+body or provider transcript.
 
 ### Native discovery scope
 

@@ -29,6 +29,16 @@ pub struct BoundCall {
     pub means: &'static str,
 }
 
+/// The model option consumed only after the exact installed parser confirms it.
+pub const MODEL_FLAG: &str = "--model";
+
+/// Optional native terminal options, independent of the structured protocol's own model field.
+pub const FLAGS: &[crate::kinds::DriverFlag] = &[crate::kinds::DriverFlag {
+    flag: MODEL_FLAG,
+    required: false,
+    without_it: "explicit native terminal model selection is unavailable",
+}];
+
 /// The method that opens the connection.
 ///
 /// Measured: it is answered in roughly four seconds on a cold start, and nothing else may be called before it.

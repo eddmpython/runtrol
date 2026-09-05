@@ -17,10 +17,11 @@ A receipt confirms admission, not model understanding. An idle agent must explic
 pub(super) fn help() -> String {
     let limits = Limits::INITIAL;
     format!(
-        "{HELP}\n{}\nLimits: body {} UTF-8 bytes; mailbox {} envelopes / {} body bytes; \
+        "{HELP}\n{}\n{}\nLimits: body {} UTF-8 bytes; mailbox {} envelopes / {} body bytes; \
         Runtime {} body bytes / {} active calls; default deadline {} seconds, maximum {} seconds; \
         forwarding {} hops / {} visited sessions.",
         super::rooms::help(),
+        super::spawn::HELP,
         limits.body_bytes,
         limits.mailbox_envelopes,
         limits.mailbox_bytes,
@@ -34,9 +35,24 @@ pub(super) fn help() -> String {
 }
 
 pub(super) fn guide() -> String {
+    guide_with(
+        "For this activation message, acknowledge readiness without using tools. Wait for my next explicit task before running a courier command.",
+    )
+}
+
+pub(super) fn initial_guide(source: ManagedSessionId, message: MessageId) -> String {
+    guide_with(&format!(
+        "For this activation, consume exactly one initial envelope with courier inbox --from {source}. \
+        Its message_id must be {message}. Carry out that delegated task in your current worktree. \
+        If the exact envelope is unavailable, report that fact instead of guessing a task."
+    ))
+}
+
+fn guide_with(instruction: &str) -> String {
     use runtrol_courier::env::{COURIER_EXE_ENV, COURIER_TOKEN_ENV, MANAGED_SESSION_ENV};
     format!(
-        "I am enabling managed-session dialogue for this live process. Use your normal shell tool \
+        "I am enabling managed-session dialogue for this live process. {instruction} \
+        For that task, use your normal shell tool \
         to run the executable from the {COURIER_EXE_ENV} environment value with the arguments shown below. \
         Your own session identity is in {MANAGED_SESSION_ENV}. Never print or copy {COURIER_TOKEN_ENV}. \
         Use list to find an enabled peer and its exact identity. Bodies go through UTF-8 stdin, never arguments. \
@@ -48,6 +64,7 @@ pub(super) fn guide() -> String {
 }
 
 pub(super) enum Command {
+    Spawn(super::spawn::SpawnCommand),
     Room(super::rooms::RoomCommand),
     List {
         after: Option<ManagedSessionId>,
@@ -93,6 +110,9 @@ pub(super) fn parse(words: &[String]) -> Result<Command, CourierFailure> {
         return Err(wrong());
     };
     let verb = verb.as_str();
+    if verb == "spawn" {
+        return super::spawn::parse(arguments).map(Command::Spawn);
+    }
     if verb == "room" {
         return super::rooms::parse(arguments).map(Command::Room);
     }

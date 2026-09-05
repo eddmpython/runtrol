@@ -604,6 +604,39 @@ test("one conversation is one row, even when two generations each hold a termina
   assert.equal(rows[0]?.canOpen, true);
 });
 
+test("lineage joins an exact live lead while the worker keeps its real working directory", () => {
+  const workerDirectory = below(ROOT, ".runtrol-worktrees", "worker");
+  const terminals = ["worker", "other", "lead"].map((id): TerminalDescriptor => ({
+    terminalId: id, runtimeGeneration: "generation-1", providerId: "codex",
+    workspace: id === "worker" ? workerDirectory : BETA,
+    nativeSessionId: id, processState: "running", openedAtMs: NOW,
+    terminalGeneration: 1, geometry: { columns: 120, rows: 40 }, memoryBytes: null,
+    ...(id === "worker" ? { spawnedBy: "lead", projectRoot: BETA } : {}),
+  } as TerminalDescriptor));
+  const native = [nativeChat({ nativeSessionId: "worker", cwd: workerDirectory, title: "A worker" }),
+    nativeChat({ nativeSessionId: "other", title: "B other" }),
+    nativeChat({ nativeSessionId: "lead", title: "C lead" })];
+  const project = (values: readonly TerminalDescriptor[]) => conversations([], PROVIDERS, native, null, null,
+    new Map(), new Map(), new Set(), new Map(), [], new Set(), new Set(), new Set(), values);
+  const rows = project(terminals);
+  assert.deepEqual(rows.map((row) => row.hostedTerminal?.terminalId), ["other", "lead", "worker"]);
+  const worker = rows.find((row) => row.spawnedBy === "lead");
+  assert.equal(worker?.homeWorkspace, BETA);
+  assert.equal(worker?.workspace, workerDirectory);
+  assert.equal(worker?.hostedTerminal?.workspace, workerDirectory);
+  const unnamed = conversations([], PROVIDERS, [], null, null, new Map(), new Map(), new Set(), new Map(),
+    [], new Set(), new Set(), new Set(), terminals);
+  assert.equal(unnamed.find((row) => row.spawnedBy === "lead")?.title, "beta");
+  for (const change of [{ runtimeGeneration: "generation-2" }, { workspace: ALPHA }]) {
+    const separate = project(terminals.map((row) => row.terminalId === "lead" ? { ...row, ...change } : row));
+    const leadIndex = separate.findIndex((row) => row.hostedTerminal?.terminalId === "lead");
+    const workerIndex = separate.findIndex((row) => row.hostedTerminal?.terminalId === "worker");
+    assert.notEqual(workerIndex, leadIndex + 1, "a foreign generation or project cannot claim the worker");
+  }
+  const ended = project(terminals.filter((row) => row.terminalId !== "lead"));
+  assert.equal(ended.find((row) => row.spawnedBy === "lead")?.canOpen, true);
+});
+
 test("a full terminal index becomes sidebar rows within the fifty millisecond p95 budget", () => {
   const count = 256;
   const chats = Array.from({ length: count }, (_, index) => nativeChat({
@@ -1609,6 +1642,18 @@ test("a conversation runtrol just started stands in the list until its service n
   // Nothing may offer to resume, rename or delete it: those need the identity the service has not published.
   assert.equal(fresh[0]?.native, null);
   assert.equal(fresh[0]?.session, null);
+
+  // Runtime has already proved process birth. Stop and dialogue must be available before the provider
+  // writes any conversation record, and the exact tab moves to that hosted row without duplication.
+  const connected = conversations(
+    [], providers, [], null, root, new Map(), new Map(), new Set(), new Map(), started,
+    new Set(), new Set(), new Set(), [{ ...terminal, nativeSessionId: null }],
+  );
+  assert.equal(connected.length, 1);
+  assert.equal(connected[0]?.presence.kind, "hosted");
+  assert.equal(connected[0]?.canStop, true);
+  assert.equal(connected[0]?.hostedTerminal?.terminalId, terminal.terminalId);
+  assert.deepEqual([...namedPlaceholders(connected, started)], [["grok:1", connected[0]!.key]]);
 
   // Once the service describes a running conversation in that folder, that row IS this conversation. Showing
   // both would put one conversation on screen twice.

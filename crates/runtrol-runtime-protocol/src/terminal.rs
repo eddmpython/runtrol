@@ -186,6 +186,15 @@ pub struct TerminalDescriptor {
     pub provider_id: ProviderId,
     /// Exact canonical workspace already filtered through the caller's grant.
     pub workspace: String,
+    /// The lead that started this worker in the same Runtime generation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spawned_by: Option<RuntimeTerminalId>,
+    /// Original approved project for a Core-owned worktree. The exact working directory remains `workspace`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_root: Option<String>,
+    /// Identity of the optional initial courier tell. Its body and current delivery state are absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initial_message_id: Option<String>,
     /// Provider-owned durable identity only when it was known before the terminal opened.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub native_session_id: Option<String>,
@@ -538,6 +547,9 @@ mod tests {
             runtime_generation: "0".repeat(64),
             provider_id: ProviderId::new("provider"),
             workspace: "/work".to_owned(),
+            spawned_by: None,
+            project_root: None,
+            initial_message_id: None,
             native_session_id: Some("native".to_owned()),
             process_state: TerminalProcessState::Running,
             opened_at_ms: 1,

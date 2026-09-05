@@ -94,7 +94,26 @@ pub async fn capture(
     within: Duration,
     contained_by: &Containment,
 ) -> Result<Output, SpawnError> {
-    capture_exchange(program, args, None, None, within, contained_by).await
+    capture_exchange(program, args, None, None, within, contained_by, None).await
+}
+
+/// Capture a Windows command while retaining a caller resource until its entire Job has stopped.
+///
+/// Cancellation requests Job termination and transfers the lease to a bounded cleanup worker. If the
+/// kernel cannot prove completion, the lease remains held until Runtime exit so resource reuse refuses.
+///
+/// # Errors
+///
+/// The same errors as [`capture`], including refusal when command containment cannot be established.
+#[cfg(windows)]
+pub async fn capture_retaining(
+    program: &Program,
+    args: &[String],
+    within: Duration,
+    contained_by: &Containment,
+    lease: std::sync::Arc<dyn Send + Sync>,
+) -> Result<Output, SpawnError> {
+    capture_exchange(program, args, None, None, within, contained_by, Some(lease)).await
 }
 
 /// Run a resolved program in one exact canonical directory and read its bounded output.
@@ -112,7 +131,16 @@ pub async fn capture_in(
     within: Duration,
     contained_by: &Containment,
 ) -> Result<Output, SpawnError> {
-    capture_exchange(program, args, None, Some(directory), within, contained_by).await
+    capture_exchange(
+        program,
+        args,
+        None,
+        Some(directory),
+        within,
+        contained_by,
+        None,
+    )
+    .await
 }
 
 /// Run a resolved program, hand it `input` on standard input, close the pipe, and read what it said.
@@ -132,7 +160,7 @@ pub async fn capture_with_input(
     within: Duration,
     contained_by: &Containment,
 ) -> Result<Output, SpawnError> {
-    capture_exchange(program, args, Some(input), None, within, contained_by).await
+    capture_exchange(program, args, Some(input), None, within, contained_by, None).await
 }
 
 /// One bounded question, with or without bytes on standard input.
@@ -143,6 +171,7 @@ async fn capture_exchange(
     directory: Option<&AbsPath>,
     within: Duration,
     contained_by: &Containment,
+    lease: Option<std::sync::Arc<dyn Send + Sync>>,
 ) -> Result<Output, SpawnError> {
     let mut full: Vec<String> = program.leading().to_vec();
     full.extend_from_slice(args);
@@ -165,7 +194,7 @@ async fn capture_exchange(
     if let Some(directory) = directory {
         command.current_dir(directory.as_std_path());
     }
-    let (mut child, mut child_guard) = command.spawn(contained_by).await?;
+    let (mut child, mut child_guard) = command.spawn_for_capture(contained_by, lease).await?;
     let writing = match input {
         Some(bytes) => {
             let stdin = child.stdin.take().ok_or_else(|| SpawnError::Io {
@@ -235,17 +264,23 @@ async fn collect(
             drop(stdin.shutdown().await);
         }
     };
+    let stopped = async {
+        let status = child.wait().await.map_err(|error| SpawnError::Io {
+            path: path.to_owned(),
+            detail: error.to_string(),
+        })?;
+        // A descendant can retain a duplicate of a capture pipe even after replacing its stdio.
+        // Stop the command scope when its root ends, before waiting for those pipes to reach EOF.
+        child_guard.complete_capture().await?;
+        Ok::<_, SpawnError>(status)
+    };
     let (status, _written, stdout, stderr) = tokio::join!(
-        child.wait(),
+        stopped,
         write_all,
         read_bounded(stdout),
         read_bounded(stderr)
     );
-    let status = status.map_err(|error| SpawnError::Io {
-        path: path.to_owned(),
-        detail: error.to_string(),
-    })?;
-    child_guard.complete()?;
+    let status = status?;
     let (stdout, stdout_truncated) = stdout.map_err(|error| SpawnError::Io {
         path: path.to_owned(),
         detail: error.to_string(),

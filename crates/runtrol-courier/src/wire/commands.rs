@@ -31,6 +31,17 @@ pub struct Invocation {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Request {
+    /// Start one fresh managed worker in an owned worktree of the admitted lead's approved project.
+    Spawn {
+        /// Exact provider identifier resolved through runtime discovery.
+        provider: String,
+        /// Optional current provider model choice.
+        model: Option<String>,
+        /// Optional opaque initial tell held until the worker's visible dialogue activation.
+        task: Option<BoundedUtf8>,
+        /// Bounded preparation and initial delivery lifetime.
+        timeout_ms: u64,
+    },
     /// Open a fixed-participant room with the admitted session as owner and initial speaker.
     RoomOpen {
         /// All participants, including the caller. The core enforces membership and count.
@@ -123,6 +134,21 @@ pub struct Session {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "answer", rename_all = "snake_case")]
 pub enum Answer {
+    /// The worker process started. This does not assert model readiness or task completion.
+    Spawned {
+        /// The new managed terminal's courier identity.
+        session: ManagedSessionId,
+        /// Exact provider identifier.
+        provider: String,
+        /// Core-owned linked worktree path.
+        workspace: String,
+        /// Frozen commit from which this worktree started.
+        base_commit: String,
+        /// The lead that requested this worker.
+        spawned_by: ManagedSessionId,
+        /// Initial mail reservation, if supplied. Consumption requires visible activation.
+        initial: Option<Receipt>,
+    },
     /// Current structural room state after opening, inspecting, or transferring it.
     Room {
         /// Metadata without conversation content.

@@ -370,13 +370,16 @@ pub struct Composed {
     >,
     /// Per provider, the live process identities the last focus proof saw and when it was taken, so the proof
     /// (a process-table capture and a window walk) repeats when the set changes or ages, not every roster round.
-    pub(crate) focus_proofs:
+    pub(crate) focus_proofs: Arc<
         tokio::sync::Mutex<std::collections::BTreeMap<ProviderId, crate::native_focus::FocusProof>>,
+    >,
     /// Bounds filesystem identity checks moved off latency-sensitive terminal relay tasks.
     pub(crate) terminal_root_checks: Arc<tokio::sync::Semaphore>,
     /// How many terminals are open, readable without the table's lock: a draining generation stays alive
     /// while one is, exactly as it does for a running turn.
     pub(crate) open_terminals: std::sync::atomic::AtomicUsize,
+    /// Finite terminal launches and worktree cleanup keep their generation alive until ownership settles.
+    pub(crate) terminal_operations: std::sync::atomic::AtomicUsize,
     /// Rung when a terminal closes, so a draining owner re-checks whether it may end.
     pub(crate) terminal_closed: tokio::sync::Notify,
     /// Latest model catalogue per provider, keyed to the exact binary it was read from.
@@ -487,11 +490,12 @@ impl Composed {
             runtime_terminals: crate::runtime_terminal::TerminalRuntimeAdapter::default(),
             windows: crate::window_registry::WindowRegistry::default(),
             focus_targets: tokio::sync::Mutex::default(),
-            focus_proofs: tokio::sync::Mutex::default(),
+            focus_proofs: Arc::default(),
             terminal_root_checks: Arc::new(tokio::sync::Semaphore::new(
                 crate::runtime_terminal::ROOT_CHECK_SLOTS,
             )),
             open_terminals: std::sync::atomic::AtomicUsize::new(0),
+            terminal_operations: std::sync::atomic::AtomicUsize::new(0),
             terminal_closed: tokio::sync::Notify::new(),
             provider_inventory: Mutex::new(
                 crate::runtime_inventory::ProviderInventoryCache::default(),
@@ -560,11 +564,12 @@ impl Composed {
             runtime_terminals: crate::runtime_terminal::TerminalRuntimeAdapter::default(),
             windows: crate::window_registry::WindowRegistry::default(),
             focus_targets: tokio::sync::Mutex::default(),
-            focus_proofs: tokio::sync::Mutex::default(),
+            focus_proofs: Arc::default(),
             terminal_root_checks: Arc::new(tokio::sync::Semaphore::new(
                 crate::runtime_terminal::ROOT_CHECK_SLOTS,
             )),
             open_terminals: std::sync::atomic::AtomicUsize::new(0),
+            terminal_operations: std::sync::atomic::AtomicUsize::new(0),
             terminal_closed: tokio::sync::Notify::new(),
             provider_inventory: Mutex::new(
                 crate::runtime_inventory::ProviderInventoryCache::default(),

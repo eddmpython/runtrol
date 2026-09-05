@@ -575,10 +575,10 @@ struct TerminalRootCheck {
 #[cfg(windows)]
 async fn check_pinned_terminal_root(
     permits: Arc<tokio::sync::Semaphore>,
-    guard: Arc<tokio::sync::Mutex<runtrol_security::ProjectRootGuard>>,
+    guard: Arc<tokio::sync::Mutex<crate::runtime_terminal::TerminalRootGuards>>,
     stamp: (u64, u64, u64),
 ) -> TerminalRootCheck {
-    let checked = run_root_check(permits, move || guard.blocking_lock().validate().is_ok()).await;
+    let checked = run_root_check(permits, move || guard.blocking_lock().valid()).await;
     TerminalRootCheck {
         stamp,
         allowed: matches!(checked, Ok(true)),

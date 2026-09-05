@@ -477,6 +477,10 @@ function terminalRowEqual(left: TerminalDescriptor, right: TerminalDescriptor | 
     && left.providerId === right.providerId
     && left.nativeSessionId === right.nativeSessionId
     && left.workspace === right.workspace
+    && left.spawnedBy === right.spawnedBy
+    && left.projectRoot === right.projectRoot
+    && left.initialMessageId === right.initialMessageId
+    && left.dialogueEnabled === right.dialogueEnabled
     && left.processState === right.processState
     && left.openedAtMs === right.openedAtMs
     && left.geometry.columns === right.geometry.columns

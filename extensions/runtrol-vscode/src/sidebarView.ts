@@ -323,7 +323,7 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
       if (!accentIcons.has(key)) {
         accentIcons.set(
           key,
-          accentedConversationIcon(this.context.extensionUri, row.icon, row.accent).toString(),
+          accentedConversationIcon(this.context.extensionUri, row.icon, row.accent).toString(true),
         );
       }
     }
@@ -447,6 +447,7 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
     return {
       key: row.key,
       title: row.title,
+      spawnedBy: row.spawnedBy,
       serviceName: row.serviceName,
       icon: row.serviceIcon,
       accent,

@@ -5,9 +5,11 @@
 //! Windows with a real job object, which is where the product and its gates run.
 
 use base64ct::{Base64UrlUnpadded, Encoding as _};
+use std::sync::Arc;
 
 mod commands;
 mod rooms;
+mod spawning;
 use runtrol_childproc::Containment;
 use runtrol_courier::env::COURIER_TOKEN_ENV;
 use runtrol_courier::wire::Hello;
@@ -43,10 +45,16 @@ fn here() -> ProcessIdentity {
     runtrol_childproc::process_identity(std::process::id()).expect("this process has an identity")
 }
 
+fn greeting() -> tokio::sync::OwnedSemaphorePermit {
+    Arc::new(tokio::sync::Semaphore::new(1))
+        .try_acquire_owned()
+        .expect("one greeting")
+}
+
 #[tokio::test]
 async fn a_hello_is_refused_before_the_kernel_for_every_reason_but_the_authorities() {
     let gate = gate();
-    let nothing = Containment::without_any();
+    let nothing = Arc::new(Containment::without_any());
     let terminal = TerminalId::now();
     let session = session_id(terminal);
     let minted = gate.mint(terminal).expect("a token is minted");
@@ -61,21 +69,32 @@ async fn a_hello_is_refused_before_the_kernel_for_every_reason_but_the_authoriti
                 protocol_version: PROTOCOL_VERSION.saturating_add(1),
                 session,
                 token: token.clone(),
-            }
+            },
+            greeting(),
         )
         .await,
         Err(Denied::Version(PROTOCOL_VERSION.saturating_add(1)))
     );
     // The endpoint that did not identify its peer proves nothing about it.
     assert_eq!(
-        gate.admit(&nothing, None, &Hello::new(session, token.clone()))
-            .await,
+        gate.admit(
+            &nothing,
+            None,
+            &Hello::new(session, token.clone()),
+            greeting()
+        )
+        .await,
         Err(Denied::NoPeer)
     );
     // No session by that name.
     assert_eq!(
-        gate.admit(&nothing, Some(here()), &Hello::new(session, token.clone()))
-            .await,
+        gate.admit(
+            &nothing,
+            Some(here()),
+            &Hello::new(session, token.clone()),
+            greeting()
+        )
+        .await,
         Err(Denied::UnknownSession)
     );
 
@@ -84,8 +103,13 @@ async fn a_hello_is_refused_before_the_kernel_for_every_reason_but_the_authoriti
         .await
         .expect("launch succeeds");
     assert_eq!(
-        gate.admit(&nothing, Some(here()), &Hello::new(session, token.clone()))
-            .await,
+        gate.admit(
+            &nothing,
+            Some(here()),
+            &Hello::new(session, token.clone()),
+            greeting()
+        )
+        .await,
         Err(Denied::RootUnbound)
     );
 
@@ -100,8 +124,13 @@ async fn a_hello_is_refused_before_the_kernel_for_every_reason_but_the_authoriti
     let wrong = Base64UrlUnpadded::encode_string(&[0_u8; 32]);
     assert_ne!(wrong, other_token);
     assert_eq!(
-        gate.admit(&nothing, Some(here()), &Hello::new(other_session, wrong))
-            .await,
+        gate.admit(
+            &nothing,
+            Some(here()),
+            &Hello::new(other_session, wrong),
+            greeting()
+        )
+        .await,
         Err(Denied::Token)
     );
     // The right token now reaches the kernel, which a containment that holds nothing answers "outside".
@@ -109,7 +138,8 @@ async fn a_hello_is_refused_before_the_kernel_for_every_reason_but_the_authoriti
         gate.admit(
             &nothing,
             Some(here()),
-            &Hello::new(other_session, other_token)
+            &Hello::new(other_session, other_token),
+            greeting(),
         )
         .await,
         Err(Denied::OutsideContainment)
@@ -119,8 +149,13 @@ async fn a_hello_is_refused_before_the_kernel_for_every_reason_but_the_authoriti
     gate.forget(other).await;
     let stale = token_of(&gate.mint(other).expect("mint")); // a fresh token, never opened
     assert_eq!(
-        gate.admit(&nothing, Some(here()), &Hello::new(other_session, stale))
-            .await,
+        gate.admit(
+            &nothing,
+            Some(here()),
+            &Hello::new(other_session, stale),
+            greeting()
+        )
+        .await,
         Err(Denied::UnknownSession)
     );
 }
@@ -144,9 +179,10 @@ async fn a_failed_launch_leaves_neither_authority_nor_a_mailbox() {
     assert!(!gate.state.lock().await.courier.is_live(session));
     assert_eq!(
         gate.admit(
-            &Containment::without_any(),
+            &Arc::new(Containment::without_any()),
             Some(here()),
-            &Hello::new(session, token)
+            &Hello::new(session, token),
+            greeting(),
         )
         .await,
         Err(Denied::UnknownSession)
@@ -155,7 +191,6 @@ async fn a_failed_launch_leaves_neither_authority_nor_a_mailbox() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_childs_first_hello_waits_for_its_launch_to_register() {
-    use std::sync::Arc;
     use std::time::Duration;
 
     let gate = Arc::new(gate());
@@ -168,9 +203,9 @@ async fn a_childs_first_hello_waits_for_its_launch_to_register() {
     let caller = gate
         .launch(minted, || {
             let caller = tokio::spawn(async move {
-                let containment = Containment::without_any();
+                let containment = Arc::new(Containment::without_any());
                 let hello = Hello::new(session, token);
-                let admission = caller_gate.admit(&containment, Some(here()), &hello);
+                let admission = caller_gate.admit(&containment, Some(here()), &hello, greeting());
                 tokio::pin!(admission);
                 let mut polled = Some(polled);
                 std::future::poll_fn(|context| {

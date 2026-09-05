@@ -17,6 +17,12 @@ use crate::compose::Composed;
 use crate::native_claims::{TerminalClaimAdmission, TerminalClaimError};
 use crate::window_registry::ConnectionToken;
 
+mod launch;
+mod operations;
+mod spawned;
+pub(crate) use operations::TerminalOperation;
+pub(crate) use spawned::{SpawnedTerminal, WorkerLaunch, authorize_spawn_project, open_worker};
+
 const MAX_BROKER_ARGUMENTS: usize = 256;
 const MAX_BROKER_ARGUMENT_BYTES: usize = 256 * 1024;
 /// Hosted terminals have the same bounded process count as the structured hot-session engine.
@@ -63,6 +69,7 @@ impl Default for Terminals {
 
 /// One open terminal, whose service it belongs to, and the folder its CLI runs in.
 struct Open {
+    spawned: Option<Arc<SpawnedTerminal>>,
     /// Which service is hosted here, so a question about that service's account can be asked when this
     /// terminal's CLI stops writing. Known even for a conversation the service has not named yet.
     provider: ProviderId,
@@ -150,6 +157,7 @@ pub(crate) struct OfficialStop {
 /// A content-free view of one hosted terminal for public Runtime projection.
 #[derive(Clone)]
 pub(crate) struct HostedTerminal {
+    pub(crate) spawned: Option<Arc<SpawnedTerminal>>,
     pub(crate) id: TerminalId,
     pub(crate) provider: ProviderId,
     pub(crate) terminal: Terminal,
@@ -163,8 +171,15 @@ pub(crate) struct HostedTerminal {
 }
 
 impl HostedTerminal {
+    pub(crate) fn project_root(&self) -> &AbsPath {
+        self.spawned
+            .as_ref()
+            .map_or(&self.workspace, |spawned| spawned.project.root())
+    }
+
     fn from_open(id: TerminalId, open: &Open) -> Self {
         Self {
+            spawned: open.spawned.clone(),
             id,
             provider: open.provider,
             terminal: open.terminal.clone(),
@@ -371,6 +386,7 @@ impl Terminals {
         self.by_id.insert(
             id,
             Open {
+                spawned: None,
                 provider,
                 terminal,
                 workspace,
@@ -419,6 +435,7 @@ impl Terminals {
         self.by_id.insert(
             id,
             Open {
+                spawned: None,
                 provider,
                 terminal,
                 workspace,
@@ -516,6 +533,7 @@ impl Terminals {
         self.by_id.insert(
             id,
             Open {
+                spawned: None,
                 provider,
                 terminal,
                 workspace,
@@ -711,18 +729,33 @@ fn launch_arguments(
     }
 }
 
-async fn forget(composed: &Composed, id: TerminalId) {
-    let open = {
+async fn forget(composed: &Arc<Composed>, id: TerminalId) {
+    let _operation = TerminalOperation::begin(composed);
+    {
         let mut terminals = composed.terminals.lock().await;
         drop(terminals.remove(id));
-        terminals.len()
-    };
-    composed
-        .open_terminals
-        .store(open, std::sync::atomic::Ordering::Release);
+        composed
+            .open_terminals
+            .store(terminals.len(), std::sync::atomic::Ordering::Release);
+    }
     composed.runtime_terminals.terminal_ended(id).await;
     composed.native_claims.terminal_ended(id);
     composed.courier_gate.forget(id).await;
+    match composed.courier_gate.ended_worker(id).await {
+        Ok(Some(ended)) => {
+            if let Err(error) = composed
+                .isolated_workspaces
+                .lock()
+                .await
+                .release_terminal_if_present(&composed.containment, &ended)
+                .await
+            {
+                crate::isolated_workspace::report_cleanup(&error);
+            }
+        }
+        Ok(None) => {}
+        Err(error) => crate::isolated_workspace::report_cleanup(error),
+    }
     composed.terminal_closed.notify_one();
 }
 
@@ -769,6 +802,7 @@ pub(crate) async fn open_hosted(
         prepared_program,
         None,
         holder_known,
+        None,
     )
     .await
 }
@@ -814,6 +848,7 @@ pub(crate) async fn open_brokered(
         // An exact invocation from a broker names its own conversation and nobody asked the service about it,
         // so the unnamed-terminal guard stays in force here.
         false,
+        None,
     )
     .await
 }
@@ -848,7 +883,9 @@ async fn open_with_arguments(
     prepared_program: Option<runtrol_childproc::Program>,
     exact_arguments: Option<Vec<String>>,
     holder_known: bool,
+    worker: Option<&WorkerLaunch>,
 ) -> Result<(TerminalId, Terminal, Attachment), TerminalOpenError> {
+    let operation = TerminalOperation::begin(composed);
     if let Some(native) = native
         && let Some(existing) = composed.terminals.lock().await.open_for(id, native)
     {
@@ -858,7 +895,9 @@ async fn open_with_arguments(
         let attachment = existing.terminal.attach().await;
         return Ok((existing.id, existing.terminal, attachment));
     }
-    let terminal_id = TerminalId::now();
+    let terminal_id = worker.map_or_else(TerminalId::now, |worker| {
+        worker.owned.ticket.worker.terminal
+    });
     let reservation = match composed.native_claims.reserve_terminal(
         terminal_id,
         id.as_str(),
@@ -892,8 +931,6 @@ async fn open_with_arguments(
                 .map_err(|error| TerminalOpenError::Provider(error.to_string()))?;
         program
     };
-    let key = native.map(|native| (id, Box::<str>::from(native)));
-    let native = native.map(Box::<str>::from);
     // The courier token and environment this managed process is born with. Minted before the launch and
     // touching no shared state, so a launch that fails below leaves the gate exactly as it was.
     let minted = composed
@@ -907,45 +944,22 @@ async fn open_with_arguments(
         .collect();
     env.extend_from_slice(minted.env());
     let env_unset: Vec<String> = tui.env_unset.iter().map(ToString::to_string).collect();
-    let (terminal, open) = {
-        let mut terminals = composed.terminals.lock().await;
-        if terminals.len() >= MAX_HOSTED_TERMINALS {
-            return Err(TerminalOpenError::NoRoom {
-                held: terminals.len(),
-                limit: MAX_HOSTED_TERMINALS,
-            });
-        }
-        let terminal = composed
-            .courier_gate
-            .launch(minted, || {
-                let terminal = Terminal::open(&TerminalLaunch {
-                    program: &program,
-                    arguments,
-                    cwd: &cwd,
-                    env,
-                    env_unset,
-                    size: runtrol_childproc::PtySize { cols, rows },
-                })
-                .map_err(|error| TerminalOpenError::Provider(error.to_string()))?;
-                let root = runtrol_childproc::process_identity(terminal.pid());
-                Ok::<_, TerminalOpenError>((terminal, root))
-            })
-            .await?;
-        terminals.insert(terminal_id, id, key, terminal.clone(), cwd, native);
-        let open = terminals.len();
-        (terminal, open)
-    };
-    composed
-        .open_terminals
-        .store(open, std::sync::atomic::Ordering::Release);
-    if let Err(error) = reservation.commit() {
-        drop(terminal.kill());
-        forget(composed, terminal_id).await;
-        return Err(error.into());
+    launch::PreparedLaunch {
+        terminal_id,
+        provider: id,
+        native: native.map(Box::<str>::from),
+        cwd,
+        program,
+        arguments,
+        env,
+        env_unset,
+        size: runtrol_childproc::PtySize { cols, rows },
+        minted,
+        reservation,
+        worker: worker.cloned(),
     }
-    forget_on_exit(Arc::clone(composed), terminal_id, &terminal);
-    let attachment = terminal.attach().await;
-    Ok((terminal_id, terminal, attachment))
+    .open(composed, operation)
+    .await
 }
 
 /// Open the provider's own TUI attachment client for a conversation another process already owns.
@@ -1035,7 +1049,7 @@ pub(crate) async fn open_official_attach(
         env: env.clone(),
         env_unset: env_unset.clone(),
     };
-    let (terminal, open) = {
+    let terminal = {
         let mut terminals = composed.terminals.lock().await;
         if let Some(existing) = terminals.open_for(provider, native) {
             if existing.workspace != cwd {
@@ -1044,9 +1058,10 @@ pub(crate) async fn open_official_attach(
             let attachment = existing.terminal.attach().await;
             return Ok((existing.id, existing.terminal, attachment));
         }
-        if terminals.len() >= MAX_HOSTED_TERMINALS {
+        let held = terminals.len() + composed.courier_gate.pending_spawns().await;
+        if held >= MAX_HOSTED_TERMINALS {
             return Err(TerminalOpenError::NoRoom {
-                held: terminals.len(),
+                held,
                 limit: MAX_HOSTED_TERMINALS,
             });
         }
@@ -1067,12 +1082,11 @@ pub(crate) async fn open_official_attach(
             cwd,
             TerminalOrigin::OfficialAttach(Box::new(stop)),
         );
-        let open = terminals.len();
-        (terminal, open)
+        composed
+            .open_terminals
+            .store(terminals.len(), std::sync::atomic::Ordering::Release);
+        terminal
     };
-    composed
-        .open_terminals
-        .store(open, std::sync::atomic::Ordering::Release);
     if let Err(error) = reservation.commit() {
         drop(terminal.kill());
         forget(composed, terminal_id).await;
@@ -1159,11 +1173,12 @@ pub(crate) async fn open_observed_mirror(
             ));
         }
     };
-    let (terminal, open) = {
+    let terminal = {
         let mut terminals = composed.terminals.lock().await;
-        if terminals.len() >= MAX_HOSTED_TERMINALS {
+        let held = terminals.len() + composed.courier_gate.pending_spawns().await;
+        if held >= MAX_HOSTED_TERMINALS {
             return Err(TerminalOpenError::NoRoom {
-                held: terminals.len(),
+                held,
                 limit: MAX_HOSTED_TERMINALS,
             });
         }
@@ -1187,11 +1202,11 @@ pub(crate) async fn open_observed_mirror(
                 shell_pid: params.process_id,
             },
         );
-        (terminal, terminals.len())
+        composed
+            .open_terminals
+            .store(terminals.len(), std::sync::atomic::Ordering::Release);
+        terminal
     };
-    composed
-        .open_terminals
-        .store(open, std::sync::atomic::Ordering::Release);
     if let Err(error) = reservation.commit() {
         // ok: a mirror that never held a claim ends here with nothing left to end; the table removal in
         // `forget` is what matters.

@@ -156,7 +156,8 @@ impl CourierGate {
             Request::Cancel { call, message_id } => {
                 state.courier.cancel_call(session, call, message_id, now)
             }
-            Request::Receive { .. }
+            Request::Spawn { .. }
+            | Request::Receive { .. }
             | Request::Ask { .. }
             | Request::RoomAsk { .. }
             | Request::RoomOpen { .. }

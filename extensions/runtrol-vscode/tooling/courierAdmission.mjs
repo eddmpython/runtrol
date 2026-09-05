@@ -12,6 +12,7 @@ import { build } from "esbuild";
 import { isolatedRuntimeState, ownedTreeIdentities, terminateCapturedIdentities } from "./isolated-vscode.mjs";
 import { processRows, normalizedExecutable } from "./process-identity.mjs";
 import { commandBody, commandJourney } from "./courierCommands.mjs";
+import { spawnBody, spawnJourney } from "./courierSpawn.mjs";
 
 const root = fileURLToPath(new URL("../../../", import.meta.url));
 const core = option("--core");
@@ -48,6 +49,20 @@ try {
   server.listen(pipeName);
   await once(server, "listening");
   await mkdir(workspace);
+  let spawnBase;
+  if (process.argv.includes("--spawn")) {
+    const git = (words) => {
+      const result = spawnSync("git", ["-c", "user.name=Runtrol Fixture", "-c", "user.email=fixture@localhost", ...words],
+        { cwd: workspace, encoding: "utf8", windowsHide: true, timeout: 30_000 });
+      assert.equal(result.status, 0, `fixture Git ${words[0]}: ${result.stderr}`);
+      return result.stdout.trim();
+    };
+    git(["init"]);
+    await writeFile(path.join(workspace, "README.md"), "Isolated courier worker fixture.\n");
+    git(["add", "--", "README.md"]);
+    git(["commit", "-o", "README.md", "-m", "테스트: 격리 작업의 기준 파일을 만든다"]);
+    spawnBase = git(["rev-parse", "HEAD"]);
+  }
   await mkdir(path.join(home, "providers"), { recursive: true });
   await writeFile(path.join(home, "providers", "courier-fixture.toml"), [
     'schema = 1', 'id = "courier-fixture"', 'display_name = "Courier Fixture"', 'kind = "acp"',
@@ -78,7 +93,26 @@ try {
     RUNTROL_COURIER_ENDPOINT: birth.RUNTROL_COURIER_ENDPOINT + "-stale" }, encoding: "utf8",
     windowsHide: true, timeout: 10_000 });
   assert.notEqual(stale.status, 0, "a stale generation endpoint is not admitted");
-  if (process.argv.includes("--commands")) {
+  if (process.argv.includes("--spawn")) {
+    const [view] = await watch([opened]);
+    await activate(view, true);
+    bodyMarker = spawnBody;
+    await spawnJourney({
+      lead: { peer, session: birth.RUNTROL_MANAGED_SESSION }, workspace, base: spawnBase,
+      activate, waitFor,
+      accept: async (spawned) => {
+        const peer = connected.shift() ?? await deadline(new Promise((resolve) => { pendingPeer = resolve; }), "spawned fixture");
+        const born = await peer.read();
+        assert.equal(born.first.answer, "welcome");
+        const terminal = { generation: opened.generation, terminalId: spawned.session };
+        const [view] = await watch([terminal]);
+        return { peer, session: born.birth.RUNTROL_MANAGED_SESSION, view, terminal };
+      },
+      stop: async (worker) => {
+        command(probe, ["stop", home, identity, worker.terminal.generation, worker.terminal.terminalId]);
+      },
+    });
+  } else if (process.argv.includes("--commands")) {
     const view = (await watch([opened]))[0];
     assert.equal(view.opened.terminal.dialogueEnabled, false, "new processes start with dialogue disabled");
     const disabled = await peer.ask({ kind: "cli", words: ["list"], body: "" });
@@ -103,7 +137,8 @@ try {
     assert.equal(rearmed.status, 0);
     process.stdout.write("RUNTROL_COURIER_ACTIVATION defaultDeny=true enable=true disable=true reenable=true\n");
   } else {
-    await watch([opened]);
+    const [view] = await watch([opened]);
+    if (process.argv.includes("--input-latency")) await inputLatency(view, peer);
   }
   // This long journey has no Studio window. Hold real SDK views across handover so the existing policy for
   // retiring unwatched, quiet terminals does not legitimately end these fixture processes during the check.
@@ -196,6 +231,45 @@ async function activate(view, enabled) {
     leaseId: lease.leaseId, leaseGeneration: lease.leaseGeneration, enabled });
 }
 
+async function inputLatency(view, peer) {
+  const budget = JSON.parse(await readFile(new URL("../performance-budget.json", import.meta.url), "utf8")).multiWindowTerminal;
+  const terminal = view.opened.terminal;
+  const stamps = [];
+  const lease = await view.acquireControl({ requestId: sdk.newMutationRequestId(),
+    terminalId: terminal.terminalId, expectedTerminalGeneration: terminal.terminalGeneration });
+  const input = async () => {
+    const startedAt = Date.now();
+    const started = performance.now();
+    await view.write({ requestId: sdk.newMutationRequestId(), terminalId: terminal.terminalId,
+      leaseId: lease.leaseId, leaseGeneration: lease.leaseGeneration, bytesBase64: Buffer.from("x\x7f").toString("base64") });
+    const elapsed = performance.now() - started;
+    stamps.push({ startedAt, finishedAt: Date.now(), elapsed });
+    return elapsed;
+  };
+  const first = await input();
+  // Each hello repeats the production containment and ancestry proof. A fixed finite load keeps these OS
+  // inspections active throughout the input sample without relying on model speed or an artificial sleep in Core.
+  const load = (async () => {
+    for (let index = 0; index < budget.latencySampleCount * 2; index += 1) {
+      assert.equal((await peer.ask({ kind: "hello" })).answer, "welcome");
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  })();
+  const measured = (async () => {
+    const samples = [];
+    for (let index = 0; index < budget.latencySampleCount; index += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      samples.push(await input());
+    }
+    return samples;
+  })();
+  const [, samples] = await Promise.all([load, measured]);
+  const ordered = [...samples].sort((a, b) => a - b);
+  const p95 = ordered[Math.ceil(ordered.length * 0.95) - 1];
+  process.stdout.write(`RUNTROL_COURIER_INPUT ${JSON.stringify({ generation: terminal.runtimeGeneration, first, p95, maximum: ordered.at(-1), samples, stamps })}\n`);
+  assert.ok(p95 <= budget.warmDeliveryP95Ms, `input p95 ${p95.toFixed(2)} ms exceeds ${budget.warmDeliveryP95Ms} ms during courier admission`);
+}
+
 function option(name) {
   const index = process.argv.indexOf(name);
   if (index < 0 || !process.argv[index + 1]) throw new Error(`${name} is required`);
@@ -244,7 +318,7 @@ async function waitFor(check, description) {
     }
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
-  throw new Error(`${description} timed out`);
+  throw new Error(`${description} timed out; generations=${JSON.stringify(await status())}`);
 }
 
 function deadline(promise, description) {

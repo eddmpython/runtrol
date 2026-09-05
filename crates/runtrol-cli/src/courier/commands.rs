@@ -136,6 +136,19 @@ pub async fn execute(words: Vec<OsString>) -> Result<CommandOutput, CourierFailu
             success: true,
         });
     }
+    if let [guide_word, from_word, source, message_word, message] = words.as_slice()
+        && guide_word == "--guide"
+        && from_word == "--from"
+        && message_word == "--message-id"
+    {
+        return Ok(CommandOutput {
+            stdout: super::words::initial_guide(
+                super::words::identifier(Some(source))?,
+                super::words::identifier(Some(message))?,
+            ),
+            success: true,
+        });
+    }
     let command = parse(&words)?;
     let birth = Birth::read()?;
     let answer = run(&birth, command).await?;
@@ -150,6 +163,24 @@ pub async fn execute(words: Vec<OsString>) -> Result<CommandOutput, CourierFailu
 
 async fn run(birth: &Birth, command: Command) -> Result<Answer, CourierFailure> {
     let answer = match command {
+        Command::Spawn(command) => {
+            let task = if command.task {
+                Some(body().await?)
+            } else {
+                None
+            };
+            birth
+                .exchange(
+                    Request::Spawn {
+                        provider: command.provider,
+                        model: command.model,
+                        task,
+                        timeout_ms: command.timeout_ms,
+                    },
+                    Duration::from_millis(command.timeout_ms),
+                )
+                .await?
+        }
         Command::Room(command) => room(birth, command).await?,
         Command::List { after } => {
             birth

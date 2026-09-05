@@ -1097,11 +1097,11 @@ async fn serve_surfaces(
     // Bind before any launch so a child's first courier call always finds its generation's endpoint.
     let courier_listener = Listener::bind_logon_only(composed.courier_gate.endpoint()).await?;
     connections.spawn(crate::courier_gate::serve::serve(
-        Arc::clone(&composed.courier_gate),
-        Arc::clone(&composed.containment),
+        Arc::clone(&composed),
         courier_listener,
         crate::courier_gate::serve::HELLO_WAIT,
     ));
+    connections.spawn(crate::isolated_workspace::recover_after_restart(&composed));
     let push_wake_active = Arc::new(AtomicBool::new(false));
     let mut relay_hub = match relay {
         Some(relay) => {
@@ -2019,7 +2019,15 @@ fn live_work_of(sessions: &SessionManager, composed: &Composed) -> u32 {
     )
     .unwrap_or(u32::MAX);
     let supervised = u32::try_from(sessions.live_sessions().count()).unwrap_or(u32::MAX);
-    supervised.saturating_add(terminals)
+    let operations = u32::try_from(
+        composed
+            .terminal_operations
+            .load(std::sync::atomic::Ordering::Acquire),
+    )
+    .unwrap_or(u32::MAX);
+    supervised
+        .saturating_add(terminals)
+        .saturating_add(operations)
 }
 
 fn begin_runtime_audit_shutdown_if_drained(
@@ -3390,15 +3398,17 @@ mod tests {
         // The rule a generation drains by. An open session is a provider process this generation started and
         // owns; between turns it is idle, not finished. Counting running turns instead let an update end the
         // conversations a person had open simply because none of them happened to be mid-answer.
-        let scratch =
-            std::env::temp_dir().join(format!("runtrol-live-work-{}", std::process::id()));
-        if scratch.exists() {
-            std::fs::remove_dir_all(&scratch).expect("clear the previous run");
-        }
+        let shared = std::env::var_os("CARGO_TARGET_DIR")
+            .map(std::path::PathBuf::from)
+            .and_then(|target| target.parent().map(std::path::Path::to_path_buf))
+            .expect("tests use the shared execution target");
+        let scratch = shared.join(format!("runtrol-live-work-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&scratch).expect("create the scratch home");
         let home = scratch.to_str().expect("UTF-8 scratch path");
-        let composed = crate::Composed::for_tests(home, runtrol_drivers::builtin())
-            .expect("a fresh home composes");
+        let composed = Arc::new(
+            crate::Composed::for_tests(home, runtrol_drivers::builtin())
+                .expect("a fresh home composes"),
+        );
         let sessions = SessionManager::default();
         assert_eq!(
             live_work_of(&sessions, &composed),
@@ -3414,6 +3424,18 @@ mod tests {
             2,
             "a hosted terminal is a conversation somebody is looking at"
         );
+        let operation = crate::terminal_surface::TerminalOperation::begin(&composed);
+        composed
+            .open_terminals
+            .store(0, std::sync::atomic::Ordering::Release);
+        assert_eq!(
+            live_work_of(&sessions, &composed),
+            1,
+            "workspace cleanup still belongs to the generation after its final terminal exits"
+        );
+        drop(operation);
+        assert_eq!(live_work_of(&sessions, &composed), 0);
+        drop(composed);
         std::fs::remove_dir_all(&scratch).expect("clean the scratch home");
     }
 

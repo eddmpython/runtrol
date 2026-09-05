@@ -4,7 +4,7 @@
 //! workspace, surface kind, and an opaque owner identity. Conversation bytes and provider output never enter it.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 
 use runtrol_core::SessionManager;
 use runtrol_ipc::{GenerationLiveClaimLine, GenerationLiveClaimSurface};
@@ -24,13 +24,13 @@ pub(crate) enum TerminalClaimError {
     LegacyGenerationBusy,
 }
 
-pub(crate) enum TerminalClaimAdmission<'registry> {
+pub(crate) enum TerminalClaimAdmission {
     Join(TerminalId),
-    Reserved(TerminalClaimGuard<'registry>),
+    Reserved(TerminalClaimGuard),
 }
 
-pub(crate) struct TerminalClaimGuard<'registry> {
-    registry: &'registry NativeLiveClaimRegistry,
+pub(crate) struct TerminalClaimGuard {
+    state: Arc<RwLock<ClaimState>>,
     terminal: TerminalId,
     committed: bool,
 }
@@ -59,13 +59,9 @@ impl Drop for StructuredClaimGuard<'_> {
     }
 }
 
-impl TerminalClaimGuard<'_> {
+impl TerminalClaimGuard {
     pub(crate) fn commit(mut self) -> Result<(), TerminalClaimError> {
-        let mut state = self
-            .registry
-            .state
-            .write()
-            .map_err(|_| TerminalClaimError::State)?;
+        let mut state = self.state.write().map_err(|_| TerminalClaimError::State)?;
         let claim = state
             .pending_terminals
             .remove(&self.terminal)
@@ -76,12 +72,12 @@ impl TerminalClaimGuard<'_> {
     }
 }
 
-impl Drop for TerminalClaimGuard<'_> {
+impl Drop for TerminalClaimGuard {
     fn drop(&mut self) {
         if self.committed {
             return;
         }
-        if let Ok(mut state) = self.registry.state.write() {
+        if let Ok(mut state) = self.state.write() {
             state.pending_terminals.remove(&self.terminal);
         }
     }
@@ -89,7 +85,7 @@ impl Drop for TerminalClaimGuard<'_> {
 
 /// Complete in-memory live claim view owned by the current generation.
 pub(crate) struct NativeLiveClaimRegistry {
-    state: RwLock<ClaimState>,
+    state: Arc<RwLock<ClaimState>>,
 }
 
 #[derive(Default)]
@@ -104,7 +100,7 @@ struct ClaimState {
 impl Default for NativeLiveClaimRegistry {
     fn default() -> Self {
         Self {
-            state: RwLock::new(ClaimState::default()),
+            state: Arc::new(RwLock::new(ClaimState::default())),
         }
     }
 }
@@ -181,7 +177,7 @@ impl NativeLiveClaimRegistry {
         native_session_id: Option<&str>,
         workspace: &str,
         holder_known: bool,
-    ) -> Result<TerminalClaimAdmission<'_>, TerminalClaimError> {
+    ) -> Result<TerminalClaimAdmission, TerminalClaimError> {
         let mut state = self.state.write().map_err(|_| TerminalClaimError::State)?;
         if native_session_id.is_some() && !state.legacy_generations.is_empty() {
             return Err(TerminalClaimError::LegacyGenerationBusy);
@@ -222,7 +218,7 @@ impl NativeLiveClaimRegistry {
         );
         drop(state);
         Ok(TerminalClaimAdmission::Reserved(TerminalClaimGuard {
-            registry: self,
+            state: Arc::clone(&self.state),
             terminal,
             committed: false,
         }))

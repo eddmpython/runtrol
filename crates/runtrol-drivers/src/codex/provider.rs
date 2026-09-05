@@ -124,6 +124,7 @@ struct ListedReasoning {
 
 /// The driver for the CLI whose sessions share one daemon.
 pub struct CodexProvider {
+    terminal_flags: BTreeSet<Box<str>>,
     /// What the CLI leaves on disk about which conversations are open and answering, for the processes
     /// runtrol did not start (`roster`).
     roster: CodexRoster,
@@ -158,12 +159,20 @@ impl CodexProvider {
     #[must_use]
     pub fn new(id: ProviderId, program: Program, contained_by: Arc<Containment>) -> Self {
         Self {
+            terminal_flags: BTreeSet::new(),
             roster: CodexRoster::from_environment(),
             id,
             program,
             contained_by,
             shared: Mutex::new(Weak::new()),
         }
+    }
+
+    /// Retain the exact option support already discovered while preparing this driver.
+    #[must_use]
+    pub fn with_terminal_flags(mut self, flags: BTreeSet<Box<str>>) -> Self {
+        self.terminal_flags = flags;
+        self
     }
 
     /// The program this driver will run.
@@ -204,6 +213,18 @@ impl CodexProvider {
 impl Provider for CodexProvider {
     fn id(&self) -> ProviderId {
         self.id
+    }
+
+    fn terminal_model_arguments(&self, model: &str) -> Result<Vec<String>, ProviderError> {
+        let flag = super::bound::MODEL_FLAG;
+        if !self.terminal_flags.contains(flag) {
+            return Err(ProviderError::Unsupported {
+                provider: self.id,
+                what: "native terminal model selection".to_owned(),
+                why: "the installed CLI parser did not confirm the model option",
+            });
+        }
+        Ok(vec![flag.to_owned(), model.to_owned()])
     }
 
     fn capabilities(&self) -> ProviderCapabilities {

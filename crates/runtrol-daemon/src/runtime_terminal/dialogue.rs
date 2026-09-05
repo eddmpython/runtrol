@@ -55,28 +55,34 @@ impl TerminalRuntimeAdapter {
         // in-memory change, so neither a queued request nor cancellation can cross this operation.
         composed
             .courier_gate
-            .set_dialogue_checked(terminal_id, params.enabled, || {
-                let current = crate::runtime_serve::refresh_current(composed, authority).map_err(
-                    |failure| TerminalRuntimeFailure::new(failure.kind, failure.message),
-                )?;
-                if !has_scopes(&current.grant, &[AppScope::SessionInputWrite]) {
-                    return Err(TerminalRuntimeFailure::new(
-                        RuntimeErrorKind::ScopeDenied,
-                        "the integration grant lacks the required app scope",
-                    ));
-                }
-                ensure_visible(hosted, &current)?;
-                validate_mutation_time(&params.request_id)?;
-                now = WallMs::now().as_millis();
-                validate_lease_fields(
-                    &mut state,
-                    terminal_id,
-                    authority.key,
-                    &params.lease_id,
-                    params.lease_generation,
-                    now,
-                )
-            })
+            .set_dialogue_checked(
+                terminal_id,
+                params.enabled,
+                Some(Arc::new(authority.clone())),
+                || {
+                    let current = crate::runtime_serve::refresh_current(composed, authority)
+                        .map_err(|failure| {
+                            TerminalRuntimeFailure::new(failure.kind, failure.message)
+                        })?;
+                    if !has_scopes(&current.grant, &[AppScope::SessionInputWrite]) {
+                        return Err(TerminalRuntimeFailure::new(
+                            RuntimeErrorKind::ScopeDenied,
+                            "the integration grant lacks the required app scope",
+                        ));
+                    }
+                    ensure_visible(hosted, &current)?;
+                    validate_mutation_time(&params.request_id)?;
+                    now = WallMs::now().as_millis();
+                    validate_lease_fields(
+                        &mut state,
+                        terminal_id,
+                        authority.key,
+                        &params.lease_id,
+                        params.lease_generation,
+                        now,
+                    )
+                },
+            )
             .await
             .map_err(|failure| match failure {
                 crate::courier_gate::DialogueFailure::Control(failure) => failure,

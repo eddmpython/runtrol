@@ -87,6 +87,7 @@ impl Fixture {
             roots: vec![root],
         };
         let hosted = HostedTerminal {
+            spawned: None,
             id: terminal_id,
             provider: CoreProviderId::parse("claude").expect("a fixture provider"),
             terminal: Terminal::fed(0, runtrol_childproc::PtySize { cols: 80, rows: 24 })
@@ -439,7 +440,7 @@ async fn hold_gate(
             fixture
                 .composed
                 .courier_gate
-                .set_dialogue_checked(fixture.hosted.id, false, || {
+                .set_dialogue_checked(fixture.hosted.id, false, None, || {
                     started.send(()).expect("announce the held gate lock");
                     releasing
                         .recv_timeout(Duration::from_secs(5))

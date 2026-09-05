@@ -8,7 +8,6 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use runtrol_childproc::Containment;
 use runtrol_courier::ManagedSessionId;
 use runtrol_courier::wire::{
     Answer, COMMAND_SLOTS, HelloAnswer, Invocation, MAX_FRAME_BYTES, Request, WAIT_SLOTS,
@@ -31,11 +30,11 @@ const ACCEPT_RETRY: Duration = Duration::from_millis(100);
 
 /// Serve the courier endpoint until the task is dropped with its generation.
 pub(crate) async fn serve(
-    gate: Arc<CourierGate>,
-    containment: Arc<Containment>,
+    composed: Arc<crate::Composed>,
     mut listener: Listener,
     hello_wait: Duration,
 ) {
+    let gate = Arc::clone(&composed.courier_gate);
     let slots = Arc::new(tokio::sync::Semaphore::new(GREETING_SLOTS));
     let commands = Arc::new(tokio::sync::Semaphore::new(COMMAND_SLOTS));
     let waits = Arc::new(tokio::sync::Semaphore::new(WAIT_SLOTS));
@@ -62,34 +61,25 @@ pub(crate) async fn serve(
                 continue;
             }
         };
-        let gate = Arc::clone(&gate);
-        let containment = Arc::clone(&containment);
+        let composed = Arc::clone(&composed);
         let commands = Arc::clone(&commands);
         let waits = Arc::clone(&waits);
         tasks.spawn(async move {
-            greet(
-                &gate,
-                &containment,
-                connection,
-                hello_wait,
-                slot,
-                commands,
-                waits,
-            )
-            .await;
+            greet(&composed, connection, hello_wait, slot, commands, waits).await;
         });
     }
 }
 
 async fn greet(
-    gate: &CourierGate,
-    containment: &Containment,
+    composed: &Arc<crate::Composed>,
     mut connection: Connection,
     hello_wait: Duration,
     greeting: tokio::sync::OwnedSemaphorePermit,
     commands: Arc<tokio::sync::Semaphore>,
     waits: Arc<tokio::sync::Semaphore>,
 ) {
+    let gate = &composed.courier_gate;
+    let containment = &composed.containment;
     // Silence past the deadline, a peer that left, or a broken read: nothing was admitted, and there is no one
     // to tell. The connection ends here.
     let frame =
@@ -114,16 +104,20 @@ async fn greet(
         }
     };
     drop(frame);
-    match gate.admit(containment, peer, &invocation.hello).await {
+    match gate
+        .admit(containment, peer, &invocation.hello, greeting)
+        .await
+    {
         Ok(admitted) => {
             let session = admitted.session;
-            drop(greeting);
             let Some(request) = invocation.request else {
                 welcome(&mut connection, session).await;
                 return;
             };
-            let waiting = matches!(&request, Request::Ask { .. } | Request::RoomAsk { .. })
-                || matches!(&request, Request::Receive { timeout_ms, .. } if *timeout_ms > 0);
+            let waiting = matches!(
+                &request,
+                Request::Spawn { .. } | Request::Ask { .. } | Request::RoomAsk { .. }
+            ) || matches!(&request, Request::Receive { timeout_ms, .. } if *timeout_ms > 0);
             let _session_slot = if waiting {
                 let Some(slot) = gate.wait_slot(admitted).await else {
                     refuse(&mut connection).await;
@@ -138,7 +132,17 @@ async fn greet(
                 return;
             };
             if welcome(&mut connection, session).await {
-                command(gate, admitted, &mut connection, request).await;
+                if matches!(&request, Request::Spawn { .. }) {
+                    Box::pin(super::spawn_command::serve(
+                        composed,
+                        admitted,
+                        &mut connection,
+                        request,
+                    ))
+                    .await;
+                } else {
+                    command(gate, admitted, &mut connection, request).await;
+                }
             }
         }
         Err(denied) => {

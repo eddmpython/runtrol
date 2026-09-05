@@ -198,6 +198,16 @@ impl Provider for ClaudeProvider {
         self.id
     }
 
+    fn terminal_model_arguments(&self, model: &str) -> Result<Vec<String>, ProviderError> {
+        super::agent::require_optional(
+            self.id,
+            "--model",
+            &self.available_flags,
+            &self.unavailable_flags,
+        )?;
+        Ok(vec!["--model".to_owned(), model.to_owned()])
+    }
+
     fn capabilities(&self) -> ProviderCapabilities {
         let cli = || ProviderCapability::available(ProviderCapabilitySource::OfficialCli);
         let resume = if self.available_flags.contains("--resume") {

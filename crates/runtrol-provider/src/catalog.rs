@@ -61,6 +61,22 @@ pub enum ModelCatalog {
 }
 
 impl ModelCatalog {
+    /// Whether this exact provider choice appears in the current discovery result.
+    #[must_use]
+    pub fn contains_model(&self, selected: &str) -> bool {
+        match self {
+            Self::Known { models } => models.iter().any(|model| model.id.as_ref() == selected),
+            Self::Aliases { aliases, .. } => aliases.iter().any(|alias| alias.as_ref() == selected),
+            Self::Partial {
+                aliases, models, ..
+            } => {
+                aliases.iter().any(|alias| alias.as_ref() == selected)
+                    || models.iter().any(|model| model.id.as_ref() == selected)
+            }
+            Self::Unknown { .. } | Self::Unsupported { .. } => false,
+        }
+    }
+
     /// An honest answer for a driver with no discovery binding.
     #[must_use]
     pub fn unknown(why: impl Into<Box<str>>) -> Self {

@@ -1096,9 +1096,9 @@ export class StudioRuntimeClient implements vscode.Disposable {
   async setTerminalDialogue(terminal: TerminalDescriptor, enabled: boolean): Promise<void> {
     await this.commandClient();
     const source = await this.locateRuntime();
-    const guide = enabled ? await readDialogueGuide(source.runtimeExecutable) : null;
     const view = await this.attachTerminal(terminal.runtimeGeneration, terminal.terminalId);
     try {
+      const guide = enabled ? await readDialogueGuide(source.runtimeExecutable, view.opened.terminal) : null;
       await setTerminalDialogue(view, enabled, guide);
     } finally {
       view.close();

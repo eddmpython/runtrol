@@ -36,6 +36,12 @@ pub struct Receipt {
 /// Why an envelope was not admitted. A refused envelope leaves the courier exactly as it was.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Refusal {
+    /// An initial delivery reserves one tell, with no call waiting on an inactive recipient.
+    #[error("initial reserved mail must be a tell")]
+    InitialMailKind,
+    /// Initial mail cannot replace an existing mailbox or reservation.
+    #[error("recipient {0} already has a mailbox or reservation")]
+    RecipientAlreadyReserved(ManagedSessionId),
     /// The envelope speaks another layout.
     #[error("protocol version {offered} where {PROTOCOL_VERSION} is required")]
     UnsupportedVersion {

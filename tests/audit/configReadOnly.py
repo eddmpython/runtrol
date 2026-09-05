@@ -50,8 +50,10 @@ MAY_MUTATE_DISK = {
     "crates/runtrol-daemon/src/native_deletions.rs": "appends one bounded line per native conversation this Runtime removed, inside the runtrol home, so the next deletion is answerable",
     "crates/runtrol-daemon/src/generations.rs": "daemons own the locator of their own home: each writes "
     "only its own entry, under the home's advisory lock, by atomic rename",
-    "crates/runtrol-daemon/src/isolated_workspace.rs": "owns the bounded ordinary-chat worktree registry "
-    "inside runtrol home and asks Git to create or remove only exact Core-owned linked worktrees",
+    "crates/runtrol-daemon/src/isolated_workspace/mod.rs": "owns the existing ordinary-chat linked worktree operations",
+    "crates/runtrol-daemon/src/isolated_workspace/registry/mod.rs": "owns one bounded worktree registry and its exact operation locks inside runtrol home",
+    "crates/runtrol-daemon/src/isolated_workspace/registry/migration.rs": "publishes the same ownership registry inside a container that excludes cached legacy commits",
+    "crates/runtrol-daemon/src/isolated_workspace/terminal.rs": "asks Git to create or remove only exact Core-owned terminal worktrees",
     "crates/runtrol-daemon/src/provider_update.rs": "owns the bounded provider update version floor "
     "and rollback pin journal inside the runtrol home; provider package changes still go through npm",
     "crates/runtrol-daemon/src/runtime_locator.rs": "atomically owns the public Runtime instance and "
@@ -78,6 +80,12 @@ MAY_MUTATE_PREFIXES = {
 # through a `#[cfg(test)]` module declaration in their parent; keeping the list exact prevents an
 # ordinary production module under a generically named directory from escaping the capability scan.
 TEST_ONLY_SOURCE = {
+    "crates/runtrol-childproc/src/contain/command_job/tests/mod.rs",
+    "crates/runtrol-daemon/src/isolated_workspace/tests/mod.rs",
+    "crates/runtrol-daemon/src/isolated_workspace/tests/cancellation.rs",
+    "crates/runtrol-daemon/src/isolated_workspace/tests/process.rs",
+    "crates/runtrol-daemon/src/isolated_workspace/tests/registry.rs",
+    "crates/runtrol-daemon/src/isolated_workspace/tests/terminal.rs",
     "crates/runtrol-daemon/src/runtime_serve/tests/dispatch.rs",
     "crates/runtrol-daemon/src/runtime_serve/tests/official_attach.rs",
     "crates/runtrol-daemon/src/runtime_serve/tests/state_replay.rs",

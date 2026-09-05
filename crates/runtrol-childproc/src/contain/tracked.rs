@@ -188,13 +188,6 @@ impl TrackedCommand {
     ///
     /// [`SpawnError::Containment`] when durable publication or bootstrap execution fails, and [`SpawnError::Io`]
     /// when the operating system refuses the process spawn.
-    #[cfg_attr(
-        windows,
-        expect(
-            clippy::unused_async,
-            reason = "the await lives in the Unix containment arm; the signature is one contract on both platforms"
-        )
-    )]
     pub async fn spawn(
         self,
         containment: &Containment,
@@ -216,9 +209,84 @@ impl TrackedCommand {
                 }),
             };
         }
+        #[cfg(windows)]
+        {
+            let program = self.program.clone();
+            let mut command = self.into_command(&program, true, true);
+            containment.prepare(command.as_std_mut());
+            crate::hide_console_window(command.as_std_mut());
+            // CreateProcess may wait on loader or security inspection. It must not hold the
+            // Runtime reactor that acknowledges terminal input and courier commands.
+            tokio::task::spawn_blocking(move || {
+                let child = command.spawn().map_err(|error| SpawnError::Io {
+                    path: program.to_string_lossy().into_owned(),
+                    detail: error.to_string(),
+                })?;
+                Ok((TrackedChild::direct(child), ChildGuard::untracked()))
+            })
+            .await
+            .map_err(|error| SpawnError::Containment {
+                doing: "waiting for the provider spawn worker",
+                detail: error.to_string(),
+            })?
+        }
+        #[cfg(not(windows))]
         self.spawn_direct(containment)
     }
 
+    /// Captures have a shorter lifetime than the Runtime that contains them.
+    pub(crate) async fn spawn_for_capture(
+        self,
+        containment: &Containment,
+        lease: Option<std::sync::Arc<dyn Send + Sync>>,
+    ) -> Result<(TrackedChild, ChildGuard), SpawnError> {
+        #[cfg(windows)]
+        {
+            use windows_sys::Win32::System::Threading::CREATE_SUSPENDED;
+
+            let program = self.program.clone();
+            let mut command = self.into_command(&program, true, true);
+            containment.prepare(command.as_std_mut());
+            crate::console_window::hide_console_window_with_flags(
+                command.as_std_mut(),
+                CREATE_SUSPENDED,
+            );
+            tokio::task::spawn_blocking(move || {
+                let job = super::command_job::CommandJob::new(lease)?;
+                let mut child = command.spawn().map_err(|error| SpawnError::Io {
+                    path: program.to_string_lossy().into_owned(),
+                    detail: error.to_string(),
+                })?;
+                // No await separates suspended creation, Job assignment, and verified resume.
+                // The worker owns the lease even if its awaiting caller is cancelled.
+                if let Err(error) = job.assign_and_resume(&child) {
+                    if let Err(cleanup) = child.start_kill() {
+                        eprintln!("runtrol: failed to stop a suspended command: {cleanup}");
+                    }
+                    job.retire_failed(child);
+                    return Err(error);
+                }
+                Ok((
+                    TrackedChild::direct(child),
+                    ChildGuard {
+                        command_job: Some(job),
+                    },
+                ))
+            })
+            .await
+            .map_err(|error| SpawnError::Containment {
+                doing: "waiting for the contained command spawn worker",
+                detail: error.to_string(),
+            })?
+        }
+        #[cfg(not(windows))]
+        {
+            drop(lease);
+            self.spawn(containment).await
+        }
+    }
+
+    #[cfg(not(windows))]
     fn spawn_direct(
         self,
         containment: &Containment,
@@ -590,6 +658,8 @@ fn wait_for_bootstrap_inner(status: &std::os::unix::net::UnixStream) -> Result<(
 
 /// The durable half of one tracked child process.
 pub struct ChildGuard {
+    #[cfg(windows)]
+    command_job: Option<super::command_job::CommandJob>,
     #[cfg(unix)]
     tracked: Option<TrackedGuard>,
 }
@@ -605,6 +675,8 @@ struct TrackedGuard {
 impl ChildGuard {
     const fn untracked() -> Self {
         Self {
+            #[cfg(windows)]
+            command_job: None,
             #[cfg(unix)]
             tracked: None,
         }
@@ -634,12 +706,39 @@ impl ChildGuard {
     /// [`SpawnError::Containment`] when residual descendants cannot be stopped or the durable record cannot be
     /// removed.
     pub fn complete(&mut self) -> Result<(), SpawnError> {
+        #[cfg(windows)]
+        if let Some(job) = &self.command_job {
+            job.request_stop()?;
+            if !job.is_empty()? {
+                return Err(SpawnError::Containment {
+                    doing: "completing a command Job",
+                    detail: "command descendants have not stopped".to_owned(),
+                });
+            }
+            self.command_job.take();
+        }
         #[cfg(unix)]
         if let Some(tracked) = &mut self.tracked {
             tracked.registry.complete(&tracked.id)?;
             tracked.finished = true;
         }
         Ok(())
+    }
+
+    #[cfg_attr(
+        not(windows),
+        expect(
+            clippy::unused_async,
+            reason = "Windows capture waits asynchronously for its private Job"
+        )
+    )]
+    pub(crate) async fn complete_capture(&mut self) -> Result<(), SpawnError> {
+        #[cfg(windows)]
+        if let Some(job) = &self.command_job {
+            job.stop().await?;
+            self.command_job.take();
+        }
+        self.complete()
     }
 
     /// Close the exact keeper's private control channel, reap it, and remove the durable record after no group member
@@ -649,6 +748,19 @@ impl ChildGuard {
     ///
     /// [`SpawnError::Containment`] when keeper termination, reaping, or durable removal fails.
     pub async fn terminate(&mut self, child: &mut TrackedChild) -> Result<(), SpawnError> {
+        #[cfg(windows)]
+        if let Some(job) = &self.command_job {
+            job.stop().await?;
+            child
+                .wait()
+                .await
+                .map_err(|error| SpawnError::Containment {
+                    doing: "reaping the stopped command root",
+                    detail: error.to_string(),
+                })?;
+            self.command_job.take();
+            return Ok(());
+        }
         #[cfg(unix)]
         if let Some(tracked) = &mut self.tracked {
             let _requested = tracked.registry.stop_keeper(&tracked.id)?;
@@ -700,6 +812,10 @@ const KEEPER_STOP_DEADLINE: std::time::Duration = std::time::Duration::from_secs
 
 impl Drop for ChildGuard {
     fn drop(&mut self) {
+        #[cfg(windows)]
+        if let Some(job) = self.command_job.take() {
+            job.retire();
+        }
         #[cfg(unix)]
         if let Some(tracked) = &mut self.tracked
             && !tracked.finished

@@ -62,6 +62,7 @@ const target: Target = { provider: "claude", native: null, hosted: null, workspa
 function harness(opens: Array<() => Promise<TerminalView>>) {
   const written: string[] = [];
   const shown: string[] = [];
+  const openings: Promise<void>[] = [];
   const closed: Array<number | void> = [];
   let calls = 0;
   const runtime = {
@@ -77,14 +78,14 @@ function harness(opens: Array<() => Promise<TerminalView>>) {
     },
   } as unknown as StudioRuntimeClient;
   const presentation: TerminalPresentation = {
-    opening: () => shown.push("opening"),
+    opening: (work) => { shown.push("opening"); openings.push(work); },
     ended: (code) => shown.push(`ended ${code}`),
     failed: (message) => shown.push(`failed ${message}`),
   };
   const pty = new RuntimeTerminal(runtime, target, () => undefined, async () => null, () => undefined, () => undefined, presentation);
   pty.onDidWrite((text) => written.push(text));
   pty.onDidClose((code) => closed.push(code));
-  return { pty, written, shown, closed };
+  return { pty, written, shown, closed, openings };
 }
 
 const settle = (ms = 30) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -96,6 +97,21 @@ test("a cold open writes nothing until the Runtime's own screen arrives, then on
   await settle();
   assert.deepEqual(written, ["\x1b[H\x1b[Jwelcome", "> "]);
   assert.deepEqual(shown, ["opening"]);
+  pty.close();
+});
+
+test("opening settles while a connected provider remains alive and keeps delivering output", async () => {
+  const { pty, openings, written, closed } = harness([
+    async () => fakeView("ready", [{ kind: "output", text: "still running" }, { kind: "hang" }]),
+  ]);
+  pty.open(undefined);
+  const outcome = await Promise.race([
+    openings[0]!.then(() => "connected"),
+    settle(100).then(() => "still opening"),
+  ]);
+  assert.equal(outcome, "connected");
+  assert.deepEqual(written, ["ready", "still running"]);
+  assert.deepEqual(closed, []);
   pty.close();
 });
 

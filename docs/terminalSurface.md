@@ -28,7 +28,7 @@ transport or Studio navigation.
   which of the three it is, and its `viewerCount` says how many views are attached right now: a proved count the
   index republishes when a view attaches or ends, and one that never implies model work.
 - [`runtrol-core::terminal`](../crates/runtrol-core/src/terminal/mod.rs) owns the executable ring, geometry, screen,
-  and shared-state limits. [`terminal_surface.rs`](../crates/runtrol-daemon/src/terminal_surface.rs) binds hosted
+  and shared-state limits. [`terminal_surface/mod.rs`](../crates/runtrol-daemon/src/terminal_surface/mod.rs) binds hosted
   terminal admission to the Core hot-process ceiling and proves the complete-set memory bound. Viewers reuse that
   fan-out and add no payload ring of their own; control records are bounded separately.
 - Runtime answers terminal capability and cursor-position queries once at the host. Viewers do not race to answer.

@@ -64,10 +64,20 @@ try {
     const stop = await optionalJson(path.join(coordination, "stop.json"));
     if (stop) { leaveEvidence = stop.keepEvidence === true; break; }
     const failed = await optionalJson(path.join(coordination, "viewer-failure.json"));
-    if (failed) throw new Error(failed.failure);
-    if (processes.some(({ child }) => child.exitCode !== null)) break;
+    if (failed) {
+      leaveEvidence = true;
+      throw new Error(failed.failure);
+    }
+    const ended = processes.find(({ child }) => child.exitCode !== null || child.signalCode !== null);
+    if (ended) {
+      leaveEvidence = true;
+      throw new Error(`${ended.label} ended: code ${ended.child.exitCode}, signal ${ended.child.signalCode}`);
+    }
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
+} catch (error) {
+  process.stderr.write(`RUNTROL_PROVIDER_HOST_FAILED ${error instanceof Error ? error.message : String(error)}\n`);
+  throw error;
 } finally {
   for (const entry of processes.reverse()) {
     const tree = ownedTreeIdentities(entry.child.pid);
@@ -89,6 +99,9 @@ async function start(binary, words, label, environment, windowsHide) {
   entry.identity = processRows().find((row) => row.pid === child.pid && normalizedExecutable(row.executable) === normalizedExecutable(binary));
   if (!entry.identity) throw new Error(`cannot prove birth identity of ${label} ${child.pid}`);
   child.on("error", (error) => process.stderr.write(`${label}: ${error.message}\n`));
+  child.on("exit", (code, signal) => process.stdout.write(
+    `RUNTROL_PROVIDER_PROCESS_EXIT ${JSON.stringify({ label, pid: child.pid, code, signal })}\n`,
+  ));
 }
 
 async function optionalJson(file) {

@@ -532,7 +532,7 @@ async fn perform_runtime_open(
         let discovered =
             crate::provider_prepare::cached_models(composed, provider, &prepared).await;
         let choices_are_current = discovered.is_ok_and(|catalogue| {
-            selected_model.is_none_or(|model| model_is_current(&catalogue, model))
+            selected_model.is_none_or(|model| catalogue.contains_model(model))
                 && selected_effort.is_none_or(|effort| {
                     reasoning_effort_is_current(&catalogue, selected_model, effort)
                 })
@@ -613,24 +613,6 @@ async fn perform_runtime_open(
         }
         // Only the deadline passing is genuinely unknown: the provider may still be opening.
         Err(_) => send_open_unknown(id, guard, returning).await,
-    }
-}
-
-fn model_is_current(catalogue: &runtrol_provider::ModelCatalog, selected: &str) -> bool {
-    match catalogue {
-        runtrol_provider::ModelCatalog::Known { models } => {
-            models.iter().any(|model| model.id.as_ref() == selected)
-        }
-        runtrol_provider::ModelCatalog::Aliases { aliases, .. } => {
-            aliases.iter().any(|alias| alias.as_ref() == selected)
-        }
-        runtrol_provider::ModelCatalog::Partial {
-            aliases, models, ..
-        } => {
-            aliases.iter().any(|alias| alias.as_ref() == selected)
-                || models.iter().any(|model| model.id.as_ref() == selected)
-        }
-        _ => false,
     }
 }
 

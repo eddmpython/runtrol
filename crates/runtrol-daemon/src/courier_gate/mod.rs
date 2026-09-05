@@ -11,18 +11,19 @@ use core::fmt;
 use std::collections::BTreeMap;
 
 use base64ct::{Base64UrlUnpadded, Encoding as _};
-use runtrol_childproc::{Containment, ProcessTree};
 use runtrol_courier::env::{
     COURIER_ENDPOINT_ENV, COURIER_EXE_ENV, COURIER_TOKEN_ENV, MANAGED_SESSION_ENV, TOKEN_BYTES,
 };
-use runtrol_courier::wire::Hello;
 use runtrol_courier::{Courier, Limits, ManagedSessionId, PROTOCOL_VERSION};
 use runtrol_provider::{ProcessIdentity, TerminalId};
 use zeroize::Zeroizing;
 
+mod admission;
 mod commands;
 mod rooms;
 pub(crate) mod serve;
+mod spawn_command;
+mod spawning;
 
 #[cfg(test)]
 mod tests;
@@ -34,6 +35,7 @@ struct Registered {
     waits: std::sync::Arc<tokio::sync::Semaphore>,
     activation: u64,
     enabled: bool,
+    authority: Option<std::sync::Arc<crate::runtime_auth::AuthorizedIntegration>>,
 }
 
 /// The exact mailbox lifetime observed while authenticating this connection's hello.
@@ -96,6 +98,7 @@ pub(crate) struct CourierGate {
 struct GateState {
     sessions: BTreeMap<ManagedSessionId, Registered>,
     courier: Courier,
+    workers: BTreeMap<TerminalId, spawning::Worker>,
 }
 
 /// Why a hello was not admitted. Said on the daemon's error stream; the peer hears only that it was refused.
@@ -159,6 +162,7 @@ impl CourierGate {
             state: tokio::sync::Mutex::new(GateState {
                 sessions: BTreeMap::new(),
                 courier: Courier::new(Limits::INITIAL),
+                workers: BTreeMap::new(),
             }),
             changed: tokio::sync::Notify::new(),
         }
@@ -207,21 +211,9 @@ impl CourierGate {
         minted: Minted,
         start: impl FnOnce() -> Result<(T, Option<ProcessIdentity>), E>,
     ) -> Result<T, E> {
-        let session = minted.session;
         let mut state = self.state.lock().await;
         let (started, root) = start()?;
-        state.sessions.insert(
-            session,
-            Registered {
-                token: minted.token,
-                root,
-                activation: 0,
-                enabled: false,
-                waits: std::sync::Arc::new(tokio::sync::Semaphore::new(
-                    runtrol_courier::wire::SESSION_WAIT_SLOTS,
-                )),
-            },
-        );
+        state.register(minted, root);
         self.changed.notify_waiters();
         Ok(started)
     }
@@ -233,7 +225,7 @@ impl CourierGate {
         terminal: TerminalId,
         enabled: bool,
     ) -> Result<(), &'static str> {
-        self.set_dialogue_checked(terminal, enabled, || Ok(()))
+        self.set_dialogue_checked(terminal, enabled, None, || Ok(()))
             .await
             .map_err(|error| match error {
                 DialogueFailure::Session(message) | DialogueFailure::Control(message) => message,
@@ -245,6 +237,7 @@ impl CourierGate {
         &self,
         terminal: TerminalId,
         enabled: bool,
+        authority: Option<std::sync::Arc<crate::runtime_auth::AuthorizedIntegration>>,
         check: impl FnOnce() -> Result<(), E>,
     ) -> Result<(), DialogueFailure<E>> {
         let session = session_of(terminal)
@@ -266,6 +259,7 @@ impl CourierGate {
                     "the session exhausted its activation generations",
                 ))?;
         registered.enabled = enabled;
+        registered.authority = if enabled { authority } else { None };
         registered.waits.close();
         if enabled {
             registered.waits = std::sync::Arc::new(tokio::sync::Semaphore::new(
@@ -298,68 +292,10 @@ impl CourierGate {
             self.changed.notify_waiters();
         }
     }
-
-    /// Admit a hello from `peer`, or say exactly why not.
-    ///
-    /// # Errors
-    ///
-    /// The first authority that disagrees, in this order: the layout version, the peer's existence, the session,
-    /// its bound root, the token, the kernel's containment, then the process tree.
-    pub(crate) async fn admit(
-        &self,
-        containment: &Containment,
-        peer: Option<ProcessIdentity>,
-        hello: &Hello,
-    ) -> Result<Admitted, Denied> {
-        if hello.protocol_version != PROTOCOL_VERSION {
-            return Err(Denied::Version(hello.protocol_version));
-        }
-        let peer = peer.ok_or(Denied::NoPeer)?;
-        let (expected, root, admitted) = {
-            let state = self.state.lock().await;
-            let registered = state
-                .sessions
-                .get(&hello.session)
-                .ok_or(Denied::UnknownSession)?;
-            (
-                registered.token.clone(),
-                registered.root,
-                registered.admission(hello.session),
-            )
-        };
-        let root = root.ok_or(Denied::RootUnbound)?;
-        let offered =
-            Base64UrlUnpadded::decode_vec(&hello.token).map_err(|_malformed| Denied::Token)?;
-        if !same_token(&expected, &offered) {
-            return Err(Denied::Token);
-        }
-        match containment.contains(root, peer) {
-            Ok(true) => {}
-            Ok(false) => return Err(Denied::OutsideContainment),
-            Err(error) => return Err(Denied::Unanswered(error.to_string())),
-        }
-        let tree = ProcessTree::capture().map_err(|error| Denied::Unanswered(error.to_string()))?;
-        if !tree.contains_identity(root, peer) {
-            return Err(Denied::OutsideTree);
-        }
-        Ok(admitted)
-    }
 }
 
 fn session_of(terminal: TerminalId) -> Result<ManagedSessionId, GateError> {
     let text = terminal.to_string();
     text.parse()
         .map_err(|_not_canonical| GateError::Session(text))
-}
-
-/// Equal or not, in time that does not depend on where the two first differ.
-fn same_token(expected: &[u8; TOKEN_BYTES], offered: &[u8]) -> bool {
-    if offered.len() != TOKEN_BYTES {
-        return false;
-    }
-    let mut difference = 0_u8;
-    for (mine, theirs) in expected.iter().zip(offered) {
-        difference |= mine ^ theirs;
-    }
-    difference == 0
 }

@@ -4246,6 +4246,13 @@
           "$ref": "#/$defs/TerminalGeometry",
           "description": "Current shared PTY geometry."
         },
+        "initialMessageId": {
+          "description": "Identity of the optional initial courier tell. Its body and current delivery state are absent.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "memoryBytes": {
           "description": "Resident memory of the hosted process in bytes, as the operating system reports it at listing time.\n\nPresent only while the process runs and the operating system answered; absent means not measured.",
           "format": "uint64",
@@ -4291,6 +4298,13 @@
           "$ref": "#/$defs/TerminalProcessState",
           "description": "Structural live process state."
         },
+        "projectRoot": {
+          "description": "Original approved project for a Core-owned worktree. The exact working directory remains `workspace`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "providerId": {
           "$ref": "#/$defs/ProviderId",
           "description": "Opaque provider identity returned by Runtime inventory."
@@ -4298,6 +4312,17 @@
         "runtimeGeneration": {
           "description": "SHA-256 digest of the Runtime generation that owns the process.",
           "type": "string"
+        },
+        "spawnedBy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RuntimeTerminalId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The lead that started this worker in the same Runtime generation."
         },
         "terminalGeneration": {
           "description": "Monotonic process incarnation used to reject stale control acquisition.",

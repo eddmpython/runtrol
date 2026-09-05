@@ -577,6 +577,9 @@ pub(crate) async fn reconcile_native_activity(
     provider: runtrol_provider::ProviderId,
     activity: &runtrol_provider::NativeProcessActivity,
 ) {
+    // One captured table serves the complete observation. This owned lock also bounds the blocking work
+    // after its awaiting connection is cancelled; terminal input never takes this lock.
+    let mut proofs = Arc::clone(&composed.focus_proofs).lock_owned().await;
     // A package-manager launcher may remain as the PTY root while the provider executable that owns the native
     // conversation runs below it. Capture once per provider observation, never once per binding. If the operating
     // system refuses the ancestry view, exact root-PID binding remains available and descendant attribution closes.
@@ -597,48 +600,62 @@ pub(crate) async fn reconcile_native_activity(
         .map(|process| process.pid)
         .collect();
     let now_ms = runtrol_provider::WallMs::now().as_millis();
-    let wants_focus = !live_pids.is_empty() && {
-        let proofs = composed.focus_proofs.lock().await;
-        proofs.get(&provider).is_none_or(|proof| {
+    let wants_focus = !live_pids.is_empty()
+        && proofs.get(&provider).is_none_or(|proof| {
             proof.live_pids != live_pids
                 || now_ms.saturating_sub(proof.taken_at_ms)
                     >= crate::native_focus::FOCUS_PROOF_MAX_AGE_MS
+        });
+    let (process_tree, targets) = if needs_process_tree || wants_focus {
+        let activity = activity.clone();
+        let inspected = tokio::task::spawn_blocking(move || {
+            let tree = match runtrol_childproc::ProcessTree::capture() {
+                Ok(tree) => Some(tree),
+                Err(error) => {
+                    report_process_tree_failure(&error);
+                    None
+                }
+            };
+            let targets =
+                tree.as_ref()
+                    .filter(|_| wants_focus)
+                    .map_or_else(BTreeMap::new, |tree| {
+                        let mut targets =
+                            crate::native_focus::window_targets(&activity, &shells, tree);
+                        let desktop = crate::native_focus::desktop_targets(
+                            &activity,
+                            tree,
+                            &targets,
+                            &|chain| match runtrol_childproc::os_window::locate_window(chain, "") {
+                                runtrol_childproc::os_window::Located::Found(owner) => Some(owner),
+                                _ => None,
+                            },
+                        );
+                        targets.extend(desktop);
+                        targets
+                    });
+            (proofs, tree, targets)
         })
-    };
-    let process_tree = if needs_process_tree || wants_focus {
-        match runtrol_childproc::ProcessTree::capture() {
-            Ok(tree) => Some(tree),
+        .await;
+        let (returned, tree, targets) = match inspected {
+            Ok(inspected) => inspected,
             Err(error) => {
-                report_process_tree_failure(&error);
-                None
+                report_process_inspection_failure(&error);
+                return;
             }
-        }
+        };
+        proofs = returned;
+        (tree, targets)
     } else {
-        None
+        (None, BTreeMap::new())
     };
     if live_pids.is_empty() || wants_focus {
-        let targets = process_tree
-            .as_ref()
-            .map_or_else(std::collections::BTreeMap::new, |tree| {
-                let mut targets = crate::native_focus::window_targets(activity, &shells, tree);
-                // A conversation no registered window owns may still sit in a terminal host with a window of its
-                // own on this desktop; the nearest ancestor owning one is what a click brings forward.
-                let desktop =
-                    crate::native_focus::desktop_targets(activity, tree, &targets, &|chain| {
-                        match runtrol_childproc::os_window::locate_window(chain, "") {
-                            runtrol_childproc::os_window::Located::Found(owner) => Some(owner),
-                            _ => None,
-                        }
-                    });
-                targets.extend(desktop);
-                targets
-            });
         let mut focus = composed.focus_targets.lock().await;
         focus.retain(|(owner, _), _| *owner != provider);
         for (native, target) in targets {
             focus.insert((provider, native), target);
         }
-        composed.focus_proofs.lock().await.insert(
+        proofs.insert(
             provider,
             crate::native_focus::FocusProof {
                 live_pids,
@@ -968,4 +985,12 @@ fn report_process_tree_failure(error: &runtrol_childproc::ProcessTreeError) {
     if !REPORTED.swap(true, Ordering::Relaxed) {
         eprintln!("runtrol: provider process ancestry is unavailable: {error}");
     }
+}
+
+#[expect(
+    clippy::print_stderr,
+    reason = "the daemon reports a failed background process inspection without claiming a new proof"
+)]
+fn report_process_inspection_failure(error: &tokio::task::JoinError) {
+    eprintln!("runtrol: provider process inspection failed: {error}");
 }

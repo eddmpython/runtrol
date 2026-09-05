@@ -1,10 +1,14 @@
 import { execFile } from "node:child_process";
-import { newMutationRequestId, type TerminalView } from "@runtrol/runtime-client";
+import { newMutationRequestId, type TerminalDescriptor, type TerminalView } from "@runtrol/runtime-client";
 
 /// The installed courier owns its command vocabulary, environment names, and executable limits.
-export function readDialogueGuide(executable: string): Promise<string> {
+export function readDialogueGuide(executable: string, terminal?: TerminalDescriptor): Promise<string> {
+  const words = ["courier", "--guide"];
+  if (terminal?.spawnedBy && terminal.initialMessageId) {
+    words.push("--from", terminal.spawnedBy, "--message-id", terminal.initialMessageId);
+  }
   return new Promise((resolve, reject) => {
-    execFile(executable, ["courier", "--guide"],
+    execFile(executable, words,
       { windowsHide: true, timeout: 5_000, maxBuffer: 64 * 1024, encoding: "utf8" },
       (error, stdout) => {
         if (error) { reject(error); return; }

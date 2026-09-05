@@ -17,6 +17,7 @@ import { escapeHtml, usageChipsMarkup, usagePanelsMarkup, USAGE_SCRIPT, USAGE_ST
 export type SidebarConversationRow = {
   readonly key: string;
   readonly title: string;
+  readonly spawnedBy?: string;
   readonly serviceName: string;
   /// The declared icon name, resolved to a page URI by the host.
   readonly icon: string;
@@ -270,7 +271,9 @@ function conversationHtml(row: SidebarConversationRow, assets: SidebarAssets): s
   // tooltip floating beside the hover actions reads as clutter (operator, 2026-08-27).
   // Running is a state of the whole row, said once on the row: the provider icon turns.
   const visibleTitle = conversationTitle(row.title);
-  const tooltip = row.blocked ?? (visibleTitle === row.title ? null : row.title);
+  const titleDetail = visibleTitle === row.title ? null : row.title;
+  const tooltip = row.blocked ?? [titleDetail, row.spawnedBy ? `Started by lead ${row.spawnedBy}` : null]
+    .filter(Boolean).join("\n");
   return `<div class="row conv${row.canOpen ? "" : " blocked"}${row.pinned ? " pinned" : ""}${row.open ? " open" : ""}${state ? " stateful" : ""}${signal}" role="button" tabindex="0" data-kind="conversation" data-key="${escapeHtml(row.key)}"${tooltip ? ` title="${escapeHtml(tooltip)}"` : ""}>
 <span class="glyph-slot"><img class="glyph" src="${escapeHtml(iconUri)}" alt="${escapeHtml(row.serviceName)}" draggable="false"></span>
 <span class="title">${escapeHtml(visibleTitle)}</span>

@@ -167,6 +167,8 @@ export type Conversation = {
   readonly hostedTerminal: TerminalDescriptor | null;
   /// The transient row key this hosted process had before the provider published its conversation identity.
   readonly hostedKey: string | null;
+  /// Exact managed lead identity, present only for a Runtime-created worker.
+  readonly spawnedBy?: string;
   readonly canOpen: boolean;
   /// A registered VS Code window is proved to own the terminal this conversation runs in, so that window can
   /// show it and be brought forward. Never a way to open it here.
@@ -324,7 +326,7 @@ export function conversations(
       terminal.processState !== "running"
       || claimedTerminals.has(key)
       || (conversation !== null && placedNatives.has(conversation))
-      || started.some((pending) => startedCoversTerminal(pending, terminal))
+      || started.some((pending) => pending.terminalId === undefined && startedCoversTerminal(pending, terminal))
     ) continue;
     const chat = conversation ? nativeByKey.get(conversation) ?? null : null;
     const working = terminal.nativeSessionId
@@ -343,8 +345,37 @@ export function conversations(
   }
   // Pinned rows first, then running conversations above idle ones, and inside each of those bands a fixed
   // order. Pinning is a placement choice, so it sorts ahead of everything else.
-  return rows.sort((left, right) =>
+  const projected = rows.map((row): Conversation => {
+    const terminal = row.hostedTerminal;
+    if (!terminal?.spawnedBy || !terminal.projectRoot) return row;
+    const projectless = isProjectless(terminal.projectRoot, projectlessRoot);
+    return { ...row, spawnedBy: terminal.spawnedBy, homeWorkspace: terminal.projectRoot,
+      folder: projectless ? "" : workspaceName(terminal.projectRoot), projectless };
+  });
+  projected.sort((left, right) =>
     Number(right.pinned) - Number(left.pinned) || byRunningThenStable(left, right));
+  return withWorkersAfterLead(projected);
+}
+
+/// Runtime lineage orders rows within the same project and pin band, without introducing another group.
+function withWorkersAfterLead(rows: readonly Conversation[]): Conversation[] {
+  const terminals = new Map(rows.flatMap((row) => row.hostedTerminal
+    ? [[terminalKey(row.hostedTerminal), row] as const] : []));
+  const workers = new Map<string, Conversation[]>();
+  const placed = new Set<string>();
+  for (const row of rows) {
+    if (!row.spawnedBy || !row.hostedTerminal) continue;
+    const lead = terminals.get(terminalKey({ runtimeGeneration: row.hostedTerminal.runtimeGeneration,
+      terminalId: row.spawnedBy }));
+    if (!lead?.hostedTerminal || lead.spawnedBy || lead.pinned !== row.pinned
+      || workspaceIdentity(lead.hostedTerminal.workspace) !== workspaceIdentity(row.hostedTerminal.projectRoot ?? row.homeWorkspace)
+      || workspaceIdentity(lead.homeWorkspace) !== workspaceIdentity(row.homeWorkspace)) continue;
+    const children = workers.get(lead.key) ?? [];
+    children.push(row);
+    workers.set(lead.key, children);
+    placed.add(row.key);
+  }
+  return rows.filter((row) => !placed.has(row.key)).flatMap((row) => [row, ...(workers.get(row.key) ?? [])]);
 }
 
 /// How near the top a conversation sits by what its process is doing, higher first.
@@ -991,7 +1022,7 @@ function hostedRow(
     serviceIcon: providerIcon(terminal.providerId, providers),
     title: chat
       ? providerTitle(chat.title, chat.nativeSessionId)
-      : workspaceName(terminal.workspace) || "New conversation",
+      : workspaceName(terminal.projectRoot ?? terminal.workspace) || "New conversation",
     homeWorkspace: terminal.workspace,
     workspace: terminal.workspace,
     folder: projectless ? "" : workspaceName(terminal.workspace),

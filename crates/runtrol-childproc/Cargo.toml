@@ -28,6 +28,10 @@ tokio = { workspace = true, features = ["io-util", "macros", "process", "rt", "s
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt", "macros"] }
 
+[target.'cfg(windows)'.dev-dependencies]
+# Real assignment refusal tests duplicate a Job with the official restricted access masks.
+windows-sys = { workspace = true, features = ["Win32_System_SystemServices"] }
+
 # Job objects, and the handles this process passes on. The kill-on-close job is what makes "runtrol dies, its
 # children die" a kernel guarantee rather than a best effort; the console handles are what a started daemon
 # must not be given a copy of.

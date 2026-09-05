@@ -369,7 +369,9 @@ export class RuntimeTerminal implements vscode.Pseudoterminal {
     this.pending = [];
     this.pendingBytes = 0;
     for (const bytes of pending) this.queueInput(bytes);
-    await this.pump(view);
+    // Opening ends at connection. The provider's lifetime is supervised separately; waiting for its
+    // output pump here kept the workbench's opening indicator alive for the whole conversation.
+    void this.pump(view).catch((error: unknown) => this.fail(error));
   }
 
   /// Preserve exact keystroke order while bounding both byte ownership and Promise ownership if a Runtime stalls.

@@ -70,6 +70,9 @@ use crate::error::SpawnError;
 pub use bootstrap::{BOOTSTRAP_ARGUMENT, bootstrap_if_requested};
 pub use tracked::{ChildGuard, TrackedChild, TrackedCommand};
 
+#[cfg(windows)]
+mod command_job;
+
 /// What containment this platform can actually enforce.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Strength {

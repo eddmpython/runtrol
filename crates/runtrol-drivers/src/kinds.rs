@@ -124,7 +124,7 @@ pub const KINDS: &[DriverKind] = &[
     DriverKind {
         kind: "codex-app-server",
         make: Some(make_codex),
-        flags: &[],
+        flags: crate::codex::bound::FLAGS,
         legacy_mcp: crate::codex::LEGACY_MCP,
         unavailable: None,
     },
@@ -168,11 +168,14 @@ fn make_claude(context: &DriverContext) -> Box<dyn Provider> {
 
 /// Build the driver for the CLI whose sessions share one daemon.
 fn make_codex(context: &DriverContext) -> Box<dyn Provider> {
-    Box::new(CodexProvider::new(
-        context.provider,
-        context.program.clone(),
-        Arc::clone(&context.contained_by),
-    ))
+    Box::new(
+        CodexProvider::new(
+            context.provider,
+            context.program.clone(),
+            Arc::clone(&context.contained_by),
+        )
+        .with_terminal_flags(context.available_flags.clone()),
+    )
 }
 
 /// Build the provider-neutral ACP driver.

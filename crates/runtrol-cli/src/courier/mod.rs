@@ -9,6 +9,7 @@ use runtrol_courier::wire::{Hello, HelloAnswer, MAX_FRAME_BYTES};
 
 mod commands;
 mod rooms;
+mod spawn;
 mod words;
 pub use commands::{CommandOutput, execute};
 

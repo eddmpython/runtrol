@@ -8,6 +8,7 @@ use crate::limits::{Limits, UnixMillis};
 use crate::receipt::{DeliveryState, Receipt, Refusal};
 
 mod commands;
+mod reserved;
 pub(crate) mod rooms;
 
 #[cfg(test)]
@@ -39,6 +40,7 @@ enum CallStage {
 /// One live session's mail, oldest first.
 #[derive(Debug, Default)]
 struct Mailbox {
+    ready: bool,
     queue: VecDeque<CallEnvelope>,
     bytes: usize,
 }
@@ -122,7 +124,9 @@ impl Courier {
     /// Whether `session` may send and be sent to.
     #[must_use]
     pub fn is_live(&self, session: ManagedSessionId) -> bool {
-        self.mailboxes.contains_key(&session)
+        self.mailboxes
+            .get(&session)
+            .is_some_and(|mailbox| mailbox.ready)
     }
 
     /// Envelopes waiting for `session`, or `None` when it is not live.
@@ -141,10 +145,16 @@ impl Courier {
 
     /// Admit `session` as a live source and target. `false` when it was live already.
     pub fn session_started(&mut self, session: ManagedSessionId) -> bool {
-        if self.mailboxes.contains_key(&session) {
-            return false;
+        if let Some(mailbox) = self.mailboxes.get_mut(&session) {
+            return !std::mem::replace(&mut mailbox.ready, true);
         }
-        self.mailboxes.insert(session, Mailbox::default());
+        self.mailboxes.insert(
+            session,
+            Mailbox {
+                ready: true,
+                ..Mailbox::default()
+            },
+        );
         true
     }
 
@@ -236,6 +246,9 @@ impl Courier {
         self.expire_rooms(now, &mut swept);
         self.expire_waiting(session, now, &mut swept);
         let mailbox = self.mailboxes.get_mut(&session)?;
+        if !mailbox.ready {
+            return None;
+        }
         let index = mailbox.queue.iter().position(|envelope| {
             source.is_none_or(|source| envelope.source == source)
                 && call.is_none_or(|call| {

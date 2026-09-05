@@ -69,6 +69,8 @@ pub use local_terminal::{LocalTerminal, LocalTerminalSize};
 pub use process_tree::{ProcessTree, ProcessTreeError, process_identity};
 pub use pty::{PtyChild, PtySize, PtySpawn};
 pub use resolve::{LauncherKept, Program, ProgramKind, resolve};
+#[cfg(windows)]
+pub use run::capture_retaining;
 pub use run::{MAX_OUTPUT_BYTES, Output, capture, capture_in, capture_with_input};
 pub use shims::{PROVIDER_SHIM_PATH_ENV, ProviderShim, ShimError, materialize_provider_shims};
 pub use stall::arm_stall_backtrace;

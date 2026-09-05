@@ -180,7 +180,25 @@ pub(crate) struct TerminalView {
 #[cfg(windows)]
 #[derive(Debug)]
 struct PinnedTerminalRoot {
-    guard: Arc<tokio::sync::Mutex<ProjectRootGuard>>,
+    guard: Arc<tokio::sync::Mutex<TerminalRootGuards>>,
+}
+
+#[cfg(windows)]
+#[derive(Debug)]
+pub(crate) struct TerminalRootGuards {
+    approved: ProjectRootGuard,
+    worker: Option<[ProjectRootGuard; 2]>,
+}
+
+#[cfg(windows)]
+impl TerminalRootGuards {
+    pub(crate) fn valid(&mut self) -> bool {
+        self.approved.validate().is_ok()
+            && self
+                .worker
+                .as_mut()
+                .is_none_or(|guards| guards.iter_mut().all(|guard| guard.validate().is_ok()))
+    }
 }
 
 impl TerminalView {
@@ -210,7 +228,7 @@ impl TerminalView {
     }
 
     #[cfg(windows)]
-    pub(crate) fn pinned_root_guard(&self) -> Arc<tokio::sync::Mutex<ProjectRootGuard>> {
+    pub(crate) fn pinned_root_guard(&self) -> Arc<tokio::sync::Mutex<TerminalRootGuards>> {
         Arc::clone(&self.pinned_root.guard)
     }
 }
@@ -1321,7 +1339,7 @@ fn ensure_visible(
 fn visible_in(hosted: &HostedTerminal, roots: &[AuthorizedRoot]) -> bool {
     roots
         .iter()
-        .any(|root| hosted.workspace.is_under(&root.path))
+        .any(|root| hosted.project_root().is_under(&root.path))
 }
 
 #[cfg(windows)]
@@ -1332,7 +1350,7 @@ fn pin_visible_root(
     let row = authority
         .roots
         .iter()
-        .find(|row| AbsPath::new(&row.path).is_ok_and(|path| hosted.workspace.is_under(&path)))
+        .find(|row| AbsPath::new(&row.path).is_ok_and(|path| hosted.project_root().is_under(&path)))
         .ok_or_else(|| {
             TerminalRuntimeFailure::new(
                 RuntimeErrorKind::RootDenied,
@@ -1352,8 +1370,28 @@ fn pin_visible_root(
                 "an approved terminal root no longer has local authority",
             )
         })?;
+    let worker = hosted
+        .spawned
+        .as_ref()
+        .map(|spawned| {
+            let project = ProjectRootGuard::acquire(
+                spawned.project.root(),
+                ProjectRootIdentity::from_bytes(spawned.project.root_identity()),
+            )
+            .map_err(|_| root_authority_failure())?;
+            let workspace = ProjectRootGuard::acquire(
+                &spawned.workspace,
+                ProjectRootIdentity::from_bytes(spawned.workspace_identity),
+            )
+            .map_err(|_| root_authority_failure())?;
+            Ok::<_, TerminalRuntimeFailure>([project, workspace])
+        })
+        .transpose()?;
     Ok(PinnedTerminalRoot {
-        guard: Arc::new(tokio::sync::Mutex::new(guard)),
+        guard: Arc::new(tokio::sync::Mutex::new(TerminalRootGuards {
+            approved: guard,
+            worker,
+        })),
     })
 }
 
@@ -1446,6 +1484,27 @@ fn descriptor(
         runtime_generation: runtime_generation.to_owned(),
         provider_id: runtrol_runtime_protocol::ProviderId::new(hosted.provider.to_string()),
         workspace: hosted.workspace.as_str().to_owned(),
+        spawned_by: hosted
+            .spawned
+            .as_ref()
+            .map(|spawned| {
+                spawned
+                    .ticket
+                    .lead
+                    .terminal
+                    .to_string()
+                    .parse()
+                    .map_err(|_| TerminalRuntimeFailure::invalid("invalid worker lineage"))
+            })
+            .transpose()?,
+        project_root: hosted
+            .spawned
+            .as_ref()
+            .map(|spawned| spawned.project.root().to_string()),
+        initial_message_id: hosted
+            .spawned
+            .as_ref()
+            .and_then(|spawned| spawned.initial_message.map(|id| id.to_string())),
         native_session_id: hosted.native.as_deref().map(str::to_owned),
         process_state: if hosted.stopping {
             TerminalProcessState::Stopping

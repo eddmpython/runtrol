@@ -96,6 +96,20 @@ pub trait Provider: Send + Sync + 'static {
     /// Which provider this is.
     fn id(&self) -> ProviderId;
 
+    /// Arguments for an explicitly selected model in a fresh native terminal.
+    /// The driver must require the installed CLI's discovered option support. The caller validates
+    /// the selection against `models` before passing it here. No provider argv enters the core.
+    ///
+    /// # Errors
+    /// Refuses when this driver or installed CLI has no confirmed native terminal model option.
+    fn terminal_model_arguments(&self, _model: &str) -> Result<Vec<String>, ProviderError> {
+        Err(ProviderError::Unsupported {
+            provider: self.id(),
+            what: "native terminal model selection".to_owned(),
+            why: "this driver has no discovered terminal model option",
+        })
+    }
+
     /// Report structural operations supported by this exact prepared driver.
     ///
     /// The default is deliberately unknown so a third-party driver built for an older SPI never gains a capability

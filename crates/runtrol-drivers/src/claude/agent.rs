@@ -661,7 +661,7 @@ fn argv(
     Ok(args)
 }
 
-fn require_optional(
+pub(super) fn require_optional(
     provider: ProviderId,
     flag: &'static str,
     available_flags: &BTreeSet<Box<str>>,

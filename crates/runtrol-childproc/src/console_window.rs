@@ -11,12 +11,14 @@ use std::process::Command;
 /// the caller's decisions. It is a no-op on platforms where a Windows console cannot be created.
 #[cfg(windows)]
 pub fn hide_console_window(command: &mut Command) {
+    hide_console_window_with_flags(command, 0);
+}
+
+#[cfg(windows)]
+pub(crate) fn hide_console_window_with_flags(command: &mut Command, flags: u32) {
     use std::os::windows::process::CommandExt as _;
-
-    /// Run a console application without creating or inheriting a console window.
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-
-    command.creation_flags(CREATE_NO_WINDOW);
+    use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
+    command.creation_flags(CREATE_NO_WINDOW | flags);
 }
 
 /// Leave process creation unchanged where Windows console windows do not exist.

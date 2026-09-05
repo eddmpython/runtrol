@@ -12,6 +12,9 @@ and refactoring that no user can observe do not belong here.
 
 ### Added
 
+- An enabled lead session can start workers in isolated worktrees, with discovered provider and model choices.
+  Workers receive their initial request only after visible dialogue activation. Their rows identify the lead,
+  remain available after it ends, and preserve edited or committed files on exit.
 - Managed sessions can open a bounded room, explicitly select its speaker, and exchange exact requests and replies.
   The last allowed reply stays readable. Closing the room or ending a participant releases its unread mail without
   disturbing other messages.
@@ -73,6 +76,15 @@ and refactoring that no user can observe do not belong here.
 
 ### Fixed
 
+- Fresh conversations expose their live controls as soon as Runtime confirms the terminal, before the provider
+  publishes a conversation. Opening progress ends when the view connects, and coloured sidebar icons render correctly.
+- A new worker uses its project name until the provider names the conversation, keeping internal worktree identifiers
+  out of conversation titles.
+
+- Ending or cancelling a worktree operation waits for its command descendants before releasing cleanup ownership.
+  Restart recovery checks exact process and directory identities, and old cached registry writers cannot overwrite
+  migrated ownership records.
+- Managed terminal creation and courier process authentication run outside the terminal input event loop.
 - Managed sessions can authenticate their shell tools to the local courier from their first command and after a
   Runtime generation handover. Windows verifies the pipe client's logon rather than rejecting a managed shell
   solely because its sandbox uses a different primary user. Foreign process trees, other logons and remote clients
