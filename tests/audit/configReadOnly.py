@@ -39,7 +39,7 @@ MAY_MUTATE_DISK = {
     "the installation-selected shim directory and refuses every foreign entry",
     "crates/runtrol-core/src/home/mod.rs": "creates runtrol's own state directories",
     "crates/runtrol-core/src/probe/cache.rs": "atomically replaces runtrol's disposable probe cache",
-    "crates/runtrol-ipc/src/transport.rs": "creates and removes runtrol's local Unix socket",
+    "crates/runtrol-ipc/src/transport/mod.rs": "creates and removes runtrol's local Unix socket",
     "crates/runtrol-vault/src/lib.rs": "atomically creates runtrol's OS-protected machine identity file",
     "crates/runtrol-daemon/src/legacy_slots.rs": "removes only the exact credential slots an earlier Agent "
     "Tools build left inside runtrol home, and preserves everything else in that directory",

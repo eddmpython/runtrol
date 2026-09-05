@@ -14,7 +14,7 @@ use crate::id::ManagedSessionId;
 /// The largest frame the courier reads into a value.
 ///
 /// A body is at most 16 KiB and the envelope around it is small, so anything larger is not a courier frame.
-/// Checked before parsing; the transport's own ceiling is the one that bounds allocation.
+/// The transport checks this ceiling against the length prefix before allocating or reading the payload.
 pub const MAX_FRAME_BYTES: usize = 64 * 1024;
 
 /// The first frame on a connection: which managed session speaks, proved by the token it was born with.

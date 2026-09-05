@@ -915,29 +915,26 @@ async fn open_with_arguments(
                 limit: MAX_HOSTED_TERMINALS,
             });
         }
-        let terminal = Terminal::open(&TerminalLaunch {
-            program: &program,
-            arguments,
-            cwd: &cwd,
-            env,
-            env_unset,
-            size: runtrol_childproc::PtySize { cols, rows },
-        })
-        .map_err(|error| TerminalOpenError::Provider(error.to_string()))?;
+        let terminal = composed
+            .courier_gate
+            .launch(minted, || {
+                let terminal = Terminal::open(&TerminalLaunch {
+                    program: &program,
+                    arguments,
+                    cwd: &cwd,
+                    env,
+                    env_unset,
+                    size: runtrol_childproc::PtySize { cols, rows },
+                })
+                .map_err(|error| TerminalOpenError::Provider(error.to_string()))?;
+                let root = runtrol_childproc::process_identity(terminal.pid());
+                Ok::<_, TerminalOpenError>((terminal, root))
+            })
+            .await?;
         terminals.insert(terminal_id, id, key, terminal.clone(), cwd, native);
         let open = terminals.len();
         (terminal, open)
     };
-    // The process exists now: open its courier session under its own root, so a courier call from inside its
-    // process tree is admitted and one from anywhere else is not.
-    composed
-        .courier_gate
-        .open_session(
-            terminal_id,
-            minted,
-            runtrol_childproc::process_identity(terminal.pid()),
-        )
-        .await;
     composed
         .open_terminals
         .store(open, std::sync::atomic::Ordering::Release);

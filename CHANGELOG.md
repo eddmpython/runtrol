@@ -64,6 +64,10 @@ and refactoring that no user can observe do not belong here.
 
 ### Fixed
 
+- Managed sessions can authenticate their shell tools to the local courier from their first command and after a
+  Runtime generation handover. Windows verifies the pipe client's logon rather than rejecting a managed shell
+  solely because its sandbox uses a different primary user. Foreign process trees, other logons and remote clients
+  remain refused, and oversized frames are rejected before their body is allocated.
 - A row click always does something a person can see (`STATE-04`): it opens the conversation, shows it in the
   window that runs it, or says in the row's own words why it cannot be opened. A conversation the Runtime is
   still stopping, one whose owner could not be rechecked, or one its service cannot reopen used to answer the

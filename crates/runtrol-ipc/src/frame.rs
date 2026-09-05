@@ -40,7 +40,7 @@ pub const WIRE_VERSION: u8 = 29;
 pub const MAX_FRAME: usize = 16 * 1024 * 1024 + 64 * 1024;
 
 /// How many bytes carry the length.
-const HEADER: usize = 4;
+pub(crate) const HEADER: usize = 4;
 
 /// A frame could not be written or read.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -126,21 +126,9 @@ pub enum Decoded {
 /// [`FrameError::TooLarge`] when the length prefix claims more than this build will carry. Reported before anything is
 /// reserved, which is the point: the prefix came from another process.
 pub fn decode(buffer: &Bytes) -> Result<Decoded, FrameError> {
-    let Some(header) = buffer.get(..HEADER) else {
+    let Some(total) = frame_size(buffer, MAX_FRAME)? else {
         return Ok(Decoded::NeedMore { at_least: HEADER });
     };
-    let length = read_u32(header);
-
-    // Checked before the buffer is asked for anything. A reader that reserved first would let whoever wrote the prefix
-    // decide how much memory it holds.
-    if length > MAX_FRAME {
-        return Err(FrameError::TooLarge {
-            bytes: length,
-            max: MAX_FRAME,
-        });
-    }
-
-    let total = HEADER.saturating_add(length);
     if buffer.len() < total {
         return Ok(Decoded::NeedMore { at_least: total });
     }
@@ -148,6 +136,25 @@ pub fn decode(buffer: &Bytes) -> Result<Decoded, FrameError> {
         payload: buffer.slice(HEADER..total),
         consumed: total,
     })
+}
+
+/// Validate the prefix before reserving or reading its payload. A caller may narrow the wire ceiling.
+pub(crate) fn frame_size(buffer: &[u8], limit: usize) -> Result<Option<usize>, FrameError> {
+    let Some(header) = buffer.get(..HEADER) else {
+        return Ok(None);
+    };
+    let length = read_u32(header);
+
+    // Checked before the buffer is asked for anything. A reader that reserved first would let whoever wrote the prefix
+    // decide how much memory it holds.
+    let limit = limit.min(MAX_FRAME);
+    if length > limit {
+        return Err(FrameError::TooLarge {
+            bytes: length,
+            max: limit,
+        });
+    }
+    Ok(Some(HEADER.saturating_add(length)))
 }
 
 /// The length out of a four byte header.

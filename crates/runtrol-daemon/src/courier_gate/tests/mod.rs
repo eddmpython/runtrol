@@ -77,7 +77,9 @@ async fn a_hello_is_refused_before_the_kernel_for_every_reason_but_the_authoriti
     );
 
     // The session exists but its process is not known yet.
-    gate.open_session(terminal, minted, None).await;
+    gate.launch(minted, || Ok::<_, ()>(((), None)))
+        .await
+        .expect("launch succeeds");
     assert_eq!(
         gate.admit(&nothing, Some(here()), &Hello::new(session, token.clone()))
             .await,
@@ -89,7 +91,9 @@ async fn a_hello_is_refused_before_the_kernel_for_every_reason_but_the_authoriti
     let other_session = session_id(other);
     let other_minted = gate.mint(other).expect("a token is minted");
     let other_token = token_of(&other_minted);
-    gate.open_session(other, other_minted, Some(here())).await;
+    gate.launch(other_minted, || Ok::<_, ()>(((), Some(here()))))
+        .await
+        .expect("launch succeeds");
     let wrong = Base64UrlUnpadded::encode_string(&[0_u8; 32]);
     assert_ne!(wrong, other_token);
     assert_eq!(
@@ -122,3 +126,71 @@ async fn a_hello_is_refused_before_the_kernel_for_every_reason_but_the_authoriti
 // is proved by the real journey, not here: establishing a kill-on-close job in this test process and dropping
 // it would terminate the test runner itself. The gate's own kernel query is proved separately in
 // `runtrol-childproc`'s containment membership test, which runs the job in a helper process for that reason.
+
+#[tokio::test]
+async fn a_failed_launch_leaves_neither_authority_nor_a_mailbox() {
+    let gate = gate();
+    let terminal = TerminalId::now();
+    let session = session_id(terminal);
+    let minted = gate.mint(terminal).expect("mint");
+    let token = token_of(&minted);
+    assert_eq!(
+        gate.launch::<(), _>(minted, || Err("spawn refused")).await,
+        Err("spawn refused")
+    );
+    assert!(!gate.state.lock().await.courier.is_live(session));
+    assert_eq!(
+        gate.admit(
+            &Containment::without_any(),
+            Some(here()),
+            &Hello::new(session, token)
+        )
+        .await,
+        Err(Denied::UnknownSession)
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_childs_first_hello_waits_for_its_launch_to_register() {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    let gate = Arc::new(gate());
+    let terminal = TerminalId::now();
+    let session = session_id(terminal);
+    let minted = gate.mint(terminal).expect("mint");
+    let token = token_of(&minted);
+    let (polled, polling) = std::sync::mpsc::channel();
+    let caller_gate = Arc::clone(&gate);
+    let caller = gate
+        .launch(minted, || {
+            let caller = tokio::spawn(async move {
+                let containment = Containment::without_any();
+                let hello = Hello::new(session, token);
+                let admission = caller_gate.admit(&containment, Some(here()), &hello);
+                tokio::pin!(admission);
+                let mut polled = Some(polled);
+                std::future::poll_fn(|context| {
+                    let result = std::future::Future::poll(admission.as_mut(), context);
+                    if let Some(polled) = polled.take() {
+                        polled.send(result.is_pending()).expect("launch is waiting");
+                    }
+                    result
+                })
+                .await
+            });
+            assert!(
+                polling
+                    .recv_timeout(Duration::from_secs(2))
+                    .expect("hello was polled during launch")
+            );
+            Ok::<_, ()>((caller, Some(here())))
+        })
+        .await
+        .expect("launch succeeded");
+    assert_eq!(
+        caller.await.expect("hello finished"),
+        Err(Denied::OutsideContainment)
+    );
+    assert!(gate.state.lock().await.courier.is_live(session));
+}

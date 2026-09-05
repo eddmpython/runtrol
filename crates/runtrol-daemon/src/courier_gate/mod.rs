@@ -2,8 +2,8 @@
 //!
 //! A managed process is born with four environment values ([`runtrol_courier::env`]). This gate hands them out
 //! when a terminal is launched, learns the launched root process once it exists, and admits a connection only
-//! when three independent authorities agree with the token: the endpoint's owner check has already proved the
-//! peer is this user, the kernel says the peer is inside the daemon's containment, and the process tree says
+//! when three independent authorities agree with the token: the endpoint has already proved the pipe client's
+//! logon, the kernel says the peer is inside the daemon's containment, and the process tree says
 //! the peer is the session's root process or one of its descendants. The token is compared in constant time
 //! and exists in exactly two places: this gate's memory and the child's environment.
 
@@ -33,9 +33,10 @@ struct Registered {
 
 /// A token and the environment for a process about to launch, minted without touching any shared state.
 ///
-/// Held by the launch until the process exists, then handed to [`CourierGate::open_session`]. A launch that
+/// Handed to [`CourierGate::launch`] with the process creation operation. A launch that
 /// fails drops this and leaves the gate exactly as it was: nothing was opened to leak.
 pub(crate) struct Minted {
+    session: ManagedSessionId,
     token: Zeroizing<[u8; TOKEN_BYTES]>,
     env: Vec<(String, String)>,
 }
@@ -53,9 +54,13 @@ pub(crate) struct CourierGate {
     exe: String,
     /// Where this generation's courier listens.
     endpoint: String,
-    sessions: tokio::sync::Mutex<BTreeMap<ManagedSessionId, Registered>>,
-    /// The mailboxes and calls of this generation. Opened and ended with the sessions above.
-    courier: tokio::sync::Mutex<Courier>,
+    state: tokio::sync::Mutex<GateState>,
+}
+
+/// Session authority and mailbox lifetime change together under one admission lock.
+struct GateState {
+    sessions: BTreeMap<ManagedSessionId, Registered>,
+    courier: Courier,
 }
 
 /// Why a hello was not admitted. Said on the daemon's error stream; the peer hears only that it was refused.
@@ -116,8 +121,10 @@ impl CourierGate {
         Self {
             exe,
             endpoint,
-            sessions: tokio::sync::Mutex::new(BTreeMap::new()),
-            courier: tokio::sync::Mutex::new(Courier::new(Limits::INITIAL)),
+            state: tokio::sync::Mutex::new(GateState {
+                sessions: BTreeMap::new(),
+                courier: Courier::new(Limits::INITIAL),
+            }),
         }
     }
 
@@ -129,7 +136,7 @@ impl CourierGate {
     /// Mint the token and environment a process launched for `terminal` is born with, touching no shared state.
     ///
     /// The gate learns nothing yet: a launch that fails after this drops the [`Minted`] and leaves the gate
-    /// unchanged. [`Self::open_session`] is what opens the session, once the process exists.
+    /// unchanged. [`Self::launch`] binds the process and opens its session together.
     ///
     /// # Errors
     ///
@@ -141,6 +148,7 @@ impl CourierGate {
         getrandom::fill(&mut *token).map_err(|_unavailable| GateError::Randomness)?;
         let spelled = Base64UrlUnpadded::encode_string(&*token);
         Ok(Minted {
+            session,
             token,
             env: vec![
                 (COURIER_EXE_ENV.to_owned(), self.exe.clone()),
@@ -151,26 +159,30 @@ impl CourierGate {
         })
     }
 
-    /// Open the session for `terminal`, now that its process exists: the token admits connections, and the
-    /// courier holds its mailbox. A process that could not be identified stays `root: None`, so admission
-    /// refuses it (`RootUnbound`) rather than guessing.
-    pub(crate) async fn open_session(
+    /// Launch and register a process as one admission transaction. Its first hello waits for registration,
+    /// even if the child's first instruction connects before the launch returns. A failed launch changes
+    /// nothing, and there is no cancellation point between launching and registering the live process.
+    ///
+    /// # Errors
+    ///
+    /// Returns the launch error unchanged. A root that cannot be identified remains unbound and is refused.
+    pub(crate) async fn launch<T, E>(
         &self,
-        terminal: TerminalId,
         minted: Minted,
-        root: Option<ProcessIdentity>,
-    ) {
-        let Ok(session) = session_of(terminal) else {
-            return;
-        };
-        self.sessions.lock().await.insert(
+        start: impl FnOnce() -> Result<(T, Option<ProcessIdentity>), E>,
+    ) -> Result<T, E> {
+        let session = minted.session;
+        let mut state = self.state.lock().await;
+        let (started, root) = start()?;
+        state.sessions.insert(
             session,
             Registered {
                 token: minted.token,
                 root,
             },
         );
-        self.courier.lock().await.session_started(session);
+        state.courier.session_started(session);
+        Ok(started)
     }
 
     /// The terminal is gone: its token admits nobody, and its mail and calls are released now.
@@ -178,9 +190,10 @@ impl CourierGate {
         let Ok(session) = session_of(terminal) else {
             return;
         };
-        let known = self.sessions.lock().await.remove(&session).is_some();
+        let mut state = self.state.lock().await;
+        let known = state.sessions.remove(&session).is_some();
         if known {
-            self.courier.lock().await.session_ended(session);
+            state.courier.session_ended(session);
         }
     }
 
@@ -201,8 +214,11 @@ impl CourierGate {
         }
         let peer = peer.ok_or(Denied::NoPeer)?;
         let (expected, root) = {
-            let sessions = self.sessions.lock().await;
-            let registered = sessions.get(&hello.session).ok_or(Denied::UnknownSession)?;
+            let state = self.state.lock().await;
+            let registered = state
+                .sessions
+                .get(&hello.session)
+                .ok_or(Denied::UnknownSession)?;
             (registered.token.clone(), registered.root)
         };
         let root = root.ok_or(Denied::RootUnbound)?;

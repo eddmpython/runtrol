@@ -18,14 +18,16 @@
 //! because a default is something a later release may change.
 //!
 //! **The endpoint admits the operator only.** Unix creates its parent at mode 0700, narrows the socket to 0600, and
-//! compares the peer UID with the socket owner. Windows installs an explicit current-user DACL at pipe creation,
-//! rejects remote clients, observes the peer process, impersonates the connected pipe client, and compares its token
-//! user SID with the daemon's. The Windows system calls are confined to audited unsafe blocks in this module.
+//! compares the peer UID with the socket owner. Windows owner-only endpoints install the current-user DACL and
+//! compare the peer process's user SID with the daemon's. Logon-only endpoints instead restrict the DACL to the
+//! current logon and verify the first read under the pipe client's impersonated token before returning a frame.
+//! Both expose the exact kernel peer process identity and reject remote clients. The Windows
+//! system calls are confined to audited unsafe blocks in this module.
 
 use bytes::{Bytes, BytesMut};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
-use crate::frame::{Decoded, FrameError, MAX_FRAME, encode};
+use crate::frame::{FrameError, HEADER, MAX_FRAME, encode, frame_size};
 
 /// How much the reader holds between frames.
 ///
@@ -138,6 +140,9 @@ pub struct Connection {
     closed: bool,
     /// Exact client process identity, present only on the accepting end of an owner-only endpoint.
     peer_process: Option<PeerProcess>,
+    /// A logon-only pipe must prove its first received bytes before returning any frame.
+    #[cfg(windows)]
+    logon_pending: bool,
 }
 
 impl Connection {
@@ -230,33 +235,53 @@ impl Connection {
     /// [`TransportError::Frame`] when a length prefix claims more than this build carries, [`TransportError::Io`] when
     /// the read fails.
     pub async fn recv(&mut self) -> Result<Option<Bytes>, TransportError> {
-        loop {
-            // Whatever has already arrived is tried first, because a read may have delivered several frames at once and
-            // waiting for more bytes before handing over the ones in hand would stall on the last of them.
-            let held = Bytes::copy_from_slice(&self.pending);
-            match crate::frame::decode(&held)? {
-                Decoded::Frame { payload, consumed } => {
-                    drop(self.pending.split_to(consumed));
-                    return Ok(Some(payload));
-                }
-                Decoded::NeedMore { at_least } => {
-                    if self.closed {
-                        // The other end went away mid-frame. Reported as the end rather than as a failure: a command
-                        // surface that stopped is not an error the daemon has to act on.
-                        return Ok(None);
-                    }
-                    self.pending.reserve(at_least.min(MAX_FRAME));
-                }
-            }
+        self.recv_bounded(MAX_FRAME).await
+    }
 
-            let read = self
-                .stream
+    /// Receive one frame within the caller's payload ceiling, checked before reading or allocating its body.
+    ///
+    /// Cancellation preserves partial input in this connection. No bytes from the next frame are read early.
+    ///
+    /// # Errors
+    ///
+    /// [`TransportError::Frame`] when the prefix exceeds `limit` or the wire ceiling, [`TransportError::Io`]
+    /// when the read fails. A refused connection must be closed by its caller.
+    pub async fn recv_bounded(&mut self, limit: usize) -> Result<Option<Bytes>, TransportError> {
+        loop {
+            let total = frame_size(&self.pending, limit)?;
+            if let Some(total) = total
+                && self.pending.len() >= total
+            {
+                let frame = self.pending.split_to(total).freeze();
+                return Ok(Some(frame.slice(HEADER..)));
+            }
+            if self.closed {
+                return Ok(None);
+            }
+            let remaining = total.unwrap_or(HEADER) - self.pending.len();
+            self.pending.reserve(remaining);
+            // Read the prefix alone, then only its admitted payload. Even bytes already waiting in the pipe
+            // cannot make a narrow endpoint allocate the broader transport ceiling.
+            let read = (&mut self.stream)
+                .take(remaining as u64)
                 .read_buf(&mut self.pending)
                 .await
                 .map_err(|error| TransportError::Io {
                     doing: "receiving a frame",
                     detail: error.to_string(),
                 })?;
+            #[cfg(windows)]
+            if read != 0 && self.logon_pending {
+                if let Err(error) = self.stream.verify_logon() {
+                    self.closed = true;
+                    self.pending.clear();
+                    return Err(TransportError::Io {
+                        doing: "verifying the pipe client's logon",
+                        detail: error.to_string(),
+                    });
+                }
+                self.logon_pending = false;
+            }
             if read == 0 {
                 self.closed = true;
                 if self.pending.is_empty() {
@@ -267,14 +292,19 @@ impl Connection {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AccessPolicy {
+    Private,
+    Owner,
+    Logon,
+}
+
 /// Where the daemon waits for the command surface.
 pub struct Listener {
     /// The platform's own mechanism.
     inner: platform::Listener,
     /// The address, kept for the error messages that have to name it.
     address: String,
-    /// Whether every accepted peer must be the endpoint owner.
-    owner_only: bool,
 }
 
 impl Listener {
@@ -301,9 +331,8 @@ impl Listener {
     )]
     pub async fn bind(address: &str) -> Result<Self, TransportError> {
         Ok(Self {
-            inner: platform::Listener::bind(address, false)?,
+            inner: platform::Listener::bind(address, AccessPolicy::Private)?,
             address: address.to_owned(),
-            owner_only: false,
         })
     }
 
@@ -320,9 +349,27 @@ impl Listener {
     )]
     pub async fn bind_owner_only(address: &str) -> Result<Self, TransportError> {
         Ok(Self {
-            inner: platform::Listener::bind(address, true)?,
+            inner: platform::Listener::bind(address, AccessPolicy::Owner)?,
             address: address.to_owned(),
-            owner_only: true,
+        })
+    }
+
+    /// Start an endpoint restricted to the current Windows logon, or to the owning user on Unix.
+    ///
+    /// Windows installs a logon SID DACL and verifies the client's impersonated logon on the first read, before
+    /// returning a frame. A silent client therefore never makes accepting the next connection wait for input.
+    ///
+    /// # Errors
+    ///
+    /// [`TransportError::Bind`] when the platform cannot install this policy. There is no weaker fallback.
+    #[expect(
+        clippy::unused_async,
+        reason = "the endpoint has to be registered with the active Tokio I/O runtime"
+    )]
+    pub async fn bind_logon_only(address: &str) -> Result<Self, TransportError> {
+        Ok(Self {
+            inner: platform::Listener::bind(address, AccessPolicy::Logon)?,
+            address: address.to_owned(),
         })
     }
 
@@ -338,12 +385,14 @@ impl Listener {
     ///
     /// [`TransportError::Bind`] when the platform refuses to keep listening.
     pub async fn accept(&mut self) -> Result<Connection, TransportError> {
-        let (stream, peer_process) = self.inner.accept(&self.address, self.owner_only).await?;
+        let (stream, peer_process) = self.inner.accept(&self.address).await?;
         Ok(Connection {
             stream,
             pending: BytesMut::with_capacity(READ_BUFFER),
             closed: false,
             peer_process,
+            #[cfg(windows)]
+            logon_pending: self.inner.logon_only(),
         })
     }
 }
@@ -360,6 +409,8 @@ pub async fn connect(address: &str) -> Result<Connection, TransportError> {
         pending: BytesMut::with_capacity(READ_BUFFER),
         closed: false,
         peer_process: None,
+        #[cfg(windows)]
+        logon_pending: false,
     })
 }
 
@@ -393,23 +444,24 @@ mod platform {
         SDDL_REVISION_1,
     };
     use windows_sys::Win32::Security::{
-        EqualSid, GetTokenInformation, PSECURITY_DESCRIPTOR, PSID, SECURITY_ATTRIBUTES,
-        TOKEN_QUERY, TOKEN_USER, TokenUser,
+        EqualSid, GetTokenInformation, PSECURITY_DESCRIPTOR, PSID, RevertToSelf,
+        SECURITY_ATTRIBUTES, TOKEN_GROUPS, TOKEN_QUERY, TOKEN_USER, TokenLogonSid, TokenUser,
     };
     use windows_sys::Win32::Storage::FileSystem::{
         CREATE_NEW, CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_FLAG_FIRST_PIPE_INSTANCE,
         FILE_FLAG_OVERLAPPED, FILE_SHARE_READ, PIPE_ACCESS_DUPLEX,
     };
     use windows_sys::Win32::System::Pipes::{
-        CreateNamedPipeW, GetNamedPipeClientProcessId, PIPE_READMODE_BYTE,
-        PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
+        CreateNamedPipeW, GetNamedPipeClientProcessId, ImpersonateNamedPipeClient,
+        PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES,
+        PIPE_WAIT,
     };
     use windows_sys::Win32::System::Threading::{
-        GetCurrentProcess, GetProcessTimes, OpenProcess, OpenProcessToken,
-        PROCESS_QUERY_LIMITED_INFORMATION,
+        GetCurrentProcess, GetCurrentThread, GetProcessTimes, OpenProcess, OpenProcessToken,
+        OpenThreadToken, PROCESS_QUERY_LIMITED_INFORMATION,
     };
 
-    use super::{PeerProcess, TransportError};
+    use super::{AccessPolicy, PeerProcess, TransportError};
 
     /// The byte stream, whichever end this is.
     pub(super) enum Stream {
@@ -417,6 +469,24 @@ mod platform {
         Server(NamedPipeServer),
         /// The command surface's end.
         Client(NamedPipeClient),
+    }
+
+    impl Stream {
+        pub(super) fn verify_logon(&self) -> std::io::Result<()> {
+            let Self::Server(pipe) = self else {
+                return Err(std::io::Error::other(
+                    "only a server pipe may verify its client's logon",
+                ));
+            };
+            if pipe_client_is_current_logon(pipe)? {
+                Ok(())
+            } else {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "the pipe client does not belong to the Runtime's logon",
+                ))
+            }
+        }
     }
 
     impl tokio::io::AsyncRead for Stream {
@@ -475,19 +545,23 @@ mod platform {
         waiting: Option<NamedPipeServer>,
         /// One additional unclaimed instance for a caller arriving before the owner loop accepts again.
         spare: Option<NamedPipeServer>,
-        /// Every instance receives the current-owner DACL when set.
-        owner_only: bool,
+        /// Every instance and accepted peer use this same authority.
+        policy: AccessPolicy,
     }
 
     impl Listener {
-        pub(super) fn bind(address: &str, owner_only: bool) -> Result<Self, TransportError> {
-            let first = instance(address, true, owner_only)?;
-            let spare = instance(address, false, owner_only)?;
+        pub(super) fn bind(address: &str, policy: AccessPolicy) -> Result<Self, TransportError> {
+            let first = instance(address, true, policy)?;
+            let spare = instance(address, false, policy)?;
             Ok(Self {
                 waiting: Some(first),
                 spare: Some(spare),
-                owner_only,
+                policy,
             })
+        }
+
+        pub(super) fn logon_only(&self) -> bool {
+            self.policy == AccessPolicy::Logon
         }
 
         #[expect(
@@ -497,14 +571,7 @@ mod platform {
         pub(super) async fn accept(
             &mut self,
             address: &str,
-            owner_only: bool,
         ) -> Result<(Stream, Option<PeerProcess>), TransportError> {
-            if owner_only != self.owner_only {
-                return Err(TransportError::Bind {
-                    address: address.to_owned(),
-                    detail: "the listener's owner-only policy changed while accepting".to_owned(),
-                });
-            }
             loop {
                 // Both borrowed instances stay in `self` across the await. A Windows caller may claim either
                 // available instance, so accepting only one of them can strand a successful single caller until a
@@ -531,7 +598,7 @@ mod platform {
                             detail: error.to_string(),
                         }),
                 }?;
-                let replacement = instance(address, false, owner_only)?;
+                let replacement = instance(address, false, self.policy)?;
                 let waiting = if accepted_waiting {
                     self.waiting.replace(replacement)
                 } else {
@@ -541,7 +608,9 @@ mod platform {
                     address: address.to_owned(),
                     detail: "the Windows listener lost its connected pipe".to_owned(),
                 })?;
-                let peer_process = if owner_only {
+                let peer_process = if self.policy == AccessPolicy::Private {
+                    None
+                } else {
                     let mut peer = 0_u32;
                     // SAFETY: `waiting` owns a live connected pipe handle, and `peer` is a valid writable u32 for the
                     // duration of the call. The call borrows the handle and does not close or retain it.
@@ -554,14 +623,18 @@ mod platform {
                             detail: std::io::Error::last_os_error().to_string(),
                         });
                     }
-                    match pipe_client_is_current_user(peer) {
-                        Ok(true) => {}
-                        Ok(false) => continue,
-                        Err(error) => {
-                            return Err(TransportError::Bind {
-                                address: address.to_owned(),
-                                detail: error.to_string(),
-                            });
+                    // A sandbox may use another primary process user while connecting under this logon. The
+                    // logon-only policy proves the effective pipe token on first read, not the primary user.
+                    if self.policy == AccessPolicy::Owner {
+                        match pipe_client_is_current_user(peer) {
+                            Ok(true) => {}
+                            Ok(false) => continue,
+                            Err(error) => {
+                                return Err(TransportError::Bind {
+                                    address: address.to_owned(),
+                                    detail: error.to_string(),
+                                });
+                            }
                         }
                     }
                     let started =
@@ -576,8 +649,6 @@ mod platform {
                                 .to_owned(),
                         })?,
                     )
-                } else {
-                    None
                 };
                 return Ok((Stream::Server(waiting), peer_process));
             }
@@ -588,10 +659,10 @@ mod platform {
     fn instance(
         address: &str,
         first: bool,
-        owner_only: bool,
+        policy: AccessPolicy,
     ) -> Result<NamedPipeServer, TransportError> {
-        if owner_only {
-            return owner_only_instance(address, first);
+        if policy != AccessPolicy::Private {
+            return restricted_instance(address, first, policy);
         }
         ServerOptions::new()
             .first_pipe_instance(first)
@@ -605,18 +676,26 @@ mod platform {
             })
     }
 
-    /// One current-owner pipe instance. Tokio's safe builder has no security-attributes input, so the exact DACL is
+    /// One restricted pipe instance. Tokio's safe builder has no security-attributes input, so the exact DACL is
     /// installed at creation and the resulting overlapped handle is transferred to Tokio once.
     #[expect(
         unsafe_code,
         reason = "Tokio has no safe SECURITY_ATTRIBUTES input; one owned overlapped handle is created with an explicit DACL and transferred exactly once"
     )]
-    fn owner_only_instance(address: &str, first: bool) -> Result<NamedPipeServer, TransportError> {
-        let mut security =
-            SecurityDescriptor::current_owner().map_err(|error| TransportError::Bind {
-                address: address.to_owned(),
-                detail: error.to_string(),
-            })?;
+    fn restricted_instance(
+        address: &str,
+        first: bool,
+        policy: AccessPolicy,
+    ) -> Result<NamedPipeServer, TransportError> {
+        let descriptor = if policy == AccessPolicy::Logon {
+            SecurityDescriptor::current_logon()
+        } else {
+            SecurityDescriptor::current_owner()
+        };
+        let mut security = descriptor.map_err(|error| TransportError::Bind {
+            address: address.to_owned(),
+            detail: error.to_string(),
+        })?;
         let mut attributes = SECURITY_ATTRIBUTES {
             nLength: u32::try_from(core::mem::size_of::<SECURITY_ATTRIBUTES>()).map_err(|_| {
                 TransportError::Bind {
@@ -715,17 +794,29 @@ mod platform {
     struct SecurityDescriptor(PSECURITY_DESCRIPTOR);
 
     impl SecurityDescriptor {
+        fn current_owner() -> std::io::Result<Self> {
+            let owner = process_user()?.sid_string()?;
+            Self::for_principal(&owner, &owner)
+        }
+
+        fn current_logon() -> std::io::Result<Self> {
+            let owner = process_user()?.sid_string()?;
+            let logon = process_logon()?.sid_string()?;
+            // A user SID spans logons. Only the token's logon SID is allowed to open this endpoint.
+            // https://learn.microsoft.com/en-us/windows/win32/ipc/named-pipe-security-and-access-rights
+            Self::for_principal(&owner, &logon)
+        }
+
         #[expect(
             unsafe_code,
             reason = "Windows allocates an SDDL security descriptor through an FFI output pointer that is checked and then owned by this RAII value"
         )]
-        fn current_owner() -> std::io::Result<Self> {
-            let owner = process_user()?.sid_string()?;
-            // The exact process token user owns the object and is the only principal that receives full control.
+        fn for_principal(owner: &str, principal: &str) -> std::io::Result<Self> {
+            // The exact process token user owns the object; only the requested principal receives full control.
             // Token default ownership can be an administrator group for service accounts, so both ownership and the
             // protected DACL must be explicit. No owner-rights alias, Everyone, anonymous, network, administrator, or
             // SYSTEM ACE is present.
-            let sddl: Vec<u16> = format!("O:{owner}D:P(A;;GA;;;{owner})")
+            let sddl: Vec<u16> = format!("O:{owner}D:P(A;;GA;;;{principal})")
                 .encode_utf16()
                 .chain(core::iter::once(0))
                 .collect();
@@ -766,34 +857,49 @@ mod platform {
         }
     }
 
-    /// Aligned storage returned by `GetTokenInformation(TokenUser)`.
-    struct OwnedTokenUser {
-        storage: Vec<usize>,
+    #[derive(Clone, Copy)]
+    enum TokenSid {
+        User,
+        Logon,
     }
 
-    impl OwnedTokenUser {
+    /// Aligned storage returned by `GetTokenInformation`, owning the SID that points into it.
+    struct OwnedTokenSid {
+        storage: Vec<usize>,
+        kind: TokenSid,
+    }
+
+    impl OwnedTokenSid {
         #[expect(
             unsafe_code,
-            reason = "GetTokenInformation writes a bounded TOKEN_USER into aligned owned storage and both calls validate their output lengths"
+            reason = "GetTokenInformation writes a bounded TOKEN_USER or TOKEN_GROUPS into aligned owned storage and both calls validate their output lengths"
         )]
-        fn read(token: HANDLE) -> std::io::Result<Self> {
+        fn read(token: HANDLE, kind: TokenSid) -> std::io::Result<Self> {
+            let (class, minimum) = match kind {
+                TokenSid::User => (TokenUser, core::mem::size_of::<TOKEN_USER>()),
+                TokenSid::Logon => (TokenLogonSid, core::mem::size_of::<TOKEN_GROUPS>()),
+            };
             let mut needed = 0_u32;
             // SAFETY: the first call intentionally supplies no output storage and only requests the required size.
-            unsafe {
-                GetTokenInformation(token, TokenUser, core::ptr::null_mut(), 0, &raw mut needed)
-            };
+            unsafe { GetTokenInformation(token, class, core::ptr::null_mut(), 0, &raw mut needed) };
             if needed == 0 {
                 return Err(std::io::Error::last_os_error());
             }
-            let needed_usize = usize::try_from(needed)
-                .map_err(|_| std::io::Error::other("token user length does not fit usize"))?;
+            let needed_usize = usize::try_from(needed).map_err(|_| {
+                std::io::Error::other("token information length does not fit usize")
+            })?;
+            if needed_usize < minimum {
+                return Err(std::io::Error::other(
+                    "the token did not expose a complete SID record",
+                ));
+            }
             let words = needed_usize.div_ceil(core::mem::size_of::<usize>());
             let mut storage = vec![0_usize; words];
-            // SAFETY: storage is aligned for TOKEN_USER, has at least `needed` writable bytes, and remains alive.
+            // SAFETY: storage is aligned for both token layouts, has `needed` writable bytes, and remains alive.
             let read = unsafe {
                 GetTokenInformation(
                     token,
-                    TokenUser,
+                    class,
                     storage.as_mut_ptr().cast(),
                     needed,
                     &raw mut needed,
@@ -802,16 +908,45 @@ mod platform {
             if read == 0 {
                 return Err(std::io::Error::last_os_error());
             }
-            Ok(Self { storage })
+            if !usize::try_from(needed)
+                .is_ok_and(|written| written >= minimum && written <= needed_usize)
+            {
+                return Err(std::io::Error::other(
+                    "the token returned an incomplete SID record",
+                ));
+            }
+            if matches!(kind, TokenSid::Logon) {
+                // TokenLogonSid returns TOKEN_GROUPS with the token's one logon SID. No absent or ambiguous SID
+                // may become a weaker user-only check.
+                // https://learn.microsoft.com/en-us/windows/win32/api/winnt/ne-winnt-token_information_class
+                // SAFETY: the successful call initialized at least one complete aligned TOKEN_GROUPS value.
+                let count = unsafe { (*storage.as_ptr().cast::<TOKEN_GROUPS>()).GroupCount };
+                if count != 1 {
+                    return Err(std::io::Error::other(
+                        "the token does not expose exactly one logon SID",
+                    ));
+                }
+            }
+            Ok(Self { storage, kind })
         }
 
         #[expect(
             unsafe_code,
-            reason = "the storage was populated as TOKEN_USER and owns the SID allocation it points into"
+            reason = "the storage was populated and length-checked for the selected token layout and owns its SID"
         )]
         fn sid(&self) -> PSID {
-            // SAFETY: `read` initialized the aligned buffer as TOKEN_USER and the buffer has not moved or been freed.
-            unsafe { (*self.storage.as_ptr().cast::<TOKEN_USER>()).User.Sid }
+            match self.kind {
+                TokenSid::User => {
+                    // SAFETY: `read` initialized a complete aligned TOKEN_USER and the allocation is still owned.
+                    unsafe { (*self.storage.as_ptr().cast::<TOKEN_USER>()).User.Sid }
+                }
+                TokenSid::Logon => {
+                    // SAFETY: `read` proved a complete TOKEN_GROUPS with exactly one group and keeps it alive.
+                    unsafe { (*self.storage.as_ptr().cast::<TOKEN_GROUPS>()).Groups }
+                        .first()
+                        .map_or(core::ptr::null_mut(), |group| group.Sid)
+                }
+            }
         }
 
         #[expect(
@@ -856,16 +991,27 @@ mod platform {
         unsafe_code,
         reason = "the current process pseudo-handle is borrowed only long enough to open one owned query token"
     )]
-    fn process_user() -> std::io::Result<OwnedTokenUser> {
+    fn process_user() -> std::io::Result<OwnedTokenSid> {
         // SAFETY: GetCurrentProcess returns a valid pseudo-handle borrowed only for this call.
-        process_handle_user(unsafe { GetCurrentProcess() })
+        let token = process_token(unsafe { GetCurrentProcess() })?;
+        OwnedTokenSid::read(token.0, TokenSid::User)
+    }
+
+    #[expect(
+        unsafe_code,
+        reason = "the current process pseudo-handle is borrowed to query its primary token's logon SID"
+    )]
+    fn process_logon() -> std::io::Result<OwnedTokenSid> {
+        // SAFETY: GetCurrentProcess returns a valid borrowed pseudo-handle.
+        let token = process_token(unsafe { GetCurrentProcess() })?;
+        OwnedTokenSid::read(token.0, TokenSid::Logon)
     }
 
     #[expect(
         unsafe_code,
         reason = "the connected pipe reports one client PID whose process token is opened read-only and owned for the bounded SID comparison"
     )]
-    fn process_user_for_pid(process_id: u32) -> std::io::Result<OwnedTokenUser> {
+    fn process_user_for_pid(process_id: u32) -> std::io::Result<OwnedTokenSid> {
         // SAFETY: the process identifier came from the live connected pipe. The returned query-only handle is checked
         // and transferred to `OwnedHandle` exactly once.
         let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, process_id) };
@@ -873,7 +1019,8 @@ mod platform {
             return Err(std::io::Error::last_os_error());
         }
         let process = OwnedHandle(process);
-        process_handle_user(process.0)
+        let token = process_token(process.0)?;
+        OwnedTokenSid::read(token.0, TokenSid::User)
     }
 
     #[expect(
@@ -912,14 +1059,58 @@ mod platform {
         unsafe_code,
         reason = "a borrowed live process handle is used only to open one owned query token"
     )]
-    fn process_handle_user(process: HANDLE) -> std::io::Result<OwnedTokenUser> {
+    fn process_token(process: HANDLE) -> std::io::Result<OwnedHandle> {
         let mut token: HANDLE = core::ptr::null_mut();
         // SAFETY: `process` is a borrowed live process handle and `token` is a writable output pointer.
         if unsafe { OpenProcessToken(process, TOKEN_QUERY, &raw mut token) } == 0 || token.is_null()
         {
             return Err(std::io::Error::last_os_error());
         }
-        OwnedTokenUser::read(OwnedHandle(token).0)
+        Ok(OwnedHandle(token))
+    }
+
+    /// An impersonation never crosses an await or returns to Tokio. A failed revert cannot leave a worker running
+    /// as a client: Windows requires the process to stop in that case.
+    /// <https://learn.microsoft.com/en-us/windows/win32/api/securitybaseapi/nf-securitybaseapi-reverttoself>
+    struct RevertGuard;
+
+    impl Drop for RevertGuard {
+        #[expect(
+            unsafe_code,
+            reason = "this synchronous scope owns the calling thread's impersonation and must revert before return"
+        )]
+        fn drop(&mut self) {
+            // SAFETY: this guard exists only after a successful impersonation on this thread and never crosses await.
+            if unsafe { RevertToSelf() } == 0 {
+                std::process::abort();
+            }
+        }
+    }
+
+    #[expect(
+        unsafe_code,
+        reason = "the live server pipe and thread token are queried synchronously under a guaranteed revert guard"
+    )]
+    fn pipe_client_is_current_logon(pipe: &NamedPipeServer) -> std::io::Result<bool> {
+        let expected = process_logon()?;
+        // SAFETY: the server owns this connected handle and has read bytes from it. The guard below owns reverting
+        // this exact thread before any return, panic unwind, or future poll.
+        if unsafe { ImpersonateNamedPipeClient(pipe.as_raw_handle()) } == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        let _revert = RevertGuard;
+        let mut token = core::ptr::null_mut();
+        // SAFETY: the current-thread pseudo-handle and output pointer remain valid for the call. OpenAsSelf queries
+        // with the server process identity, including when the client's token grants identification only.
+        if unsafe { OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, 1, &raw mut token) } == 0
+            || token.is_null()
+        {
+            return Err(std::io::Error::last_os_error());
+        }
+        let token = OwnedHandle(token);
+        let actual = OwnedTokenSid::read(token.0, TokenSid::Logon)?;
+        // SAFETY: both pointers belong to validated live token buffers held until this comparison returns.
+        Ok(unsafe { EqualSid(expected.sid(), actual.sid()) } != 0)
     }
 
     #[expect(
@@ -1014,6 +1205,8 @@ mod platform {
             }
         }
     }
+    #[cfg(test)]
+    mod tests;
 }
 
 #[cfg(unix)]
@@ -1022,7 +1215,7 @@ mod platform {
 
     use tokio::net::{UnixListener, UnixStream};
 
-    use super::{PeerProcess, TransportError};
+    use super::{AccessPolicy, PeerProcess, TransportError};
 
     pub(super) fn create_owner_only_file(
         path: &std::path::Path,
@@ -1047,13 +1240,15 @@ mod platform {
     pub(super) struct Listener {
         /// The platform's listener.
         inner: UnixListener,
+        /// Unix logon-only endpoints have the same owner boundary as owner-only endpoints.
+        policy: AccessPolicy,
     }
 
     impl Listener {
-        pub(super) fn bind(address: &str, owner_only: bool) -> Result<Self, TransportError> {
+        pub(super) fn bind(address: &str, policy: AccessPolicy) -> Result<Self, TransportError> {
             use std::os::unix::fs::PermissionsExt as _;
 
-            if owner_only {
+            if policy != AccessPolicy::Private {
                 let Some(parent) = std::path::Path::new(address).parent() else {
                     return Err(TransportError::Bind {
                         address: address.to_owned(),
@@ -1100,7 +1295,7 @@ mod platform {
                     });
                 }
             };
-            if owner_only {
+            if policy != AccessPolicy::Private {
                 std::fs::set_permissions(address, std::fs::Permissions::from_mode(0o600)).map_err(
                     |error| TransportError::Bind {
                         address: address.to_owned(),
@@ -1108,13 +1303,12 @@ mod platform {
                     },
                 )?;
             }
-            Ok(Self { inner })
+            Ok(Self { inner, policy })
         }
 
         pub(super) async fn accept(
             &mut self,
             address: &str,
-            owner_only: bool,
         ) -> Result<(Stream, Option<PeerProcess>), TransportError> {
             use std::os::unix::fs::MetadataExt as _;
 
@@ -1126,7 +1320,9 @@ mod platform {
                         address: address.to_owned(),
                         detail: error.to_string(),
                     })?;
-            let peer_process = if owner_only {
+            let peer_process = if self.policy == AccessPolicy::Private {
+                None
+            } else {
                 let expected = std::fs::metadata(address)
                     .map_err(|error| TransportError::Bind {
                         address: address.to_owned(),
@@ -1163,8 +1359,6 @@ mod platform {
                             .to_owned(),
                     })?,
                 )
-            } else {
-                None
             };
             Ok((stream, peer_process))
         }
@@ -1332,6 +1526,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_logon_only_endpoint_returns_the_verified_clients_frame() {
+        let address = an_address("logon-roundtrip");
+        let mut listener = Listener::bind_logon_only(&address)
+            .await
+            .expect("the logon-only endpoint binds");
+        let serving = tokio::spawn(async move {
+            let mut connection = listener.accept().await.expect("the client arrives");
+            let frame = connection
+                .recv_bounded(16)
+                .await
+                .expect("logon verified")
+                .expect("frame");
+            assert_eq!(
+                connection.peer_process().expect("kernel peer").pid(),
+                std::process::id()
+            );
+            connection.send(&frame).await.expect("reply writes");
+        });
+        let mut client = connect(&address).await.expect("the same logon connects");
+        client.send(b"logon").await.expect("frame writes");
+        assert_eq!(
+            client.recv().await.expect("reply reads").expect("reply"),
+            &b"logon"[..]
+        );
+        serving.await.expect("the server finished");
+    }
+
+    #[tokio::test]
     async fn frame_parts_cross_without_a_full_size_staging_buffer() {
         let address = an_address("parts");
         let mut listener = Listener::bind(&address).await.expect("the endpoint binds");
@@ -1473,6 +1695,89 @@ mod tests {
         }
         let read = serving.await.expect("the server finished");
         assert_eq!(read, vec!["one", "two", "three"]);
+    }
+
+    #[tokio::test]
+    async fn a_narrow_receiver_refuses_the_prefix_without_reading_or_reserving_its_body() {
+        let address = an_address("narrow-prefix");
+        let mut listener = Listener::bind(&address).await.expect("binds");
+        let serving = tokio::spawn(async move {
+            let mut connection = listener.accept().await.expect("a client arrives");
+            let capacity = connection.pending.capacity();
+            let error = connection
+                .recv_bounded(32)
+                .await
+                .expect_err("prefix is too large");
+            assert!(matches!(
+                error,
+                TransportError::Frame(FrameError::TooLarge {
+                    bytes: 65537,
+                    max: 32
+                })
+            ));
+            assert_eq!(connection.pending.len(), HEADER);
+            assert_eq!(connection.pending.capacity(), capacity);
+        });
+        let mut client = connect(&address).await.expect("connects");
+        client
+            .stream
+            .write_all(&65_537_u32.to_be_bytes())
+            .await
+            .expect("prefix writes");
+        tokio::time::timeout(std::time::Duration::from_secs(2), serving)
+            .await
+            .expect("refusal does not wait for a body")
+            .expect("the receiver finished");
+        drop(client);
+    }
+
+    #[tokio::test]
+    async fn cancelling_a_partial_bounded_read_keeps_the_frame_and_its_successor_exact() {
+        let address = an_address("narrow-cancel");
+        let mut listener = Listener::bind(&address).await.expect("binds");
+        let (ready, resume) = tokio::sync::oneshot::channel();
+        let serving = tokio::spawn(async move {
+            let mut connection = listener.accept().await.expect("a client arrives");
+            assert!(
+                tokio::time::timeout(
+                    std::time::Duration::from_millis(100),
+                    connection.recv_bounded(3)
+                )
+                .await
+                .is_err()
+            );
+            ready.send(()).expect("the writer waits");
+            assert_eq!(
+                connection
+                    .recv_bounded(3)
+                    .await
+                    .expect("complete")
+                    .expect("frame"),
+                &b"one"[..]
+            );
+            assert_eq!(
+                connection
+                    .recv_bounded(3)
+                    .await
+                    .expect("next")
+                    .expect("frame"),
+                &b"two"[..]
+            );
+        });
+        let mut client = connect(&address).await.expect("connects");
+        client
+            .stream
+            .write_all(&[0, 0, 0, 3, b'o'])
+            .await
+            .expect("partial frame writes");
+        resume.await.expect("the read was cancelled");
+        client
+            .stream
+            .write_all(b"ne")
+            .await
+            .expect("remainder writes");
+        client.send(b"two").await.expect("next frame writes");
+        serving.await.expect("the receiver finished");
     }
 
     #[tokio::test]

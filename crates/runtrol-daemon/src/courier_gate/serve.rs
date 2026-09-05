@@ -66,15 +66,19 @@ async fn greet(
 ) {
     // Silence past the deadline, a peer that left, or a broken read: nothing was admitted, and there is no one
     // to tell. The connection ends here.
-    let Ok(Ok(Some(frame))) = tokio::time::timeout(hello_wait, connection.recv()).await else {
-        return;
-    };
+    let frame =
+        match tokio::time::timeout(hello_wait, connection.recv_bounded(MAX_FRAME_BYTES)).await {
+            Ok(Ok(Some(frame))) => frame,
+            Ok(Err(error)) => {
+                report_denied(
+                    connection.peer_process().map(PeerProcess::identity),
+                    &error.to_string(),
+                );
+                return;
+            }
+            Ok(Ok(None)) | Err(_) => return,
+        };
     let peer = connection.peer_process().map(PeerProcess::identity);
-    if frame.len() > MAX_FRAME_BYTES {
-        report_denied(peer, "its first frame is larger than a courier frame");
-        refuse(&mut connection).await;
-        return;
-    }
     let hello: Hello = match serde_json::from_slice(&frame) {
         Ok(hello) => hello,
         Err(_not_a_hello) => {
@@ -85,9 +89,9 @@ async fn greet(
     };
     match gate.admit(containment, peer, &hello).await {
         Ok(session) => {
-            if welcome(&mut connection, session).await {
-                serve_admitted(session, connection).await;
-            }
+            // Hello is the complete command at this stage. End its connection after the answer so an
+            // admitted peer cannot hold a greeting slot forever by leaving the connection idle.
+            welcome(&mut connection, session).await;
         }
         Err(denied) => {
             report_denied(peer, &denied.to_string());
@@ -96,22 +100,13 @@ async fn greet(
     }
 }
 
-/// What an admitted connection may say after its welcome. Nothing yet: the courier's verbs arrive with their
-/// own stamps, so any further frame is unknown and closes the connection.
-async fn serve_admitted(session: ManagedSessionId, mut connection: Connection) {
-    // A further frame is unknown until the courier's verbs land, so it closes the connection. The peer leaving
-    // or the read breaking closes it too, with nothing mid-flight.
-    if let Ok(Some(_frame)) = connection.recv().await {
-        report_unknown_frame(session);
-    }
-}
-
-/// Tell the peer it is in. `false` when the answer could not be delivered, which ends the connection.
-async fn welcome(connection: &mut Connection, session: ManagedSessionId) -> bool {
+/// Tell the peer it is in. A failed answer ends the connection just like a delivered one.
+async fn welcome(connection: &mut Connection, session: ManagedSessionId) {
     let Ok(bytes) = serde_json::to_vec(&HelloAnswer::Welcome { session }) else {
-        return false;
+        return;
     };
-    connection.send(&bytes).await.is_ok()
+    // No command is pending and this connection ends now, including when the peer has already left.
+    drop(connection.send(&bytes).await);
 }
 
 async fn refuse(connection: &mut Connection) {
@@ -134,16 +129,6 @@ fn report_denied(peer: Option<ProcessIdentity>, why: &str) {
         Some(peer) => eprintln!("runtrol: courier refused process {}: {why}", peer.pid()),
         None => eprintln!("runtrol: courier refused an unidentified process: {why}"),
     }
-}
-
-#[expect(
-    clippy::print_stderr,
-    reason = "the daemon's error stream is the existing operational channel for a background refusal"
-)]
-fn report_unknown_frame(session: ManagedSessionId) {
-    eprintln!(
-        "runtrol: courier closed the connection of session {session}: it sent a frame this build does not know"
-    );
 }
 
 #[expect(

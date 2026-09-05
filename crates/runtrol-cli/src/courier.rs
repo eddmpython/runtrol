@@ -7,7 +7,7 @@
 
 use runtrol_courier::ManagedSessionId;
 use runtrol_courier::env::{COURIER_ENDPOINT_ENV, COURIER_TOKEN_ENV, MANAGED_SESSION_ENV};
-use runtrol_courier::wire::{Hello, HelloAnswer};
+use runtrol_courier::wire::{Hello, HelloAnswer, MAX_FRAME_BYTES};
 
 /// What the courier connection came back with.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -71,11 +71,16 @@ pub async fn courier() -> Result<Admission, CourierFailure> {
     let hello = serde_json::to_vec(&Hello::new(session, token))
         .map_err(|_unencodable| CourierFailure::Unintelligible)?;
     connection.send(&hello).await?;
-    let frame = connection.recv().await?.ok_or(CourierFailure::NoAnswer)?;
+    let frame = connection
+        .recv_bounded(MAX_FRAME_BYTES)
+        .await?
+        .ok_or(CourierFailure::NoAnswer)?;
     match serde_json::from_slice::<HelloAnswer>(&frame) {
-        Ok(HelloAnswer::Welcome { .. }) => Ok(Admission::Welcomed),
+        Ok(HelloAnswer::Welcome { session: admitted }) if admitted == session => {
+            Ok(Admission::Welcomed)
+        }
         Ok(HelloAnswer::Refused) => Ok(Admission::Refused),
-        Err(_unintelligible) => Err(CourierFailure::Unintelligible),
+        Ok(HelloAnswer::Welcome { .. }) | Err(_) => Err(CourierFailure::Unintelligible),
     }
 }
 
