@@ -122,18 +122,29 @@ test("a folder git refuses is measured once and never again on a write", async (
   watch.dispose();
 });
 
-test("two touches inside the floor become one measurement after it", async () => {
+test("two touches inside the floor become one measurement after it", async (context) => {
+  context.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 1_000 });
   const git = counting();
   const watch = new GitChangesWatch(git.read, 1, 10, 40);
-  watch.ensure(WORKSPACE);
-  await tick();
-  assert.equal(git.reads.length, 1);
-  watch.touch(WORKSPACE);
-  await new Promise((resolve) => setTimeout(resolve, 10));
-  assert.equal(git.reads.length, 1, "inside the floor nothing runs");
-  await new Promise((resolve) => setTimeout(resolve, 50));
-  assert.equal(git.reads.length, 2, "after the floor the touch is honoured once");
-  watch.dispose();
+  try {
+    watch.ensure(WORKSPACE);
+    // Complete the first read without moving the floor's clock. A real zero-delay timer can resume after it.
+    await Promise.resolve();
+    assert.equal(git.reads.length, 1);
+    watch.touch(WORKSPACE);
+    context.mock.timers.tick(5);
+    watch.touch(WORKSPACE);
+    context.mock.timers.tick(34);
+    assert.equal(git.reads.length, 1, "inside the floor nothing runs");
+    context.mock.timers.tick(1);
+    await Promise.resolve();
+    assert.equal(git.reads.length, 2, "at the floor both touches are honoured by one read");
+    context.mock.timers.tick(40);
+    assert.equal(git.reads.length, 2, "the coalesced touch leaves no extra measurement");
+  } finally {
+    watch.dispose();
+    context.mock.timers.reset();
+  }
 });
 
 test("an unchanged answer does not redraw, a changed one does", async () => {
