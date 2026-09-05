@@ -1,4 +1,5 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { monitorEventLoopDelay } from "node:perf_hooks";
 import path from "node:path";
 
 import * as vscode from "vscode";
@@ -21,6 +22,7 @@ type Step =
   | { readonly kind: "start"; readonly label: string; readonly commandLine: string; readonly cwd?: string }
   | { readonly kind: "startTyped"; readonly label: string; readonly commandLine: string; readonly settleMs: number; readonly setupKeys?: readonly string[]; readonly setupGapMs?: number }
   | { readonly kind: "click"; readonly key: string }
+  | { readonly kind: "focusTerminal"; readonly generation: string; readonly terminalId: string }
   | { readonly kind: "rowFacts"; readonly key: string }
   | { readonly kind: "rows" }
   | { readonly kind: "listing" }
@@ -155,6 +157,10 @@ async function journey(coordination: string, role: string): Promise<void> {
         explanation: journey.lastExplanation(),
         activeTerminalName: journey.activeTerminalName(),
       };
+    } else if (step.kind === "focusTerminal") {
+      // A provider may publish its native identity after launch. Resolve the current row from the stable
+      // Runtime terminal binding at selection time instead of keeping the provisional presentation key.
+      result = await journey.terminalAttach(step.generation, step.terminalId, DEADLINE_MS);
     } else if (step.kind === "rows") {
       const publishFailure = journey.windowPublishFailure();
       result = { rows: journey.rows(), atMs: Date.now(), nativeChatCount: journey.nativeChatCount(), publishFailure, updatePayload: publishFailure ? journey.windowUpdatePayload() : null };
@@ -176,11 +182,17 @@ async function journey(coordination: string, role: string): Promise<void> {
       await journey.terminalAttach(step.generation, step.terminalId, DEADLINE_MS);
       const first = await journey.terminalWriteDirect(step.generation, step.terminalId, step.text);
       const samples = [];
-      for (let sample = 0; sample < step.count; sample += 1) {
-        await delay(step.gapMs);
-        samples.push(await journey.terminalWriteDirect(step.generation, step.terminalId, step.text));
+      const eventLoop = monitorEventLoopDelay({ resolution: 10 });
+      eventLoop.enable();
+      try {
+        for (let sample = 0; sample < step.count; sample += 1) {
+          await delay(step.gapMs);
+          samples.push(await journey.terminalWriteDirect(step.generation, step.terminalId, step.text));
+        }
+      } finally {
+        eventLoop.disable();
       }
-      result = { first, samples };
+      result = { first, samples, eventLoop: { p95Ms: eventLoop.percentile(95) / 1e6, maxMs: eventLoop.max / 1e6 } };
     } else if (step.kind === "reopenStored") {
       // A stored conversation of that service reopened the way a click on its row does: the resume path.
       result = { sessionId: await journey.openStoredWithTitle(step.provider) };

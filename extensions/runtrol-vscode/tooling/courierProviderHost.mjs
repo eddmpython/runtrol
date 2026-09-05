@@ -79,15 +79,27 @@ try {
   process.stderr.write(`RUNTROL_PROVIDER_HOST_FAILED ${error instanceof Error ? error.message : String(error)}\n`);
   throw error;
 } finally {
+  const cleanupErrors = [];
   for (const entry of processes.reverse()) {
-    const tree = ownedTreeIdentities(entry.child.pid);
-    const current = tree.find((row) => row.pid === entry.child.pid);
-    if (current && entry.identity && current.startedAt === entry.identity.startedAt
-      && normalizedExecutable(current.executable) === normalizedExecutable(entry.binary)) {
-      await terminateCapturedIdentities(tree);
-    } else if (current) throw new Error(`cannot prove cleanup ownership for ${entry.child.pid}`);
+    try {
+      const tree = ownedTreeIdentities(entry.child.pid);
+      const current = tree.find((row) => row.pid === entry.child.pid);
+      if (current && entry.identity && current.startedAt === entry.identity.startedAt
+        && normalizedExecutable(current.executable) === normalizedExecutable(entry.binary)) {
+        await terminateCapturedIdentities(tree);
+      } else if (current) throw new Error(`cannot prove cleanup ownership for ${entry.child.pid}`);
+    } catch (error) {
+      // A failed viewer cleanup must not skip the separately owned Runtime and its provider processes.
+      cleanupErrors.push(error);
+    }
   }
-  for (const log of logs) await log.close();
+  for (const log of logs) {
+    try { await log.close(); }
+    catch (error) { cleanupErrors.push(error); }
+  }
+  if (cleanupErrors.length > 0) {
+    throw new AggregateError(cleanupErrors, `owned provider host cleanup failed; evidence retained at ${temporary}`);
+  }
   if (!leaveEvidence) await rm(temporary, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
   process.stdout.write(`RUNTROL_PROVIDER_HOST_CLOSED ${JSON.stringify({ temporary, retained: leaveEvidence })}\n`);
 }
