@@ -5,6 +5,7 @@ import path from "node:path";
 import * as vscode from "vscode";
 
 import type { RuntrolExtensionApi } from "../extension";
+import type { JourneyInputTiming } from "../runtimeTerminal";
 import { extensionUnderTest } from "./extensionUnderTest.test";
 
 /// The owner-reveal journey inside one isolated window (`EXT-03`, driven by `tooling/owner-reveal-eye.mjs`): the
@@ -68,6 +69,11 @@ async function journey(coordination: string, role: string): Promise<void> {
   let waitingFor = 1;
   let running: string | null = null;
   let sinceMs = Date.now();
+  let inputSampling: {
+    generation: string; terminalId: string; count: number; gapMs: number;
+    phase: "attach" | "first" | "samples";
+    first: JourneyInputTiming | null; samples: JourneyInputTiming[];
+  } | null = null;
   const heartbeat = setInterval(() => {
     void writeFile(
       path.join(coordination, `${role}-alive.json`),
@@ -90,6 +96,7 @@ async function journey(coordination: string, role: string): Promise<void> {
       atMs: Date.now(), step: waitingFor, running,
       listing: journey.listing(), rows: journey.rows(),
       publishFailure: journey.windowPublishFailure(),
+      inputSampling,
     });
     throw error;
   } finally {
@@ -100,6 +107,7 @@ async function journey(coordination: string, role: string): Promise<void> {
   for (let index = 1; ; index += 1) {
     waitingFor = index;
     running = null;
+    inputSampling = null;
     sinceMs = Date.now();
     const step = await readPublished<Step>(coordination, `${role}-step-${index}.json`, DEADLINE_MS * 5);
     if (step.kind === "done") break;
@@ -188,9 +196,16 @@ async function journey(coordination: string, role: string): Promise<void> {
         || !Number.isFinite(step.gapMs) || step.gapMs < 0 || step.gapMs > 1000) {
         throw new Error("input samples require bounded count and spacing");
       }
+      // Keep only structural timing in memory until the step settles. A failed sample must not discard the
+      // completed measurements or make a failed reattach look like a slow write. Never retain the typed bytes.
+      inputSampling = { generation: step.generation, terminalId: step.terminalId,
+        count: step.count, gapMs: step.gapMs, phase: "attach", first: null, samples: [] };
       await journey.terminalAttach(step.generation, step.terminalId, DEADLINE_MS);
+      inputSampling.phase = "first";
       const first = await journey.terminalWriteDirect(step.generation, step.terminalId, step.text);
-      const samples = [];
+      inputSampling.first = first;
+      inputSampling.phase = "samples";
+      const samples = inputSampling.samples;
       const eventLoop = monitorEventLoopDelay({ resolution: 10 });
       eventLoop.enable();
       try {
