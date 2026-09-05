@@ -1,4 +1,9 @@
 import type { TerminalDescriptor, TerminalIndexSnapshot } from "./runtimeTypes";
+import { abortableDelay } from "./abortableDelay";
+
+// Listing verifies the locator through the Core on Windows, so both clocks remain slow.
+const FLEET_RELIST_MS = 60_000;
+const FLEET_RETRY_MS = 15_000;
 
 /// The hosted terminals of every Runtime generation, read as one list.
 ///
@@ -12,6 +17,53 @@ import type { TerminalDescriptor, TerminalIndexSnapshot } from "./runtimeTypes";
 export class TerminalFleet {
   private readonly byGeneration = new Map<string, TerminalIndexSnapshot>();
   private readonly unreachable = new Map<string, string>();
+
+  /// Follow listed generations beside the anchor until its watch stops. Locator validation can finish
+  /// after cancellation, so its completion never authorizes a fresh stream or another relist delay.
+  async followOtherGenerations<T extends { readonly digest: string }>(
+    anchor: string,
+    listedGenerations: () => Promise<readonly T[]>,
+    followGeneration: (generation: T, signal: AbortSignal) => Promise<void>,
+    publish: () => void,
+    signal: AbortSignal,
+  ): Promise<void> {
+    const following = new Map<string, Promise<void>>();
+    const retryAt = new Map<string, number>();
+    let relist = new AbortController();
+    while (!signal.aborted) {
+      const listed = await listedGenerations();
+      if (signal.aborted) break;
+      const wanted = new Set(listed.map((generation) => generation.digest));
+      for (const digest of [...retryAt.keys()]) {
+        if (!wanted.has(digest)) {
+          retryAt.delete(digest);
+          this.delete(digest);
+          publish();
+        }
+      }
+      for (const generation of listed) {
+        const digest = generation.digest;
+        if (digest === anchor || following.has(digest) || (retryAt.get(digest) ?? 0) > Date.now()) continue;
+        const run = followGeneration(generation, signal).then(
+          () => {
+            retryAt.delete(digest);
+          },
+          (error: unknown) => {
+            this.markUnreachable(digest, error instanceof Error ? error.message : String(error));
+            publish();
+            retryAt.set(digest, Date.now() + FLEET_RETRY_MS);
+          },
+        ).finally(() => {
+          following.delete(digest);
+          relist.abort();
+        });
+        following.set(digest, run);
+      }
+      relist = new AbortController();
+      await abortableDelay(FLEET_RELIST_MS, AbortSignal.any([signal, relist.signal]));
+    }
+    await Promise.all(following.values());
+  }
 
   /// The latest snapshot one generation pushed.
   set(generation: string, snapshot: TerminalIndexSnapshot): void {

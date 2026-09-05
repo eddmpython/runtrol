@@ -67,10 +67,6 @@ const ENROLLMENT_DECISION_SETTLE_MS = 5_000;
 const ENROLLMENT_DECISION_POLL_MS = 50;
 const RUNTIME_LOCATOR_SETTLE_MS = 12_000;
 const RUNTIME_LOCATOR_POLL_MS = 25;
-// How often the terminal watch lists generations it has not heard of, and how long it leaves one it could
-// not reach alone. Both are slow on purpose: a listing verifies the locator through the Core on Windows.
-const FLEET_RELIST_MS = 60_000;
-const FLEET_RETRY_MS = 15_000;
 // The in-memory lease is authoritative while the Extension Host is alive. Persisting it only
 // improves reload recovery, so SecretStorage latency must not delay an interactive session action.
 const CONTROL_PERSISTENCE_INLINE_MS = 0;
@@ -949,7 +945,13 @@ export class StudioRuntimeClient implements vscode.Disposable {
       const others = new AbortController();
       const stopOthers = (): void => others.abort();
       signal.addEventListener("abort", stopOthers, { once: true });
-      const following = this.followOtherGenerations(anchor.digest, fleet, publish, others.signal);
+      const following = fleet.followOtherGenerations(
+        anchor.digest,
+        () => this.listedGenerations(),
+        (generation, followingSignal) => this.followGeneration(generation, fleet, publish, followingSignal),
+        publish,
+        others.signal,
+      );
       try {
         // The anchor stream ending is not the Core going away: the grant generation moving (a deploy or a
         // re-enrollment) or this generation draining ends the stream, and the window re-reads the locator and
@@ -978,63 +980,6 @@ export class StudioRuntimeClient implements vscode.Disposable {
         if (this.terminalWatch === watch) this.terminalWatch = null;
       }
     });
-  }
-
-  /// Follow every generation the locator lists beside the anchor, for as long as the anchor watch runs.
-  ///
-  /// Listing is a locator read, which on Windows verifies the file's owner through the Core, so it is not done
-  /// on a fast clock: once at the start, again whenever a followed generation ends (its successor may have
-  /// appeared for the same reason), and on a slow tick for the update case, where a newer build's window starts
-  /// a generation this window has not heard of. A generation this window could not reach is tried again after
-  /// a pause rather than on every listing, so a stale locator entry costs one refused connection a while.
-  private async followOtherGenerations(
-    anchor: string,
-    fleet: TerminalFleet,
-    publish: () => void,
-    signal: AbortSignal,
-  ): Promise<void> {
-    const following = new Map<string, Promise<void>>();
-    const retryAt = new Map<string, number>();
-    let relist = new AbortController();
-    while (!signal.aborted) {
-      const listed = await this.listedGenerations();
-      const wanted = new Set(listed.map((generation) => generation.digest));
-      for (const digest of [...retryAt.keys()]) {
-        if (!wanted.has(digest)) {
-          retryAt.delete(digest);
-          fleet.delete(digest);
-          publish();
-        }
-      }
-      for (const generation of listed) {
-        const digest = generation.digest;
-        if (digest === anchor || following.has(digest) || (retryAt.get(digest) ?? 0) > Date.now()) continue;
-        const run = this.followGeneration(generation, fleet, publish, signal).then(
-          () => {
-            retryAt.delete(digest);
-          },
-          (error: unknown) => {
-            fleet.markUnreachable(digest, error instanceof Error ? error.message : String(error));
-            publish();
-            retryAt.set(digest, Date.now() + FLEET_RETRY_MS);
-          },
-        ).finally(() => {
-          following.delete(digest);
-          // A generation ended: its successor, if any, is worth listing for now rather than at the next tick.
-          relist.abort();
-        });
-        following.set(digest, run);
-      }
-      relist = new AbortController();
-      const stop = (): void => relist.abort();
-      signal.addEventListener("abort", stop, { once: true });
-      try {
-        await abortableDelay(FLEET_RELIST_MS, relist.signal);
-      } finally {
-        signal.removeEventListener("abort", stop);
-      }
-    }
-    await Promise.all(following.values());
   }
 
   /// Read one listed generation's terminal index until that generation ends or the watch stops.

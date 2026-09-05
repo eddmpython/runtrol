@@ -56,3 +56,45 @@ test("a generation that could not be followed is named as unknown rather than dr
   fleet.set("bbbb", { terminals: [terminal("bbbb", "t2")], warnings: [] });
   assert.deepEqual(fleet.merged().warnings, [], "a generation followed again is no longer unknown");
 });
+
+for (const listed of [[], [{ digest: "peer" }]]) {
+  test(`cancellation during locator validation ends before relisting ${listed.length} returned peers`, async (context) => {
+    context.mock.timers.enable({ apis: ["setTimeout"] });
+    let finishListing!: (generations: readonly { digest: string }[]) => void;
+    const pendingListing = new Promise<readonly { digest: string }[]>((resolve) => {
+      finishListing = resolve;
+    });
+    const abort = new AbortController();
+    const fleet = new TerminalFleet();
+    let listings = 0;
+    let streams = 0;
+    let publishes = 0;
+    let finished = false;
+    const watching = fleet.followOtherGenerations(
+      "anchor",
+      () => {
+        listings += 1;
+        return pendingListing;
+      },
+      async () => { streams += 1; },
+      () => { publishes += 1; },
+      abort.signal,
+    ).then(() => { finished = true; });
+    try {
+      assert.equal(listings, 1, "the locator read is already in flight");
+      abort.abort();
+      finishListing(listed);
+      // Drain continuations without advancing the relist clock. The original loop missed the abort
+      // during the pending read and started a fresh one-minute timer after the empty result arrived.
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.equal(finished, true, "cancelled locator completion must not wait for the relist timer");
+      assert.equal(streams, 0, "a cancelled result cannot open another generation stream");
+      assert.equal(publishes, 0, "cancelled discovery publishes no replacement fleet");
+      assert.equal(listings, 1, "cancelled discovery does not start another locator read");
+    } finally {
+      context.mock.timers.runAll();
+      await watching;
+      context.mock.timers.reset();
+    }
+  });
+}

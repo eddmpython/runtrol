@@ -83,6 +83,15 @@ async function journey(coordination: string, role: string): Promise<void> {
   }, 1_000);
   try {
     await steps();
+  } catch (error) {
+    // Capture the structural projection before the host closes. Tab count alone cannot distinguish a dead
+    // provider from a disconnected index or a lost hosted-row association. No terminal output is read here.
+    await publish(coordination, `${role}-failure-state.json`, {
+      atMs: Date.now(), step: waitingFor, running,
+      listing: journey.listing(), rows: journey.rows(),
+      publishFailure: journey.windowPublishFailure(),
+    });
+    throw error;
   } finally {
     clearInterval(heartbeat);
   }
@@ -163,7 +172,7 @@ async function journey(coordination: string, role: string): Promise<void> {
       result = await journey.terminalAttach(step.generation, step.terminalId, DEADLINE_MS);
     } else if (step.kind === "rows") {
       const publishFailure = journey.windowPublishFailure();
-      result = { rows: journey.rows(), atMs: Date.now(), nativeChatCount: journey.nativeChatCount(), publishFailure, updatePayload: publishFailure ? journey.windowUpdatePayload() : null };
+      result = { rows: journey.rows(), listing: journey.listing(), atMs: Date.now(), nativeChatCount: journey.nativeChatCount(), publishFailure, updatePayload: publishFailure ? journey.windowUpdatePayload() : null };
     } else if (step.kind === "closeTab") {
       // The tab's own close: the view detaches, the process is not touched.
       result = { closed: journey.closeTab(step.key) };
