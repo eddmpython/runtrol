@@ -28,6 +28,7 @@ type Step =
   | { readonly kind: "closeTab"; readonly key: string }
   | { readonly kind: "stopRow"; readonly key: string }
   | { readonly kind: "setDialogue"; readonly key: string; readonly enabled: boolean }
+  | { readonly kind: "inputSamples"; readonly generation: string; readonly terminalId: string; readonly text: string; readonly count: number; readonly gapMs: number }
   | { readonly kind: "listed"; readonly provider: string; readonly native: string }
   | { readonly kind: "startFresh"; readonly provider: string; readonly workspace: string }
   | { readonly kind: "showOther" }
@@ -167,6 +168,19 @@ async function journey(coordination: string, role: string): Promise<void> {
     } else if (step.kind === "setDialogue") {
       await journey.setDialogue(step.key, step.enabled);
       result = { dialogueEnabled: step.enabled };
+    } else if (step.kind === "inputSamples") {
+      if (!Number.isSafeInteger(step.count) || step.count < 2 || step.count > 1024
+        || !Number.isFinite(step.gapMs) || step.gapMs < 0 || step.gapMs > 1000) {
+        throw new Error("input samples require bounded count and spacing");
+      }
+      await journey.terminalAttach(step.generation, step.terminalId, DEADLINE_MS);
+      const first = await journey.terminalWriteDirect(step.generation, step.terminalId, step.text);
+      const samples = [];
+      for (let sample = 0; sample < step.count; sample += 1) {
+        await delay(step.gapMs);
+        samples.push(await journey.terminalWriteDirect(step.generation, step.terminalId, step.text));
+      }
+      result = { first, samples };
     } else if (step.kind === "reopenStored") {
       // A stored conversation of that service reopened the way a click on its row does: the resume path.
       result = { sessionId: await journey.openStoredWithTitle(step.provider) };

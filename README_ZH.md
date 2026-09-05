@@ -74,7 +74,7 @@ active subscription 与 Code-hot workspace 始终有界。streaming 与后台工
 | 自动保持最新 | 5/10 | `vscodeUpgradeRollback` 在三个操作系统中验证 VSIX 与 Core 替换期间的会话连续性。`cliUpdateRehearsal` 通过确定性 fixture 验证已确认 provider 更新的失败、精确恢复与防振荡。托管 CI 不会修改带真实账户的 provider 安装，因此证据仍处于 mock 层。 | 应用与已安装的代理 CLI 会自行保持最新；若更新破坏了会话，在用户动手之前它已经回滚。用户不存在需要关心版本的时刻。 |
 | 自动识别模型 | 6/10 | hosted `modelDetectionSmoke --require-all` 在无凭据环境中安装当前真实 CLI，检查 Codex 的 `model/list` 与包含隔离 provider-owned option cache sentinel 的 Claude partial catalogue，并拒绝在 production source 中硬编码观测 identifier。它不证明特定账户的实际可用性，因此一种 live gate 的上限为 6。 | 当前账户实际可用的模型原样出现在列表中，出现新模型时无需修改 runtrol 就会显示。 |
 | 会话之间不互踩 | 5/10 | 真实 Git metadata 与 production Core admission 会把同一 worktree 的子目录视为一个 writer，并原子拒绝 opening、live、closing 状态下重叠的预约。linked worktree 与操作员明确允许的共享启动保持独立。provider 是 fixture，因此属于 mock 层。 | 哪个会话在哪个文件夹改了什么始终可以区分；第二个会话将要触碰同一文件夹时，在开始前就会收到警告；供应商提供隔离手段（worktree）时，可直接在开始界面使用。 |
-| AI 互相咨询 | 0/10 | 已移除该表面（2026-09-02）。薄终端监督边界不在提供方配置中注册 MCP 条目，因此移除了开关和 `crossConsultSmoke`。没有门禁断言此轴。 | 一个开关让两个 CLI 通过各自的官方表面（MCP）相互注册，一个 AI 在回合中直接获取另一个 AI 的意见。接线只通过各 CLI 自己的官方命令完成（不直接写配置文件），对话内容依然不经过 runtrol，用户不需要知道 MCP 是什么。 |
+| AI 互相咨询 | 0/10 | 已使用真实 CLI 验证可见启用及双向请求与回复。[会话通信契约](docs/sessionDialogue.md)说明当前行为。尚无活跃 CI 门禁为此轴计分。 | 在侧栏启用通信后，智能体可以明确询问另一受管会话并收到回复。不修改提供方配置，只在有界内存中传递正文，Runtrol 不保留对话副本。 |
 | 离开的自由 | 5/10 | `uninstallLeavesNoTrace` 在 runtrol home 之外保存供应商状态并完成一个回合，删除整个 home 后由新 daemon 加载同一个原生会话并完成第二个回合。对端是 ACP fixture，因此处于 mock 层。 | 删除 runtrol 后，会话与记录仍属于各个 CLI，按原来的方式继续。不存在被 runtrol 扣作人质的数据。 |
 
 哪个门禁支撑哪个轴，以 [docs/northStarEvidence.md](docs/northStarEvidence.md) 为准。

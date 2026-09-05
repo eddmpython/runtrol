@@ -14,6 +14,7 @@ impl Courier {
             .values()
             .flat_map(|mailbox| mailbox.queue.iter().map(|mail| mail.deadline))
             .chain(self.calls.values().map(|call| call.deadline))
+            .chain(self.rooms.values().map(|room| room.deadline))
             .min()
     }
 

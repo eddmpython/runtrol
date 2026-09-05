@@ -8,6 +8,7 @@ use runtrol_courier::env::{COURIER_ENDPOINT_ENV, COURIER_TOKEN_ENV, MANAGED_SESS
 use runtrol_courier::wire::{Hello, HelloAnswer, MAX_FRAME_BYTES};
 
 mod commands;
+mod rooms;
 mod words;
 pub use commands::{CommandOutput, execute};
 

@@ -14,7 +14,10 @@ use runtrol_provider::TerminalId;
 
 use super::{CourierGate, gate, session_id};
 
-async fn admission(gate: &CourierGate, session: ManagedSessionId) -> super::super::Admitted {
+pub(super) async fn admission(
+    gate: &CourierGate,
+    session: ManagedSessionId,
+) -> super::super::Admitted {
     gate.state
         .lock()
         .await
@@ -24,12 +27,12 @@ async fn admission(gate: &CourierGate, session: ManagedSessionId) -> super::supe
         .admission(session)
 }
 
-struct Fleet {
-    gate: CourierGate,
-    alpha: ManagedSessionId,
-    bravo: ManagedSessionId,
-    charlie: ManagedSessionId,
-    alpha_terminal: TerminalId,
+pub(super) struct Fleet {
+    pub(super) gate: CourierGate,
+    pub(super) alpha: ManagedSessionId,
+    pub(super) bravo: ManagedSessionId,
+    pub(super) charlie: ManagedSessionId,
+    pub(super) alpha_terminal: TerminalId,
 }
 
 async fn start(gate: &CourierGate) -> (TerminalId, ManagedSessionId) {
@@ -44,7 +47,7 @@ async fn start(gate: &CourierGate) -> (TerminalId, ManagedSessionId) {
     (terminal, session_id(terminal))
 }
 
-async fn fleet() -> Fleet {
+pub(super) async fn fleet() -> Fleet {
     let gate = gate();
     let (alpha_terminal, alpha) = start(&gate).await;
     let (_bravo_terminal, bravo) = start(&gate).await;
@@ -58,7 +61,7 @@ async fn fleet() -> Fleet {
     }
 }
 
-fn now() -> UnixMillis {
+pub(super) fn now() -> UnixMillis {
     let millis = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("test clock is after the epoch")
@@ -66,7 +69,7 @@ fn now() -> UnixMillis {
     UnixMillis(u64::try_from(millis).expect("test clock fits in milliseconds"))
 }
 
-fn body(text: &str) -> BoundedUtf8 {
+pub(super) fn body(text: &str) -> BoundedUtf8 {
     BoundedUtf8::new(text.to_owned(), Limits::INITIAL.body_bytes).expect("bounded fixture body")
 }
 

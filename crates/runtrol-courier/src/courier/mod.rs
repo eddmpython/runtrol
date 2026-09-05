@@ -8,6 +8,7 @@ use crate::limits::{Limits, UnixMillis};
 use crate::receipt::{DeliveryState, Receipt, Refusal};
 
 mod commands;
+pub(crate) mod rooms;
 
 #[cfg(test)]
 mod tests;
@@ -22,6 +23,7 @@ struct ActiveCall {
     hop_count: u8,
     visited: BoundedSessionSet,
     stage: CallStage,
+    room: Option<crate::RoomId>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -76,6 +78,7 @@ pub struct Courier {
     limits: Limits,
     mailboxes: BTreeMap<ManagedSessionId, Mailbox>,
     calls: BTreeMap<CallId, ActiveCall>,
+    rooms: BTreeMap<crate::RoomId, rooms::Room>,
     /// Every message identifier known, live or retired, with where it got to.
     states: BTreeMap<MessageId, DeliveryState>,
     /// The retired identifiers, oldest first, bounded by the limits. Live ones are never here.
@@ -91,6 +94,7 @@ impl Courier {
             limits,
             mailboxes: BTreeMap::new(),
             calls: BTreeMap::new(),
+            rooms: BTreeMap::new(),
             states: BTreeMap::new(),
             retired: VecDeque::new(),
             charged_bytes: 0,
@@ -146,9 +150,10 @@ impl Courier {
 
     /// Forget `session`: its mail is dropped, the calls it took part in end, and their bytes are released now.
     ///
-    /// A reply the session had already sent stays readable by its asker: the call is complete from this side.
+    /// An ordinary reply already sent stays readable by its asker. A room retires when any participant ends,
+    /// including its unread replies; unrelated mail keeps its ordinary lifetime.
     pub fn session_ended(&mut self, session: ManagedSessionId) -> Released {
-        let mut released = Released::default();
+        let mut released = self.end_rooms_of(session);
         let Some(mailbox) = self.mailboxes.remove(&session) else {
             return released;
         };
@@ -228,6 +233,7 @@ impl Courier {
         now: UnixMillis,
     ) -> Option<CallEnvelope> {
         let mut swept = Swept::default();
+        self.expire_rooms(now, &mut swept);
         self.expire_waiting(session, now, &mut swept);
         let mailbox = self.mailboxes.get_mut(&session)?;
         let index = mailbox.queue.iter().position(|envelope| {
@@ -270,6 +276,7 @@ impl Courier {
     /// Expire every envelope and every call whose deadline is at or before `now`, releasing their bytes.
     pub fn sweep(&mut self, now: UnixMillis) -> Swept {
         let mut swept = Swept::default();
+        self.expire_rooms(now, &mut swept);
         let sessions: Vec<ManagedSessionId> = self.mailboxes.keys().copied().collect();
         for session in sessions {
             self.expire_waiting(session, now, &mut swept);
@@ -386,6 +393,7 @@ impl Courier {
                     hop_count: delivered.hop_count,
                     visited: delivered.visited.clone(),
                     stage: CallStage::Queued,
+                    room: delivered.room_id,
                 },
             );
         }
@@ -421,6 +429,7 @@ impl Courier {
         // A reply cannot outlive its call or reset the chain the target received.
         let delivered = CallEnvelope {
             deadline: envelope.deadline.min(call.deadline),
+            room_id: call.room,
             hop_count: call.hop_count,
             visited: call.visited,
             ..envelope
@@ -470,6 +479,7 @@ impl Courier {
         self.calls.remove(&envelope.call_id);
         self.retire(call.ask, DeliveryState::Cancelled);
         Ok(self.enqueue(CallEnvelope {
+            room_id: call.room,
             hop_count: call.hop_count,
             visited: call.visited,
             ..envelope

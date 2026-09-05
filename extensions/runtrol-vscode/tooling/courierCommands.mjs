@@ -1,6 +1,9 @@
 // Real Runtime dialogue journey, called from the owned admission/handover harness.
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
+import { roomJourney } from "./courierRooms.mjs";
+
+export const commandBody = "courier-probe-한국어 English\nopaque body\n";
 
 function id() {
   const bytes = randomBytes(16);
@@ -30,7 +33,7 @@ export async function commandJourney(first, firstSession, open) {
   assert.deepEqual(new Set(listed.sessions.map((row) => row.session)), new Set([a.session, b.session, c.session]));
   assert.ok(listed.sessions.every((row) => Object.keys(row).sort().join(",") === "pid,session"));
   const firstId = id();
-  const body = "courier-probe-한국어 English\nopaque body\n";
+  const body = commandBody;
   await cli(c, ["tell", b.session], "unrelated");
   const receipt = await cli(a, ["tell", b.session, "--message-id", firstId], body);
   assert.equal(receipt.receipt.message_id, firstId);
@@ -96,6 +99,7 @@ export async function commandJourney(first, firstSession, open) {
   // The list round trip makes the disconnected request's cleanup observable without consuming its body.
   await cli(a, ["list"]);
   assert.equal((await receive(b)).envelope, null);
+  await roomJourney(cohort, cli, raw, body);
   process.stdout.write("RUNTROL_COURIER_COMMANDS list=true unicode=true duplicate=true filter=true overflow=true roundTrip=true reverse=true cancel=true expiry=true waitSaturation=true disconnect=true\n");
   return body;
 }

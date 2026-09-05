@@ -119,6 +119,15 @@ pub async fn execute(words: Vec<OsString>) -> Result<CommandOutput, CourierFailu
             })
         })
         .collect::<Result<_, _>>()?;
+    let room_help = words.first().is_some_and(|word| word == "room")
+        && matches!(words.len(), 2 | 3)
+        && words.last().is_some_and(|word| word == "--help");
+    if room_help {
+        return Ok(CommandOutput {
+            stdout: super::rooms::help(),
+            success: true,
+        });
+    }
     if let [word] = words.as_slice()
         && matches!(word.as_str(), "--help" | "help" | "--guide")
     {
@@ -141,6 +150,7 @@ pub async fn execute(words: Vec<OsString>) -> Result<CommandOutput, CourierFailu
 
 async fn run(birth: &Birth, command: Command) -> Result<Answer, CourierFailure> {
     let answer = match command {
+        Command::Room(command) => room(birth, command).await?,
         Command::List { after } => {
             birth
                 .exchange(Request::List { after }, Duration::ZERO)
@@ -209,6 +219,54 @@ async fn run(birth: &Birth, command: Command) -> Result<Answer, CourierFailure> 
         }
     };
     Ok(answer)
+}
+
+async fn room(birth: &Birth, command: super::rooms::RoomCommand) -> Result<Answer, CourierFailure> {
+    use super::rooms::RoomCommand;
+    let request = match command {
+        RoomCommand::Open {
+            mut peers,
+            timeout_ms,
+        } => {
+            if peers.contains(&birth.hello.session) {
+                return Err(CourierFailure::Arguments(
+                    "room open lists peers only; your identity is included automatically".into(),
+                ));
+            }
+            peers.insert(0, birth.hello.session);
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_err(|_invalid| CourierFailure::Timeout)?;
+            Request::RoomOpen {
+                participants: peers,
+                deadline: UnixMillis(u64::try_from(now.as_millis()).unwrap_or(u64::MAX))
+                    .plus(timeout_ms),
+            }
+        }
+        RoomCommand::Inspect { room } => Request::RoomInspect { room },
+        RoomCommand::Transfer { room, speaker } => Request::RoomTransfer { room, speaker },
+        RoomCommand::Close { room } => Request::RoomClose { room },
+        RoomCommand::Ask {
+            room,
+            target,
+            message,
+            timeout_ms,
+        } => {
+            return wait(
+                birth,
+                Request::RoomAsk {
+                    room,
+                    target,
+                    message_id: message,
+                    body: body().await?,
+                    timeout_ms,
+                },
+                timeout_ms,
+            )
+            .await;
+        }
+    };
+    birth.exchange(request, Duration::ZERO).await
 }
 
 async fn wait(birth: &Birth, request: Request, timeout_ms: u64) -> Result<Answer, CourierFailure> {

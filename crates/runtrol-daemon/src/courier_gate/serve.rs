@@ -122,7 +122,7 @@ async fn greet(
                 welcome(&mut connection, session).await;
                 return;
             };
-            let waiting = matches!(&request, Request::Ask { .. })
+            let waiting = matches!(&request, Request::Ask { .. } | Request::RoomAsk { .. })
                 || matches!(&request, Request::Receive { timeout_ms, .. } if *timeout_ms > 0);
             let _session_slot = if waiting {
                 let Some(slot) = gate.wait_slot(admitted).await else {

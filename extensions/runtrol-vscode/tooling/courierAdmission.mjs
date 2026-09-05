@@ -11,7 +11,7 @@ import { createRequire } from "node:module";
 import { build } from "esbuild";
 import { isolatedRuntimeState, ownedTreeIdentities, terminateCapturedIdentities } from "./isolated-vscode.mjs";
 import { processRows, normalizedExecutable } from "./process-identity.mjs";
-import { commandJourney } from "./courierCommands.mjs";
+import { commandBody, commandJourney } from "./courierCommands.mjs";
 
 const root = fileURLToPath(new URL("../../../", import.meta.url));
 const core = option("--core");
@@ -85,7 +85,8 @@ try {
     assert.equal(disabled.status, 1);
     assert.equal(JSON.parse(disabled.stdout).answer, "refused");
     await activate(view, true);
-    bodyMarker = await commandJourney(peer, birth.RUNTROL_MANAGED_SESSION, async () => {
+    bodyMarker = commandBody;
+    await commandJourney(peer, birth.RUNTROL_MANAGED_SESSION, async () => {
       const opened = command(probe, ["open", home, identity, "courier-fixture", workspace]);
       extraTerminals.push(opened);
       const peer = connected.shift() ?? await deadline(new Promise((resolve) => { pendingPeer = resolve; }), "another fixture");

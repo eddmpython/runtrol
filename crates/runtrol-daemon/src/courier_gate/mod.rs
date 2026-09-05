@@ -21,6 +21,7 @@ use runtrol_provider::{ProcessIdentity, TerminalId};
 use zeroize::Zeroizing;
 
 mod commands;
+mod rooms;
 pub(crate) mod serve;
 
 #[cfg(test)]

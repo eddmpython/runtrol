@@ -2,7 +2,10 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{BoundedUtf8, CallEnvelope, CallId, ManagedSessionId, MessageId, Receipt};
+use crate::{
+    BoundedUtf8, CallEnvelope, CallId, ManagedSessionId, MessageId, Receipt, RoomId, RoomView,
+    UnixMillis,
+};
 
 /// Maximum structural rows in one listing. Continue after its last identifier to fetch the next page.
 pub const SESSION_PAGE: usize = 32;
@@ -28,6 +31,43 @@ pub struct Invocation {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Request {
+    /// Open a fixed-participant room with the admitted session as owner and initial speaker.
+    RoomOpen {
+        /// All participants, including the caller. The core enforces membership and count.
+        participants: Vec<ManagedSessionId>,
+        /// The room and its rounds expire no later than this instant.
+        deadline: UnixMillis,
+    },
+    /// Read room metadata as a participant without consuming any mail.
+    RoomInspect {
+        /// Exact room identity in this Runtime generation.
+        room: RoomId,
+    },
+    /// Explicitly select a participant to ask the next round, as the owner.
+    RoomTransfer {
+        /// Exact room identity.
+        room: RoomId,
+        /// The next speaker, already a participant.
+        speaker: ManagedSessionId,
+    },
+    /// Retire this room and its mail, as the owner.
+    RoomClose {
+        /// Exact room identity.
+        room: RoomId,
+    },
+    /// Admit one fresh round and await its exact reply on this connection.
+    RoomAsk {
+        /// Exact room identity.
+        room: RoomId,
+        /// A different fixed participant.
+        target: ManagedSessionId,
+        /// Duplicate identity of the outgoing ask.
+        message_id: MessageId,
+        /// Opaque UTF-8 body, bounded by the courier's existing limit.
+        body: BoundedUtf8,
+        /// Positive bounded wait. Closing or timing out releases this admitted call only.
+        timeout_ms: u64,
+    },
     /// Live managed session identities in ascending order.
     List {
         /// Exclusive cursor from a previous page.
@@ -83,6 +123,16 @@ pub struct Session {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "answer", rename_all = "snake_case")]
 pub enum Answer {
+    /// Current structural room state after opening, inspecting, or transferring it.
+    Room {
+        /// Metadata without conversation content.
+        room: RoomView,
+    },
+    /// The owner explicitly retired this room and its outstanding calls and bodies.
+    RoomClosed {
+        /// The retired room identity.
+        room: RoomId,
+    },
     /// One page. `next` is the cursor for another page, if one exists.
     Sessions {
         /// Bounded live structural rows.

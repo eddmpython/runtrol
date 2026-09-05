@@ -17,9 +17,10 @@ A receipt confirms admission, not model understanding. An idle agent must explic
 pub(super) fn help() -> String {
     let limits = Limits::INITIAL;
     format!(
-        "{HELP}\nLimits: body {} UTF-8 bytes; mailbox {} envelopes / {} body bytes; \
+        "{HELP}\n{}\nLimits: body {} UTF-8 bytes; mailbox {} envelopes / {} body bytes; \
         Runtime {} body bytes / {} active calls; default deadline {} seconds, maximum {} seconds; \
         forwarding {} hops / {} visited sessions.",
+        super::rooms::help(),
         limits.body_bytes,
         limits.mailbox_envelopes,
         limits.mailbox_bytes,
@@ -47,6 +48,7 @@ pub(super) fn guide() -> String {
 }
 
 pub(super) enum Command {
+    Room(super::rooms::RoomCommand),
     List {
         after: Option<ManagedSessionId>,
     },
@@ -69,18 +71,31 @@ pub(super) enum Command {
     },
 }
 
-fn wrong() -> CourierFailure {
-    CourierFailure::Arguments(format!("invalid courier arguments\n{HELP}"))
+pub(super) fn wrong() -> CourierFailure {
+    CourierFailure::Arguments(format!("invalid courier arguments\n{}", help()))
 }
 
-fn identifier<T: std::str::FromStr>(text: Option<&str>) -> Result<T, CourierFailure> {
+pub(super) fn identifier<T: std::str::FromStr>(text: Option<&str>) -> Result<T, CourierFailure> {
     text.ok_or_else(wrong)?.parse().map_err(|_invalid| wrong())
 }
 
+pub(super) fn timeout(value: &str) -> Result<u64, CourierFailure> {
+    let seconds: u64 = value.parse().map_err(|_invalid| wrong())?;
+    let millis = seconds.checked_mul(1000).ok_or_else(wrong)?;
+    if millis == 0 || millis > Limits::INITIAL.max_deadline_millis {
+        return Err(wrong());
+    }
+    Ok(millis)
+}
+
 pub(super) fn parse(words: &[String]) -> Result<Command, CourierFailure> {
-    let Some(verb) = words.first().map(String::as_str) else {
+    let Some((verb, arguments)) = words.split_first() else {
         return Err(wrong());
     };
+    let verb = verb.as_str();
+    if verb == "room" {
+        return super::rooms::parse(arguments).map(Command::Room);
+    }
     let needs_target = matches!(verb, "tell" | "ask" | "reply" | "cancel");
     let target = needs_target
         .then(|| words.get(1).map(String::as_str))
@@ -103,12 +118,7 @@ pub(super) fn parse(words: &[String]) -> Result<Command, CourierFailure> {
                 message = Some(identifier(Some(value))?);
             }
             "--timeout" if matches!(verb, "tell" | "ask" | "wait") && timeout_ms.is_none() => {
-                let seconds: u64 = value.parse().map_err(|_invalid| wrong())?;
-                let millis = seconds.checked_mul(1000).ok_or_else(wrong)?;
-                if millis == 0 || millis > Limits::INITIAL.max_deadline_millis {
-                    return Err(wrong());
-                }
-                timeout_ms = Some(millis);
+                timeout_ms = Some(timeout(value)?);
             }
             _ => return Err(wrong()),
         }

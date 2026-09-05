@@ -46,6 +46,24 @@ mail in order. `ask` admits a request and waits for its exact reply on one conne
 ask, with its peer and deadline derived from the Runtime's call metadata. `cancel` withdraws the caller's call and
 queues a bodyless notification when the bounded mailbox can admit it.
 
+## Explicit rooms
+
+The `room` commands group fixed participants for a bounded exchange. Opening a room makes the caller its owner and
+first speaker. Only that owner may select another participant as speaker or close the room. A selected speaker
+explicitly asks one participant, who replies through the ordinary exact-message reply command. The Runtime never
+chooses the next speaker, starts another round, or wakes an idle model.
+
+Each admitted round starts a fresh ask chain. An unanswered, cancelled, or abandoned round still consumes its
+allowance; a refused ask does not. One round remains in flight until its reply is consumed or its call ends. The
+final allowed reply remains readable. Closing a room, disabling or ending any participant, or reaching the room's
+deadline immediately retires its calls and unread mail while preserving unrelated mail in order.
+
+The [room core](../crates/runtrol-courier/src/courier/rooms/mod.rs) owns membership and speaker authority. Its
+participant and round ceilings come from `Limits::INITIAL`; total rooms share the active-call ceiling. Completed
+room metadata participates in the same expiry schedule, so an empty room cannot survive its deadline or accumulate
+without a bound. Command words and their generated limit reference live in the
+[room parser](../crates/runtrol-cli/src/courier/rooms.rs).
+
 ## Authority and lifetime
 
 The named pipe rejects remote clients. Windows admission requires the current effective logon, an inherited
@@ -83,6 +101,7 @@ node extensions/runtrol-vscode/tooling/courierAdmission.mjs --core DEVELOPMENT_E
 ```
 
 It exercises Unicode, filtering, duplicates, full mailboxes, both reply directions, role refusal, exact cancellation,
-deadline expiry, waiter saturation, disconnect cleanup, generation continuity, and body absence from task-owned
+deadline expiry, waiter saturation, disconnect cleanup, explicit room rounds and authority, generation continuity,
+and body absence from task-owned
 Runtime files. Real-provider visual verification uses the isolated native Extension Host in
 [`courierProviderHost.mjs`](../extensions/runtrol-vscode/tooling/courierProviderHost.mjs).

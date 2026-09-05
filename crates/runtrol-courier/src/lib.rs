@@ -19,6 +19,7 @@ mod receipt;
 pub mod wire;
 
 pub use body::{BodyTooLarge, BoundedUtf8};
+pub use courier::rooms::{RoomError, RoomView};
 pub use courier::{Courier, Released, Swept};
 pub use envelope::{BoundedSessionSet, CallEnvelope, CallKind, PROTOCOL_VERSION, VisitedBound};
 pub use id::{CallId, CallRef, IdError, ManagedSessionId, MessageId, RoomId};

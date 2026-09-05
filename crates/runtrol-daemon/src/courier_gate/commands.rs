@@ -7,14 +7,14 @@ use runtrol_courier::{CallEnvelope, CallKind, CallRef, Limits, ManagedSessionId,
 
 use super::{Admitted, CourierGate, GateState, PendingCall};
 
-fn active(state: &GateState, session: ManagedSessionId, activation: u64) -> bool {
+pub(super) fn active(state: &GateState, session: ManagedSessionId, activation: u64) -> bool {
     state
         .sessions
         .get(&session)
         .is_some_and(|registered| registered.enabled && registered.activation == activation)
 }
 
-fn now() -> UnixMillis {
+pub(super) fn now() -> UnixMillis {
     match SystemTime::now().duration_since(UNIX_EPOCH) {
         Ok(duration) => UnixMillis(u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)),
         // Before the epoch no message can be assigned an honest deadline. Zero makes all normal future
@@ -23,7 +23,7 @@ fn now() -> UnixMillis {
     }
 }
 
-fn refused(reason: impl Into<String>) -> Answer {
+pub(super) fn refused(reason: impl Into<String>) -> Answer {
     Answer::Refused {
         reason: reason.into(),
     }
@@ -61,6 +61,10 @@ impl CourierGate {
         self.command_owned(admitted, request, &mut None).await
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the closed wire table routes every command through its admitted activation"
+    )]
     pub(super) async fn command_owned(
         &self,
         admitted: Admitted,
@@ -71,6 +75,29 @@ impl CourierGate {
         let Some(activation) = admitted.activation else {
             return refused("dialogue was disabled when this connection was admitted");
         };
+        if let Request::RoomAsk {
+            room,
+            target,
+            message_id,
+            body,
+            timeout_ms,
+        } = request
+        {
+            return self
+                .room_ask(
+                    admitted, room, target, message_id, body, timeout_ms, pending,
+                )
+                .await;
+        }
+        if matches!(
+            &request,
+            Request::RoomOpen { .. }
+                | Request::RoomInspect { .. }
+                | Request::RoomTransfer { .. }
+                | Request::RoomClose { .. }
+        ) {
+            return self.room_command(admitted, request).await;
+        }
         if let Request::Ask { envelope } = request {
             return self.ask(session, activation, envelope, pending).await;
         }
@@ -129,7 +156,13 @@ impl CourierGate {
             Request::Cancel { call, message_id } => {
                 state.courier.cancel_call(session, call, message_id, now)
             }
-            Request::Receive { .. } | Request::Ask { .. } => {
+            Request::Receive { .. }
+            | Request::Ask { .. }
+            | Request::RoomAsk { .. }
+            | Request::RoomOpen { .. }
+            | Request::RoomInspect { .. }
+            | Request::RoomTransfer { .. }
+            | Request::RoomClose { .. } => {
                 return refused("receive requires the asynchronous wait path");
             }
         };
@@ -176,7 +209,7 @@ impl CourierGate {
             .await
     }
 
-    async fn receive(
+    pub(super) async fn receive(
         &self,
         session: ManagedSessionId,
         activation: u64,

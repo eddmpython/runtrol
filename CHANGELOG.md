@@ -12,6 +12,9 @@ and refactoring that no user can observe do not belong here.
 
 ### Added
 
+- Managed sessions can open a bounded room, explicitly select its speaker, and exchange exact requests and replies.
+  The last allowed reply stays readable. Closing the room or ending a participant releases its unread mail without
+  disturbing other messages.
 - Enable dialogue from a live conversation's sidebar row. The terminal receives a visible instruction with the
   courier's current commands and limits. Dialogue starts disabled, shows its enabled state on the row, and can be
   disabled without stopping the conversation or leaving provider configuration behind.
