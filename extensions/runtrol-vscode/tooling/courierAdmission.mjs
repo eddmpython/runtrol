@@ -1,9 +1,10 @@
 // CALL-02: real Runtime admission, retained connections, outside-tree refusal, and generation continuity.
 // Usage: node tooling/courierAdmission.mjs --core <built runtrol.exe> --next <different built runtrol.exe>
+// --lifecycle starts with the baseline, upgrades to --next, then restores the original executable.
 import assert from "node:assert/strict";
 import net from "node:net";
 import { spawn, spawnSync } from "node:child_process";
-import { mkdir, mkdtemp, open, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, open, readFile, rm, writeFile } from "node:fs/promises";
 import { once } from "node:events";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,10 +14,13 @@ import { isolatedRuntimeState, ownedTreeIdentities, terminateCapturedIdentities 
 import { processRows, normalizedExecutable } from "./process-identity.mjs";
 import { commandBody, commandJourney } from "./courierCommands.mjs";
 import { spawnBody, spawnJourney } from "./courierSpawn.mjs";
+import { lifecycleJourney } from "./courierLifecycle.mjs";
+import { assertNoBodyResidue } from "./bodyResidue.mjs";
 
 const root = fileURLToPath(new URL("../../../", import.meta.url));
 const core = option("--core");
 const nextCore = option("--next");
+const lifecycle = process.argv.includes("--lifecycle");
 const probe = path.join(path.dirname(core), "examples", "handoverProbe.exe");
 const fixture = fileURLToPath(new URL("./courierProcess.mjs", import.meta.url));
 const executionRoot = path.join(process.env.LOCALAPPDATA, "dev-workspace");
@@ -72,10 +76,11 @@ try {
     `new = [${JSON.stringify(fixture.replaceAll("\\", "/"))}]`,
     '[tui.env]', `RUNTROL_COURIER_PROBE = ${JSON.stringify(pipeName)}`,
   ].join("\n") + "\n");
-  await start(core, "first");
+  const initialRuntime = await start(core, "first");
   await waitFor(async () => (await status()).find((generation) => !generation.draining), "first generation");
   const enrolled = command(probe, ["enroll", home, core, identity, workspace]);
   const opened = command(probe, ["open", home, identity, "courier-fixture", workspace]);
+  initialRuntime.generation = opened.generation;
   const peer = await deadline(firstConnected, "fixture connection");
   const born = await peer.read();
   assert.equal(born.first?.answer, "welcome", "the first instruction's hello is admitted");
@@ -112,6 +117,21 @@ try {
         command(probe, ["stop", home, identity, worker.terminal.generation, worker.terminal.terminalId]);
       },
     });
+  } else if (lifecycle) {
+    await activate((await watch([opened]))[0], true);
+    await lifecycleJourney({
+      open: openAgent, newId: () => sdk.newMutationRequestId(), waitFor,
+      retainMarker: (marker) => { bodyMarker = marker; },
+      startNext: () => startGeneration(nextCore, "next"),
+      startOriginal: () => startGeneration(core, "restored"),
+      draining: (digest) => waitFor(async () => (await status()).some((row) => row.digest === digest && row.draining),
+        "pending-body generation draining"),
+      endedGeneration: (digest) => waitFor(async () => !(await status()).some((row) => row.digest === digest)
+        && processes.filter((entry) => entry.generation === digest).every((entry) => entry.child.exitCode !== null),
+        "prior Runtime process exit"),
+      stop: (agent) => command(probe, ["stop", home, identity, agent.terminal.generation, agent.terminal.terminalId]),
+      crash: crashGeneration,
+    }, { peer, session: birth.RUNTROL_MANAGED_SESSION, terminal: opened, runtimePid: initialRuntime.child.pid });
   } else if (process.argv.includes("--commands")) {
     const view = (await watch([opened]))[0];
     assert.equal(view.opened.terminal.dialogueEnabled, false, "new processes start with dialogue disabled");
@@ -140,23 +160,25 @@ try {
     const [view] = await watch([opened]);
     if (process.argv.includes("--input-latency")) await inputLatency(view, peer);
   }
-  // This long journey has no Studio window. Hold real SDK views across handover so the existing policy for
-  // retiring unwatched, quiet terminals does not legitimately end these fixture processes during the check.
-  await start(nextCore, "next");
-  await waitFor(async () => (await status()).some((generation) => generation.digest === opened.generation && generation.draining),
-    "first generation draining");
-  process.stdout.write("courier handover: checking old managed hello\n");
-  assert.equal((await peer.ask({ kind: "hello" })).answer, "welcome", "the draining generation still serves its child");
-  assert.equal((await peer.ask({ kind: "command" })).welcome, true);
-  process.stdout.write("courier handover: stopping managed terminals\n");
-  command(probe, ["stop", home, identity, opened.generation, opened.terminalId]);
-  for (const terminal of extraTerminals) command(probe, ["stop", home, identity, terminal.generation, terminal.terminalId]);
-  await waitFor(async () => !(await status()).some((generation) => generation.digest === opened.generation), "drained generation exit");
-  process.stdout.write(`RUNTROL_COURIER_ADMISSION ${JSON.stringify({ generation: enrolled.generation,
-    firstHello: true, twelveHeldClients: true, wrongTokenRefused: true, outsideTreeRefused: true,
-    staleEndpointRefused: true, survivedHandover: true, drainedAfterExit: true })}\n`);
+  if (!lifecycle) {
+    // This long journey has no Studio window. Hold real SDK views across handover so the existing policy for
+    // retiring unwatched, quiet terminals does not legitimately end these fixture processes during the check.
+    await start(nextCore, "next");
+    await waitFor(async () => (await status()).some((generation) => generation.digest === opened.generation && generation.draining),
+      "first generation draining");
+    process.stdout.write("courier handover: checking old managed hello\n");
+    assert.equal((await peer.ask({ kind: "hello" })).answer, "welcome", "the draining generation still serves its child");
+    assert.equal((await peer.ask({ kind: "command" })).welcome, true);
+    process.stdout.write("courier handover: stopping managed terminals\n");
+    command(probe, ["stop", home, identity, opened.generation, opened.terminalId]);
+    for (const terminal of extraTerminals) command(probe, ["stop", home, identity, terminal.generation, terminal.terminalId]);
+    await waitFor(async () => !(await status()).some((generation) => generation.digest === opened.generation), "drained generation exit");
+    process.stdout.write(`RUNTROL_COURIER_ADMISSION ${JSON.stringify({ generation: enrolled.generation,
+      firstHello: true, twelveHeldClients: true, wrongTokenRefused: true, outsideTreeRefused: true,
+      staleEndpointRefused: true, survivedHandover: true, drainedAfterExit: true })}\n`);
+  }
 } catch (error) {
-  for (const label of ["first", "next"]) {
+  for (const label of ["first", "next", "restored"]) {
     try {
       const log = await readFile(path.join(temporary, `${label}.log`), "utf8");
       process.stderr.write(`${label} Runtime: ${log.slice(-6000)}\n`);
@@ -180,20 +202,8 @@ try {
     }
   }
   for (const log of logs) await log.close();
-  if (bodyMarker) await noResidue(temporary, bodyMarker);
+  if (bodyMarker) await assertNoBodyResidue(temporary, bodyMarker);
   await rm(temporary, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
-}
-
-async function noResidue(directory, marker) {
-  for (const entry of await readdir(directory, { withFileTypes: true })) {
-    const target = path.join(directory, entry.name);
-    if (entry.isDirectory()) await noResidue(target, marker);
-    else if (entry.isFile()) {
-      const bytes = await readFile(target);
-      assert.ok(!bytes.includes(Buffer.from(marker)) && !bytes.includes(Buffer.from(marker, "utf16le")),
-        `opaque body retained in ${path.basename(target)}`);
-    }
-  }
 }
 
 async function watch(terminals) {
@@ -288,6 +298,39 @@ async function start(binary, label) {
   if (!entry.identity) throw new Error(`cannot prove birth identity of daemon ${child.pid}`);
   process.stdout.write(`owned ${label} pid=${child.pid} home=${home}\n`);
   child.on("error", (error) => { process.stderr.write(`${label}: ${error.message}\n`); });
+  return entry;
+}
+
+async function startGeneration(binary, label) {
+  const entry = await start(binary, label);
+  const generation = await waitFor(async () => (await status()).find((row) => row.processId === entry.child.pid && !row.draining),
+    `${label} generation`);
+  entry.generation = generation.digest;
+  return entry;
+}
+
+async function openAgent() {
+  const terminal = command(probe, ["open", home, identity, "courier-fixture", workspace]);
+  extraTerminals.push(terminal);
+  const peer = connected.shift() ?? await deadline(new Promise((resolve) => { pendingPeer = resolve; }), "lifecycle fixture");
+  const born = await peer.read();
+  assert.ok(born.first?.answer === "welcome", "the lifecycle fixture was not admitted");
+  await activate((await watch([terminal]))[0], true);
+  return { peer, session: born.birth.RUNTROL_MANAGED_SESSION, terminal };
+}
+
+async function crashGeneration(entry) {
+  const captured = ownedTreeIdentities(entry.child.pid);
+  const current = captured.find((row) => row.pid === entry.child.pid);
+  assert.ok(current && current.startedAt === entry.identity.startedAt
+    && normalizedExecutable(current.executable) === normalizedExecutable(entry.binary),
+  "the fault injection target no longer has its owned identity");
+  entry.expectedExit = true;
+  assert.ok(entry.child.kill("SIGKILL"), "the owned Runtime fault injection failed");
+  await waitFor(() => {
+    const running = processRows();
+    return captured.every((before) => !running.some((after) => after.pid === before.pid && after.startedAt === before.startedAt));
+  }, "faulted Runtime and contained descendants exit");
 }
 
 function command(binary, words) {
@@ -314,7 +357,7 @@ async function waitFor(check, description) {
     const result = await check();
     if (result) return result;
     for (const entry of processes) {
-      if (entry.child.exitCode !== null && entry.child.exitCode !== 0) throw new Error(`daemon exited ${entry.child.exitCode}`);
+      if (!entry.expectedExit && entry.child.exitCode !== null && entry.child.exitCode !== 0) throw new Error(`daemon exited ${entry.child.exitCode}`);
     }
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
@@ -352,7 +395,7 @@ function linePeer(socket) {
   socket.on("close", () => close(new Error("fixture pipe closed")));
   const read = () => deadline(lines.length ? Promise.resolve(lines.shift()) : ended ? Promise.reject(ended)
     : new Promise((resolve, reject) => readers.push({ resolve, reject })), "fixture reply");
-  return { read, async ask(request) {
+  return { read, ended: () => ended !== null, async ask(request) {
     socket.write(JSON.stringify(request) + "\n");
     const answer = await read();
     if (answer.failure) throw new Error(answer.failure);

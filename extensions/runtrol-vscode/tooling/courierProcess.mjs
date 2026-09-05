@@ -30,6 +30,7 @@ peer.on("data", (chunk) => {
 });
 
 async function run(request) {
+  if (request.kind === "malformed") return malformed(request);
   if (request.kind === "request") return hello({ request: request.command }, 2);
   if (request.kind === "hold") {
     return hello({ request: request.command }, 1, request.key);
@@ -69,6 +70,42 @@ async function run(request) {
     return { status: command.status, welcome: command.stdout.trim() === "courier: welcome" };
   }
   throw new Error("unknown test request");
+}
+
+function malformed({ shape, marker }) {
+  return new Promise((resolve, reject) => {
+    const socket = net.createConnection(birth.RUNTROL_COURIER_ENDPOINT);
+    const received = [];
+    let receivedBytes = 0;
+    const timer = setTimeout(() => { socket.destroy(); reject(new Error("malformed courier probe timed out")); }, 8_000);
+    socket.on("error", (error) => {
+      if (error.code !== "ECONNRESET" && error.code !== "EPIPE") {
+        clearTimeout(timer); reject(new Error("malformed courier probe transport failed"));
+      }
+    });
+    socket.on("data", (chunk) => {
+      receivedBytes += chunk.length;
+      if (receivedBytes > 4096) {
+        clearTimeout(timer); socket.destroy(); reject(new Error("malformed courier refusal exceeded its bound"));
+      } else received.push(chunk);
+    });
+    socket.on("close", () => {
+      clearTimeout(timer);
+      const bytes = Buffer.concat(received);
+      resolve({ closed: true, refused: bytes.includes(Buffer.from('"answer":"refused"')),
+        bodyAbsent: !bytes.includes(Buffer.from(marker)) });
+    });
+    socket.on("connect", () => {
+      const invalid = { protocol_version: 1, session: birth.RUNTROL_MANAGED_SESSION,
+        token: birth.RUNTROL_COURIER_TOKEN, request: { command: "room_ask", room: birth.RUNTROL_MANAGED_SESSION,
+          target: birth.RUNTROL_MANAGED_SESSION, message_id: birth.RUNTROL_MANAGED_SESSION,
+          body: { marker }, timeout_ms: 1_000 } };
+      const bytes = Buffer.from(shape === "invalidJson" ? `{${marker}` : JSON.stringify(invalid));
+      const prefix = Buffer.alloc(4);
+      prefix.writeUInt32BE(shape === "oversizedPrefix" ? 16 * 1024 * 6 + 4097 : bytes.length);
+      socket.write(shape === "oversizedPrefix" ? prefix : Buffer.concat([prefix, bytes]));
+    });
+  });
 }
 
 function hello(overrides = {}, expected = 1, holdKey = null) {

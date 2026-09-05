@@ -157,3 +157,13 @@ the native Extension Host journey also measures the Studio input path.
 With `--spawn`, the harness creates a disposable Git project and proves isolated workers, public lineage, visible
 activation before initial delivery, depth and capacity refusals, clean-only recovery, and unchanged original files.
 Its provider is a command fixture. Real-provider acceptance additionally uses the native Extension Host journey.
+
+With `--lifecycle`, pass the accepted baseline as `--core` and the new development executable as `--next`.
+The journey leaves exact asks pending across upgrade and rollback, ends the original Runtime before restoring its
+image, and abruptly terminates the upgraded Runtime while another ask is pending. It checks contained-process exit,
+closed peers, no replay into the replacement generation, timeout retirement, malformed-frame refusals, and body
+absence after all Runtime handles close. This process fault does not invoke or test the Rust panic hook.
+
+The [body-residue scanner](../extensions/runtrol-vscode/tooling/bodyResidue.mjs) checks explicit markers in raw,
+JSON-escaped and Unicode-escaped UTF-8 and UTF-16LE. New lifecycle probes create unique ASCII sentinels in memory.
+Its mutation tests run with the extension's ordinary tests and reject injected copies without printing their bodies.
