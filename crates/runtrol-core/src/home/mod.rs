@@ -99,6 +99,13 @@ pub enum HomeError {
         tag: String,
     },
 
+    /// A courier nonce is not the thirty-two lowercase hex digits a courier endpoint name is built from.
+    #[error("{nonce:?} is not a courier nonce (thirty-two lowercase hex digits)")]
+    CourierNonce {
+        /// What was given.
+        nonce: String,
+    },
+
     /// The socket path would not fit the kernel's address field.
     ///
     /// Unix only: the address is a fixed-size array there, whereas a Windows pipe name is a

@@ -304,6 +304,20 @@ impl Layout {
         Endpoint::generation_runtime_of(&self.root, generation)
     }
 
+    /// Where one Runtime generation's courier listens: the endpoint a managed process is told about at birth.
+    ///
+    /// The nonce is minted by the generation that binds the endpoint, so the name cannot be derived from the
+    /// home alone, and two generations of one home never share a courier.
+    ///
+    /// # Errors
+    ///
+    /// [`HomeError::CourierNonce`] when the nonce is not thirty-two lowercase hex digits, and on Unix
+    /// [`HomeError::SocketPathTooLong`] when the socket path would not fit the kernel's field.
+    pub fn courier_endpoint(&self, nonce: &str) -> Result<Endpoint, HomeError> {
+        checked_nonce(nonce)?;
+        Endpoint::courier_of(&self.root, nonce)
+    }
+
     /// The directories that have to exist before anything writes.
     pub(crate) const fn directories(&self) -> [&AbsPath; DIRECTORIES.len()] {
         [&self.providers, &self.process_guards, &self.agent_tools]
@@ -362,6 +376,23 @@ impl AgentToolSlot {
 pub const GENERATION_TAG_LENGTH: usize = 16;
 
 /// A generation tag is exactly sixteen lowercase hex digits; anything else cannot become an endpoint name.
+/// How many lowercase hex digits a courier nonce is: 128 bits of randomness.
+const COURIER_NONCE_LENGTH: usize = 32;
+
+fn checked_nonce(nonce: &str) -> Result<(), HomeError> {
+    let well_formed = nonce.len() == COURIER_NONCE_LENGTH
+        && nonce
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte));
+    if well_formed {
+        Ok(())
+    } else {
+        Err(HomeError::CourierNonce {
+            nonce: nonce.to_owned(),
+        })
+    }
+}
+
 fn checked_generation(generation: &str) -> Result<(), HomeError> {
     let well_formed = generation.len() == GENERATION_TAG_LENGTH
         && generation
@@ -439,6 +470,11 @@ impl Endpoint {
     /// One generation's public Runtime socket: `runtrol-runtime-<generation>.sock`.
     fn generation_runtime_of(root: &AbsPath, generation: &str) -> Result<Self, HomeError> {
         Self::with_segment(root, &format!("runtrol-runtime-{generation}.sock"))
+    }
+
+    /// One generation's courier socket: `runtrol-courier-<nonce>.sock`.
+    fn courier_of(root: &AbsPath, nonce: &str) -> Result<Self, HomeError> {
+        Self::with_segment(root, &format!("runtrol-courier-{nonce}.sock"))
     }
 
     fn with_segment(root: &AbsPath, segment: &str) -> Result<Self, HomeError> {
@@ -522,6 +558,18 @@ impl Endpoint {
     fn generation_runtime_of(root: &AbsPath, generation: &str) -> Result<Self, HomeError> {
         Ok(Self(format!(
             r"\\.\pipe\runtrol-runtime-{:016x}-{generation}",
+            fingerprint(root)
+        )))
+    }
+
+    /// One generation's courier pipe: the home fingerprint and the generation's own nonce.
+    #[expect(
+        clippy::unnecessary_wraps,
+        reason = "one signature for both platforms keeps the cfg out of Layout"
+    )]
+    fn courier_of(root: &AbsPath, nonce: &str) -> Result<Self, HomeError> {
+        Ok(Self(format!(
+            r"\\.\pipe\runtrol-courier-{:016x}-{nonce}",
             fingerprint(root)
         )))
     }
