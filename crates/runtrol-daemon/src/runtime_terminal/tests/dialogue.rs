@@ -3,6 +3,7 @@
 use std::future::{Future, poll_fn};
 use std::path::PathBuf;
 use std::task::Poll;
+use std::time::Duration;
 
 use runtrol_core::terminal::Terminal;
 use runtrol_store::{IntegrationRevocation, IntegrationRootRow};

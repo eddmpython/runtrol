@@ -191,9 +191,9 @@ receives `nativeConversationBusy`, `terminalAlreadyLive`, or `legacyGenerationBu
 descriptor carries both its Runtime generation and terminal generation. Reconnect attaches only to that exact Runtime
 generation; an unavailable owner returns `terminalGenerationUnavailable` and is never redirected.
 
-A terminal control lease is scoped to one view, integration, terminal generation, and lease generation. Multiple
-authorized views may hold independent leases for the same terminal. Their writes are serialized by the single PTY
-writer. Expiry or release in one view cannot revoke or stale another view's lease.
+Terminal control follows the single-holder lease contract in
+[terminalSurface.md](terminalSurface.md#public-runtime-contract). Transfers and renewals advance its generation;
+stale holders cannot write through the shared PTY.
 
 ## Streams
 

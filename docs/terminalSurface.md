@@ -202,14 +202,19 @@ an update is either already in the row it reads or wakes the subscription. Autho
 before terminal output, and a revoked key, reduced grant, changed key generation, or missing row closes that view
 before it can keep streaming under old authority.
 
-Filesystem identity is still part of authority. Every terminal mutation validates the current canonical roots before
-touching the PTY. Root identity syscalls run outside the async executor on the bounded blocking lane shared by terminal
-views and indexes. A quiet output-only view also receives a background root proof. No successful proof is accepted
-after one second, and a failure, timeout, or blocking-task failure closes the affected view or index. A successful
-result whose key, grant, or terminal generation changed while the check ran authorizes nothing and is discarded. The
-exact scheduling, timeout, and concurrency limits are executable constants in
-[`runtime_terminal`](../crates/runtrol-daemon/src/runtime_terminal/mod.rs) and the relay ordering lives in
-the Runtime serving modules.
+Filesystem identity is still part of authority. An admitted dedicated terminal view uses a recent proof of its pinned
+root for input and control acquisition or renewal. These control operations check the exact view and current grant
+again after obtaining the mutation lock. Background root proofs and index root checks share a bounded blocking lane;
+quiet output-only views also receive these checks. Opening, rebinding and ordinary requests outside a dedicated view
+retain their own canonical-root validation.
+
+A proof's lifetime begins when its filesystem check finishes, so delayed observation cannot renew old authority.
+A failure, timeout, stale result or blocking-task failure closes the affected view or index. A successful result whose
+key, grant, or terminal generation changed while the check ran authorizes nothing and is discarded. Static failure
+reasons identify the affected terminal view without recording terminal bytes. Scheduling, timeout, concurrency and
+freshness limits belong to
+[`root_proof`](../crates/runtrol-daemon/src/runtime_terminal/root_proof.rs); relay ordering lives in the Runtime serving
+modules.
 
 During a Runtime upgrade, the old generation freezes its last committed ceiling and accepts only monotonic
 intersections delivered by a successor. Missing rows, key changes, revocations, and stale or conflicting snapshots
@@ -229,6 +234,10 @@ and replace its screen from the returned snapshot. It must not redirect to the c
 `terminalGenerationUnavailable` means that exact owner no longer exists. `terminalGone`,
 `terminalWorkspaceConflict`, `nativeConversationBusy`, and `legacyGenerationBusy` are distinct typed failures. Input,
 resize, stop, control acquisition, and approval mutations are never retried after an uncertain outcome.
+
+Studio's output pump owns reattachment for its exact broken view. A delayed control failure or lease response from
+that view cannot close the replacement or change its lease. The failed mutation keeps its original outcome; later
+unsent input waits within the existing bounded input queue until reattachment settles.
 
 One atomic live-admission registry prevents a native conversation from having both a structured owner and a terminal
 surface, including during generation handover. Runtime-owned TUI processes and official attachment renderers

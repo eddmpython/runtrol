@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use base64ct::{Base64, Encoding as _};
 use runtrol_core::terminal::{Attachment, TerminalError};
@@ -40,44 +40,16 @@ use crate::runtime_native_sessions::NativeCursorCodec;
 use crate::terminal_surface::HostedTerminal;
 
 mod dialogue;
+mod root_proof;
+
+#[cfg(test)]
+#[path = "tests/view_control.rs"]
+mod view_control_tests;
+
+use root_proof::fresh_root_proof;
+pub(crate) use root_proof::{ROOT_CHECK_SLOTS, RootCheck, RootCheckFailure, run_root_check};
 
 const LEASE_LIFETIME_MS: u64 = runtrol_runtime_protocol::CONTROL_LEASE_LIFETIME_MS;
-/// Filesystem identity checks may block in the operating system, so they get a small separate global lane.
-pub(crate) const ROOT_CHECK_SLOTS: usize = 2;
-pub(crate) const ROOT_CHECK_DEADLINE: Duration = Duration::from_millis(400);
-
-/// Run one filesystem proof without mistaking a delayed async poll for a late blocking result.
-pub(crate) async fn run_root_check<T, F>(
-    permits: Arc<tokio::sync::Semaphore>,
-    check: F,
-) -> Result<T, ()>
-where
-    T: Send + 'static,
-    F: FnOnce() -> T + Send + 'static,
-{
-    let started = Instant::now();
-    let deadline = started + ROOT_CHECK_DEADLINE;
-    let permit = tokio::select! {
-        biased;
-        permit = permits.acquire_owned() => permit.map_err(drop)?,
-        () = tokio::time::sleep_until(tokio::time::Instant::from_std(deadline)) => return Err(()),
-    };
-    let mut worker = tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        let answer = check();
-        (Instant::now(), answer)
-    });
-    let deadline_wait = tokio::time::sleep_until(tokio::time::Instant::from_std(deadline));
-    tokio::pin!(deadline_wait);
-    tokio::select! {
-        biased;
-        joined = &mut worker => match joined {
-            Ok((finished, answer)) if finished <= deadline => Ok(answer),
-            Ok(_) | Err(_) => Err(()),
-        },
-        () = &mut deadline_wait => Err(()),
-    }
-}
 
 /// Public terminal state that is deliberately separate from the PTY host.
 pub(crate) struct TerminalRuntimeAdapter {
@@ -174,7 +146,7 @@ pub(crate) struct TerminalView {
     #[cfg(windows)]
     pinned_root: PinnedTerminalRoot,
     root_grant_generation: u64,
-    last_root_proof: tokio::time::Instant,
+    last_root_proof: Instant,
 }
 
 #[cfg(windows)]
@@ -205,11 +177,7 @@ impl TerminalView {
     /// Rebind a changed grant, or require the blocking lane's recent successful root proof.
     pub(crate) fn refresh_root_authority(&mut self) -> Result<(), TerminalRuntimeFailure> {
         if self.root_grant_generation == self.authority.grant.grant_generation {
-            return if self.last_root_proof.elapsed() <= std::time::Duration::from_secs(1) {
-                Ok(())
-            } else {
-                Err(root_authority_failure())
-            };
+            return self.require_fresh_root_proof();
         }
         #[cfg(windows)]
         {
@@ -218,13 +186,25 @@ impl TerminalView {
         #[cfg(not(windows))]
         ensure_visible(&self.hosted, &self.authority)?;
         self.root_grant_generation = self.authority.grant.grant_generation;
-        self.last_root_proof = tokio::time::Instant::now();
+        self.last_root_proof = Instant::now();
         Ok(())
     }
 
     /// Record a successful check whose authority stamp still matches this view.
-    pub(crate) fn remember_root_proof(&mut self) {
-        self.last_root_proof = tokio::time::Instant::now();
+    pub(crate) fn remember_root_proof(
+        &mut self,
+        completed_at: Instant,
+    ) -> Result<(), RootCheckFailure> {
+        fresh_root_proof(completed_at)?;
+        self.last_root_proof = completed_at;
+        Ok(())
+    }
+
+    fn require_fresh_root_proof(&self) -> Result<(), TerminalRuntimeFailure> {
+        if self.root_grant_generation != self.authority.grant.grant_generation {
+            return Err(root_authority_failure());
+        }
+        fresh_root_proof(self.last_root_proof).map_err(|_| root_authority_failure())
     }
 
     #[cfg(windows)]
@@ -300,10 +280,9 @@ impl TerminalRuntimeAdapter {
         let permits = composed.terminal_root_checks.clone();
         let authority = authority.clone();
         let checked = run_root_check(permits, move || current_roots(&authority)).await;
-        match checked {
-            Ok(Ok(roots)) => Ok(roots),
-            Ok(Err(failure)) => Err(failure),
-            Err(()) => Err(root_authority_failure()),
+        match checked.and_then(RootCheck::fresh) {
+            Ok(RootCheck { value, .. }) => value,
+            Err(_) => Err(root_authority_failure()),
         }
     }
 
@@ -721,6 +700,7 @@ impl TerminalRuntimeAdapter {
         let pinned_root = pin_visible_root(&authority, &hosted)?;
         #[cfg(not(windows))]
         ensure_visible(&hosted, &authority)?;
+        let root_completed_at = Instant::now();
         let control_lease = if initial_control
             && authority
                 .grant
@@ -755,7 +735,7 @@ impl TerminalRuntimeAdapter {
             #[cfg(windows)]
             pinned_root,
             root_grant_generation: authority.grant.grant_generation,
-            last_root_proof: tokio::time::Instant::now(),
+            last_root_proof: root_completed_at,
             authority,
         })
     }
@@ -787,6 +767,33 @@ impl TerminalRuntimeAdapter {
         validate_mutation_time(&params.request_id)?;
         let terminal_id = private_terminal_id(&params.terminal_id)?;
         let hosted = visible_terminal(composed, authority, terminal_id).await?;
+        self.acquire_hosted(composed, authority, params, hosted, None)
+            .await
+    }
+
+    /// Acquire control without reopening the filesystem root already proven for this exact view.
+    pub(crate) async fn acquire_view(
+        &self,
+        composed: &Composed,
+        view: &TerminalView,
+        params: &TerminalAcquireControlParams,
+    ) -> Result<TerminalControlLease, TerminalRuntimeFailure> {
+        validate_mutation_time(&params.request_id)?;
+        let terminal_id = private_terminal_id(&params.terminal_id)?;
+        let hosted = visible_terminal_in_view(composed, view, terminal_id).await?;
+        self.acquire_hosted(composed, &view.authority, params, hosted, Some(view))
+            .await
+    }
+
+    async fn acquire_hosted(
+        &self,
+        composed: &Composed,
+        authority: &AuthorizedIntegration,
+        params: &TerminalAcquireControlParams,
+        hosted: HostedTerminal,
+        view: Option<&TerminalView>,
+    ) -> Result<TerminalControlLease, TerminalRuntimeFailure> {
+        let terminal_id = hosted.id;
         if hosted.generation != params.expected_terminal_generation {
             return Err(TerminalRuntimeFailure::new(
                 RuntimeErrorKind::SessionConflict,
@@ -795,7 +802,10 @@ impl TerminalRuntimeAdapter {
         }
         let key = mutation_key(authority.key, &params.request_id)?;
         let fingerprint = fingerprint(params)?;
-        if let Some(outcome) = self.prior(&key, fingerprint).await? {
+        let mut state = self.state.lock().await;
+        validate_control_view(composed, view)?;
+        let now = WallMs::now().as_millis();
+        if let Some(outcome) = prior_from_state(&mut state, &key, fingerprint, now)? {
             return match outcome {
                 MutationOutcome::Lease(lease) => Ok(lease),
                 MutationOutcome::Opened(_)
@@ -806,8 +816,6 @@ impl TerminalRuntimeAdapter {
                 )),
             };
         }
-        let mut state = self.state.lock().await;
-        let now = WallMs::now().as_millis();
         prune_mutations(&mut state, now);
         prune_expired_leases(&mut state, now);
         ensure_lease_capacity(&state)?;
@@ -840,9 +848,37 @@ impl TerminalRuntimeAdapter {
     ) -> Result<TerminalControlLease, TerminalRuntimeFailure> {
         let terminal_id = private_terminal_id(&params.terminal_id)?;
         drop(visible_terminal(composed, authority, terminal_id).await?);
+        self.renew_hosted(composed, authority, params, terminal_id, None)
+            .await
+    }
+
+    /// Renew through the admitted view using the same lease mutation as the ordinary control method.
+    pub(crate) async fn renew_view(
+        &self,
+        composed: &Composed,
+        view: &TerminalView,
+        params: &TerminalControlParams,
+    ) -> Result<TerminalControlLease, TerminalRuntimeFailure> {
+        let terminal_id = private_terminal_id(&params.terminal_id)?;
+        drop(visible_terminal_in_view(composed, view, terminal_id).await?);
+        self.renew_hosted(composed, &view.authority, params, terminal_id, Some(view))
+            .await
+    }
+
+    async fn renew_hosted(
+        &self,
+        composed: &Composed,
+        authority: &AuthorizedIntegration,
+        params: &TerminalControlParams,
+        terminal_id: TerminalId,
+        view: Option<&TerminalView>,
+    ) -> Result<TerminalControlLease, TerminalRuntimeFailure> {
         let key = mutation_key(authority.key, &params.request_id)?;
         let fingerprint = fingerprint(params)?;
-        if let Some(outcome) = self.prior(&key, fingerprint).await? {
+        let mut state = self.state.lock().await;
+        validate_control_view(composed, view)?;
+        let now = WallMs::now().as_millis();
+        if let Some(outcome) = prior_from_state(&mut state, &key, fingerprint, now)? {
             return match outcome {
                 MutationOutcome::Lease(lease) => Ok(lease),
                 MutationOutcome::Opened(_)
@@ -854,8 +890,6 @@ impl TerminalRuntimeAdapter {
             };
         }
         validate_mutation_time(&params.request_id)?;
-        let now = WallMs::now().as_millis();
-        let mut state = self.state.lock().await;
         prune_mutations(&mut state, now);
         ensure_mutation_capacity(&state)?;
         current_lease_mut(&mut state, terminal_id, authority.key, params, now)?;
@@ -1417,6 +1451,29 @@ pub(crate) fn validate_workspace_roots(
     }
 }
 
+fn validate_control_view(
+    composed: &Composed,
+    view: Option<&TerminalView>,
+) -> Result<(), TerminalRuntimeFailure> {
+    let Some(view) = view else {
+        return Ok(());
+    };
+    let current = crate::runtime_serve::refresh_current(composed, &view.authority)
+        .map_err(|failure| TerminalRuntimeFailure::new(failure.kind, failure.message))?;
+    if !has_scopes(&current.grant, &[AppScope::SessionInputWrite]) {
+        return Err(TerminalRuntimeFailure::new(
+            RuntimeErrorKind::ScopeDenied,
+            "the integration grant lacks the required app scope",
+        ));
+    }
+    if current.grant.key_generation != view.authority.grant.key_generation
+        || current.grant.grant_generation != view.authority.grant.grant_generation
+    {
+        return Err(root_authority_failure());
+    }
+    view.require_fresh_root_proof()
+}
+
 async fn visible_terminal(
     composed: &Composed,
     authority: &AuthorizedIntegration,
@@ -1862,45 +1919,6 @@ pub(crate) fn has_scopes(grant: &IntegrationGrant, scopes: &[AppScope]) -> bool 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn a_completed_root_check_survives_delayed_async_observation() {
-        let permits = Arc::new(tokio::sync::Semaphore::new(1));
-        let (started_tx, started_rx) = std::sync::mpsc::sync_channel(1);
-        let (release_tx, release_rx) = std::sync::mpsc::sync_channel(1);
-        let check = tokio::spawn(run_root_check(permits, move || {
-            started_tx.send(()).expect("announce blocking check");
-            release_rx.recv().expect("release blocking check");
-            true
-        }));
-        loop {
-            match started_rx.try_recv() {
-                Ok(()) => break,
-                Err(std::sync::mpsc::TryRecvError::Empty) => tokio::task::yield_now().await,
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    panic!("blocking check ended before announcing itself")
-                }
-            }
-        }
-        release_tx.send(()).expect("finish blocking check");
-        std::thread::sleep(ROOT_CHECK_DEADLINE + Duration::from_millis(100));
-        assert_eq!(
-            check.await.expect("join root check"),
-            Ok(true),
-            "a result completed within the deadline must win when the async runtime observes both it and the timer late"
-        );
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn a_root_check_that_really_finishes_late_is_refused() {
-        let permits = Arc::new(tokio::sync::Semaphore::new(1));
-        let checked = run_root_check(permits, || {
-            std::thread::sleep(ROOT_CHECK_DEADLINE + Duration::from_millis(100));
-            true
-        })
-        .await;
-        assert_eq!(checked, Err(()));
-    }
 
     #[test]
     fn terminal_geometry_is_rejected_instead_of_silently_clamped() {

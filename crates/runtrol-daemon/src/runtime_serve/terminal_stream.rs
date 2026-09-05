@@ -20,7 +20,9 @@ use crate::Composed;
 use crate::runtime_auth::AuthorizedIntegration;
 use crate::runtime_inventory::RuntimeSessionCatalogue;
 use crate::runtime_native_sessions::NativeCursorCodec;
-use crate::runtime_terminal::{TerminalRuntimeFailure, TerminalView, has_scopes, run_root_check};
+use crate::runtime_terminal::{
+    RootCheck, RootCheckFailure, TerminalRuntimeFailure, TerminalView, has_scopes, run_root_check,
+};
 
 #[cfg(not(windows))]
 use super::authority::current_authority_row;
@@ -412,6 +414,7 @@ pub(super) async fn relay_terminal(
             }, if root_check.is_some() => {
                 root_check = None;
                 let Ok(checked) = checked else {
+                    report_root_check_end(&view, RootCheckFailure::WorkerFailed);
                     return RelayOutcome::CloseConnection;
                 };
                 let current_stamp = (
@@ -419,13 +422,20 @@ pub(super) async fn relay_terminal(
                     view.authority.grant.grant_generation,
                     view.hosted.generation,
                 );
-                // A failed or timed-out filesystem proof is never made safe by an authority update. Only a
-                // successful proof may be stale, in which case it authorizes nothing and the next tick retries.
-                if !checked.allowed {
-                    return RelayOutcome::CloseConnection;
-                }
+                // A failed or expired filesystem proof is never made safe by an authority update. A fresh
+                // successful proof for another authority stamp authorizes nothing and is checked again.
+                let proof = match checked.result.and_then(RootCheck::fresh) {
+                    Ok(proof) if proof.value => proof,
+                    result => {
+                        report_root_check_end(&view, result.err().unwrap_or(RootCheckFailure::Denied));
+                        return RelayOutcome::CloseConnection;
+                    }
+                };
                 if checked.stamp == current_stamp {
-                    view.remember_root_proof();
+                    if let Err(failure) = view.remember_root_proof(proof.completed_at) {
+                        report_root_check_end(&view, failure);
+                        return RelayOutcome::CloseConnection;
+                    }
                 } else {
                     root_tick.reset_immediately();
                 }
@@ -568,7 +578,20 @@ pub(super) async fn relay_terminal(
 
 struct TerminalRootCheck {
     stamp: (u64, u64, u64),
-    allowed: bool,
+    result: Result<RootCheck<bool>, RootCheckFailure>,
+}
+
+#[expect(
+    clippy::print_stderr,
+    reason = "one bounded structural reason explains why this view lost its root proof before the connection closes"
+)]
+fn report_root_check_end(view: &TerminalView, failure: RootCheckFailure) {
+    eprintln!(
+        "runtrol: terminal root check ended view={} terminal={} reason={}",
+        view.opened.view_id,
+        view.opened.terminal.terminal_id,
+        failure.reason(),
+    );
 }
 
 /// Validate the pinned Windows directory handle away from terminal input and output tasks.
@@ -581,7 +604,7 @@ async fn check_pinned_terminal_root(
     let checked = run_root_check(permits, move || guard.blocking_lock().valid()).await;
     TerminalRootCheck {
         stamp,
-        allowed: matches!(checked, Ok(true)),
+        result: checked,
     }
 }
 
@@ -604,7 +627,7 @@ async fn check_terminal_roots(
     .await;
     TerminalRootCheck {
         stamp,
-        allowed: matches!(checked, Ok(true)),
+        result: checked,
     }
 }
 
@@ -711,7 +734,7 @@ async fn terminal_view_request(
             };
             match composed
                 .runtime_terminals
-                .acquire(composed, &view.authority, &params)
+                .acquire_view(composed, view, &params)
                 .await
             {
                 Ok(lease) => success(id, &lease),
@@ -728,7 +751,7 @@ async fn terminal_view_request(
             };
             match composed
                 .runtime_terminals
-                .renew(composed, &view.authority, &params)
+                .renew_view(composed, view, &params)
                 .await
             {
                 Ok(lease) => success(id, &lease),

@@ -76,6 +76,10 @@ and refactoring that no user can observe do not belong here.
 
 ### Fixed
 
+- A delayed input failure from a disconnected terminal view no longer closes its replacement. Uncertain input is
+  never replayed, and later typing resumes after the exact terminal reconnects.
+- Renewing control of an attached terminal reuses its current root proof instead of repeating filesystem work in
+  the input path. Delayed proof results retain their original completion time and cannot extend expired authority.
 - Background process checks open only the relevant processes and their ancestors, reducing unrelated system work
   while preserving checks against reused process identifiers.
 - Reconnecting the terminal list no longer waits an extra minute when cancellation arrives during Runtime lookup.

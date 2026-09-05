@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 
 import {
   PUBLIC_LIMITS,
+  RuntimeRequestError,
   RuntimeTransportError,
   newMutationRequestId,
   type TerminalControlLease,
@@ -26,6 +27,12 @@ type InputMeasurement = {
   receivedAtMs: number;
   resolve(timing: JourneyInputTiming): void;
   reject(error: unknown): void;
+};
+
+type ViewRecovery = {
+  view: TerminalView;
+  ready: Promise<void>;
+  finish(): void;
 };
 
 /// The conversation surface: the coding service's own terminal interface, hosted by the Core on a pseudo
@@ -113,14 +120,11 @@ const STALE_PROOF = "native catalogue observation expired";
 /// terminal's own escape vocabulary.
 /// Whether a refusal is the control lease being gone rather than the action being wrong.
 ///
-/// Named by the Runtime, so the word is matched rather than guessed at. Leases are independent per view, but this
-/// view can still hold an expired generation or race its own reconnect. Both are answered by asking again.
+/// Each terminal has one active lease; this view may hold an expired or superseded generation. Only the
+/// Runtime's structured refusal code permits asking again. An error message cannot authorize a retry.
 function leaseLost(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  return message.includes("leaseExpired")
-    || message.includes("the terminal control lease expired or was released")
-    // A reconnect or overlapping mutation in this same view may leave an older lease generation behind.
-    || message.includes("controlConflict");
+  return error instanceof RuntimeRequestError
+    && (error.failure.code === "leaseExpired" || error.failure.code === "controlConflict");
 }
 
 function sameGeometry(
@@ -153,6 +157,7 @@ export class RuntimeTerminal implements vscode.Pseudoterminal {
   readonly onDidChangeName = this.nameEmitter.event;
   readonly onDidReceive = this.receivedEmitter.event;
   private view: TerminalView | null = null;
+  private recovery: ViewRecovery | null = null;
   private lease: TerminalControlLease | null = null;
   private decoder = new TextDecoder("utf-8");
   /// The one control family this tab takes out of the service's bytes: the switches that would give the CLI
@@ -250,7 +255,7 @@ export class RuntimeTerminal implements vscode.Pseudoterminal {
       measurement?.reject(new Error("the measured terminal input was empty"));
       return;
     }
-    if (!this.view) {
+    if (!this.view && !this.recovery) {
       measurement?.reject(new Error("the measured terminal input arrived before the Runtime view connected"));
       if (this.pendingBytes + bytes.byteLength > PUBLIC_LIMITS.maxTerminalWriteBytes) {
         this.fail(new Error("Input entered while the terminal opened exceeded the Runtime input bound."));
@@ -468,6 +473,12 @@ export class RuntimeTerminal implements vscode.Pseudoterminal {
     for (;;) {
       try {
         const notification = await view.next();
+        if (this.closed) return;
+        if (this.view !== view) {
+          if (this.recovery?.view !== view) return;
+          // A command can close the view after next() resolved but before this continuation runs.
+          throw new RuntimeTransportError("the output view was withdrawn during control recovery");
+        }
         switch (notification.kind) {
           case "output":
             this.receivedEmitter.fire(notification.bytes);
@@ -494,12 +505,13 @@ export class RuntimeTerminal implements vscode.Pseudoterminal {
         }
       } catch {
         if (this.closed) return;
-        view.close();
+        const recovery = this.beginRecovery(view);
+        if (!recovery) return;
         view = await this.runtime.attachTerminal(
           view.opened.terminal.runtimeGeneration,
           view.opened.terminal.terminalId,
         );
-        if (this.closed) {
+        if (this.closed || this.recovery !== recovery) {
           view.close();
           return;
         }
@@ -509,8 +521,26 @@ export class RuntimeTerminal implements vscode.Pseudoterminal {
         this.decoder = new TextDecoder("utf-8");
         this.mouseModes.reset();
         this.writeFromService(this.decoder.decode(view.initialScreen, { stream: true }));
+        this.recovery = null;
+        recovery.finish();
       }
     }
+  }
+
+  /// Withdraw one broken view immediately. Only its output pump attaches a replacement; unsent controls wait
+  /// on this single bounded recovery while the failed mutation keeps its original rejected outcome.
+  private beginRecovery(view: TerminalView): ViewRecovery | null {
+    if (this.closed) return null;
+    if (this.recovery?.view === view) return this.recovery;
+    if (this.view !== view) return null;
+    let finish!: () => void;
+    const ready = new Promise<void>((resolve) => { finish = resolve; });
+    const recovery = { view, ready, finish };
+    this.recovery = recovery;
+    this.view = null;
+    this.lease = null;
+    view.close();
+    return recovery;
   }
 
   /// Run one action under this view's control lease.
@@ -525,22 +555,30 @@ export class RuntimeTerminal implements vscode.Pseudoterminal {
     settled: (error?: unknown) => void = () => undefined,
     takeOver = true,
   ): void {
+    let commandView: TerminalView | null = null;
     const command = this.commandTail.then(async () => {
+      if (this.closed) return;
+      if (this.recovery) await this.recovery.ready;
       if (this.closed) return;
       const view = this.view;
       if (!view) throw new Error("The public Runtime terminal is not connected.");
+      commandView = view;
       if (!takeOver && !this.holdsControl()) return;
       try {
-        await action(view, await this.ensureControl(view));
+        const lease = await this.ensureControl(view);
+        this.requireCurrentView(view);
+        await action(view, lease);
       } catch (error: unknown) {
         // The lease lives thirty seconds and is renewed when something is sent, so a conversation nobody typed
         // into for longer answers the next keystroke with `leaseExpired`. That is recoverable and used to reach
         // the person as a red line in their conversation instead (operator, 2026-08-28, with a picture). Another
         // window may also have taken control since, and asking again is the exact, visible transfer back.
-        if (!leaseLost(error)) throw error;
+        if (!leaseLost(error) || this.closed || this.view !== view) throw error;
         this.lease = null;
         if (!takeOver) return;
-        await action(view, await this.ensureControl(view));
+        const lease = await this.ensureControl(view);
+        this.requireCurrentView(view);
+        await action(view, lease);
       }
     });
     const finish = (error?: unknown): void => {
@@ -552,12 +590,22 @@ export class RuntimeTerminal implements vscode.Pseudoterminal {
     };
     this.commandTail = command.then(
       () => finish(),
-      (error: unknown) => finish(error),
+      (error: unknown) => {
+        finish(error);
+        // A delayed answer belongs to the view that sent the command, never to a replacement or its lease.
+        if (commandView && this.view !== commandView) return;
+        if (commandView && (error instanceof RuntimeTransportError
+          || (error instanceof RuntimeRequestError && error.failure.code === "outcomeUnknown"))) {
+          this.beginRecovery(commandView);
+          return;
+        }
+        this.fail(error);
+      },
     );
-    void command.catch((error: unknown) => this.fail(error));
   }
 
   private async ensureControl(view: TerminalView): Promise<TerminalControlLease> {
+    this.requireCurrentView(view);
     const lease = this.lease;
     if (lease && lease.expiresAtMs > Date.now() + 5_000) return lease;
     // A lease whose time is already up cannot be renewed: the Runtime retires it before answering, so asking
@@ -565,24 +613,34 @@ export class RuntimeTerminal implements vscode.Pseudoterminal {
     // control again, which is what a person typing after a quiet minute is entitled to.
     const renewable = lease !== null && lease.expiresAtMs > Date.now();
     if (renewable && lease) {
-      this.lease = await view.renewControl({
+      const renewed = await view.renewControl({
         requestId: newMutationRequestId(),
         terminalId: view.opened.terminal.terminalId,
         leaseId: lease.leaseId,
         leaseGeneration: lease.leaseGeneration,
       });
-      return this.lease;
+      this.requireCurrentView(view);
+      this.lease = renewed;
+      return renewed;
     }
-    this.lease = await view.acquireControl({
+    const acquired = await view.acquireControl({
       requestId: newMutationRequestId(),
       terminalId: view.opened.terminal.terminalId,
       expectedTerminalGeneration: view.opened.terminal.terminalGeneration,
     });
+    this.requireCurrentView(view);
+    this.lease = acquired;
     // Geometry follows the lease holder: the process was sized for whoever held control before, so this view's
     // own size is sent once, after this action, now that it is the one typing.
     this.lastResize = { columns: 0, rows: 0 };
     this.scheduleResize();
-    return this.lease;
+    return acquired;
+  }
+
+  private requireCurrentView(view: TerminalView): void {
+    if (this.closed || this.view !== view) {
+      throw new RuntimeTransportError("the Runtime terminal view changed before control dispatch");
+    }
   }
 
   /// Whether this view holds a control lease that has not run out.
@@ -593,11 +651,8 @@ export class RuntimeTerminal implements vscode.Pseudoterminal {
   private fail(error: unknown): void {
     if (this.closed) return;
     const message = error instanceof Error ? error.message : String(error);
-    // The Runtime going away is not this conversation failing. When the daemon stops, an attached tab's stream
-    // ends with a raw transport phrase ("Runtime closed during a frame"), and raising it as a red toast put a
-    // protocol sentence in front of the person on top of the sidebar's own "Cannot reach the Runtime Core"
-    // notice (measured 2026-09-05, the daemon killed under an open tab). Reachability is the index watch's to
-    // say; here the view only detaches quietly, and the tab reattaches to whatever generation answers next.
+    // The output pump owns recoverable transport breaks. Reaching here means opening or exact reattachment
+    // failed. Withdraw the dead route quietly; the index watch already reports Runtime reachability.
     if (error instanceof RuntimeTransportError) {
       this.detach(false, `Runtime terminal lost its transport: ${message}`);
       return;
@@ -617,8 +672,15 @@ export class RuntimeTerminal implements vscode.Pseudoterminal {
     if (this.closed) return;
     this.closed = true;
     const view = this.view;
+    const recovery = this.recovery;
     this.view = null;
+    this.recovery = null;
     this.lease = null;
+    this.pending = [];
+    this.pendingBytes = 0;
+    this.nextInputMeasurement?.reject(new Error("the terminal closed before measured input arrived"));
+    this.nextInputMeasurement = null;
+    recovery?.finish();
     if (!notifyRuntime) this.disconnected(reason);
     if (!view) return;
     if (notifyRuntime) {
