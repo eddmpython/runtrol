@@ -62,6 +62,8 @@ mod tracked;
 
 use std::process::Command;
 
+use runtrol_provider::ProcessIdentity;
+
 use crate::error::SpawnError;
 
 #[cfg(unix)]
@@ -258,6 +260,35 @@ impl Containment {
                 why: "this containment holds nothing. a child dies when the handle to it is dropped, \
                       and an unclean kill of runtrol leaves it running",
             },
+        }
+    }
+
+    /// Whether `candidate` runs inside the containment that holds `root`, as the kernel sees it right now.
+    ///
+    /// On Windows the job every child joins at birth answers, and `root` is not consulted: the job is one.
+    /// On Unix the answer is the process group `root` leads, which is what [`Self::prepare`] gives every
+    /// child. Neither trusts a parent chain, and a containment that holds nothing contains nobody.
+    ///
+    /// # Errors
+    ///
+    /// [`SpawnError::Containment`] when the kernel refuses to say.
+    pub fn contains(
+        &self,
+        root: ProcessIdentity,
+        candidate: ProcessIdentity,
+    ) -> Result<bool, SpawnError> {
+        let Inner::Platform(platform) = &self.inner else {
+            return Ok(false);
+        };
+        #[cfg(windows)]
+        {
+            _ = root;
+            platform.contains(candidate.pid())
+        }
+        #[cfg(unix)]
+        {
+            _ = platform;
+            platform::Containment::contains(root.pid(), candidate.pid())
         }
     }
 

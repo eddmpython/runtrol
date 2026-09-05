@@ -37,6 +37,10 @@ const EXIT_MODE: &str = "--exit-with";
 /// Establish tracked containment and recover whatever the killed parent left.
 const RECOVER_MODE: &str = "--recover";
 
+/// Establish containment, start one leaf, and print whether the kernel puts the leaf inside and the given
+/// outside process id outside.
+const REPORT_MEMBERSHIP: &str = "--report-membership";
+
 /// Name the guard directory for the supervising-parent mode.
 const GUARD_DIRECTORY: &str = "--guard-directory";
 
@@ -97,6 +101,17 @@ fn main() {
 
     if words
         .first()
+        .is_some_and(|argument| argument == REPORT_MEMBERSHIP)
+    {
+        let Some(Ok(outside)) = words.get(1).map(|word| word.parse::<u32>()) else {
+            eprintln!("the membership report needs the outside process id");
+            std::process::exit(23);
+        };
+        report_membership(outside);
+    }
+
+    if words
+        .first()
         .is_some_and(|argument| argument == RECOVER_MODE)
     {
         let Some(directory) = words.get(1) else {
@@ -150,6 +165,79 @@ fn main() {
         std::process::exit(11);
     };
     supervising_parent(directory);
+}
+
+/// Print `inside=<bool> outside=<bool>`: whether the kernel puts a leaf this containment started inside it, and
+/// whether it puts the process `outside` (the test that started this helper) inside it.
+fn report_membership(outside: u32) -> ! {
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            eprintln!("could not build the membership runtime: {error}");
+            std::process::exit(24);
+        }
+    };
+    let containment = match runtrol_childproc::Containment::establish() {
+        Ok(containment) => containment,
+        Err(error) => {
+            eprintln!("could not establish containment: {error}");
+            std::process::exit(25);
+        }
+    };
+    let own_path = match std::env::current_exe() {
+        Ok(path) => path,
+        Err(error) => {
+            eprintln!("could not find this binary: {error}");
+            std::process::exit(26);
+        }
+    };
+    let mut command = runtrol_childproc::TrackedCommand::new(own_path);
+    command.arg(LEAF_MODE);
+    command.stdin(Stdio::null());
+    command.stdout(Stdio::null());
+    command.stderr(Stdio::null());
+    let (mut leaf, mut leaf_guard) = match runtime.block_on(command.spawn(&containment)) {
+        Ok(spawned) => spawned,
+        Err(error) => {
+            eprintln!("could not start the leaf: {error}");
+            std::process::exit(27);
+        }
+    };
+    let leaf_identity = leaf.id().and_then(runtrol_childproc::process_identity);
+    let Some(leaf_identity) = leaf_identity else {
+        eprintln!("the leaf has no process identity");
+        std::process::exit(28);
+    };
+    let inside = match containment.contains(leaf_identity, leaf_identity) {
+        Ok(inside) => inside,
+        Err(error) => {
+            eprintln!("could not ask about the leaf: {error}");
+            std::process::exit(29);
+        }
+    };
+    let outside = match runtrol_childproc::process_identity(outside)
+        .map(|identity| containment.contains(leaf_identity, identity))
+    {
+        Some(Ok(outside)) => outside,
+        Some(Err(error)) => {
+            eprintln!("could not ask about the outside process: {error}");
+            std::process::exit(30);
+        }
+        None => false,
+    };
+    println!("inside={inside} outside={outside}");
+    if let Err(error) = std::io::stdout().flush() {
+        eprintln!("could not flush the membership report: {error}");
+        std::process::exit(31);
+    }
+    if let Err(error) = runtime.block_on(leaf_guard.terminate(&mut leaf)) {
+        eprintln!("could not stop the leaf: {error}");
+        std::process::exit(32);
+    }
+    std::process::exit(0);
 }
 
 fn sleeping_root() -> ! {

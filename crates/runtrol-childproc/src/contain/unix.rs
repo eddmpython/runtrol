@@ -57,6 +57,34 @@ impl Containment {
         }
     }
 
+    /// Whether `candidate` is in the process group `root` leads.
+    ///
+    /// Every child [`Self::prepare`] starts leads its own group, so the group is the terminal: a process is
+    /// inside exactly when the kernel says its group is the root's process id. A process that is gone is not
+    /// inside; any other refusal is reported.
+    #[expect(
+        unsafe_code,
+        reason = "reading a process group is a direct system call with no safe wrapper"
+    )]
+    pub(super) fn contains(root: u32, candidate: u32) -> Result<bool, SpawnError> {
+        let Ok(candidate) = libc::pid_t::try_from(candidate) else {
+            return Ok(false);
+        };
+        // SAFETY: `getpgid` reads one kernel fact about a process id and writes no memory of this process.
+        let group = unsafe { libc::getpgid(candidate) };
+        if group < 0 {
+            let error = std::io::Error::last_os_error();
+            if error.raw_os_error() == Some(libc::ESRCH) {
+                return Ok(false);
+            }
+            return Err(SpawnError::Containment {
+                doing: "reading a process group",
+                detail: error.to_string(),
+            });
+        }
+        Ok(u32::try_from(group) == Ok(root))
+    }
+
     /// Put the child in its own process group, and ask for a parent-death signal where that exists.
     #[expect(
         unsafe_code,

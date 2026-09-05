@@ -21,11 +21,13 @@ use std::process::Command;
 
 use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
 use windows_sys::Win32::System::JobObjects::{
-    AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    AssignProcessToJobObject, CreateJobObjectW, IsProcessInJob, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
     SetInformationJobObject, TerminateJobObject,
 };
-use windows_sys::Win32::System::Threading::GetCurrentProcess;
+use windows_sys::Win32::System::Threading::{
+    GetCurrentProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+};
 
 use crate::contain::Strength;
 use crate::error::SpawnError;
@@ -146,6 +148,41 @@ impl Containment {
     /// What this platform enforces. Answerable without establishing anything.
     pub(super) const fn platform_strength() -> Strength {
         Strength::EvenIfKilled
+    }
+
+    /// Whether the process `pid` is inside this job, as the kernel sees it right now.
+    ///
+    /// Asked of the kernel rather than inferred from a parent chain: a process started by something outside the
+    /// job is outside it whatever its ancestry says, and a process that ended has no answer at all, which is an
+    /// error here rather than a quiet `false`.
+    #[expect(
+        unsafe_code,
+        reason = "opening a process and asking the kernel about its job are calls with no safe wrapper"
+    )]
+    pub(super) fn contains(&self, pid: u32) -> Result<bool, SpawnError> {
+        // SAFETY: `OpenProcess` takes an access mask, an inherit flag and a process id, and returns a handle or
+        // null. The least access that answers a job question is asked for, and null is checked below.
+        let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+        if process.is_null() {
+            return Err(SpawnError::Containment {
+                doing: "opening a process to ask about its job",
+                detail: last_error(),
+            });
+        }
+        // The kernel's `BOOL` out-parameter is a plain `i32` in windows-sys.
+        let mut inside: i32 = 0;
+        // SAFETY: both handles are open (the job for this value's whole life, the process until the close
+        // below), and `inside` outlives the call it is written by.
+        let asked = unsafe { IsProcessInJob(process, self.job, &raw mut inside) };
+        // SAFETY: `process` came from `OpenProcess` above and is closed exactly once, here.
+        unsafe { CloseHandle(process) };
+        if asked == 0 {
+            return Err(SpawnError::Containment {
+                doing: "asking the kernel whether a process is in the job",
+                detail: last_error(),
+            });
+        }
+        Ok(inside != 0)
     }
 
     /// Nothing to do: a child of a job member is already in the job before it runs.

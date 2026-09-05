@@ -327,3 +327,26 @@ fn is_alive(pid: u32) -> bool {
         Err(error) => panic!("cannot ask the operating system about process {pid}: {error}"),
     }
 }
+
+/// The kernel's own answer to "is this process inside the containment": a leaf the helper started is, and the
+/// test process that started the helper is not.
+#[test]
+fn the_containment_says_who_is_inside_it() {
+    let helper = env!("CARGO_BIN_EXE_containedParent");
+    let mut command = Command::new(helper);
+    command
+        .arg("--report-membership")
+        .arg(std::process::id().to_string())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit());
+    runtrol_childproc::hide_console_window(&mut command);
+    let output = command.output().expect("the membership report runs");
+    assert!(
+        output.status.success(),
+        "the membership report failed: {}",
+        output.status
+    );
+    let report = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(report.trim(), "inside=true outside=false", "{report}");
+}
