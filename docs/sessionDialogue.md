@@ -72,8 +72,11 @@ The [spawn parser](../crates/runtrol-cli/src/courier/spawn.rs) owns syntax; the
 [admission state](../crates/runtrol-daemon/src/courier_gate/spawning.rs) owns worker depth and capacity.
 Pending launches and live workers consume the same bounds. A worker cannot spawn another worker.
 
-The worktree starts at the lead checkout's clean, frozen commit. Runtime discovery selects the executable and
-validates any requested model. The final launch checks the original activation, current integration authority,
+Each spawn freezes the lead checkout's committed `HEAD` before allocating its worktree. Staged, unstaged and
+untracked changes stay in the source checkout; Runtrol neither copies, stashes nor commits them. The spawn receipt
+identifies the exact base commit. Separate spawns can observe different commits if the lead's `HEAD` moves between
+them, so a client that needs one shared base checks their receipts before dispatching work. Runtime discovery selects
+the executable and validates any requested model. The final launch checks the original activation, current integration authority,
 project identity and deadline again before process creation. A disabled, revoked or expired request cannot acquire
 authority by waiting for Git or provider discovery.
 
@@ -148,6 +151,10 @@ deadline expiry, waiter saturation, disconnect cleanup, explicit room rounds and
 and body absence from task-owned
 Runtime files. Real-provider visual verification uses the isolated native Extension Host in
 [`courierProviderHost.mjs`](../extensions/runtrol-vscode/tooling/courierProviderHost.mjs).
+Its optional `--project` names an existing absolute project directory. The host keeps its Runtime state, viewer
+profile and coordination under its own temporary root; teardown never removes the supplied project. Native agents
+still have their ordinary filesystem permissions, so a mission that preserves the source checkout must restrict
+their task to the allocated worktrees and verify the source files and Git index before and after.
 
 The same harness accepts `--input-latency` to measure terminal write acknowledgements during a finite load of real
 courier admissions. It reads the sample count and warm-input ceiling from the extension's

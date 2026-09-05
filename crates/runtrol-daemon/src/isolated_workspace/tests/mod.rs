@@ -3,6 +3,7 @@ use super::*;
 mod cancellation;
 mod process;
 mod registry;
+mod snapshot;
 mod terminal;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -85,6 +86,10 @@ impl Drop for Scratch {
 }
 
 fn git(project: &std::path::Path, arguments: &[&str]) {
+    drop(git_output(project, arguments));
+}
+
+fn git_output(project: &std::path::Path, arguments: &[&str]) -> Vec<u8> {
     let output = std::process::Command::new("git")
         .arg("-C")
         .arg(project)
@@ -96,6 +101,7 @@ fn git(project: &std::path::Path, arguments: &[&str]) {
         "Git fixture command failed: {arguments:?}: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+    output.stdout
 }
 
 #[test]
@@ -169,7 +175,7 @@ async fn restart_preserves_session_binding_and_removes_the_exact_clean_worktree(
 }
 
 #[tokio::test]
-async fn cleanup_preserves_changes_across_restart_and_refuses_a_dirty_base() {
+async fn cleanup_preserves_changes_across_restart() {
     let scratch = Scratch::make();
     let containment = Containment::without_any();
     let second_id = "11234567-89ab-cdef-0123-456789abcdef";
@@ -229,19 +235,4 @@ async fn cleanup_preserves_changes_across_restart_and_refuses_a_dirty_base() {
     };
     assert_eq!(removed.outcome.as_ref(), "removed");
     assert!(!std::path::Path::new(second.workspace.as_ref()).exists());
-
-    std::fs::write(
-        scratch.project.as_std_path().join("dirty-base.txt"),
-        b"dirty\n",
-    )
-    .expect("dirty base");
-    let refusal = after_restart
-        .prepare(
-            &containment,
-            "21234567-89ab-cdef-0123-456789abcdef",
-            scratch.project.as_str(),
-        )
-        .await
-        .expect_err("dirty base refused");
-    assert!(refusal.contains("requires a clean project checkout"));
 }

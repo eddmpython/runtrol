@@ -1,7 +1,7 @@
 //! Core-owned linked worktrees for ordinary parallel chats.
 //!
 //! Studio asks for isolation but never creates, guesses, or deletes a worktree. This controller freezes the
-//! selected checkout's clean `HEAD`, records ownership before asking Git to create anything, binds the result to
+//! selected checkout's committed `HEAD`, records ownership before asking Git to create anything, binds the result to
 //! the public Runtime session, and removes only an exact owned worktree that Git proves is clean. Conversation
 //! bytes, provider identities, branches, commits, and integration policy are deliberately absent.
 
@@ -195,7 +195,6 @@ impl IsolatedWorkspaceController {
             .map_err(|_| "the selected project identity cannot be resolved".to_owned())?;
         let base = identity.worktree().clone();
         let git = resolve("git").map_err(|_| "Git is unavailable for chat isolation".to_owned())?;
-        require_clean(&git, &base, &operation).await?;
         let base_commit = revision(&git, &base, "HEAD", &operation).await?;
         let parent = base
             .parent()
@@ -579,18 +578,6 @@ fn verify_owned(record: &Record) -> Result<(), String> {
         return Err("the owned isolated workspace no longer belongs to its project".to_owned());
     }
     Ok(())
-}
-
-async fn require_clean(
-    git: &runtrol_childproc::Program,
-    workspace: &AbsPath,
-    operation: &Operation<'_>,
-) -> Result<(), String> {
-    if is_clean(git, workspace, operation).await? {
-        Ok(())
-    } else {
-        Err("safe isolation requires a clean project checkout".to_owned())
-    }
 }
 
 async fn is_clean(

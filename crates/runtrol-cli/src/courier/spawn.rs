@@ -4,6 +4,7 @@ use super::CourierFailure;
 use super::words::{timeout, wrong};
 
 pub(super) const HELP: &str = "runtrol courier spawn PROVIDER [--model MODEL] [--task] [--timeout SECONDS]\n\
+The worktree starts at your committed HEAD; uncommitted changes stay in your checkout. The receipt identifies the base commit.\n\
 With --task, stdin supplies one initial tell. The worker must enable dialogue before consuming it.";
 
 pub(super) struct SpawnCommand {

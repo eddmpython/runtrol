@@ -25,6 +25,7 @@ type Step =
   | { readonly kind: "click"; readonly key: string }
   | { readonly kind: "focusTerminal"; readonly generation: string; readonly terminalId: string }
   | { readonly kind: "rowFacts"; readonly key: string }
+  | { readonly kind: "showDiff"; readonly original: string; readonly modified: string }
   | { readonly kind: "rows" }
   | { readonly kind: "listing" }
   | { readonly kind: "reopenStored"; readonly provider: string }
@@ -234,6 +235,19 @@ async function journey(coordination: string, role: string): Promise<void> {
     } else if (step.kind === "rowFacts") {
       // What the row says it can do, read without clicking: a click on a stored conversation would resume it.
       result = { facts: journey.rowFacts(step.key), present: journey.rowKeys().includes(step.key) };
+    } else if (step.kind === "showDiff") {
+      if (!path.isAbsolute(step.original) || !path.isAbsolute(step.modified)) {
+        throw new Error("diff inspection requires exact absolute file paths");
+      }
+      const original = vscode.Uri.file(step.original);
+      const modified = vscode.Uri.file(step.modified);
+      await vscode.commands.executeCommand("vscode.diff", original, modified, "Worker change", { preview: true });
+      const input = vscode.window.tabGroups.activeTabGroup.activeTab?.input;
+      if (!(input instanceof vscode.TabInputTextDiff)
+        || input.original.toString() !== original.toString() || input.modified.toString() !== modified.toString()) {
+        throw new Error("the requested worker diff is not the active editor");
+      }
+      result = { original: step.original, modified: step.modified, active: true };
     } else if (step.kind === "showOther") {
       // A second terminal takes the panel, so a reveal has to bring the provider's terminal back.
       let other = terminals.get("other");

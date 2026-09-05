@@ -10,7 +10,7 @@ use super::identity::{Directory, VerifiedProject};
 use super::ownership::{EndedSpawn, ProcessStamp, SpawnTicket};
 use super::{
     GIT_WORKTREE_TIMEOUT, IsolatedWorkspaceController, Operation, Record, State, capture, is_clean,
-    registry, release_line, require_clean, revision,
+    registry, release_line, revision,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -128,7 +128,6 @@ impl IsolatedWorkspaceController {
         }
         self.make_room()?;
         let git = resolve("git").map_err(|e| e.to_string())?;
-        require_clean(&git, project.root(), &operation).await?;
         let base_commit = revision(&git, project.root(), "HEAD", &operation).await?;
         project.verify()?;
         let container = project

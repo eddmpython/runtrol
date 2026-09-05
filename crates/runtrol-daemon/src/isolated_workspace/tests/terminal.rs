@@ -186,6 +186,7 @@ async fn exact_old_runtime_and_worker_exit_enable_recovery_across_reopen() {
 async fn dirty_and_committed_worker_work_survive_cleanup_and_restart() {
     let scratch = Scratch::make();
     let containment = Containment::without_any();
+    let source = super::snapshot::SourceSnapshot::dirty(scratch.project.as_std_path());
     for commit in [false, true] {
         let owner = ticket(current_process());
         let mut controller = IsolatedWorkspaceController::open(scratch.registry.clone()).unwrap();
@@ -211,6 +212,7 @@ async fn dirty_and_committed_worker_work_survive_cleanup_and_restart() {
             "preservedDirty"
         );
         assert_eq!(std::fs::read_to_string(change).unwrap(), "작업 보존\n");
+        source.assert_unchanged(scratch.project.as_std_path());
     }
 }
 

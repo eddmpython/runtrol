@@ -59,6 +59,8 @@ and refactoring that no user can observe do not belong here.
 
 ### Changed
 
+- Workers start from the source checkout's committed HEAD even while local edits are in progress. Uncommitted
+  changes stay in the original checkout, and each spawn receipt identifies the exact commit used.
 - A conversation tab's pane now holds the provider's bytes and nothing else. The Runtrol mark that was drawn while a
   tab opened, the clear-screen written before a replacement screen, and the exit and error sentences written into
   the pane are gone: opening shows as the window's progress indicator, an exit or failure changes the tab title, and

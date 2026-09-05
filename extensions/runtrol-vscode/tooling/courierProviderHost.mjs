@@ -1,9 +1,9 @@
 // An isolated native Extension Host for real-provider courier journeys.
-// Usage: node tooling/courierProviderHost.mjs --core <development executable>
+// Usage: node tooling/courierProviderHost.mjs --core <development executable> [--project <existing project>]
 // The printed coordination folder speaks ownerReveal.test.ts. A stop.json file requests complete cleanup.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { cp, mkdir, mkdtemp, open, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, open, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
@@ -17,8 +17,16 @@ const coreIndex = process.argv.indexOf("--core");
 assert.ok(coreIndex >= 0 && process.argv[coreIndex + 1], "--core is required");
 const original = path.resolve(process.argv[coreIndex + 1]);
 await stat(original);
+const projectIndex = process.argv.indexOf("--project");
+let existingProject = null;
+if (projectIndex >= 0) {
+  const requested = process.argv[projectIndex + 1];
+  assert.ok(requested && path.isAbsolute(requested), "--project requires an absolute existing directory");
+  existingProject = await realpath(requested);
+  assert.ok((await stat(existingProject)).isDirectory(), "--project must name a directory");
+}
 const temporary = await mkdtemp(path.join(process.env.LOCALAPPDATA, "dev-workspace", "runtrolProvider-"));
-const workspace = path.join(temporary, "project");
+const workspace = existingProject ?? path.join(temporary, "project");
 const coordination = path.join(temporary, "coordination");
 const development = path.join(temporary, "extension");
 const userData = path.join(temporary, "profile");
@@ -30,7 +38,9 @@ const processes = [];
 const logs = [];
 let leaveEvidence = false;
 try {
-  for (const folder of [workspace, coordination, development, path.dirname(core), path.join(userData, "User")]) {
+  const folders = [coordination, development, path.dirname(core), path.join(userData, "User")];
+  if (existingProject === null) folders.push(workspace);
+  for (const folder of folders) {
     await mkdir(folder, { recursive: true });
   }
   await cp(original, core);

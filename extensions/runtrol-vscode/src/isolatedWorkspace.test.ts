@@ -109,11 +109,11 @@ test("prepare, bind, and release carry the exact Core-owned identity", async () 
 
 test("Core refusals remain visible product failures", async () => {
   const workspaces = new IsolatedWorkspaces(core([
-    { say: "failed", with: { message: "safe isolation requires a clean project checkout", retryable: false, needs_the_operator: false } },
+    { say: "failed", with: { message: "the project has no resolvable HEAD commit", retryable: false, needs_the_operator: false } },
   ]), () => INTEGRATION.integration_id, async () => {});
   await assert.rejects(
     workspaces.prepare(LINE.project, LINE.workspace_id),
-    /clean project checkout/,
+    /no resolvable HEAD commit/,
   );
 });
 
