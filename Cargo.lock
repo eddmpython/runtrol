@@ -1700,6 +1700,7 @@ dependencies = [
  "hyper-util",
  "runtrol-childproc",
  "runtrol-core",
+ "runtrol-courier",
  "runtrol-drivers",
  "runtrol-ipc",
  "runtrol-provider",

@@ -682,6 +682,35 @@ fn drain_action(
     }
 }
 
+/// The exact words a launch runs with: the caller's own when it gave them, otherwise the manifest's resume line
+/// with the conversation appended, or the manifest's new-conversation line.
+fn launch_arguments(
+    exact_arguments: Option<Vec<String>>,
+    native: Option<&str>,
+    id: ProviderId,
+    resume: &[Box<str>],
+    new: &[Box<str>],
+) -> Result<Vec<String>, TerminalOpenError> {
+    match exact_arguments {
+        Some(arguments) => Ok(arguments),
+        None => match native {
+            Some(native) => {
+                if resume.is_empty() {
+                    return Err(TerminalOpenError::Provider(format!(
+                        "{id} publishes no way to reopen a conversation from the command line"
+                    )));
+                }
+                Ok(resume
+                    .iter()
+                    .map(ToString::to_string)
+                    .chain(std::iter::once(native.to_owned()))
+                    .collect())
+            }
+            None => Ok(new.iter().map(ToString::to_string).collect()),
+        },
+    }
+}
+
 async fn forget(composed: &Composed, id: TerminalId) {
     let open = {
         let mut terminals = composed.terminals.lock().await;
@@ -693,6 +722,7 @@ async fn forget(composed: &Composed, id: TerminalId) {
         .store(open, std::sync::atomic::Ordering::Release);
     composed.runtime_terminals.terminal_ended(id).await;
     composed.native_claims.terminal_ended(id);
+    composed.courier_gate.forget(id).await;
     composed.terminal_closed.notify_one();
 }
 
@@ -851,24 +881,7 @@ async fn open_with_arguments(
     let tui = declared.manifest.tui.as_ref().ok_or_else(|| {
         TerminalOpenError::Provider(format!("{id} declares no terminal interface"))
     })?;
-    let arguments: Vec<String> = match exact_arguments {
-        Some(arguments) => arguments,
-        None => match native {
-            Some(native) => {
-                if tui.resume.is_empty() {
-                    return Err(TerminalOpenError::Provider(format!(
-                        "{id} publishes no way to reopen a conversation from the command line"
-                    )));
-                }
-                tui.resume
-                    .iter()
-                    .map(ToString::to_string)
-                    .chain(std::iter::once(native.to_owned()))
-                    .collect()
-            }
-            None => tui.new.iter().map(ToString::to_string).collect(),
-        },
-    };
+    let arguments = launch_arguments(exact_arguments, native, id, &tui.resume, &tui.new)?;
     let program = if let Some(program) = prepared_program {
         program
     } else {
@@ -881,6 +894,19 @@ async fn open_with_arguments(
     };
     let key = native.map(|native| (id, Box::<str>::from(native)));
     let native = native.map(Box::<str>::from);
+    // The courier token and environment this managed process is born with. Minted before the launch and
+    // touching no shared state, so a launch that fails below leaves the gate exactly as it was.
+    let minted = composed
+        .courier_gate
+        .mint(terminal_id)
+        .map_err(|error| TerminalOpenError::Provider(error.to_string()))?;
+    let mut env: Vec<(String, String)> = tui
+        .env
+        .iter()
+        .map(|(name, value)| (name.to_string(), value.to_string()))
+        .collect();
+    env.extend_from_slice(minted.env());
+    let env_unset: Vec<String> = tui.env_unset.iter().map(ToString::to_string).collect();
     let (terminal, open) = {
         let mut terminals = composed.terminals.lock().await;
         if terminals.len() >= MAX_HOSTED_TERMINALS {
@@ -893,12 +919,8 @@ async fn open_with_arguments(
             program: &program,
             arguments,
             cwd: &cwd,
-            env: tui
-                .env
-                .iter()
-                .map(|(name, value)| (name.to_string(), value.to_string()))
-                .collect(),
-            env_unset: tui.env_unset.iter().map(ToString::to_string).collect(),
+            env,
+            env_unset,
             size: runtrol_childproc::PtySize { cols, rows },
         })
         .map_err(|error| TerminalOpenError::Provider(error.to_string()))?;
@@ -906,6 +928,16 @@ async fn open_with_arguments(
         let open = terminals.len();
         (terminal, open)
     };
+    // The process exists now: open its courier session under its own root, so a courier call from inside its
+    // process tree is admitted and one from anywhere else is not.
+    composed
+        .courier_gate
+        .open_session(
+            terminal_id,
+            minted,
+            runtrol_childproc::process_identity(terminal.pid()),
+        )
+        .await;
     composed
         .open_terminals
         .store(open, std::sync::atomic::Ordering::Release);

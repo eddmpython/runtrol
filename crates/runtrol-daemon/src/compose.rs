@@ -46,6 +46,11 @@ pub enum ComposeError {
     #[error(transparent)]
     Home(#[from] HomeError),
 
+    /// The courier endpoint could not be prepared. The daemon serves without one rather than never, but the
+    /// dialogue plane is only as sound as this: a missing executable path or no randomness stops the start.
+    #[error("cannot prepare the courier endpoint: {0}")]
+    Courier(String),
+
     /// This executable could not measure its own image, so it has no generation identity to serve under.
     #[error("cannot measure the runtrol executable {path}: {detail}")]
     Identity {
@@ -310,6 +315,9 @@ pub struct Composed {
     /// Shared, because every driver hands it to every child it starts, and held for the process lifetime because
     /// dropping it is the kill.
     pub containment: Arc<Containment>,
+    /// The courier: which managed process may speak on the dialogue endpoint, as which session, and the
+    /// mailboxes and calls between them. Built with a fresh endpoint per generation.
+    pub(crate) courier_gate: Arc<crate::courier_gate::CourierGate>,
     /// Which providers exist, and what this build can do about each.
     pub registry: ProviderRegistry,
     /// Serializes probe-cache saves, which are re-read-merge-replace and must not interleave.
@@ -454,6 +462,7 @@ impl Composed {
         let machine_identity = load_machine_identity(&home)?;
         let (granted, paired_devices) =
             restore_device_authority(&store, machine_identity.push.as_deref())?;
+        let courier_gate = Arc::new(build_courier_gate(&home)?);
         Ok(Self {
             home,
             store: Arc::new(store),
@@ -465,6 +474,7 @@ impl Composed {
             native_claims: Arc::new(crate::native_claims::NativeLiveClaimRegistry::default()),
             pairing_admin: crate::pairing_admin::PairingAdmin::default(),
             containment,
+            courier_gate,
             registry,
             device_authority: DeviceAuthority::new(granted, paired_devices),
             probe_cache_writing: tokio::sync::Mutex::new(()),
@@ -525,6 +535,7 @@ impl Composed {
         let machine_identity = load_machine_identity_for_tests(&home)?;
         let (granted, paired_devices) =
             restore_device_authority(&store, machine_identity.push.as_deref())?;
+        let courier_gate = Arc::new(build_courier_gate(&home)?);
         Ok(Self {
             home,
             store: Arc::new(store),
@@ -536,6 +547,7 @@ impl Composed {
             native_claims: Arc::new(crate::native_claims::NativeLiveClaimRegistry::default()),
             pairing_admin: crate::pairing_admin::PairingAdmin::default(),
             containment: Arc::new(Containment::without_any()),
+            courier_gate,
             registry,
             device_authority: DeviceAuthority::new(granted, paired_devices),
             probe_cache_writing: tokio::sync::Mutex::new(()),
@@ -599,6 +611,29 @@ impl Composed {
         self.device_authority.replace(granted, paired_devices);
         Ok(())
     }
+}
+
+/// Build this generation's courier gate: the daemon executable a managed process runs as its courier, and a
+/// fresh unguessable endpoint no other generation shares.
+fn build_courier_gate(
+    home: &RuntrolHome,
+) -> Result<crate::courier_gate::CourierGate, ComposeError> {
+    let exe = std::env::current_exe().map_err(|error| {
+        ComposeError::Courier(format!("the runtrol executable path is unknown: {error}"))
+    })?;
+    let exe = exe
+        .to_str()
+        .ok_or_else(|| {
+            ComposeError::Courier("the runtrol executable path is not UTF-8".to_owned())
+        })?
+        .to_owned();
+    let mut nonce_bytes = [0_u8; 16];
+    getrandom::fill(&mut nonce_bytes).map_err(|_unavailable| {
+        ComposeError::Courier("no randomness for the courier endpoint nonce".to_owned())
+    })?;
+    let nonce = crate::runtime_auth::hex(&nonce_bytes);
+    let endpoint = home.paths().courier_endpoint(&nonce)?.address().to_owned();
+    Ok(crate::courier_gate::CourierGate::new(exe, endpoint))
 }
 
 fn load_machine_identity(home: &RuntrolHome) -> Result<LoadedMachineIdentity, ComposeError> {

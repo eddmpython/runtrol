@@ -19,6 +19,7 @@ mod account_probe;
 mod audit_relay;
 mod build_identity;
 pub mod compose;
+mod courier_gate;
 mod crash;
 pub mod dispatch;
 mod generation_authority;

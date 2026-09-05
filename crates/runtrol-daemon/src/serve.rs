@@ -1093,6 +1093,15 @@ async fn serve_surfaces(
             }
         }));
     }
+    // The courier's own endpoint, owner-only like the public one, bound before any managed session launches so a
+    // session's first courier call always finds it. It serves until this generation's tasks are dropped.
+    let courier_listener = Listener::bind_owner_only(composed.courier_gate.endpoint()).await?;
+    background.push(connections.spawn(crate::courier_gate::serve::serve(
+        Arc::clone(&composed.courier_gate),
+        Arc::clone(&composed.containment),
+        courier_listener,
+        crate::courier_gate::serve::HELLO_WAIT,
+    )));
     let push_wake_active = Arc::new(AtomicBool::new(false));
     let mut relay_hub = match relay {
         Some(relay) => {
