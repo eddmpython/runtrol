@@ -14,8 +14,15 @@ publish = false
 
 [dependencies]
 thiserror = { workspace = true }
+# The hello and its answer cross a connection as JSON; the identifiers travel as their canonical text.
+serde = { workspace = true, features = ["std", "derive"] }
 # Message, call, session and room identifiers are UUIDv7 so each sorts by the moment it was minted.
 uuid = { workspace = true, features = ["std", "v7"] }
+
+[dev-dependencies]
+# The wire tests read a hello and its answer back from JSON. The daemon that serves the wire owns the real
+# serialization; this crate carries only the shapes, so serde_json is a test dependency here.
+serde_json = { workspace = true, features = ["std"] }
 
 [lints]
 workspace = true

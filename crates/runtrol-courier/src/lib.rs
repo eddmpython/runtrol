@@ -11,10 +11,12 @@
 
 mod body;
 mod courier;
+pub mod env;
 mod envelope;
 mod id;
 mod limits;
 mod receipt;
+pub mod wire;
 
 pub use body::{BodyTooLarge, BoundedUtf8};
 pub use courier::{Courier, Released, Swept};
