@@ -6,6 +6,7 @@ mod connection;
 mod connection_state;
 mod dispatch;
 mod integration_requests;
+mod native_inspection;
 mod provider_requests;
 mod response;
 mod session_control;

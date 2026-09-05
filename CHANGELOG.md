@@ -76,6 +76,8 @@ and refactoring that no user can observe do not belong here.
 
 ### Fixed
 
+- Conversation discovery checks folders away from terminal input processing, so filesystem delays cannot block
+  typing while a provider's conversation list is being authorized.
 - Background service checks no longer pause terminal input while locating an installed CLI and checking its files.
 - Starting an isolated worker no longer fails when Windows briefly reports a finished Git process in its job count.
 - Fresh conversations expose their live controls as soon as Runtime confirms the terminal, before the provider

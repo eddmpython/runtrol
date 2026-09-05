@@ -998,6 +998,7 @@ impl RuntimeSessionCatalogue {
 }
 
 /// One exact currently valid approved root and its filesystem identity.
+#[derive(Clone)]
 pub(crate) struct AuthorizedRoot {
     pub(crate) path: AbsPath,
     pub(crate) identity: [u8; 24],
@@ -1015,17 +1016,6 @@ pub(crate) struct AuthorizedManagedSession {
     pub(crate) native: Option<Box<str>>,
     pub(crate) descriptor: SessionDescriptor,
     pub(crate) workspace: AbsPath,
-}
-
-/// Resolve one caller-selected root only when it still names the locally approved object.
-pub(crate) fn authorized_root(
-    authority: &AuthorizedIntegration,
-    requested: &str,
-) -> Result<AuthorizedRoot, RuntimeInventoryFailure> {
-    approved_roots(authority)?
-        .into_iter()
-        .find(|root| root.path.as_str() == requested)
-        .ok_or(RuntimeInventoryFailure::RootAuthorityChanged)
 }
 
 /// Revalidate every approved root before provider-supplied paths are filtered.

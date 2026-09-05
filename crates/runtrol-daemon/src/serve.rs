@@ -120,7 +120,7 @@ pub(crate) struct DiscoveryGates {
     lanes: tokio::sync::Mutex<BTreeMap<ProviderId, std::sync::Weak<tokio::sync::Mutex<()>>>>,
     /// The one lane for identities outside the registry, so an unknown provider still has exactly one.
     unknown: Arc<tokio::sync::Mutex<()>>,
-    pub(crate) listing: tokio::sync::Semaphore,
+    pub(crate) listing: Arc<tokio::sync::Semaphore>,
     /// Latest content-free provider process roster, shared by every local window.
     native_activity: tokio::sync::Mutex<
         BTreeMap<ProviderId, (std::time::Instant, runtrol_provider::NativeProcessActivity)>,
@@ -138,7 +138,7 @@ impl DiscoveryGates {
             known: known.into_boxed_slice(),
             lanes: tokio::sync::Mutex::new(BTreeMap::new()),
             unknown: Arc::new(tokio::sync::Mutex::new(())),
-            listing: tokio::sync::Semaphore::new(NATIVE_LISTING_SLOTS),
+            listing: Arc::new(tokio::sync::Semaphore::new(NATIVE_LISTING_SLOTS)),
             native_activity: tokio::sync::Mutex::new(BTreeMap::new()),
         }
     }

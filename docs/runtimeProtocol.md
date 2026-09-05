@@ -121,6 +121,13 @@ provider for every conversation it will name, which four of the five measured CL
 because their own listing treats the working directory as a filter rather than a required argument.
 Each returned row carries its own folder, so grouping stays a fact the provider reported.
 
+Root identity checks and provider path canonicalization run outside the request executor. They retain the native
+listing's existing admission slot through filesystem inspection, provider discovery and public projection. A
+cancelled caller cannot release the slot while its filesystem work is still running. The immutable managed-session
+snapshot and boot-local cursor codec are shared with that work; no catalogue or conversation copy is persisted.
+The execution boundary is owned by
+[`native_inspection.rs`](../crates/runtrol-daemon/src/runtime_serve/native_inspection.rs).
+
 `providers/nativeActivity` returns the native identities owned by live processes, the subset whose model is
 answering now, the subset whose exact live terminal has a structurally proven attachment route, and the subset
 whose process is proved to run inside a terminal a registered VS Code window observes. These are `live`,

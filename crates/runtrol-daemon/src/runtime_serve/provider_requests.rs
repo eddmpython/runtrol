@@ -286,8 +286,8 @@ pub(super) async fn list_native_sessions(
     state: &mut PublicState,
     composed: &Composed,
     discovering: &crate::serve::DiscoveryGates,
-    native_cursors: &NativeCursorCodec,
-    managed: &RuntimeSessionCatalogue,
+    native_cursors: &Arc<NativeCursorCodec>,
+    managed: &Arc<RuntimeSessionCatalogue>,
     id: JsonRpcId,
     params: serde_json::Value,
 ) -> Answer {
@@ -319,17 +319,6 @@ pub(super) async fn list_native_sessions(
     // index already made exactly this move for exactly this reason (`runtime_inventory::authorized`,
     // folderless rule in `docs/runtimeProtocol.md`). What remains bounded is what the caller is
     // shown: every returned row is re-checked below before it reaches anyone.
-    let selected_root = match params.root.as_deref() {
-        Some(requested) => match crate::runtime_inventory::authorized_root(&authority, requested) {
-            Ok(root) => Some(root),
-            Err(failure) => return inventory_failure(id, failure),
-        },
-        None => None,
-    };
-    let approved_roots = match crate::runtime_inventory::authorized_roots(&authority) {
-        Ok(roots) => roots,
-        Err(failure) => return inventory_failure(id, failure),
-    };
     let Ok(provider) = runtrol_provider::ProviderId::parse(params.provider_id.as_str()) else {
         return Answer::plain(
             id,
@@ -340,6 +329,18 @@ pub(super) async fn list_native_sessions(
     let discovered = tokio::time::timeout(
         Duration::from_millis(crate::serve::MODEL_PREPARATION_BUDGET_MS),
         async {
+            let listing = Arc::clone(&discovering.listing)
+                .acquire_owned()
+                .await
+                .map_err(|_| NativeDiscoveryFailure::Provider)?;
+            let root_authority = authority.clone();
+            let requested = params.root.clone();
+            let (listing, (selected_root, approved_roots)) =
+                super::native_inspection::inspect(listing, move || {
+                    super::native_inspection::roots(&root_authority, requested.as_deref())
+                })
+                .await
+                .map_err(NativeDiscoveryFailure::Inventory)?;
             // Held only through preparation, which is the region the probe-cache atomicity argument covers.
             // The listing itself spawns a whole CLI and can take seconds; holding this mutex across it queued
             // every provider's catalogue behind whichever CLI was slowest (measured 2026-08-19: a just-opened
@@ -351,11 +352,6 @@ pub(super) async fn list_native_sessions(
                     .await
                     .map_err(|_| NativeDiscoveryFailure::Provider)?
             };
-            let _listing = discovering
-                .listing
-                .acquire()
-                .await
-                .map_err(|_| NativeDiscoveryFailure::Provider)?;
             // A driver that cannot enumerate the machine is never handed a folderless query. It
             // would have to either invent a folder or answer one folder's worth as if it were all,
             // and the second is how a partial list comes to read as complete.
@@ -386,16 +382,24 @@ pub(super) async fn list_native_sessions(
                 .await
                 .map_err(|_| NativeDiscoveryFailure::Provider)?;
             let next = catalogue.next_cursor.clone();
-            let mut public = crate::runtime_native_sessions::authorize_catalogue(
-                native_cursors,
-                &authority,
-                selected_root.as_ref(),
-                &approved_roots,
-                managed,
-                provider,
-                prepared.binary_identity,
-                catalogue,
-            )
+            let inspected_authority = authority.clone();
+            let inspected_root = selected_root.clone();
+            let codec = Arc::clone(native_cursors);
+            let managed = Arc::clone(managed);
+            let binary_identity = prepared.binary_identity;
+            let (_listing, mut public) = super::native_inspection::inspect(listing, move || {
+                crate::runtime_native_sessions::authorize_catalogue(
+                    &codec,
+                    &inspected_authority,
+                    inspected_root.as_ref(),
+                    &approved_roots,
+                    &managed,
+                    provider,
+                    binary_identity,
+                    catalogue,
+                )
+            })
+            .await
             .map_err(NativeDiscoveryFailure::Inventory)?;
             if let Some(next) = next {
                 public.next_cursor = Some(
