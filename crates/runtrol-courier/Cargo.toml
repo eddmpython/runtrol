@@ -1,0 +1,21 @@
+# The dialogue plane's mechanical core: bounded identifiers, envelopes, receipts, ceilings, and accounting
+# between Runtrol-managed sessions. No transport, no clock, no process, no provider name: the daemon wires
+# this to its local named pipe and its managed process tree. A leaf on purpose, so the command surface and the
+# daemon can both speak the same envelope without either reaching the other.
+[package]
+name = "runtrol-courier"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+thiserror = { workspace = true }
+# Message, call, session and room identifiers are UUIDv7 so each sorts by the moment it was minted.
+uuid = { workspace = true, features = ["std", "v7"] }
+
+[lints]
+workspace = true

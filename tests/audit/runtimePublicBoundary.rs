@@ -92,12 +92,14 @@ fn publishable_crates_import_no_private_runtime_authority() {
         "runtrol_ipc",
         "runtrol_store",
         "runtrol_vault",
+        "runtrol_courier",
         "runtrol-core",
         "runtrol-daemon",
         "runtrol-drivers",
         "runtrol-ipc",
         "runtrol-store",
         "runtrol-vault",
+        "runtrol-courier",
     ] {
         assert!(
             !protocol.contains(forbidden),
@@ -172,6 +174,7 @@ fn publishable_typescript_client_imports_no_private_runtime_authority() {
         "runtrol-ipc",
         "runtrol-store",
         "runtrol-vault",
+        "runtrol-courier",
     ] {
         assert!(
             !source.contains(forbidden),

@@ -1675,6 +1675,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "runtrol-courier"
+version = "0.1.1"
+dependencies = [
+ "thiserror 2.0.19",
+ "uuid",
+]
+
+[[package]]
 name = "runtrol-daemon"
 version = "0.1.1"
 dependencies = [

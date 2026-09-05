@@ -15,6 +15,7 @@ members = [
     "crates/runtrol-transport",
     "crates/runtrol-vault",
     "crates/runtrol-update",
+    "crates/runtrol-courier",
     "crates/runtrol-runtime-protocol",
     "crates/runtrol-runtime-client",
     "crates/runtrol-core",

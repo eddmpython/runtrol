@@ -44,6 +44,9 @@ const ALLOWED_EDGES: &[(&str, &[&str])] = &[
     ("runtrol-vault", &["runtrol-provider"]),
     // L1. Signed release and filesystem replacement primitives. It opens no socket and starts no provider.
     ("runtrol-update", &[]),
+    // L1. The dialogue plane's mechanical core: identifiers, envelopes, receipts, ceilings, and accounting between
+    // managed sessions. No transport, no clock, no provider; the daemon wires it to the local pipe later.
+    ("runtrol-courier", &[]),
     // L2. The kernel. **It cannot see the drivers** (see FORBIDDEN_TRANSITIVE below).
     (
         "runtrol-core",

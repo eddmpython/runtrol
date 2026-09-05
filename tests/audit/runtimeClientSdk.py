@@ -41,6 +41,7 @@ def boundaryViolations(package: dict[str, object], sources: dict[str, str]) -> l
         "runtrol-ipc",
         "runtrol-store",
         "runtrol-vault",
+        "runtrol-courier",
     ):
         if forbidden in allSource:
             found.append(f"public TypeScript source reaches private authority `{forbidden}`")
