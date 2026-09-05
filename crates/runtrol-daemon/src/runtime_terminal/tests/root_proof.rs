@@ -69,3 +69,50 @@ async fn a_failed_worker_has_a_distinct_structural_reason() {
     assert_eq!(RootCheckFailure::Denied.reason(), "denied");
     assert_eq!(RootCheckFailure::Stale.reason(), "stale");
 }
+
+#[test]
+fn cancellation_and_timeout_abort_a_blocking_check_that_has_not_started() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    for timeout in [false, true] {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .max_blocking_threads(1)
+            .enable_all()
+            .build()
+            .expect("the fixture runtime builds");
+        runtime.block_on(async {
+            let (started, entered) = tokio::sync::oneshot::channel();
+            let (release, wait) = std::sync::mpsc::channel();
+            let blocker = tokio::task::spawn_blocking(move || {
+                started.send(()).expect("announce the occupied worker");
+                wait.recv().expect("release the occupied worker");
+            });
+            entered.await.expect("the sole worker is occupied");
+            let calls = Arc::new(AtomicUsize::new(0));
+            let counted = Arc::clone(&calls);
+            let checking = tokio::spawn(run_root_check(
+                Arc::new(tokio::sync::Semaphore::new(1)),
+                move || {
+                    counted.fetch_add(1, Ordering::SeqCst);
+                    true
+                },
+            ));
+            tokio::task::yield_now().await;
+            if timeout {
+                assert_eq!(
+                    checking.await.expect("bounded waiter ends"),
+                    Err(RootCheckFailure::TimedOut)
+                );
+            } else {
+                checking.abort();
+                assert!(checking.await.expect_err("canceled waiter").is_cancelled());
+            }
+            release.send(()).expect("release the exact blocker");
+            blocker.await.expect("the blocker ends");
+            tokio::task::spawn_blocking(|| ())
+                .await
+                .expect("drain the blocking queue");
+            assert_eq!(calls.load(Ordering::SeqCst), 0);
+        });
+    }
+}

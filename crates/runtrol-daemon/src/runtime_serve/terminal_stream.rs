@@ -21,11 +21,9 @@ use crate::runtime_auth::AuthorizedIntegration;
 use crate::runtime_inventory::RuntimeSessionCatalogue;
 use crate::runtime_native_sessions::NativeCursorCodec;
 use crate::runtime_terminal::{
-    RootCheck, RootCheckFailure, TerminalRuntimeFailure, TerminalView, has_scopes, run_root_check,
+    ROOT_REFRESH_AFTER, RootCheckFailure, TerminalRuntimeFailure, TerminalView, has_scopes,
 };
 
-#[cfg(not(windows))]
-use super::authority::current_authority_row;
 use super::authority::{authorized_scopes, refresh_current, refresh_current_in_place};
 use super::connection_state::{PublicState, RelayOutcome};
 use super::response::{
@@ -367,12 +365,15 @@ pub(super) async fn relay_terminal(
     let mut draining_authority_updates = composed.generation_authority.subscribe();
     // Subscribe first, then read. A mutation between terminal admission and this relay is either present in
     // the snapshot below or wakes one of these receivers; there is no gap where passive output can retain it.
-    if refresh_terminal_authority(composed, &mut view).is_err() {
+    if refresh_terminal_authority(composed, &mut view)
+        .await
+        .is_err()
+    {
         return RelayOutcome::CloseConnection;
     }
-    let mut root_check: Option<tokio::task::JoinHandle<TerminalRootCheck>> = None;
-    let first_check = tokio::time::Instant::now() + Duration::from_millis(500);
-    let mut root_tick = tokio::time::interval_at(first_check, Duration::from_millis(500));
+    let mut root_updates = view.root_proof().subscribe();
+    let first_check = tokio::time::Instant::now() + ROOT_REFRESH_AFTER;
+    let mut root_tick = tokio::time::interval_at(first_check, ROOT_REFRESH_AFTER);
     root_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     // Only a draining generation needs a clock: it must fail closed when successor relay updates stop.
     // Primary generations wake on the commit-coupled notification above and perform no periodic store read.
@@ -394,82 +395,45 @@ pub(super) async fn relay_terminal(
         return RelayOutcome::CloseConnection;
     }
     loop {
+        if let Err(failure) = view.root_proof().fresh() {
+            report_root_check_end(&view, failure);
+            return RelayOutcome::CloseConnection;
+        }
+        let root_expiry = tokio::time::Instant::from_std(view.root_proof().expires_at());
         tokio::select! {
             biased;
             changed = primary_authority_updates.changed() => {
-                if changed.is_err() || refresh_terminal_authority(composed, &mut view).is_err() {
+                if changed.is_err() || refresh_terminal_authority(composed, &mut view).await.is_err() {
                     return RelayOutcome::CloseConnection;
                 }
+                root_updates = view.root_proof().subscribe();
             }
             changed = draining_authority_updates.changed() => {
-                if changed.is_err() || refresh_terminal_authority(composed, &mut view).is_err() {
+                if changed.is_err() || refresh_terminal_authority(composed, &mut view).await.is_err() {
                     return RelayOutcome::CloseConnection;
                 }
+                root_updates = view.root_proof().subscribe();
             }
-            checked = async {
-                match root_check.as_mut() {
-                    Some(check) => check.await,
-                    None => std::future::pending().await,
-                }
-            }, if root_check.is_some() => {
-                root_check = None;
-                let Ok(checked) = checked else {
-                    report_root_check_end(&view, RootCheckFailure::WorkerFailed);
+            changed = root_updates.changed() => {
+                if changed.is_err() {
                     return RelayOutcome::CloseConnection;
-                };
-                let current_stamp = (
-                    view.authority.grant.key_generation,
-                    view.authority.grant.grant_generation,
-                    view.hosted.generation,
-                );
-                // A failed or expired filesystem proof is never made safe by an authority update. A fresh
-                // successful proof for another authority stamp authorizes nothing and is checked again.
-                let proof = match checked.result.and_then(RootCheck::fresh) {
-                    Ok(proof) if proof.value => proof,
-                    result => {
-                        report_root_check_end(&view, result.err().unwrap_or(RootCheckFailure::Denied));
-                        return RelayOutcome::CloseConnection;
-                    }
-                };
-                if checked.stamp == current_stamp {
-                    if let Err(failure) = view.remember_root_proof(proof.completed_at) {
-                        report_root_check_end(&view, failure);
-                        return RelayOutcome::CloseConnection;
-                    }
-                } else {
-                    root_tick.reset_immediately();
                 }
+                // A completed check is already visible to every view. A timeout cannot renew its prior proof.
+                root_tick.reset_immediately();
+            }
+            () = tokio::time::sleep_until(root_expiry) => {
+                // The loop reads the current shared completion again before any input or output is admitted.
             }
             _ = authority_tick.tick(), if composed.draining.load(std::sync::atomic::Ordering::Acquire) => {
-                if refresh_terminal_authority(composed, &mut view).is_err() {
+                if refresh_terminal_authority(composed, &mut view).await.is_err() {
                     return RelayOutcome::CloseConnection;
                 }
+                root_updates = view.root_proof().subscribe();
             }
-            _ = root_tick.tick(), if root_check.is_none() => {
-                #[cfg(windows)]
-                {
-                    root_check = Some(tokio::spawn(check_pinned_terminal_root(
-                        composed.terminal_root_checks.clone(),
-                        view.pinned_root_guard(),
-                        (
-                            view.authority.grant.key_generation,
-                            view.authority.grant.grant_generation,
-                            view.hosted.generation,
-                        ),
-                    )));
-                }
-                #[cfg(not(windows))]
-                {
-                    let Ok(row) = current_authority_row(composed, &view.authority) else {
-                        return RelayOutcome::CloseConnection;
-                    };
-                    root_check = Some(tokio::spawn(check_terminal_roots(
-                        composed.terminal_root_checks.clone(),
-                        row,
-                        view.hosted.project_root().clone(),
-                        view.hosted.worktree().cloned(),
-                        view.hosted.generation,
-                    )));
+            _ = root_tick.tick() => {
+                if let Err(failure) = view.root_proof().refresh() {
+                    report_root_check_end(&view, failure);
+                    return RelayOutcome::CloseConnection;
                 }
             }
             changed = view.attachment.exited.changed() => {
@@ -489,7 +453,7 @@ pub(super) async fn relay_terminal(
                         bytes_base64: base64ct::Base64::encode_string(&chunk.bytes),
                     };
                     sequence = sequence.saturating_add(1);
-                    if send_to_view(connection, RuntimeMethod::TerminalsOutput, &notification)
+                    if send_root_output(connection, &view, RuntimeMethod::TerminalsOutput, &notification)
                         .await
                         .is_err()
                     {
@@ -517,6 +481,7 @@ pub(super) async fn relay_terminal(
                     return RelayOutcome::CloseConnection;
                 };
                 let handled = terminal_view_request(composed, &mut view, request).await;
+                root_updates = view.root_proof().subscribe();
                 if send_response(connection, &handled.response).await.is_err() {
                     return RelayOutcome::CloseConnection;
                 }
@@ -536,7 +501,7 @@ pub(super) async fn relay_terminal(
                             bytes_base64: base64ct::Base64::encode_string(&chunk.bytes),
                         };
                         sequence = sequence.saturating_add(1);
-                        if send_to_view(connection, RuntimeMethod::TerminalsOutput, &notification)
+                        if send_root_output(connection, &view, RuntimeMethod::TerminalsOutput, &notification)
                         .await
                         .is_err()
                         {
@@ -561,7 +526,7 @@ pub(super) async fn relay_terminal(
                             checkpoint_available: fresh.checkpoint_available,
                             next_sequence: sequence,
                         };
-                        if send_to_view(connection, RuntimeMethod::TerminalsLagged, &notification)
+                        if send_root_output(connection, &view, RuntimeMethod::TerminalsLagged, &notification)
                         .await
                         .is_err()
                         {
@@ -577,11 +542,6 @@ pub(super) async fn relay_terminal(
     }
 }
 
-struct TerminalRootCheck {
-    stamp: (u64, u64, u64),
-    result: Result<RootCheck<bool>, RootCheckFailure>,
-}
-
 #[expect(
     clippy::print_stderr,
     reason = "one bounded structural reason explains why this view lost its root proof before the connection closes"
@@ -595,50 +555,12 @@ fn report_root_check_end(view: &TerminalView, failure: RootCheckFailure) {
     );
 }
 
-/// Validate the pinned Windows directory handle away from terminal input and output tasks.
-#[cfg(windows)]
-async fn check_pinned_terminal_root(
-    permits: Arc<tokio::sync::Semaphore>,
-    guard: Arc<tokio::sync::Mutex<crate::runtime_terminal::TerminalRootGuards>>,
-    stamp: (u64, u64, u64),
-) -> TerminalRootCheck {
-    let checked = run_root_check(permits, move || guard.blocking_lock().valid()).await;
-    TerminalRootCheck {
-        stamp,
-        result: checked,
-    }
-}
-
-/// Check a quiet output view on the blocking pool, with one daemon-wide bound and a fail-closed deadline.
-#[cfg(not(windows))]
-async fn check_terminal_roots(
-    permits: Arc<tokio::sync::Semaphore>,
-    row: Arc<runtrol_store::IntegrationRow>,
-    workspace: runtrol_provider::AbsPath,
-    binding: Option<crate::isolated_workspace::WorktreeBinding>,
-    terminal_generation: u64,
-) -> TerminalRootCheck {
-    let stamp = (
-        row.key_generation,
-        row.grant_generation,
-        terminal_generation,
-    );
-    let checked = run_root_check(permits, move || {
-        crate::runtime_terminal::validate_workspace_roots(&row, &workspace).is_ok()
-            && binding
-                .as_ref()
-                .is_none_or(|binding| binding.verify().is_ok())
-    })
-    .await;
-    TerminalRootCheck {
-        stamp,
-        result: checked,
-    }
-}
-
-fn refresh_terminal_authority(composed: &Composed, view: &mut TerminalView) -> Result<(), ()> {
+async fn refresh_terminal_authority(
+    composed: &Composed,
+    view: &mut TerminalView,
+) -> Result<(), ()> {
     refresh_current_in_place(composed, &mut view.authority).map_err(drop)?;
-    view.refresh_root_authority().map_err(drop)?;
+    view.refresh_root_authority().await.map_err(drop)?;
     if has_scopes(&view.authority.grant, &[AppScope::SessionOutputRead]) {
         Ok(())
     } else {
@@ -694,7 +616,7 @@ async fn terminal_view_request(
             failure.message,
         ));
     }
-    if let Err(failure) = view.refresh_root_authority() {
+    if let Err(failure) = view.refresh_root_authority().await {
         return TerminalViewResponse::continuing(failure_response(
             id,
             failure.kind,
@@ -993,6 +915,22 @@ async fn send_terminal_index_end(
 /// silent hang (`terminalTransportIntegrity`, lag replacement and disconnect).
 const VIEW_WRITE_DEADLINE: Duration = Duration::from_secs(10);
 
+/// Authorize each output frame at its send boundary, including exit drain and lag replacement frames.
+async fn send_root_output<T: serde::Serialize>(
+    connection: &mut Connection,
+    view: &TerminalView,
+    method: RuntimeMethod,
+    params: &T,
+) -> Result<(), ()> {
+    #[cfg(test)]
+    view.root_proof().test_output_check();
+    if let Err(failure) = view.root_proof().fresh() {
+        report_root_check_end(view, failure);
+        return Err(());
+    }
+    send_to_view(connection, method, params).await
+}
+
 /// One notification into the view's connection, or a failure when the connection did not take it in time.
 async fn send_to_view<T: serde::Serialize>(
     connection: &mut Connection,
@@ -1010,3 +948,7 @@ async fn send_to_view<T: serde::Serialize>(
         Ok(Err(_)) | Err(_) => Err(()),
     }
 }
+
+#[cfg(test)]
+#[path = "tests/root_output.rs"]
+mod root_output_tests;

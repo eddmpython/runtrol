@@ -684,31 +684,146 @@ fn last_turn_boundary(bytes: &[u8]) -> Option<TurnBoundary> {
     bytes.rsplit(|byte| *byte == b'\n').find_map(turn_boundary)
 }
 
-/// Read only this provider's measured compact envelope. A nested payload type, escaped message string, or
-/// incomplete envelope cannot claim a boundary by containing the same event name.
+/// Read only the structural envelope, independent of JSON whitespace and object field order. Root metadata
+/// and the payload's direct type must fit the existing prefix bound. Nothing after those facts is decoded.
 fn turn_boundary(line: &[u8]) -> Option<TurnBoundary> {
     let prefix = line.get(..line.len().min(MAX_BOUNDARY_PREFIX_BYTES))?;
-    let after_timestamp = prefix.strip_prefix(b"{\"timestamp\":\"")?;
-    let end = after_timestamp.iter().position(|byte| *byte == b'\"')?;
-    let timestamp = after_timestamp.get(..end)?;
-    let event = after_timestamp
-        .get(end..)?
-        .strip_prefix(b"\",\"type\":\"event_msg\",\"payload\":{\"type\":\"")?;
-    let end = event.iter().position(|byte| *byte == b'\"')?;
-    let answering = match event.get(..end)? {
-        TURN_OPENED => true,
-        TURN_CLOSED | TURN_ABORTED => false,
-        _ => return None,
-    };
-    if !matches!(event.get(end + 1), Some(b',' | b'}')) {
-        return None;
+    let mut cursor = EnvelopeCursor(prefix);
+    let mut envelope = BoundaryEnvelope::default();
+    cursor.take(b'{')?;
+    loop {
+        match cursor.key()?.as_str() {
+            "timestamp" => {
+                // An unreadable timestamp overrides an earlier open turn with an unknown boundary.
+                envelope.at =
+                    EnvelopeTimestamp::Present(WallMs::from_iso8601(&cursor.value::<String>()?));
+            }
+            "type" => {
+                if cursor.value::<String>()? != "event_msg" {
+                    return None;
+                }
+                envelope.event = true;
+            }
+            "payload" => {
+                cursor.payload(&mut envelope)?;
+                if let Some(boundary) = envelope.boundary() {
+                    return Some(boundary);
+                }
+            }
+            _ => cursor.ignore()?,
+        }
+        let more = cursor.next_member()?;
+        if let Some(boundary) = envelope.boundary() {
+            return Some(boundary);
+        }
+        if !more {
+            return None;
+        }
     }
-    // An unreadable timestamp is an unknown boundary, not permission to keep an older open turn active.
-    let at = match std::str::from_utf8(timestamp) {
-        Ok(timestamp) => WallMs::from_iso8601(timestamp),
-        Err(_) => None,
-    };
-    Some(TurnBoundary { answering, at })
+}
+
+/// These three structural facts are the only values retained from a record prefix.
+#[derive(Default)]
+struct BoundaryEnvelope {
+    event: bool,
+    at: EnvelopeTimestamp,
+    answering: Option<bool>,
+}
+
+#[derive(Clone, Copy, Default)]
+enum EnvelopeTimestamp {
+    #[default]
+    Missing,
+    Present(Option<WallMs>),
+}
+
+impl BoundaryEnvelope {
+    fn boundary(&self) -> Option<TurnBoundary> {
+        if !self.event {
+            return None;
+        }
+        let EnvelopeTimestamp::Present(at) = self.at else {
+            return None;
+        };
+        Some(TurnBoundary {
+            answering: self.answering?,
+            at,
+        })
+    }
+}
+
+/// A bounded cursor through exactly the root object and its payload object. Serde skips unknown values
+/// iteratively without materializing them; its temporary nesting scratch cannot outgrow this byte prefix.
+struct EnvelopeCursor<'a>(&'a [u8]);
+
+impl<'a> EnvelopeCursor<'a> {
+    fn whitespace(&mut self) {
+        while let Some((b' ' | b'\t' | b'\r' | b'\n', remaining)) = self.0.split_first() {
+            self.0 = remaining;
+        }
+    }
+
+    fn take(&mut self, expected: u8) -> Option<()> {
+        self.whitespace();
+        let (byte, remaining) = self.0.split_first()?;
+        if *byte != expected {
+            return None;
+        }
+        self.0 = remaining;
+        Some(())
+    }
+
+    fn value<T: serde::Deserialize<'a>>(&mut self) -> Option<T> {
+        let mut stream = serde_json::Deserializer::from_slice(self.0).into_iter::<T>();
+        let Ok(value) = stream.next()? else {
+            return None;
+        };
+        self.0 = self.0.get(stream.byte_offset()..)?;
+        Some(value)
+    }
+
+    fn key(&mut self) -> Option<String> {
+        let key = self.value()?;
+        self.take(b':')?;
+        Some(key)
+    }
+
+    fn ignore(&mut self) -> Option<()> {
+        self.value::<serde::de::IgnoredAny>()?;
+        Some(())
+    }
+
+    /// Require a complete scalar and its enclosing delimiter before accepting a boundary.
+    fn next_member(&mut self) -> Option<bool> {
+        self.whitespace();
+        let (byte, remaining) = self.0.split_first()?;
+        let more = match byte {
+            b',' => true,
+            b'}' => false,
+            _ => return None,
+        };
+        self.0 = remaining;
+        Some(more)
+    }
+
+    fn payload(&mut self, envelope: &mut BoundaryEnvelope) -> Option<()> {
+        self.take(b'{')?;
+        loop {
+            if self.key()? == "type" {
+                envelope.answering = match self.value::<String>()?.as_bytes() {
+                    TURN_OPENED => Some(true),
+                    TURN_CLOSED | TURN_ABORTED => Some(false),
+                    _ => return None,
+                };
+            } else {
+                self.ignore()?;
+            }
+            let more = self.next_member()?;
+            if envelope.boundary().is_some() || !more {
+                return Some(());
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1145,6 +1260,112 @@ mod tests {
             last_open_turn((closed("a") + &opened("b") + &aborted("b")).as_bytes()),
             Some(false)
         );
+    }
+
+    #[test]
+    fn structural_envelopes_accept_whitespace_and_both_objects_field_orders() {
+        for (event, answering) in [
+            ("task_started", true),
+            ("task_complete", false),
+            ("turn_aborted", false),
+        ] {
+            for spaced in [false, true] {
+                for payload_order in [false, true] {
+                    let separator = if spaced { " : " } else { ":" };
+                    let delimiter = if spaced { " ,\t" } else { "," };
+                    let payload_type = format!("\"type\"{separator}\"{event}\"");
+                    let opaque = format!("\"turn_id\"{separator}\"synthetic\"");
+                    let payload = if payload_order {
+                        format!("{opaque}{delimiter}{payload_type}")
+                    } else {
+                        format!("{payload_type}{delimiter}{opaque}")
+                    };
+                    let fields = [
+                        format!("\"timestamp\"{separator}\"{TURN_AT}\""),
+                        format!("\"type\"{separator}\"event_msg\""),
+                        format!("\"payload\"{separator}{{ {payload} }}"),
+                    ];
+                    for order in [
+                        [0, 1, 2],
+                        [0, 2, 1],
+                        [1, 0, 2],
+                        [1, 2, 0],
+                        [2, 0, 1],
+                        [2, 1, 0],
+                    ] {
+                        let ordered = order.map(|index| fields.get(index).expect("field index"));
+                        let line =
+                            format!(" {{ {} }}\r\n", ordered.map(String::as_str).join(delimiter));
+                        assert!(line.len() < MAX_BOUNDARY_PREFIX_BYTES);
+                        assert_eq!(
+                            last_turn_boundary(line.as_bytes()),
+                            Some(TurnBoundary {
+                                answering,
+                                at: WallMs::from_iso8601(TURN_AT),
+                            }),
+                            "event={event} spaced={spaced} payload_order={payload_order} root_order={order:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_resumed_owner_sees_its_new_reordered_turn_in_warm_and_cold_rosters() {
+        let (_kept, root) = home(&[(OPEN_THREAD, opened("old_owner"))]);
+        let _held = hold(&root, OPEN_THREAD);
+        let mut warm = CodexRoster::rooted(root.clone());
+        assert_eq!(warm.activity(codex()).expect("readable").active.len(), 1);
+        warm.identify = resumed_identity;
+        assert!(warm.activity(codex()).expect("readable").active.is_empty());
+        let log = locate_log(&root, OPEN_THREAD).expect("the fixture log exists");
+        let next = concat!(
+            "{ \"payload\" : { \"turn_id\" : \"new_owner\", \"type\" : \"task_started\" }, ",
+            "\"type\" : \"event_msg\", \"timestamp\" : \"2026-08-29T00:00:03Z\" }\n"
+        );
+        OpenOptions::new()
+            .append(true)
+            .open(log)
+            .expect("append fixture")
+            .write_all(next.as_bytes())
+            .expect("the new owner opens its turn");
+        assert_eq!(warm.activity(codex()).expect("readable").active.len(), 1);
+        let mut cold = CodexRoster::rooted(root);
+        cold.identify = resumed_identity;
+        assert_eq!(cold.activity(codex()).expect("readable").active.len(), 1);
+    }
+
+    #[test]
+    fn reordered_metadata_never_uses_nested_or_quoted_event_types() {
+        for payload in [
+            r#"{ "body": { "type": "task_started" }, "type": "other" }"#,
+            r#"{ "body": "\"type\":\"task_started\"", "type": "other" }"#,
+            r#"{ "body": { "type": "task_started" } }"#,
+        ] {
+            let line = format!(
+                "{{ \"payload\" : {payload}, \"timestamp\" : \"{TURN_AT}\", \"type\" : \"event_msg\" }}\n"
+            );
+            assert_eq!(last_turn_boundary(line.as_bytes()), None);
+        }
+        let line = format!(
+            "{{ \"payload\" : {{ \"type\" : \"task_started\" }}, \"timestamp\" : \"{TURN_AT}\", \"type\" : \"response_item\" }}\n"
+        );
+        assert_eq!(last_turn_boundary(line.as_bytes()), None);
+    }
+
+    #[test]
+    fn envelope_metadata_must_fit_the_existing_bound_without_reading_trailing_body() {
+        let body = "x".repeat(MAX_BOUNDARY_PREFIX_BYTES);
+        let metadata_last = format!(
+            "{{\"body\":\"{body}\",\"timestamp\":\"{TURN_AT}\",\"type\":\"event_msg\",\"payload\":{{\"type\":\"task_started\"}}}}\n"
+        );
+        assert_eq!(last_turn_boundary(metadata_last.as_bytes()), None);
+        let metadata_first = format!(
+            "{{ \"type\" : \"event_msg\", \"timestamp\" : \"{TURN_AT}\", \"payload\" : {{ \"type\" : \"task_started\", \"body\" : \"{body}\" }} }}\n"
+        );
+        assert_eq!(last_open_turn(metadata_first.as_bytes()), Some(true));
     }
 
     #[test]

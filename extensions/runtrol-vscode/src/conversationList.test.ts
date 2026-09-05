@@ -637,6 +637,42 @@ test("lineage joins an exact live lead while the worker keeps its real working d
   assert.equal(ended.find((row) => row.spawnedBy === "lead")?.canOpen, true);
 });
 
+for (const published of [false, true]) {
+  test(`restored hosted worktrees group by projectRoot ${published ? "after" : "before"} provider publication`, () => {
+    const worktree = below(ROOT, ".runtrol-worktrees", "preserved-worker");
+    const terminal = {
+      terminalId: "resumed-terminal", runtimeGeneration: "new-generation", providerId: "codex",
+      workspace: worktree, projectRoot: ALPHA, spawnedBy: null, nativeSessionId: "retained-native",
+      processState: "running", origin: "owned", openedAtMs: NOW, terminalGeneration: 1,
+      geometry: { columns: 120, rows: 40 }, memoryBytes: null,
+    } as TerminalDescriptor;
+    const chats = published
+      ? [nativeChat({ nativeSessionId: "retained-native", cwd: worktree, title: "Retained conversation" })]
+      : [];
+    const project = (descriptor: TerminalDescriptor) => conversations([], PROVIDERS, chats, null, null,
+      new Map(), new Map(), new Set(), new Map(), [], new Set(), new Set(), new Set(), [descriptor]);
+    const rows = project(terminal);
+    const row = rows[0];
+    assert.equal(rows.length, 1);
+    assert.equal(projects([record(ALPHA)], rows, [])[0]?.rows[0], row);
+    assert.equal(row?.homeWorkspace, ALPHA);
+    assert.equal(row?.folder, "alpha");
+    assert.equal(row?.workspace, worktree, "actions keep the exact resumed working directory");
+    assert.equal(row?.hostedTerminal, terminal, "the exact descriptor and origin are preserved");
+    assert.equal(row?.hostedTerminal?.nativeSessionId, "retained-native");
+    assert.equal(row?.hostedTerminal?.spawnedBy, null);
+    assert.equal(row?.spawnedBy, undefined, "project grouping does not invent worker lineage");
+    assert.equal(row?.live, true);
+    if (published) assert.equal(row?.native, chats[0]);
+
+    const unbound = project({ ...terminal, projectRoot: undefined });
+    assert.equal(unbound[0]?.homeWorkspace, worktree, "a missing project fact keeps the existing cwd grouping");
+    assert.equal(projects([record(ALPHA)], unbound, [])[0]?.rows.length, 0);
+    assert.equal(projects([record(worktree)], unbound, [])[0]?.rows[0], unbound[0]);
+    assert.equal(unbound[0]?.spawnedBy, undefined);
+  });
+}
+
 test("a full terminal index becomes sidebar rows within the fifty millisecond p95 budget", () => {
   const count = 256;
   const chats = Array.from({ length: count }, (_, index) => nativeChat({

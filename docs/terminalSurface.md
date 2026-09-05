@@ -208,17 +208,23 @@ before terminal output, and a revoked key, reduced grant, changed key generation
 before it can keep streaming under old authority.
 
 Filesystem identity is still part of authority. An admitted dedicated terminal view uses a recent proof of its pinned
-root for input and control acquisition or renewal. These control operations check the exact view and current grant
-again after obtaining the mutation lock. Background root proofs and index root checks share a bounded blocking lane;
-quiet output-only views also receive these checks. Opening, rebinding and ordinary requests outside a dedicated view
-retain their own canonical-root validation.
+root for input, output and control acquisition or renewal. These control operations check the exact view and current
+grant again after obtaining the mutation lock. Views with the same integration, key and grant generations, approved
+root identity and complete worktree binding share a pinned guard and one refresh in flight. The pool holds weak
+references, so departed views retain neither authority nor a background poller. Background root proofs and index
+root checks share a bounded blocking lane; quiet output-only views also receive these checks. Opening, rebinding and
+ordinary requests outside a dedicated view retain their own canonical-root validation. Admission rechecks the
+current grant and proof after waiting for control state, before issuing an initial lease or returning the first
+screen snapshot.
 
 A proof's lifetime begins when its filesystem check finishes, so delayed observation cannot renew old authority.
-A failure, timeout, stale result or blocking-task failure closes the affected view or index. A successful result whose
-key, grant, or terminal generation changed while the check ran authorizes nothing and is discarded. Static failure
-reasons identify the affected terminal view without recording terminal bytes. Scheduling, timeout, concurrency and
-freshness limits belong to
-[`root_proof`](../crates/runtrol-daemon/src/runtime_terminal/root_proof.rs); relay ordering lives in the Runtime serving
+A denied or failed filesystem check invalidates its shared proof. A refresh timeout provides no new authority: a
+view can use its prior successful proof only until that proof's original expiration. Every output frame, including
+exit drain and lag replacement, checks freshness before sending, and quiet views wake at the same absolute expiry.
+An index check failure still closes its subscription. A successful result for a previous key, grant or worktree
+binding cannot authorize the replacement binding. Static failure reasons identify the affected terminal view without
+recording terminal bytes. Scheduling, timeout, concurrency and freshness limits belong to
+[`root_proof`](../crates/runtrol-daemon/src/runtime_terminal/root_proof/mod.rs); relay ordering lives in the Runtime serving
 modules.
 
 During a Runtime upgrade, the old generation freezes its last committed ceiling and accepts only monotonic

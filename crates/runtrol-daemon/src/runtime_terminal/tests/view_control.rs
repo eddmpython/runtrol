@@ -3,23 +3,26 @@
 use std::future::{Future, poll_fn};
 use std::path::PathBuf;
 use std::task::Poll;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use runtrol_runtime_protocol::{IntegrationId, ProviderId, WindowMirrorOpenParams};
 use runtrol_store::IntegrationRootRow;
 
 use super::*;
 
-struct Fixture {
-    composed: Arc<Composed>,
-    view: TerminalView,
+pub(crate) struct Fixture {
+    pub(crate) composed: Arc<Composed>,
+    pub(crate) view: TerminalView,
     row: IntegrationRow,
     feeder: crate::window_registry::ConnectionToken,
     directory: PathBuf,
 }
 
 impl Fixture {
-    async fn new() -> Self {
+    pub(crate) async fn new() -> Self {
+        // A serving Runtime has measured its image before admission. Match that startup boundary so
+        // the first fixture does not hash the entire test executable after pinning its one-second proof.
+        runtime_generation().expect("the fixture Runtime has its startup generation");
         let directory = std::env::var_os("CARGO_TARGET_DIR")
             .map_or_else(std::env::temp_dir, PathBuf::from)
             .join(format!("view-control-{}", TerminalId::now()));
@@ -115,23 +118,10 @@ impl Fixture {
     }
 
     async fn refresh_proof(&mut self) {
-        #[cfg(windows)]
-        let check = {
-            let guard = self.view.pinned_root_guard();
-            move || guard.blocking_lock().valid()
-        };
-        #[cfg(not(windows))]
-        let check = {
-            let row = self.row.clone();
-            let workspace = self.view.hosted.workspace.clone();
-            move || validate_workspace_roots(&row, &workspace).is_ok()
-        };
-        let proof = run_root_check(self.composed.terminal_root_checks.clone(), check)
+        let proof = Arc::clone(self.view.root_proof());
+        tokio::task::spawn_blocking(move || proof.checked_now())
             .await
-            .expect("the fixture root check completes in its bounded lane");
-        assert!(proof.value, "the exact fixture root remains valid");
-        self.view
-            .remember_root_proof(proof.completed_at)
+            .expect("the fixture root check worker finishes")
             .expect("the newly completed fixture proof is still fresh");
     }
 
@@ -141,6 +131,66 @@ impl Fixture {
             terminal_id: self.view.opened.terminal.terminal_id.clone(),
             expected_terminal_generation: self.view.hosted.generation,
         }
+    }
+
+    pub(crate) async fn another_terminal_view(&self, index: usize) -> TerminalView {
+        let cwd = self
+            .view
+            .hosted
+            .workspace
+            .as_std_path()
+            .join(format!("child-{index}"));
+        std::fs::create_dir(&cwd).expect("create a distinct child workspace");
+        let terminal = crate::terminal_surface::open_observed_mirror(
+            &self.composed,
+            self.feeder,
+            "fixture-window".into(),
+            WindowMirrorOpenParams {
+                window_session_id: "fixture-window".into(),
+                terminal_key: format!("terminal-{index}"),
+                execution_id: format!("execution-{index}"),
+                provider_id: ProviderId::new("claude"),
+                command_line: "fixture".into(),
+                cwd: cwd.to_str().expect("UTF-8 child workspace").to_owned(),
+                process_id: None,
+                geometry: TerminalGeometry {
+                    columns: 80,
+                    rows: 24,
+                },
+            },
+        )
+        .await
+        .expect("open a distinct fed terminal without a process");
+        self.composed
+            .runtime_terminals
+            .attach(
+                &self.composed,
+                self.view.authority.clone(),
+                &TerminalAttachParams {
+                    terminal_id: terminal.to_string().parse().expect("terminal ID"),
+                },
+            )
+            .await
+            .expect("attach the distinct terminal")
+    }
+
+    pub(crate) async fn enable_output(&mut self) {
+        self.row.scopes.push("session.output.read".into());
+        self.row.grant_generation += 1;
+        self.view
+            .authority
+            .grant
+            .scopes
+            .push(AppScope::SessionOutputRead);
+        self.view.authority.grant.grant_generation = self.row.grant_generation;
+        self.composed
+            .integration_authority
+            .publish_committed(self.view.authority.key, self.row.clone())
+            .expect("publish output authority");
+        self.view
+            .refresh_root_authority()
+            .await
+            .expect("pin output authority");
     }
 
     async fn acquire(
@@ -153,7 +203,7 @@ impl Fixture {
             .await
     }
 
-    async fn close(self) {
+    pub(crate) async fn close(self) {
         crate::terminal_surface::end_observed_mirrors_of(&self.composed, self.feeder).await;
         tokio::time::timeout(Duration::from_secs(2), async {
             while Arc::strong_count(&self.composed) > 1 {
@@ -177,30 +227,59 @@ fn renewal(lease: &TerminalControlLease) -> TerminalControlParams {
     }
 }
 
+#[cfg(windows)]
 #[tokio::test]
-async fn applying_a_proof_keeps_its_actual_age_and_rejects_an_old_success() {
-    let mut fixture = Fixture::new().await;
-    let completed_at = Instant::now()
-        .checked_sub(Duration::from_millis(500))
-        .expect("the fixture clock supports a recent proof");
-    fixture
-        .view
-        .remember_root_proof(completed_at)
-        .expect("still fresh");
-    assert_eq!(fixture.view.last_root_proof, completed_at);
-    assert_eq!(
-        fixture.view.remember_root_proof(
-            Instant::now()
-                .checked_sub(Duration::from_secs(2))
-                .expect("the fixture clock supports a stale proof"),
-        ),
-        Err(RootCheckFailure::Stale)
+async fn eight_views_of_one_approved_root_share_one_validation_owner() {
+    let fixture = Fixture::new().await;
+    let first = fixture.view.pinned_root_guard();
+    let mut views = Vec::new();
+    let mut shared = true;
+    for index in 1..8 {
+        let view = fixture.another_terminal_view(index).await;
+        assert_ne!(view.hosted.id, fixture.view.hosted.id);
+        shared &= Arc::ptr_eq(&first, &view.pinned_root_guard());
+        views.push(view);
+    }
+    let proof = fixture.view.root_proof();
+    let calls_before = proof.test_calls();
+    proof.set_test_completion(
+        Instant::now()
+            .checked_sub(ROOT_REFRESH_AFTER)
+            .expect("fixture age"),
     );
+    let mut changed = proof.subscribe();
+    let refresh_started_at = Instant::now();
+    proof.refresh().expect("request the first terminal refresh");
+    for view in &views {
+        view.root_proof()
+            .refresh()
+            .expect("join the same root check");
+    }
+    while proof
+        .fresh()
+        .is_ok_and(|completed| completed < refresh_started_at)
+    {
+        changed
+            .changed()
+            .await
+            .expect("the shared OS check finishes");
+    }
+    let completed_at = proof.fresh().expect("current completed proof");
     assert_eq!(
-        fixture.view.last_root_proof, completed_at,
-        "refusal never changes the stored proof"
+        proof.test_calls(),
+        calls_before + 1,
+        "eight distinct terminals perform one OS check"
     );
+    for view in &views {
+        assert_eq!(view.root_proof().fresh(), Ok(completed_at));
+    }
+    drop(views);
+    drop(first);
     fixture.close().await;
+    assert!(
+        shared,
+        "one root must not schedule eight duplicate validations"
+    );
 }
 
 #[cfg(windows)]
@@ -296,15 +375,17 @@ async fn view_control_requires_the_exact_terminal_and_process_generation() {
 
 #[tokio::test]
 async fn stale_view_authority_cannot_acquire_renew_or_replay_a_lease() {
-    let mut fixture = Fixture::new().await;
+    let fixture = Fixture::new().await;
     let params = fixture.acquire_params();
     let lease = fixture
         .acquire(&params)
         .await
         .expect("current view acquires");
-    fixture.view.last_root_proof = Instant::now()
-        .checked_sub(Duration::from_secs(2))
-        .expect("the fixture clock supports a stale proof");
+    fixture.view.root_proof().set_test_completion(
+        Instant::now()
+            .checked_sub(Duration::from_secs(2))
+            .expect("the fixture clock supports a stale proof"),
+    );
     assert_eq!(
         fixture
             .acquire(&params)
@@ -337,6 +418,100 @@ async fn stale_view_authority_cannot_acquire_renew_or_replay_a_lease() {
         lease.lease_generation
     );
     fixture.close().await;
+}
+
+#[tokio::test]
+async fn a_changed_grant_gets_a_new_os_completion_and_a_denial_reaches_other_views() {
+    let mut fixture = Fixture::new().await;
+    let other = fixture.another_terminal_view(1).await;
+    let previous = fixture.view.root_proof().fresh().expect("initial proof");
+    fixture.row.grant_generation += 1;
+    fixture.view.authority.grant.grant_generation = fixture.row.grant_generation;
+    fixture
+        .composed
+        .integration_authority
+        .publish_committed(fixture.view.authority.key, fixture.row.clone())
+        .expect("publish changed grant");
+    fixture
+        .view
+        .refresh_root_authority()
+        .await
+        .expect("pin the new grant");
+    assert!(fixture.view.root_proof().fresh().expect("new grant proof") > previous);
+    assert!(!Arc::ptr_eq(fixture.view.root_proof(), other.root_proof()));
+    drop(other);
+    let other = fixture.another_terminal_view(2).await;
+    let original = fixture.view.hosted.workspace.as_std_path().to_owned();
+    let moved = fixture.directory.join("moved-root");
+    std::fs::rename(&original, &moved).expect("move the approved directory");
+    let proof = Arc::clone(fixture.view.root_proof());
+    let denied = tokio::task::spawn_blocking(move || proof.checked_now())
+        .await
+        .expect("observe changed root");
+    let input = fixture
+        .composed
+        .runtime_terminals
+        .acquire_view(
+            &fixture.composed,
+            &other,
+            &TerminalAcquireControlParams {
+                request_id: MutationRequestId::now(),
+                terminal_id: other.opened.terminal.terminal_id.clone(),
+                expected_terminal_generation: other.hosted.generation,
+            },
+        )
+        .await;
+    std::fs::rename(&moved, &original).expect("restore the exact fixture root");
+    drop(other);
+    fixture.close().await;
+    assert_eq!(denied, Err(RootCheckFailure::Denied));
+    assert_eq!(
+        input.expect_err("another view must see the denial").kind,
+        RuntimeErrorKind::RootDenied
+    );
+}
+
+#[tokio::test]
+async fn queued_view_admission_cannot_return_a_snapshot_or_initial_lease_after_proof_expiry() {
+    for initial_control in [false, true] {
+        let fixture = Fixture::new().await;
+        let attachment = fixture.view.hosted.terminal.attach().await;
+        let held = fixture.composed.runtime_terminals.state.lock().await;
+        let mut creating = Box::pin(fixture.composed.runtime_terminals.finish_view(
+            &fixture.composed,
+            fixture.view.authority.clone(),
+            fixture.view.hosted.id,
+            attachment,
+            initial_control,
+        ));
+        poll_fn(|context| {
+            assert!(
+                creating.as_mut().poll(context).is_pending(),
+                "admission waits after pinning its root"
+            );
+            Poll::Ready(())
+        })
+        .await;
+        fixture.view.root_proof().set_test_completion(
+            Instant::now()
+                .checked_sub(Duration::from_secs(2))
+                .expect("expired admission proof"),
+        );
+        drop(held);
+        let result = creating.await;
+        let refusal = result.err().map(|failure| failure.kind);
+        let leases = fixture
+            .composed
+            .runtime_terminals
+            .state
+            .lock()
+            .await
+            .leases
+            .len();
+        fixture.close().await;
+        assert_eq!(refusal, Some(RuntimeErrorKind::RootDenied));
+        assert_eq!(leases, 0, "expired admission cannot mint an initial lease");
+    }
 }
 
 #[tokio::test]

@@ -347,9 +347,9 @@ export function conversations(
   // order. Pinning is a placement choice, so it sorts ahead of everything else.
   const projected = rows.map((row): Conversation => {
     const terminal = row.hostedTerminal;
-    if (!terminal?.spawnedBy || !terminal.projectRoot) return row;
+    if (!terminal?.projectRoot) return row;
     const projectless = isProjectless(terminal.projectRoot, projectlessRoot);
-    return { ...row, spawnedBy: terminal.spawnedBy, homeWorkspace: terminal.projectRoot,
+    return { ...row, ...(terminal.spawnedBy ? { spawnedBy: terminal.spawnedBy } : {}), homeWorkspace: terminal.projectRoot,
       folder: projectless ? "" : workspaceName(terminal.projectRoot), projectless };
   });
   projected.sort((left, right) =>

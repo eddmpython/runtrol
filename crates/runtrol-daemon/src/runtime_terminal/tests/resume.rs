@@ -153,11 +153,60 @@ async fn original_resume_only_grant_keeps_project_visibility_without_fabricated_
     assert!(descriptor.spawned_by.is_none());
     assert!(descriptor.initial_message_id.is_none());
     #[cfg(windows)]
-    {
-        let pinned = super::super::pin_visible_root(&fixture.authority, &hosted).unwrap();
-        assert!(pinned.guard.lock().await.valid());
-    }
+    assert_distinct_worktree_proofs(&fixture, &hosted).await;
     terminal.end_feed(None).unwrap();
+}
+
+#[cfg(windows)]
+async fn assert_distinct_worktree_proofs(fixture: &Fixture, hosted: &HostedTerminal) {
+    let pinned = fixture
+        .composed
+        .runtime_terminals
+        .roots
+        .pin(
+            &fixture.authority,
+            hosted,
+            fixture.composed.terminal_root_checks.clone(),
+        )
+        .await
+        .unwrap();
+    assert!(pinned.guard.lock().await.valid());
+    let completed_at = pinned.proof.fresh().unwrap();
+    let mut changed_hosted = hosted.clone();
+    let mut changed_owner = hosted.resumed.as_ref().unwrap().as_ref().clone();
+    changed_owner.binding.base_commit = "different-binding".into();
+    changed_hosted.resumed = Some(Arc::new(changed_owner.clone()));
+    let replacement = fixture
+        .composed
+        .runtime_terminals
+        .roots
+        .pin(
+            &fixture.authority,
+            &changed_hosted,
+            fixture.composed.terminal_root_checks.clone(),
+        )
+        .await
+        .unwrap();
+    assert!(
+        replacement.proof.fresh().unwrap() > completed_at,
+        "a different worktree binding gets its own OS completion"
+    );
+    changed_owner.binding.workspace_identity = [0; 24];
+    changed_hosted.resumed = Some(Arc::new(changed_owner));
+    assert!(
+        fixture
+            .composed
+            .runtime_terminals
+            .roots
+            .pin(
+                &fixture.authority,
+                &changed_hosted,
+                fixture.composed.terminal_root_checks.clone(),
+            )
+            .await
+            .is_err(),
+        "another filesystem identity cannot reuse the old proof"
+    );
 }
 
 #[tokio::test]

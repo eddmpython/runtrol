@@ -6,7 +6,6 @@
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use std::time::Instant;
 
 use base64ct::{Base64, Encoding as _};
 use runtrol_core::terminal::{Attachment, TerminalError};
@@ -23,17 +22,15 @@ use runtrol_runtime_protocol::{
     TerminalIndexSnapshot, TerminalOpenParams, TerminalOpenTarget, TerminalProcessState,
     TerminalResizeParams, TerminalStopParams, TerminalViewOpened, TerminalWriteParams,
 };
-#[cfg(windows)]
-use runtrol_security::{ProjectRootGuard, ProjectRootIdentity};
 use runtrol_store::IntegrationKey;
-#[cfg(any(test, not(windows)))]
+#[cfg(test)]
 use runtrol_store::IntegrationRow;
 use sha2::{Digest as _, Sha256};
 use tokio::sync::Mutex;
 
 use crate::Composed;
 use crate::runtime_auth::AuthorizedIntegration;
-#[cfg(any(test, not(windows)))]
+#[cfg(test)]
 use crate::runtime_inventory::approved_root_rows;
 use crate::runtime_inventory::{AuthorizedRoot, RuntimeSessionCatalogue, authorized_roots};
 use crate::runtime_native_sessions::NativeCursorCodec;
@@ -41,14 +38,18 @@ use crate::terminal_surface::HostedTerminal;
 
 mod dialogue;
 mod resume;
+mod root_guard;
 mod root_proof;
 
 #[cfg(test)]
 #[path = "tests/view_control.rs"]
-mod view_control_tests;
+pub(crate) mod view_control_tests;
 
-use root_proof::fresh_root_proof;
-pub(crate) use root_proof::{ROOT_CHECK_SLOTS, RootCheck, RootCheckFailure, run_root_check};
+use root_guard::{RootLease, RootProofPool};
+pub(crate) use root_proof::{
+    ROOT_CHECK_SLOTS, ROOT_REFRESH_AFTER, RootCheck, RootCheckFailure, SharedRootProof,
+    run_root_check,
+};
 
 const LEASE_LIFETIME_MS: u64 = runtrol_runtime_protocol::CONTROL_LEASE_LIFETIME_MS;
 
@@ -57,6 +58,7 @@ pub(crate) struct TerminalRuntimeAdapter {
     state: Mutex<TerminalAuthorityState>,
     /// Serializes admission and launch so concurrent native opens cannot create two processes.
     open_lane: Mutex<()>,
+    roots: Arc<RootProofPool>,
 }
 
 impl Default for TerminalRuntimeAdapter {
@@ -64,6 +66,7 @@ impl Default for TerminalRuntimeAdapter {
         Self {
             state: Mutex::new(TerminalAuthorityState::default()),
             open_lane: Mutex::new(()),
+            roots: Arc::new(RootProofPool::default()),
         }
     }
 }
@@ -144,72 +147,44 @@ pub(crate) struct TerminalView {
     pub(crate) attachment: Attachment,
     pub(crate) hosted: HostedTerminal,
     pub(crate) authority: AuthorizedIntegration,
-    #[cfg(windows)]
-    pinned_root: PinnedTerminalRoot,
-    root_grant_generation: u64,
-    last_root_proof: Instant,
-}
-
-#[cfg(windows)]
-#[derive(Debug)]
-struct PinnedTerminalRoot {
-    guard: Arc<tokio::sync::Mutex<TerminalRootGuards>>,
-}
-
-#[cfg(windows)]
-#[derive(Debug)]
-pub(crate) struct TerminalRootGuards {
-    approved: ProjectRootGuard,
-    worker: Option<[ProjectRootGuard; 2]>,
-}
-
-#[cfg(windows)]
-impl TerminalRootGuards {
-    pub(crate) fn valid(&mut self) -> bool {
-        self.approved.validate().is_ok()
-            && self
-                .worker
-                .as_mut()
-                .is_none_or(|guards| guards.iter_mut().all(|guard| guard.validate().is_ok()))
-    }
+    pinned_root: RootLease,
+    root_pool: Arc<RootProofPool>,
 }
 
 impl TerminalView {
     /// Rebind a changed grant, or require the blocking lane's recent successful root proof.
-    pub(crate) fn refresh_root_authority(&mut self) -> Result<(), TerminalRuntimeFailure> {
-        if self.root_grant_generation == self.authority.grant.grant_generation {
+    pub(crate) async fn refresh_root_authority(&mut self) -> Result<(), TerminalRuntimeFailure> {
+        if self.pinned_root.matches_grant(&self.authority) {
             return self.require_fresh_root_proof();
         }
-        #[cfg(windows)]
-        {
-            self.pinned_root = pin_visible_root(&self.authority, &self.hosted)?;
-        }
-        #[cfg(not(windows))]
-        ensure_visible(&self.hosted, &self.authority)?;
-        self.root_grant_generation = self.authority.grant.grant_generation;
-        self.last_root_proof = Instant::now();
-        Ok(())
-    }
-
-    /// Record a successful check whose authority stamp still matches this view.
-    pub(crate) fn remember_root_proof(
-        &mut self,
-        completed_at: Instant,
-    ) -> Result<(), RootCheckFailure> {
-        fresh_root_proof(completed_at)?;
-        self.last_root_proof = completed_at;
-        Ok(())
+        self.pinned_root = self
+            .root_pool
+            .pin(
+                &self.authority,
+                &self.hosted,
+                self.pinned_root.proof.permits(),
+            )
+            .await?;
+        self.require_fresh_root_proof()
     }
 
     fn require_fresh_root_proof(&self) -> Result<(), TerminalRuntimeFailure> {
-        if self.root_grant_generation != self.authority.grant.grant_generation {
+        if !self.pinned_root.matches_grant(&self.authority) {
             return Err(root_authority_failure());
         }
-        fresh_root_proof(self.last_root_proof).map_err(|_| root_authority_failure())
+        self.pinned_root
+            .proof
+            .fresh()
+            .map(|_| ())
+            .map_err(|_| root_authority_failure())
     }
 
-    #[cfg(windows)]
-    pub(crate) fn pinned_root_guard(&self) -> Arc<tokio::sync::Mutex<TerminalRootGuards>> {
+    pub(crate) fn root_proof(&self) -> &Arc<SharedRootProof> {
+        &self.pinned_root.proof
+    }
+
+    #[cfg(all(test, windows))]
+    fn pinned_root_guard(&self) -> Arc<tokio::sync::Mutex<root_guard::TerminalRootGuards>> {
         Arc::clone(&self.pinned_root.guard)
     }
 }
@@ -718,18 +693,18 @@ impl TerminalRuntimeAdapter {
             })?;
             (hosted, terminals.change_sender())
         };
-        #[cfg(windows)]
-        let pinned_root = pin_visible_root(&authority, &hosted)?;
-        #[cfg(not(windows))]
-        ensure_visible(&hosted, &authority)?;
-        let root_completed_at = Instant::now();
+        let pinned_root = self
+            .roots
+            .pin(&authority, &hosted, composed.terminal_root_checks.clone())
+            .await?;
         let control_lease = if initial_control
             && authority
                 .grant
                 .scopes
                 .contains(&AppScope::SessionInputWrite)
         {
-            self.initial_lease(authority.key, &hosted).await?
+            self.initial_lease(composed, &authority, &pinned_root, &hosted)
+                .await?
         } else {
             None
         };
@@ -750,29 +725,31 @@ impl TerminalRuntimeAdapter {
             checkpoint_available: attachment.checkpoint_available,
             control_lease,
         };
+        validate_view_admission(composed, &authority, &pinned_root)?;
         Ok(TerminalView {
             opened,
             attachment,
             hosted,
-            #[cfg(windows)]
             pinned_root,
-            root_grant_generation: authority.grant.grant_generation,
-            last_root_proof: root_completed_at,
+            root_pool: Arc::clone(&self.roots),
             authority,
         })
     }
 
     async fn initial_lease(
         &self,
-        owner: IntegrationKey,
+        composed: &Composed,
+        authority: &AuthorizedIntegration,
+        root: &RootLease,
         hosted: &HostedTerminal,
     ) -> Result<Option<TerminalControlLease>, TerminalRuntimeFailure> {
         let now = WallMs::now().as_millis();
         let mut state = self.state.lock().await;
+        validate_view_admission(composed, authority, root)?;
         prune_expired_leases(&mut state, now);
         ensure_lease_capacity(&state)?;
         let lease_generation = next_control_generation(&mut state, hosted.id);
-        let active = new_lease(owner, hosted.generation, lease_generation)?;
+        let active = new_lease(authority.key, hosted.generation, lease_generation)?;
         let public = public_lease(hosted.id, &active)?;
         // The opener takes control: any earlier holder's lease is replaced, which its next write is told.
         state.leases.insert(hosted.id, active);
@@ -1377,6 +1354,23 @@ const fn root_authority_failure() -> TerminalRuntimeFailure {
     )
 }
 
+/// Admission may wait after pinning. Neither an initial lease nor its screen reply may outlive that proof.
+fn validate_view_admission(
+    composed: &Composed,
+    authority: &AuthorizedIntegration,
+    root: &RootLease,
+) -> Result<(), TerminalRuntimeFailure> {
+    let current = crate::runtime_serve::refresh_current(composed, authority)
+        .map_err(|failure| TerminalRuntimeFailure::new(failure.kind, failure.message))?;
+    if !root.matches_grant(&current) {
+        return Err(root_authority_failure());
+    }
+    root.proof
+        .fresh()
+        .map(|_| ())
+        .map_err(|_| root_authority_failure())
+}
+
 fn ensure_visible(
     hosted: &HostedTerminal,
     authority: &AuthorizedIntegration,
@@ -1398,60 +1392,8 @@ fn visible_in(hosted: &HostedTerminal, roots: &[AuthorizedRoot]) -> bool {
         .any(|root| hosted.project_root().is_under(&root.path))
 }
 
-#[cfg(windows)]
-fn pin_visible_root(
-    authority: &AuthorizedIntegration,
-    hosted: &HostedTerminal,
-) -> Result<PinnedTerminalRoot, TerminalRuntimeFailure> {
-    let row = authority
-        .roots
-        .iter()
-        .find(|row| AbsPath::new(&row.path).is_ok_and(|path| hosted.project_root().is_under(&path)))
-        .ok_or_else(|| {
-            TerminalRuntimeFailure::new(
-                RuntimeErrorKind::RootDenied,
-                "the terminal is outside the integration's approved roots",
-            )
-        })?;
-    let path = AbsPath::new(&row.path).map_err(|_| {
-        TerminalRuntimeFailure::new(
-            RuntimeErrorKind::RootDenied,
-            "an approved terminal root no longer has local authority",
-        )
-    })?;
-    let guard = ProjectRootGuard::acquire(&path, ProjectRootIdentity::from_bytes(row.identity))
-        .map_err(|_| {
-            TerminalRuntimeFailure::new(
-                RuntimeErrorKind::RootDenied,
-                "an approved terminal root no longer has local authority",
-            )
-        })?;
-    let worker = hosted
-        .worktree()
-        .map(|binding| {
-            let project = ProjectRootGuard::acquire(
-                binding.project.root(),
-                ProjectRootIdentity::from_bytes(binding.project.root_identity()),
-            )
-            .map_err(|_| root_authority_failure())?;
-            let workspace = ProjectRootGuard::acquire(
-                &binding.workspace,
-                ProjectRootIdentity::from_bytes(binding.workspace_identity),
-            )
-            .map_err(|_| root_authority_failure())?;
-            Ok::<_, TerminalRuntimeFailure>([project, workspace])
-        })
-        .transpose()?;
-    Ok(PinnedTerminalRoot {
-        guard: Arc::new(tokio::sync::Mutex::new(TerminalRootGuards {
-            approved: guard,
-            worker,
-        })),
-    })
-}
-
 /// Revalidate a quiet terminal's output boundary away from its latency-sensitive relay task.
-#[cfg(any(test, not(windows)))]
+#[cfg(test)]
 pub(crate) fn validate_workspace_roots(
     row: &IntegrationRow,
     workspace: &AbsPath,

@@ -7,6 +7,9 @@ pub(crate) const ROOT_CHECK_SLOTS: usize = 2;
 pub(crate) const ROOT_CHECK_DEADLINE: Duration = Duration::from_millis(400);
 const ROOT_PROOF_MAX_AGE: Duration = Duration::from_secs(1);
 
+mod shared;
+pub(crate) use shared::{ROOT_REFRESH_AFTER, SharedRootProof};
+
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct RootCheck<T> {
     pub(crate) completed_at: Instant,
@@ -58,6 +61,18 @@ where
     F: FnOnce() -> T + Send + 'static,
 {
     let deadline = Instant::now() + ROOT_CHECK_DEADLINE;
+    run_root_check_until(permits, deadline, check).await
+}
+
+pub(super) async fn run_root_check_until<T, F>(
+    permits: Arc<tokio::sync::Semaphore>,
+    deadline: Instant,
+    check: F,
+) -> Result<RootCheck<T>, RootCheckFailure>
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
     let permit = tokio::select! {
         biased;
         permit = permits.acquire_owned() => permit.map_err(|_| RootCheckFailure::WorkerFailed)?,
@@ -68,19 +83,19 @@ where
     if Instant::now() > deadline {
         return Err(RootCheckFailure::TimedOut);
     }
-    let mut worker = tokio::task::spawn_blocking(move || {
+    let mut worker = CancelWorker(tokio::task::spawn_blocking(move || {
         let _permit = permit;
         let value = check();
         RootCheck {
             completed_at: Instant::now(),
             value,
         }
-    });
+    }));
     let deadline_wait = tokio::time::sleep_until(tokio::time::Instant::from_std(deadline));
     tokio::pin!(deadline_wait);
     tokio::select! {
         biased;
-        joined = &mut worker => match joined {
+        joined = &mut worker.0 => match joined {
             Ok(checked) if checked.completed_at <= deadline => Ok(checked),
             Ok(_) => Err(RootCheckFailure::TimedOut),
             Err(_) => Err(RootCheckFailure::WorkerFailed),
@@ -89,6 +104,15 @@ where
     }
 }
 
+/// Dropping a check cancels a queued blocking job. A job already executing keeps its captured permit until exit.
+struct CancelWorker<T>(tokio::task::JoinHandle<T>);
+
+impl<T> Drop for CancelWorker<T> {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
 #[cfg(test)]
-#[path = "tests/root_proof.rs"]
+#[path = "../tests/root_proof.rs"]
 mod tests;
