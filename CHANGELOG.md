@@ -76,6 +76,8 @@ and refactoring that no user can observe do not belong here.
 
 ### Fixed
 
+- Background process checks open only the relevant processes and their ancestors, reducing unrelated system work
+  while preserving checks against reused process identifiers.
 - Reconnecting the terminal list no longer waits an extra minute when cancellation arrives during Runtime lookup.
 - Conversation discovery checks folders away from terminal input processing, so filesystem delays cannot block
   typing while a provider's conversation list is being authorized.

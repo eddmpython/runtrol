@@ -12,6 +12,13 @@ use runtrol_provider::ProcessIdentity;
 
 const MAX_ANCESTOR_DEPTH: usize = 64;
 
+#[cfg(any(windows, test))]
+const MAX_PROCESSES: usize = 65_536;
+
+#[cfg(test)]
+#[path = "process_tree/tests/targeted.rs"]
+mod targeted_tests;
+
 /// A bounded snapshot or query surface for current process ancestry.
 #[derive(Debug)]
 pub struct ProcessTree {
@@ -56,6 +63,29 @@ impl ProcessTree {
         #[cfg(unix)]
         {
             Ok(Self {})
+        }
+    }
+
+    /// Capture ancestry for the selected current processes.
+    ///
+    /// Windows retains only these processes and their bounded ancestor chains. Their birth stamps are read before
+    /// the parent snapshot and checked again afterwards, so a recycled candidate cannot inherit an old parent edge.
+    /// Unrelated PIDs are enumerated but never opened. Linux and macOS already query only each requested chain.
+    ///
+    /// # Errors
+    ///
+    /// [`ProcessTreeError`] when Windows cannot capture the parent table or the candidate input exceeds its bound.
+    pub fn capture_for(
+        candidates: impl IntoIterator<Item = u32>,
+    ) -> Result<Self, ProcessTreeError> {
+        #[cfg(windows)]
+        {
+            capture_selected_windows(candidates)
+        }
+        #[cfg(unix)]
+        {
+            let _unused_candidates = candidates;
+            Self::capture()
         }
     }
 
@@ -329,11 +359,105 @@ fn windows_process_start(pid: u32) -> Option<u64> {
 }
 
 #[cfg(windows)]
+fn capture_windows() -> Result<ProcessTree, ProcessTreeError> {
+    let nodes = capture_parent_edges()?
+        .into_iter()
+        .filter_map(|(pid, parent)| {
+            windows_process_start(pid).map(|started| (pid, ProcessNode { parent, started }))
+        })
+        .collect();
+    Ok(ProcessTree { nodes })
+}
+
+#[cfg(windows)]
+fn capture_selected_windows(
+    candidates: impl IntoIterator<Item = u32>,
+) -> Result<ProcessTree, ProcessTreeError> {
+    let nodes = selected_capture(candidates, capture_parent_edges, windows_process_start)?;
+    Ok(ProcessTree { nodes })
+}
+
+#[cfg(any(windows, test))]
+fn selected_capture(
+    candidates: impl IntoIterator<Item = u32>,
+    snapshot: impl FnOnce() -> Result<std::collections::BTreeMap<u32, u32>, ProcessTreeError>,
+    mut started_now: impl FnMut(u32) -> Option<u64>,
+) -> Result<std::collections::BTreeMap<u32, ProcessNode>, ProcessTreeError> {
+    let mut unique = std::collections::BTreeSet::new();
+    for (index, pid) in candidates.into_iter().enumerate() {
+        if index >= MAX_PROCESSES {
+            return Err(ProcessTreeError::Snapshot {
+                doing: "bounding the selected processes",
+                detail: format!("the selection exceeds {MAX_PROCESSES} candidates"),
+            });
+        }
+        if pid != 0 {
+            unique.insert(pid);
+        }
+    }
+    let anchors: std::collections::BTreeMap<_, _> = unique
+        .into_iter()
+        .filter_map(|pid| started_now(pid).map(|started| (pid, started)))
+        .collect();
+    if anchors.is_empty() {
+        return Ok(std::collections::BTreeMap::new());
+    }
+    let parents = snapshot()?;
+    Ok(selected_nodes(&anchors, &parents, started_now))
+}
+
+/// Select only chains rooted in a process identity established before the parent snapshot.
+#[cfg(any(windows, test))]
+fn selected_nodes(
+    anchors: &std::collections::BTreeMap<u32, u64>,
+    parents: &std::collections::BTreeMap<u32, u32>,
+    mut started_now: impl FnMut(u32) -> Option<u64>,
+) -> std::collections::BTreeMap<u32, ProcessNode> {
+    let mut nodes = std::collections::BTreeMap::<u32, ProcessNode>::new();
+    let mut inspected = std::collections::BTreeMap::new();
+    for (&seed, &anchored) in anchors {
+        let observed = *inspected.entry(seed).or_insert_with(|| started_now(seed));
+        if observed != Some(anchored) {
+            continue;
+        }
+        let mut current = seed;
+        let mut started = anchored;
+        let mut visited = std::collections::BTreeSet::new();
+        for depth in 0..=MAX_ANCESTOR_DEPTH {
+            if current == 0 || !visited.insert(current) {
+                break;
+            }
+            let Some(&parent) = parents.get(&current) else {
+                break;
+            };
+            nodes.insert(current, ProcessNode { parent, started });
+            if depth == MAX_ANCESTOR_DEPTH || parent == 0 || visited.contains(&parent) {
+                break;
+            }
+            let parent_started = *inspected
+                .entry(parent)
+                .or_insert_with(|| started_now(parent));
+            let Some(parent_started) = parent_started else {
+                break;
+            };
+            // The child's anchored chain predates the snapshot. A parent PID recycled during or after it is newer
+            // than that child and must not splice the new occupant's parent edge into the old chain.
+            if parent_started > started {
+                break;
+            }
+            current = parent;
+            started = parent_started;
+        }
+    }
+    nodes
+}
+
+#[cfg(windows)]
 #[expect(
     unsafe_code,
     reason = "Windows exposes the current process parent table through the ToolHelp snapshot API"
 )]
-fn capture_windows() -> Result<ProcessTree, ProcessTreeError> {
+fn capture_parent_edges() -> Result<std::collections::BTreeMap<u32, u32>, ProcessTreeError> {
     use windows_sys::Win32::Foundation::{
         CloseHandle, ERROR_NO_MORE_FILES, GetLastError, INVALID_HANDLE_VALUE,
     };
@@ -341,8 +465,6 @@ fn capture_windows() -> Result<ProcessTree, ProcessTreeError> {
         CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
         TH32CS_SNAPPROCESS,
     };
-
-    const MAX_PROCESSES: usize = 65_536;
 
     struct Snapshot(windows_sys::Win32::Foundation::HANDLE);
     impl Drop for Snapshot {
@@ -373,7 +495,7 @@ fn capture_windows() -> Result<ProcessTree, ProcessTreeError> {
     if unsafe { Process32FirstW(snapshot.0, &raw mut entry) } == 0 {
         return Err(snapshot_failure("reading the first process snapshot entry"));
     }
-    let mut nodes = std::collections::BTreeMap::new();
+    let mut parents = std::collections::BTreeMap::new();
     let mut seen = 0_usize;
     loop {
         seen += 1;
@@ -383,15 +505,7 @@ fn capture_windows() -> Result<ProcessTree, ProcessTreeError> {
                 detail: format!("the snapshot exceeds {MAX_PROCESSES} processes"),
             });
         }
-        if let Some(started) = windows_process_start(entry.th32ProcessID) {
-            nodes.insert(
-                entry.th32ProcessID,
-                ProcessNode {
-                    parent: entry.th32ParentProcessID,
-                    started,
-                },
-            );
-        }
+        parents.insert(entry.th32ProcessID, entry.th32ParentProcessID);
         // SAFETY: the snapshot handle and writable entry remain live for the complete enumeration.
         if unsafe { Process32NextW(snapshot.0, &raw mut entry) } != 0 {
             continue;
@@ -407,7 +521,7 @@ fn capture_windows() -> Result<ProcessTree, ProcessTreeError> {
                 .to_string(),
         });
     }
-    Ok(ProcessTree { nodes })
+    Ok(parents)
 }
 
 #[cfg(windows)]
@@ -589,9 +703,16 @@ mod tests {
         let tree = ProcessTree::capture().expect("the current process tree is inspectable");
         let current = process_identity(std::process::id())
             .expect("the current process has an exact kernel identity");
+        let selected = ProcessTree::capture_for([current.pid()])
+            .expect("the current process ancestry is inspectable");
 
         assert!(tree.contains(std::process::id(), std::process::id()));
         assert!(tree.contains_identity(current, current));
+        assert!(selected.contains_identity(current, current));
+        assert_eq!(
+            selected.ancestors_of(current.pid()),
+            tree.ancestors_of(current.pid())
+        );
     }
 
     #[test]
@@ -614,9 +735,12 @@ mod tests {
             .expect("the current process has an exact kernel identity");
         let descendant =
             process_identity(child.0.id()).expect("the child has an exact kernel identity");
+        let selected = ProcessTree::capture_for([descendant.pid()])
+            .expect("the child ancestry is inspectable");
 
         assert!(tree.contains(std::process::id(), child.0.id()));
         assert!(tree.contains_identity(root, descendant));
+        assert!(selected.contains_identity(root, descendant));
     }
 
     #[test]

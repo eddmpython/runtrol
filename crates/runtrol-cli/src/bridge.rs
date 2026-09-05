@@ -321,8 +321,9 @@ fn response_kind(response: &Response) -> &'static str {
 /// the Runtime can tell a window observing that shell that the command is brokered here. Empty when the platform
 /// cannot say; the terminal opens either way.
 fn invoking_ancestors() -> Vec<u32> {
-    match runtrol_childproc::ProcessTree::capture() {
-        Ok(tree) => tree.ancestors_of(std::process::id()),
+    let pid = std::process::id();
+    match runtrol_childproc::ProcessTree::capture_for([pid]) {
+        Ok(tree) => tree.ancestors_of(pid),
         Err(_unreadable) => Vec::new(),
     }
 }

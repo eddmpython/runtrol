@@ -145,6 +145,10 @@ provider's bounded process roster. The measured driver validates both PID and ke
 stale roster file cannot alias a reused PID. Runtime may use the same content-free binding internally to attach a
 provider-minted native identity to the exact daemon-owned PTY process or to select a measured live terminal route.
 Only the route's availability appears in `attachable`; implementation details and process coordinates remain private.
+On Windows, the ancestry snapshot opens only the observed candidates and their bounded ancestor chains for birth
+checks. It checks each candidate before and after the parent-table snapshot and rechecks retained identities when
+used. Unrelated processes contribute parent-table entries but require no process handles. The capture and identity
+rules live in [`process_tree.rs`](../crates/runtrol-childproc/src/process_tree.rs).
 `terminals/open` remains the single public operation: for a live native target it joins the existing Runtime terminal
 or a structurally proven official attachment and never runs the provider's resume command; for a cold target it
 performs the explicit native resume.

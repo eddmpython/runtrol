@@ -195,7 +195,7 @@ async fn bring_forward(host_pid: Option<u32>, workspace_folders: &[String]) -> W
     };
     let outcome = tokio::task::spawn_blocking(move || {
         let mut processes = vec![host_pid];
-        if let Ok(tree) = runtrol_childproc::ProcessTree::capture() {
+        if let Ok(tree) = runtrol_childproc::ProcessTree::capture_for([host_pid]) {
             processes.extend(tree.ancestors_of(host_pid));
         }
         runtrol_childproc::os_window::reveal_window(&processes, &fragment)

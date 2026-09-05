@@ -613,7 +613,9 @@ pub(crate) async fn reconcile_native_activity(
     let (process_tree, targets) = if needs_process_tree || wants_focus {
         let activity = activity.clone();
         let inspected = tokio::task::spawn_blocking(move || {
-            let tree = match runtrol_childproc::ProcessTree::capture() {
+            let tree = match runtrol_childproc::ProcessTree::capture_for(
+                activity.processes.iter().map(|process| process.pid),
+            ) {
                 Ok(tree) => Some(tree),
                 Err(error) => {
                     report_process_tree_failure(&error);

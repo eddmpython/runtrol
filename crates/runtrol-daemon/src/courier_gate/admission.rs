@@ -55,8 +55,8 @@ impl CourierGate {
                 Ok(false) => return Err(Denied::OutsideContainment),
                 Err(error) => return Err(Denied::Unanswered(error.to_string())),
             }
-            let tree =
-                ProcessTree::capture().map_err(|error| Denied::Unanswered(error.to_string()))?;
+            let tree = ProcessTree::capture_for([root.pid(), peer.pid()])
+                .map_err(|error| Denied::Unanswered(error.to_string()))?;
             if !tree.contains_identity(root, peer) {
                 return Err(Denied::OutsideTree);
             }
