@@ -28,12 +28,10 @@ help text are owned by [`words.rs`](../crates/runtrol-cli/src/courier/words.rs).
 arguments contain structural identifiers and deadlines only. Stdout contains one JSON answer; a refusal or an
 unanswered wait exits unsuccessfully. Calling `courier` without a verb only checks admission.
 
-For example, in a PowerShell shell tool, set that invocation's output encoding to UTF-8 before piping a body:
-
-```powershell
-$OutputEncoding = [System.Text.UTF8Encoding]::new($false)
-'An explicit request' | & $env:RUNTROL_COURIER_EXE courier ask TARGET_SESSION --timeout 30
-```
+For a PowerShell shell tool, follow the invocation-local encoding setup in `courier --help` before piping a body.
+Windows PowerShell can prepend a BOM when its console input encoding still has a preamble, even if output encoding
+is already UTF-8 without a BOM. Its pipe also appends a newline. Callers that require an exact body without that
+newline supply a raw UTF-8 input stream. The courier preserves these bytes; it does not normalize them.
 
 The receiver explicitly invokes `courier wait`, reads the returned envelope, then supplies its answer on stdin to
 `courier reply MESSAGE_ID`. An idle model cannot be awakened through a mailbox alone. It must already be running a

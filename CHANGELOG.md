@@ -12,6 +12,7 @@ and refactoring that no user can observe do not belong here.
 
 ### Added
 
+- Courier help and visible activation explain the PowerShell encoding setup needed to prevent an added BOM.
 - An enabled lead session can start workers in isolated worktrees, with discovered provider and model choices.
   Workers receive their initial request only after visible dialogue activation. Their rows identify the lead,
   remain available after it ends, and preserve edited or committed files on exit.

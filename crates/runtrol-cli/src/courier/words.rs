@@ -12,6 +12,9 @@ runtrol courier inbox [--from SESSION]\n\
 runtrol courier wait [--from SESSION] [--timeout SECONDS]\n\
 runtrol courier cancel CALL\n\
 Bodies are opaque UTF-8 read from stdin. Each inbox or wait consumes at most one envelope.\n\
+For PowerShell piping, set this invocation's encodings first:\n\
+$OutputEncoding = [System.Text.UTF8Encoding]::new($false); [Console]::InputEncoding = $OutputEncoding; [Console]::OutputEncoding = $OutputEncoding\n\
+PowerShell piping appends a newline. Use a raw UTF-8 input stream if the body must omit it.\n\
 A receipt confirms admission, not model understanding. An idle agent must explicitly wait to receive.";
 
 pub(super) fn help() -> String {
