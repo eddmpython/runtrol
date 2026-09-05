@@ -10,7 +10,9 @@ use runtrol_provider::{ProviderId, TerminalId};
 
 use crate::Composed;
 use crate::isolated_workspace::ownership::SpawnTicket;
-use crate::isolated_workspace::{PreparedWorkspace, VerifiedProject, report_cleanup};
+use crate::isolated_workspace::{
+    PreparedWorkspace, VerifiedProject, WorktreeBinding, report_cleanup,
+};
 use crate::terminal_surface::{SpawnedTerminal, WorkerLaunch};
 
 use super::Admitted;
@@ -116,6 +118,7 @@ async fn execute(
         workspace,
         base_commit,
         workspace_identity,
+        container_identity,
     } = composed
         .isolated_workspaces
         .lock()
@@ -124,10 +127,14 @@ async fn execute(
         .await?;
     let owned = Arc::new(SpawnedTerminal {
         ticket,
-        project,
-        workspace,
-        base_commit,
-        workspace_identity,
+        binding: WorktreeBinding {
+            workspace_id: ticket.reservation_id().into(),
+            project,
+            workspace,
+            base_commit,
+            workspace_identity,
+            container_identity,
+        },
         initial_message: initial.map(|receipt| receipt.message_id),
     });
     let launch = WorkerLaunch {
@@ -150,8 +157,8 @@ async fn execute(
     Ok(Answer::Spawned {
         session: super::session_of(terminal).map_err(|error| error.to_string())?,
         provider,
-        workspace: owned.workspace.to_string(),
-        base_commit: owned.base_commit.to_string(),
+        workspace: owned.binding.workspace.to_string(),
+        base_commit: owned.binding.base_commit.to_string(),
         spawned_by: admitted.session,
         initial,
     })

@@ -40,6 +40,7 @@ use crate::runtime_native_sessions::NativeCursorCodec;
 use crate::terminal_surface::HostedTerminal;
 
 mod dialogue;
+mod resume;
 mod root_proof;
 
 #[cfg(test)]
@@ -247,12 +248,13 @@ fn terminal_lane_failure(error: &TerminalError) -> TerminalRuntimeFailure {
             RuntimeErrorKind::ResourceExhausted,
             "the bounded operation lane for this terminal is full",
         ),
-        TerminalError::Spawn(_) | TerminalError::Input(_) | TerminalError::Runtime(_) => {
-            TerminalRuntimeFailure::new(
-                RuntimeErrorKind::OutcomeUnknown,
-                "the terminal operation could not enter its ordered lane",
-            )
-        }
+        TerminalError::Spawn(_)
+        | TerminalError::Input(_)
+        | TerminalError::Runtime(_)
+        | TerminalError::CleanupIncomplete { .. } => TerminalRuntimeFailure::new(
+            RuntimeErrorKind::OutcomeUnknown,
+            "the terminal operation could not enter its ordered lane",
+        ),
         TerminalError::NotFed | TerminalError::Feed(_) => TerminalRuntimeFailure::new(
             RuntimeErrorKind::InvalidRequest,
             "the terminal operation belongs to an observed mirror's feeding window",
@@ -397,11 +399,11 @@ impl TerminalRuntimeAdapter {
                 "the terminal workspace cannot be resolved inside an approved root",
             )
         })?;
-        if !roots.iter().any(|root| workspace.is_under(&root.path)) {
-            return Err(TerminalRuntimeFailure::new(
-                RuntimeErrorKind::RootDenied,
-                "the terminal workspace is outside the integration's approved roots",
-            ));
+        // A separately approved worktree path must still acquire its durable occupancy. Root permission
+        // alone cannot make another generation's cleanup aware of the newly resumed process.
+        let resumed = resume::prepare(composed, &authority, &workspace, &params.target).await?;
+        if resumed.is_none() && !roots.iter().any(|root| workspace.is_under(&root.path)) {
+            return Err(root_authority_failure());
         }
         if !providers.providers.iter().any(|provider| {
             provider.provider_id == params.provider_id
@@ -539,6 +541,12 @@ impl TerminalRuntimeAdapter {
                 )
             })
         };
+        if resumed.is_some() && live_route.is_some() {
+            return Err(TerminalRuntimeFailure::new(
+                RuntimeErrorKind::NativeConversationBusy,
+                "the retained worktree requires its external conversation owner to end before resuming",
+            ));
+        }
         let opened = match live_route {
             Some(LiveTerminalRoute::Official(attach_target)) => {
                 crate::terminal_surface::open_official_attach(
@@ -559,20 +567,34 @@ impl TerminalRuntimeAdapter {
                 .await
             }
             None => {
-                crate::terminal_surface::open_hosted(
-                    composed,
-                    provider,
-                    native,
-                    workspace,
-                    params.geometry.columns,
-                    params.geometry.rows,
-                    Some(exact_program()?),
-                    // The service was asked above which conversations its live processes hold, and this one was not
-                    // among them (`resume_would_fork`). A terminal in this folder that nobody has named is therefore
-                    // provably some other conversation, and must not hold this one back.
-                    holder_known,
-                )
-                .await
+                if let Some(resumed) = &resumed {
+                    crate::terminal_surface::open_resumed(
+                        composed,
+                        provider,
+                        native.ok_or_else(root_authority_failure)?,
+                        resumed,
+                        params.geometry.columns,
+                        params.geometry.rows,
+                        exact_program()?,
+                        holder_known,
+                    )
+                    .await
+                } else {
+                    crate::terminal_surface::open_hosted(
+                        composed,
+                        provider,
+                        native,
+                        workspace,
+                        params.geometry.columns,
+                        params.geometry.rows,
+                        Some(exact_program()?),
+                        // The service was asked above which conversations its live processes hold, and this one was not
+                        // among them (`resume_would_fork`). A terminal in this folder that nobody has named is therefore
+                        // provably some other conversation, and must not hold this one back.
+                        holder_known,
+                    )
+                    .await
+                }
             }
         };
         let (terminal_id, _terminal, attachment) = opened
@@ -1405,17 +1427,16 @@ fn pin_visible_root(
             )
         })?;
     let worker = hosted
-        .spawned
-        .as_ref()
-        .map(|spawned| {
+        .worktree()
+        .map(|binding| {
             let project = ProjectRootGuard::acquire(
-                spawned.project.root(),
-                ProjectRootIdentity::from_bytes(spawned.project.root_identity()),
+                binding.project.root(),
+                ProjectRootIdentity::from_bytes(binding.project.root_identity()),
             )
             .map_err(|_| root_authority_failure())?;
             let workspace = ProjectRootGuard::acquire(
-                &spawned.workspace,
-                ProjectRootIdentity::from_bytes(spawned.workspace_identity),
+                &binding.workspace,
+                ProjectRootIdentity::from_bytes(binding.workspace_identity),
             )
             .map_err(|_| root_authority_failure())?;
             Ok::<_, TerminalRuntimeFailure>([project, workspace])
@@ -1555,9 +1576,8 @@ fn descriptor(
             })
             .transpose()?,
         project_root: hosted
-            .spawned
-            .as_ref()
-            .map(|spawned| spawned.project.root().to_string()),
+            .worktree()
+            .map(|binding| binding.project.root().to_string()),
         initial_message_id: hosted
             .spawned
             .as_ref()

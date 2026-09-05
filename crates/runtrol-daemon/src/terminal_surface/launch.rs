@@ -4,10 +4,12 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use runtrol_childproc::{Program, PtySize};
-use runtrol_core::terminal::{Attachment, Terminal, TerminalLaunch};
+use runtrol_core::terminal::{Attachment, Terminal, TerminalError, TerminalLaunch};
 use runtrol_provider::{AbsPath, ProviderId, TerminalId};
 
-use super::{MAX_HOSTED_TERMINALS, TerminalOpenError, TerminalOperation, WorkerLaunch};
+use super::{
+    MAX_HOSTED_TERMINALS, ResumeLaunch, TerminalOpenError, TerminalOperation, WorkerLaunch,
+};
 use crate::Composed;
 use crate::courier_gate::Minted;
 use crate::native_claims::TerminalClaimGuard;
@@ -25,6 +27,28 @@ pub(super) struct PreparedLaunch {
     pub(super) minted: Minted,
     pub(super) reservation: TerminalClaimGuard,
     pub(super) worker: Option<WorkerLaunch>,
+    pub(super) resumed: Option<ResumeLaunch>,
+}
+
+/// A failed host can still own a live child. Publish that exact terminal and its admission before
+/// returning the failure; ordinary errors are proof that no child ownership remains.
+pub(super) fn opened(
+    result: Result<Terminal, TerminalError>,
+) -> Result<(Terminal, Option<TerminalOpenError>), TerminalOpenError> {
+    match result {
+        Ok(terminal) => Ok((terminal, None)),
+        Err(TerminalError::CleanupIncomplete {
+            cause,
+            cleanup,
+            terminal,
+        }) => Ok((
+            terminal,
+            Some(TerminalOpenError::Provider(format!(
+                "{cause}; the started process has not been confirmed stopped: {cleanup}"
+            ))),
+        )),
+        Err(error) => Err(TerminalOpenError::Provider(error.to_string())),
+    }
 }
 
 impl PreparedLaunch {
@@ -41,7 +65,7 @@ impl PreparedLaunch {
         // even if its caller disappears, so every process retains observable cleanup ownership.
         let opened = tokio::task::spawn_blocking(move || {
             let _operation = operation;
-            runtime.block_on(self.publish(&composed, &cancelled))
+            runtime.block_on(self.publish(&composed, &cancelled, Terminal::open))
         })
         .await
         .map_err(|error| {
@@ -55,37 +79,42 @@ impl PreparedLaunch {
         self,
         composed: &Arc<Composed>,
         cancelled: &AtomicBool,
+        spawn: impl FnOnce(&TerminalLaunch<'_>) -> Result<Terminal, TerminalError>,
     ) -> Result<(TerminalId, Terminal, Attachment), TerminalOpenError> {
         let worker = self.worker.as_ref();
-        let terminal = {
+        let resumed = self.resumed.as_ref();
+        // Reserve without holding the terminal table. The stripe lease, not the controller mutex,
+        // remains with this finite launch owner until the born process has been durably recorded.
+        let mut resume_reservation = match resumed {
+            Some(resumed) => Some(resumed.reserve(composed).await?),
+            None => None,
+        };
+        let mut born_root = None;
+        let mut birth_failure = None;
+        let opened = async {
             // Keep the established table-to-gate lock order through final admission and process birth.
             let mut terminals = composed.terminals.lock().await;
-            let held = terminals
-                .len()
-                .saturating_add(composed.courier_gate.pending_spawns().await)
-                .saturating_sub(usize::from(worker.is_some()));
-            if held >= MAX_HOSTED_TERMINALS {
-                return Err(TerminalOpenError::NoRoom {
-                    held,
-                    limit: MAX_HOSTED_TERMINALS,
-                });
-            }
+            require_capacity(composed, terminals.len(), worker.is_some()).await?;
             let start = || {
                 if cancelled.load(Ordering::Acquire) {
                     return Err(TerminalOpenError::Provider(
                         "the terminal open was cancelled before launch".to_owned(),
                     ));
                 }
-                let terminal = Terminal::open(&TerminalLaunch {
+                if let Some(resumed) = resumed {
+                    resumed.validate(composed)?;
+                }
+                let (terminal, failure) = opened(spawn(&TerminalLaunch {
                     program: &self.program,
                     arguments: self.arguments,
                     cwd: &self.cwd,
                     env: self.env,
                     env_unset: self.env_unset,
                     size: self.size,
-                })
-                .map_err(|error| TerminalOpenError::Provider(error.to_string()))?;
+                }))?;
+                birth_failure = failure;
                 let root = runtrol_childproc::process_identity(terminal.pid());
+                born_root = root;
                 Ok::<_, TerminalOpenError>((terminal, root))
             };
             let terminal = if let Some(worker) = worker {
@@ -114,37 +143,105 @@ impl PreparedLaunch {
                 self.cwd,
                 self.native,
             );
-            if let Some(worker) = worker
-                && let Some(opened) = terminals.by_id.get_mut(&self.terminal_id)
-            {
-                opened.spawned = Some(Arc::clone(&worker.owned));
+            if let Some(opened) = terminals.by_id.get_mut(&self.terminal_id) {
+                opened.spawned = worker.map(|launch| Arc::clone(&launch.owned));
+                opened.resumed = resumed.map(|launch| Arc::clone(&launch.owned));
             }
             composed
                 .open_terminals
                 .store(terminals.len(), Ordering::Release);
-            terminal
-        };
-        // Every registered process has an exit observer before any fallible ownership commit.
-        super::forget_on_exit(Arc::clone(composed), self.terminal_id, &terminal);
-        if let Err(error) = self.reservation.commit() {
-            drop(terminal.kill());
-            return Err(error.into());
+            Ok::<_, TerminalOpenError>(terminal)
         }
-        if let Some(worker) = worker {
-            let binding = match runtrol_childproc::process_identity(terminal.pid()) {
-                Some(process) => composed.isolated_workspaces.lock().await.bind_terminal(
-                    &worker.owned.ticket,
-                    process,
-                    &worker.owned.workspace,
-                ),
-                None => Err("the worker process could not be identified".to_owned()),
-            };
-            if let Err(error) = binding {
-                drop(terminal.kill());
-                return Err(TerminalOpenError::Provider(error));
+        .await;
+        let terminal = match opened {
+            Ok(terminal) => terminal,
+            Err(error) => {
+                if let Some(reservation) = resume_reservation {
+                    reservation.abort().map_err(|cleanup| {
+                        TerminalOpenError::Provider(format!("{error}; {cleanup}"))
+                    })?;
+                }
+                return Err(error);
             }
-        }
-        let attachment = terminal.attach().await;
-        Ok((self.terminal_id, terminal, attachment))
+        };
+        // File transactions never wait while the shared terminal table or gate is held. The native
+        // pending claim and workspace stripe protect birth until durable process binding settles.
+        let resume_binding = match resume_reservation.as_mut() {
+            Some(reservation) => reservation.bind(born_root),
+            None => Ok(()),
+        };
+        drop(resume_reservation);
+        finish_born(
+            composed,
+            self.terminal_id,
+            terminal,
+            self.reservation,
+            worker,
+            resume_binding,
+            birth_failure,
+        )
+        .await
     }
 }
+
+async fn require_capacity(
+    composed: &Composed,
+    hosted: usize,
+    reserved_worker: bool,
+) -> Result<(), TerminalOpenError> {
+    let held = hosted
+        .saturating_add(composed.courier_gate.pending_spawns().await)
+        .saturating_sub(usize::from(reserved_worker));
+    if held >= MAX_HOSTED_TERMINALS {
+        return Err(TerminalOpenError::NoRoom {
+            held,
+            limit: MAX_HOSTED_TERMINALS,
+        });
+    }
+    Ok(())
+}
+
+async fn finish_born(
+    composed: &Arc<Composed>,
+    terminal_id: TerminalId,
+    terminal: Terminal,
+    claim: TerminalClaimGuard,
+    worker: Option<&WorkerLaunch>,
+    resume_binding: Result<(), String>,
+    birth_failure: Option<TerminalOpenError>,
+) -> Result<(TerminalId, Terminal, Attachment), TerminalOpenError> {
+    // Every registered process has an exit observer before any fallible ownership commit.
+    super::forget_on_exit(Arc::clone(composed), terminal_id, &terminal);
+    if let Err(error) = claim.commit_born() {
+        drop(terminal.kill());
+        return Err(error.into());
+    }
+    if let Err(error) = resume_binding {
+        drop(terminal.kill());
+        return Err(TerminalOpenError::Provider(error));
+    }
+    if let Some(worker) = worker {
+        let binding = match runtrol_childproc::process_identity(terminal.pid()) {
+            Some(process) => composed.isolated_workspaces.lock().await.bind_terminal(
+                &worker.owned.ticket,
+                process,
+                &worker.owned.binding.workspace,
+            ),
+            None => Err("the worker process could not be identified".to_owned()),
+        };
+        if let Err(error) = binding {
+            drop(terminal.kill());
+            return Err(TerminalOpenError::Provider(error));
+        }
+    }
+    if let Some(error) = birth_failure {
+        drop(terminal.kill());
+        return Err(error);
+    }
+    let attachment = terminal.attach().await;
+    Ok((terminal_id, terminal, attachment))
+}
+
+#[cfg(test)]
+#[path = "tests/launch.rs"]
+mod tests;

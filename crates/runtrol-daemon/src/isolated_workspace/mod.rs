@@ -18,12 +18,16 @@ mod identity;
 pub(crate) mod ownership;
 mod recovery;
 mod registry;
+mod resume;
 mod terminal;
 pub(crate) use identity::VerifiedProject;
 pub(crate) use recovery::{recover_after_restart, report_cleanup};
+pub(crate) use resume::{
+    EndedResume, ResumeReservation, WorktreeBinding, read_resume_binding, refuse_unbound_worktree,
+};
 pub(crate) use terminal::PreparedWorkspace;
 
-const FILE_SCHEMA: u8 = 2;
+const FILE_SCHEMA: u8 = 3;
 const MAX_RECORDS: usize = 128;
 const MAX_FILE_BYTES: u64 = 256 * 1024;
 const GIT_INSPECTION_TIMEOUT: Duration = Duration::from_secs(15);
@@ -520,6 +524,11 @@ fn validate_records(records: &[Record]) -> Result<(), String> {
             if !terminals.insert(terminal.ticket.worker) {
                 return Err("one Runtime terminal owns multiple isolated workspaces".to_owned());
             }
+            if let Some(resume) = &terminal.resume
+                && !terminals.insert(resume.owner)
+            {
+                return Err("one resumed terminal owns multiple isolated workspaces".to_owned());
+            }
         }
         if !valid_commit(&record.base_commit) {
             return Err("the isolated workspace registry has an invalid base commit".to_owned());
@@ -652,4 +661,4 @@ fn release_line(record: &Record, outcome: &str) -> Response {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

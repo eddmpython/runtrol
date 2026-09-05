@@ -19,8 +19,10 @@ use crate::window_registry::ConnectionToken;
 
 mod launch;
 mod operations;
+mod resumed;
 mod spawned;
 pub(crate) use operations::TerminalOperation;
+pub(crate) use resumed::{ResumeLaunch, ResumedTerminal, open_resumed};
 pub(crate) use spawned::{SpawnedTerminal, WorkerLaunch, authorize_spawn_project, open_worker};
 
 const MAX_BROKER_ARGUMENTS: usize = 256;
@@ -70,6 +72,7 @@ impl Default for Terminals {
 /// One open terminal, whose service it belongs to, and the folder its CLI runs in.
 struct Open {
     spawned: Option<Arc<SpawnedTerminal>>,
+    resumed: Option<Arc<ResumedTerminal>>,
     /// Which service is hosted here, so a question about that service's account can be asked when this
     /// terminal's CLI stops writing. Known even for a conversation the service has not named yet.
     provider: ProviderId,
@@ -158,6 +161,7 @@ pub(crate) struct OfficialStop {
 #[derive(Clone)]
 pub(crate) struct HostedTerminal {
     pub(crate) spawned: Option<Arc<SpawnedTerminal>>,
+    pub(crate) resumed: Option<Arc<ResumedTerminal>>,
     pub(crate) id: TerminalId,
     pub(crate) provider: ProviderId,
     pub(crate) terminal: Terminal,
@@ -172,14 +176,21 @@ pub(crate) struct HostedTerminal {
 
 impl HostedTerminal {
     pub(crate) fn project_root(&self) -> &AbsPath {
+        self.worktree()
+            .map_or(&self.workspace, |binding| binding.project.root())
+    }
+
+    pub(crate) fn worktree(&self) -> Option<&crate::isolated_workspace::WorktreeBinding> {
         self.spawned
             .as_ref()
-            .map_or(&self.workspace, |spawned| spawned.project.root())
+            .map(|spawned| &spawned.binding)
+            .or_else(|| self.resumed.as_ref().map(|resumed| &resumed.binding))
     }
 
     fn from_open(id: TerminalId, open: &Open) -> Self {
         Self {
             spawned: open.spawned.clone(),
+            resumed: open.resumed.clone(),
             id,
             provider: open.provider,
             terminal: open.terminal.clone(),
@@ -387,6 +398,7 @@ impl Terminals {
             id,
             Open {
                 spawned: None,
+                resumed: None,
                 provider,
                 terminal,
                 workspace,
@@ -436,6 +448,7 @@ impl Terminals {
             id,
             Open {
                 spawned: None,
+                resumed: None,
                 provider,
                 terminal,
                 workspace,
@@ -534,6 +547,7 @@ impl Terminals {
             id,
             Open {
                 spawned: None,
+                resumed: None,
                 provider,
                 terminal,
                 workspace,
@@ -731,13 +745,15 @@ fn launch_arguments(
 
 async fn forget(composed: &Arc<Composed>, id: TerminalId) {
     let _operation = TerminalOperation::begin(composed);
-    {
+    let resumed = {
         let mut terminals = composed.terminals.lock().await;
+        let resumed = terminals.hosted(id).and_then(|hosted| hosted.resumed);
         drop(terminals.remove(id));
         composed
             .open_terminals
             .store(terminals.len(), std::sync::atomic::Ordering::Release);
-    }
+        resumed
+    };
     composed.runtime_terminals.terminal_ended(id).await;
     composed.native_claims.terminal_ended(id);
     composed.courier_gate.forget(id).await;
@@ -755,6 +771,21 @@ async fn forget(composed: &Arc<Composed>, id: TerminalId) {
         }
         Ok(None) => {}
         Err(error) => crate::isolated_workspace::report_cleanup(error),
+    }
+    if let Some(resumed) = resumed {
+        let ended = crate::isolated_workspace::EndedResume::after_terminal_exit(
+            &resumed.binding,
+            resumed.owner,
+        );
+        if let Err(error) = composed
+            .isolated_workspaces
+            .lock()
+            .await
+            .release_resume(&composed.containment, &ended)
+            .await
+        {
+            crate::isolated_workspace::report_cleanup(&error);
+        }
     }
     composed.terminal_closed.notify_one();
 }
@@ -803,6 +834,7 @@ pub(crate) async fn open_hosted(
         None,
         holder_known,
         None,
+        None,
     )
     .await
 }
@@ -849,6 +881,7 @@ pub(crate) async fn open_brokered(
         // so the unnamed-terminal guard stays in force here.
         false,
         None,
+        None,
     )
     .await
 }
@@ -884,6 +917,7 @@ async fn open_with_arguments(
     exact_arguments: Option<Vec<String>>,
     holder_known: bool,
     worker: Option<&WorkerLaunch>,
+    resumed: Option<&ResumeLaunch>,
 ) -> Result<(TerminalId, Terminal, Attachment), TerminalOpenError> {
     let operation = TerminalOperation::begin(composed);
     if let Some(native) = native
@@ -895,9 +929,10 @@ async fn open_with_arguments(
         let attachment = existing.terminal.attach().await;
         return Ok((existing.id, existing.terminal, attachment));
     }
-    let terminal_id = worker.map_or_else(TerminalId::now, |worker| {
-        worker.owned.ticket.worker.terminal
-    });
+    let terminal_id = worker.map_or_else(
+        || resumed.map_or_else(TerminalId::now, |resume| resume.owned.owner.terminal),
+        |worker| worker.owned.ticket.worker.terminal,
+    );
     let reservation = match composed.native_claims.reserve_terminal(
         terminal_id,
         id.as_str(),
@@ -913,6 +948,11 @@ async fn open_with_arguments(
         }
         TerminalClaimAdmission::Reserved(reservation) => reservation,
     };
+    if worker.is_none() && resumed.is_none() {
+        crate::isolated_workspace::refuse_unbound_worktree(composed, &cwd)
+            .await
+            .map_err(TerminalOpenError::Provider)?;
+    }
     let declared = composed
         .registry
         .get(id)
@@ -957,6 +997,7 @@ async fn open_with_arguments(
         minted,
         reservation,
         worker: worker.cloned(),
+        resumed: resumed.cloned(),
     }
     .open(composed, operation)
     .await
@@ -1021,6 +1062,9 @@ pub(crate) async fn open_official_attach(
         }
         TerminalClaimAdmission::Reserved(reservation) => reservation,
     };
+    crate::isolated_workspace::refuse_unbound_worktree(composed, &cwd)
+        .await
+        .map_err(TerminalOpenError::Provider)?;
     let arguments = tui
         .attach
         .iter()
@@ -1049,7 +1093,7 @@ pub(crate) async fn open_official_attach(
         env: env.clone(),
         env_unset: env_unset.clone(),
     };
-    let terminal = {
+    let (terminal, birth_failure) = {
         let mut terminals = composed.terminals.lock().await;
         if let Some(existing) = terminals.open_for(provider, native) {
             if existing.workspace != cwd {
@@ -1065,15 +1109,14 @@ pub(crate) async fn open_official_attach(
                 limit: MAX_HOSTED_TERMINALS,
             });
         }
-        let terminal = Terminal::open(&TerminalLaunch {
+        let (terminal, failure) = launch::opened(Terminal::open(&TerminalLaunch {
             program: &program,
             arguments,
             cwd: &cwd,
             env,
             env_unset,
             size: runtrol_childproc::PtySize { cols, rows },
-        })
-        .map_err(|error| TerminalOpenError::Provider(error.to_string()))?;
+        }))?;
         terminals.insert_external(
             terminal_id,
             provider,
@@ -1085,14 +1128,17 @@ pub(crate) async fn open_official_attach(
         composed
             .open_terminals
             .store(terminals.len(), std::sync::atomic::Ordering::Release);
-        terminal
+        (terminal, failure)
     };
-    if let Err(error) = reservation.commit() {
+    forget_on_exit(Arc::clone(composed), terminal_id, &terminal);
+    if let Err(error) = reservation.commit_born() {
         drop(terminal.kill());
-        forget(composed, terminal_id).await;
         return Err(error.into());
     }
-    forget_on_exit(Arc::clone(composed), terminal_id, &terminal);
+    if let Some(error) = birth_failure {
+        drop(terminal.kill());
+        return Err(error);
+    }
     let attachment = terminal.attach().await;
     Ok((terminal_id, terminal, attachment))
 }
@@ -1207,7 +1253,7 @@ pub(crate) async fn open_observed_mirror(
             .store(terminals.len(), std::sync::atomic::Ordering::Release);
         terminal
     };
-    if let Err(error) = reservation.commit() {
+    if let Err(error) = reservation.commit_born() {
         // ok: a mirror that never held a claim ends here with nothing left to end; the table removal in
         // `forget` is what matters.
         drop(terminal.end_feed(None));
@@ -1442,7 +1488,9 @@ mod tests {
             workspace.clone(),
             None,
         );
-        reservation.commit().expect("the terminal claim commits");
+        reservation
+            .commit_born()
+            .expect("the terminal claim commits");
         let descendant = descendant_pid(&terminal).await;
         (terminal, descendant)
     }

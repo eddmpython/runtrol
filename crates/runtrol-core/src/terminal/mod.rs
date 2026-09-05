@@ -35,6 +35,7 @@ use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore, broadcast, mpsc, onesh
 
 pub mod fed;
 pub mod input;
+mod opening;
 pub mod xterm;
 
 use fed::{FedChild, FeedError};
@@ -133,6 +134,19 @@ pub enum TerminalError {
     /// The runtime this was called from has no task executor.
     #[error("a terminal needs a runtime to watch its child: {0}")]
     Runtime(String),
+    /// Host initialization failed, and immediate cleanup could not prove the root process ended.
+    ///
+    /// The caller must publish this terminal as an owned, failed launch and retain its admission claim
+    /// until its exit watcher observes the exact process end. Input and resize are unavailable.
+    #[error("terminal initialization failed: {cause}; process cleanup is incomplete: {cleanup}")]
+    CleanupIncomplete {
+        /// The original initialization failure.
+        cause: Box<TerminalError>,
+        /// Why termination could not be confirmed without waiting under the caller's admission locks.
+        cleanup: SpawnError,
+        /// The still-owned root process and its exit watcher.
+        terminal: Terminal,
+    },
     /// Feeding a terminal whose bytes come from its own process, not from a window.
     #[error("the terminal is not an observed mirror")]
     NotFed,
@@ -239,6 +253,8 @@ impl Child {
 
 struct Shared {
     child: Child,
+    /// Failed initialization retains only process ownership and exit observation, never an input lane.
+    initialization_failed: bool,
     /// The raw lane's one ordering point: the next sequence to publish, held only while a chunk is sent.
     /// A viewer subscribes under it so its boundary is exact. No projector work ever runs under it.
     publish: Mutex<u64>,
@@ -423,17 +439,11 @@ impl Terminal {
     /// # Errors
     ///
     /// [`TerminalError::Spawn`] when the platform refuses; [`TerminalError::Runtime`] outside a runtime.
+    /// After process birth, an ordinary error proves the owned root has ended. On Windows, the failed
+    /// `ConPTY` is closed before returning. [`TerminalError::CleanupIncomplete`] retains the process and its
+    /// exit watcher; the caller must retain its admission until that watcher confirms root exit.
     pub fn open(launch: &TerminalLaunch<'_>) -> Result<Self, TerminalError> {
-        let size = bounded_size(launch.size);
-        let child = PtyChild::spawn(PtySpawn {
-            program: launch.program,
-            arguments: &launch.arguments,
-            cwd: launch.cwd,
-            env: &launch.env,
-            env_unset: &launch.env_unset,
-            size,
-        })?;
-        Self::host(Child::Pty(child), size)
+        opening::open(launch, Self::host)
     }
 
     /// Host a terminal some VS Code window owns and observes: the window feeds the raw bytes it captured
@@ -445,11 +455,28 @@ impl Terminal {
     /// [`TerminalError::Runtime`] outside a runtime.
     pub fn fed(pid: u32, size: PtySize) -> Result<Self, TerminalError> {
         Self::host(Child::Fed(FedChild::new(pid)), bounded_size(size))
+            .map_err(|failure| *failure.cause)
     }
 
-    fn host(child: Child, size: PtySize) -> Result<Self, TerminalError> {
-        let reader = child.reader()?;
-        let writer = child.writer()?;
+    fn host(child: Child, size: PtySize) -> Result<Self, opening::FailedHost> {
+        let reader = match child.reader() {
+            Ok(reader) => reader,
+            Err(error) => {
+                return Err(opening::FailedHost {
+                    child,
+                    cause: Box::new(error.into()),
+                });
+            }
+        };
+        let writer = match child.writer() {
+            Ok(writer) => writer,
+            Err(error) => {
+                return Err(opening::FailedHost {
+                    child,
+                    cause: Box::new(error.into()),
+                });
+            }
+        };
         Self::host_with(child, reader, writer, size)
     }
 
@@ -460,39 +487,46 @@ impl Terminal {
         reader: Box<dyn TerminalRead>,
         writer: Box<dyn Write + Send>,
         size: PtySize,
-    ) -> Result<Self, TerminalError> {
-        let handle = tokio::runtime::Handle::try_current()
-            .map_err(|error| TerminalError::Runtime(error.to_string()))?;
-        let writer = terminal_writer(writer)?;
-        let (output, _) = broadcast::channel(RING_CHUNKS);
-        let (exited, _) = watch::channel(None);
-        let shared = Arc::new(Shared {
-            child,
-            publish: Mutex::new(1),
-            projector: Mutex::new(Projector {
-                screen: vt100::Parser::new(size.rows, size.cols, 0),
-                queries: xterm::QueryCarry::default(),
-                feed: output.subscribe(),
-                pending: None,
-                processed: 0,
-                available: true,
-            }),
-            published: tokio::sync::Notify::new(),
-            input: Mutex::new(input::InputCarry::default()),
-            operations: OperationGate::default(),
-            writer,
-            output,
-            exited,
-            finished: AtomicBool::new(false),
-            wrote_at: AtomicU64::new(0),
-            geometry: AtomicU32::new(pack_size(size)),
-        });
+    ) -> Result<Self, opening::FailedHost> {
+        Self::host_with_reader(child, reader, writer, size, start_reader)
+    }
+
+    fn host_with_reader(
+        child: Child,
+        reader: Box<dyn TerminalRead>,
+        writer: Box<dyn Write + Send>,
+        size: PtySize,
+        start: impl FnOnce(Box<dyn TerminalRead>, mpsc::Sender<Bytes>) -> std::io::Result<()>,
+    ) -> Result<Self, opening::FailedHost> {
+        let handle = match tokio::runtime::Handle::try_current() {
+            Ok(handle) => handle,
+            Err(error) => {
+                return Err(opening::FailedHost {
+                    child,
+                    cause: Box::new(TerminalError::Runtime(error.to_string())),
+                });
+            }
+        };
+        let writer = match terminal_writer(writer) {
+            Ok(writer) => writer,
+            Err(cause) => {
+                return Err(opening::FailedHost {
+                    child,
+                    cause: Box::new(cause),
+                });
+            }
+        };
+        let shared = Shared::new(child, size, writer, false);
         let (chunks, mut incoming) = mpsc::channel::<Bytes>(RING_CHUNKS);
-        std::thread::Builder::new()
-            .name("runtrol-terminal-read".to_owned())
-            .stack_size(TERMINAL_IO_STACK_BYTES)
-            .spawn(move || read_terminal(reader, &chunks))
-            .map_err(|error| TerminalError::Runtime(error.to_string()))?;
+        if let Err(error) = start(reader, chunks) {
+            return Err(opening::FailedHost {
+                child: shared.child,
+                cause: Box::new(TerminalError::Runtime(error.to_string())),
+            });
+        }
+        // Nothing fallible remains after the reader starts. Until now the child could be returned to
+        // the opening owner for confirmed cleanup without any shared task having taken it.
+        let shared = Arc::new(shared);
         let host = Arc::clone(&shared);
         handle.spawn(async move {
             while let Some(chunk) = incoming.recv().await {
@@ -683,6 +717,7 @@ impl TerminalOperation<'_> {
     ///
     /// [`TerminalError::Input`] when the terminal rejects or does not acknowledge the input by its deadline.
     pub async fn input(&mut self, bytes: &[u8]) -> Result<(), TerminalError> {
+        self.shared.require_initialized()?;
         let forwarded = self.shared.input.lock().await.forward(bytes);
         if forwarded.is_empty() {
             return Ok(());
@@ -699,6 +734,7 @@ impl TerminalOperation<'_> {
     ///
     /// [`TerminalError::Spawn`] when the platform refuses the new geometry.
     pub async fn resize(&mut self, size: PtySize) -> Result<(), TerminalError> {
+        self.shared.require_initialized()?;
         let size = bounded_size(size);
         self.shared.child.resize(size)?;
         {
@@ -735,6 +771,14 @@ fn terminal_writer(
         })
         .map_err(|error| TerminalError::Runtime(error.to_string()))?;
     Ok(outbound)
+}
+
+fn start_reader(reader: Box<dyn TerminalRead>, chunks: mpsc::Sender<Bytes>) -> std::io::Result<()> {
+    std::thread::Builder::new()
+        .name("runtrol-terminal-read".to_owned())
+        .stack_size(TERMINAL_IO_STACK_BYTES)
+        .spawn(move || read_terminal(reader, &chunks))
+        .map(drop)
 }
 
 const fn pack_size(size: PtySize) -> u32 {
@@ -820,6 +864,47 @@ fn report_screen_reset(operation: &str) {
 }
 
 impl Shared {
+    fn new(
+        child: Child,
+        size: PtySize,
+        writer: blocking_mpsc::SyncSender<WriteRequest>,
+        initialization_failed: bool,
+    ) -> Self {
+        let (output, _) = broadcast::channel(RING_CHUNKS);
+        let (exited, _) = watch::channel(None);
+        Self {
+            child,
+            initialization_failed,
+            publish: Mutex::new(1),
+            projector: Mutex::new(Projector {
+                screen: vt100::Parser::new(size.rows, size.cols, 0),
+                queries: xterm::QueryCarry::default(),
+                feed: output.subscribe(),
+                pending: None,
+                processed: 0,
+                available: !initialization_failed,
+            }),
+            published: tokio::sync::Notify::new(),
+            input: Mutex::new(input::InputCarry::default()),
+            operations: OperationGate::default(),
+            writer,
+            output,
+            exited,
+            finished: AtomicBool::new(false),
+            wrote_at: AtomicU64::new(0),
+            geometry: AtomicU32::new(pack_size(size)),
+        }
+    }
+
+    fn require_initialized(&self) -> Result<(), TerminalError> {
+        if self.initialization_failed {
+            return Err(TerminalError::Runtime(
+                "the terminal host did not initialize".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
     async fn write_ordered(&self, bytes: Bytes) -> std::io::Result<()> {
         if bytes.len() > MAX_WRITE_BYTES {
             return Err(std::io::Error::new(
@@ -939,16 +1024,22 @@ impl Shared {
                 Ok(Some(code)) => {
                     tokio::time::sleep(EXIT_SETTLE).await;
                     self.finish();
-                    // ok: no receiver means nobody is attached to hear the exit; the value stays in the
-                    // channel for whoever attaches next.
-                    _ = self.exited.send(Some(code));
+                    // A durable admission bind may delay the first subscriber until after exit.
+                    // Keep the exact state even while the watch channel has no receivers.
+                    _ = self.exited.send_replace(Some(code));
                     return;
                 }
                 Err(error) => {
+                    if self.initialization_failed {
+                        // CleanupIncomplete already reported the failure. An uninspectable failed child
+                        // must keep its existing bounded terminal ownership until exit is proved.
+                        drop(error);
+                        continue;
+                    }
                     self.finish();
                     // The platform could not say. Reported as an exit with no code rather than left
                     // running forever in every viewer's eyes. ok: a missing receiver is the same as above.
-                    _ = self.exited.send(Some(-1));
+                    _ = self.exited.send_replace(Some(-1));
                     drop(error);
                     return;
                 }

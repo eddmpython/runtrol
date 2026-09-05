@@ -89,6 +89,7 @@ impl Fixture {
         };
         let hosted = HostedTerminal {
             spawned: None,
+            resumed: None,
             id: terminal_id,
             provider: CoreProviderId::parse("claude").expect("a fixture provider"),
             terminal: Terminal::fed(0, runtrol_childproc::PtySize { cols: 80, rows: 24 })

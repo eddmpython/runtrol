@@ -93,6 +93,22 @@ Git operations retain their resource lock until their command and descendants ha
 worktrees are removed only after exact terminal exit; dirty or committed work is preserved. A finite restart sweep
 also requires the recorded Runtime incarnation to have ended. Unknown or replaced ownership is retained and reported.
 
+Selecting a preserved worker conversation resumes its native session in that exact worktree under the original
+project's current `session.resume` grant. The worktree controller verifies the recorded project and filesystem
+identities, then reserves the new Runtime and terminal occupant before process creation. An old exit callback or
+restart sweep cannot reclaim a live resumed occupant. This binding keeps the original base commit but does not
+invent new worker lineage. Dialogue starts disabled again; calls from the ended process are not replayed.
+Within the current Runtime, the previous terminal's claim must retire before another occupant can start. A live
+foreign Runtime without an exact terminal-retirement proof keeps the retained worktree unavailable for resume.
+Opening a different subdirectory inside a retained worktree is refused; its recorded workspace is not silently
+changed, and a fresh launch cannot bypass the retained worktree's cleanup owner.
+Read-only checks use the atomically published registry independently of Git cleanup. Final reservation and
+process binding keep their exclusive ownership checks.
+
+The registry upgrades its ownership schema under the shared writer lock before it can record a resumed occupant.
+Older writers reject that schema, so rolling back the executable must preserve the upgraded registry and its
+worktrees. Rows whose original ownership cannot be verified remain preserved without resume authority.
+
 Windows command cleanup validates the bounded PID list returned by a successful Job query, retaining exact process
 handles and checking their membership and termination before releasing the operation. A finished process may remain
 briefly in the assigned count after leaving that list; count inequality alone is not a failed completion proof.

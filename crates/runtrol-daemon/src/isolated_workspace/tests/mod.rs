@@ -1,23 +1,24 @@
 use super::*;
 #[cfg(windows)]
 mod cancellation;
-mod process;
+pub(crate) mod process;
 mod registry;
+mod resume;
 mod snapshot;
 mod terminal;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static NEXT_SCRATCH: AtomicU64 = AtomicU64::new(0);
 
-struct Scratch {
-    root: std::path::PathBuf,
+pub(crate) struct Scratch {
+    pub(crate) root: std::path::PathBuf,
     shared: std::path::PathBuf,
-    project: AbsPath,
+    pub(crate) project: AbsPath,
     registry: AbsPath,
 }
 
 impl Scratch {
-    fn make() -> Self {
+    pub(crate) fn make() -> Self {
         let shared = std::env::var_os("CARGO_TARGET_DIR")
             .map(std::path::PathBuf::from)
             .filter(|path| path.is_absolute())

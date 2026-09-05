@@ -60,14 +60,16 @@ impl Drop for StructuredClaimGuard<'_> {
 }
 
 impl TerminalClaimGuard {
-    pub(crate) fn commit(mut self) -> Result<(), TerminalClaimError> {
+    /// A process has been born and its exact exit observer now owns this claim. Even a failed
+    /// publication must retain the pending claim until that observer calls `terminal_ended`.
+    pub(crate) fn commit_born(mut self) -> Result<(), TerminalClaimError> {
+        self.committed = true;
         let mut state = self.state.write().map_err(|_| TerminalClaimError::State)?;
         let claim = state
             .pending_terminals
             .remove(&self.terminal)
             .ok_or(TerminalClaimError::State)?;
         state.terminals.insert(self.terminal, claim);
-        self.committed = true;
         Ok(())
     }
 }
@@ -106,6 +108,13 @@ impl Default for NativeLiveClaimRegistry {
 }
 
 impl NativeLiveClaimRegistry {
+    /// A positive, current-generation proof. Poison or an unreadable state never means absence.
+    pub(crate) fn terminal_absent(&self, terminal: TerminalId) -> Result<bool, TerminalClaimError> {
+        let state = self.state.read().map_err(|_| TerminalClaimError::State)?;
+        Ok(!state.pending_terminals.contains_key(&terminal)
+            && !state.terminals.contains_key(&terminal))
+    }
+
     /// Atomically reserve a structured launch against every local and inherited process claim.
     pub(crate) fn reserve_structured(
         &self,
@@ -504,6 +513,64 @@ fn claim_conflict(
 mod tests {
     use super::*;
 
+    #[test]
+    fn exact_claim_absence_distinguishes_pending_born_ended_and_unknown() {
+        let registry = NativeLiveClaimRegistry::default();
+        let terminal = TerminalId::now();
+        let TerminalClaimAdmission::Reserved(claim) = registry
+            .reserve_terminal(terminal, "fixture", Some("native"), "/work", false)
+            .unwrap()
+        else {
+            panic!("new claim");
+        };
+        assert!(!registry.terminal_absent(terminal).unwrap());
+        assert!(registry.terminal_absent(TerminalId::now()).unwrap());
+        claim.commit_born().unwrap();
+        assert!(!registry.terminal_absent(terminal).unwrap());
+        assert!(
+            registry
+                .reserve_structured(SessionId::now(), "fixture", Some("native"), "/work")
+                .is_err()
+        );
+        registry.terminal_ended(terminal);
+        assert!(registry.terminal_absent(terminal).unwrap());
+        let poisoned = std::panic::catch_unwind(|| {
+            let _held = registry.state.write().unwrap();
+            panic!("fixture registry failure");
+        });
+        assert!(poisoned.is_err());
+        assert_eq!(
+            registry.terminal_absent(terminal),
+            Err(TerminalClaimError::State)
+        );
+    }
+
+    #[test]
+    fn a_failed_born_claim_commit_does_not_release_its_unconfirmed_process() {
+        let registry = NativeLiveClaimRegistry::default();
+        let terminal = TerminalId::now();
+        let TerminalClaimAdmission::Reserved(claim) = registry
+            .reserve_terminal(terminal, "fixture", Some("native"), "/work", false)
+            .unwrap()
+        else {
+            panic!("new claim");
+        };
+        let poisoned = std::panic::catch_unwind(|| {
+            let _held = registry.state.write().unwrap();
+            panic!("fixture commit failure");
+        });
+        assert!(poisoned.is_err());
+        assert_eq!(claim.commit_born(), Err(TerminalClaimError::State));
+        assert_eq!(
+            registry.terminal_absent(terminal),
+            Err(TerminalClaimError::State)
+        );
+        registry.state.clear_poison();
+        assert!(!registry.terminal_absent(terminal).unwrap());
+        registry.terminal_ended(terminal);
+        assert!(registry.terminal_absent(terminal).unwrap());
+    }
+
     /// A terminal another generation cannot name blocks every conversation in its folder, because it might be
     /// any of them. It stops blocking the moment the coding service itself has been asked and did not name the
     /// conversation being opened: then the unnamed terminal is provably a different one.
@@ -664,7 +731,7 @@ mod tests {
         else {
             panic!("fresh terminal unexpectedly joined");
         };
-        terminal.commit().expect("committed terminal claim");
+        terminal.commit_born().expect("committed terminal claim");
 
         assert!(
             registry
@@ -697,7 +764,7 @@ mod tests {
             else {
                 panic!("fresh terminal unexpectedly joined");
             };
-            terminal.commit().expect("committed terminal claim");
+            terminal.commit_born().expect("committed terminal claim");
         }
 
         assert_eq!(
@@ -729,7 +796,7 @@ mod tests {
         else {
             panic!("fresh terminal unexpectedly joined");
         };
-        terminal.commit().expect("committed terminal claim");
+        terminal.commit_born().expect("committed terminal claim");
         assert!(
             registry
                 .bind_terminal_native(terminal_id, "example", "first", "/work")
@@ -776,7 +843,7 @@ mod tests {
         else {
             panic!("fresh terminal unexpectedly joined");
         };
-        terminal.commit().expect("committed terminal claim");
+        terminal.commit_born().expect("committed terminal claim");
 
         assert!(matches!(
             registry.bind_terminal_native(terminal_id, "example", "native", "/work"),
@@ -798,7 +865,7 @@ mod tests {
         else {
             panic!("fresh terminal unexpectedly joined");
         };
-        terminal.commit().expect("committed terminal claim");
+        terminal.commit_born().expect("committed terminal claim");
 
         assert!(
             registry
@@ -841,7 +908,7 @@ mod tests {
         else {
             panic!("first terminal unexpectedly joined");
         };
-        terminal.commit().expect("committed terminal claim");
+        terminal.commit_born().expect("committed terminal claim");
         assert!(matches!(
             other.reserve_structured(SessionId::now(), "example", Some("native"), "/work"),
             Err(TerminalClaimError::TerminalAlreadyLive)

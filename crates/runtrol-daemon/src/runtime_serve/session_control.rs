@@ -1,5 +1,10 @@
 //! Managed session opening and connection-bound control requests.
 
+#[cfg(test)]
+#[path = "tests/structured_worktree.rs"]
+mod tests;
+
+use std::sync::Arc;
 use std::time::Duration;
 
 use runtrol_core::{ApprovalAuthority, WorkspaceClaim};
@@ -38,7 +43,7 @@ use super::response::{
 )]
 pub(super) async fn open_session(
     state: &mut PublicState,
-    composed: &Composed,
+    composed: &Arc<Composed>,
     discovering: &crate::serve::DiscoveryGates,
     native_cursors: &NativeCursorCodec,
     sessions: &RuntimeSessionCatalogue,
@@ -69,6 +74,17 @@ pub(super) async fn open_session(
             return confirmation_failure(id, failure, "shared session open");
         }
     };
+    if let Err(message) =
+        crate::isolated_workspace::refuse_unbound_worktree(composed, &request.workspace).await
+    {
+        return control_failure(
+            id,
+            &RuntimeControlFailure {
+                kind: RuntimeErrorKind::WorkspaceConflict,
+                message: message.into(),
+            },
+        );
+    }
     let (answered, hearing) = oneshot::channel();
     if asking
         .send(Box::new(RuntimeAsked {

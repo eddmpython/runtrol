@@ -132,6 +132,14 @@ impl PtyChild {
         self.inner.kill()
     }
 
+    /// Close the owner's unused output pipe after terminal-host initialization failed.
+    ///
+    /// No output reader may remain. Closing this end before releasing a failed `ConPTY` prevents its
+    /// console host from waiting forever for an output consumer that was never started.
+    pub fn abandon_output(&mut self) {
+        self.inner.abandon_output();
+    }
+
     /// Release the terminal once the child has ended and its output has settled.
     ///
     /// After this the reader reports end of stream. Called by the host after the exit was observed and

@@ -17,15 +17,18 @@
 //! is released by the operating system when the process ends, so a stale file cannot claim a dead process.
 //!
 //! **A model is answering** while the conversation's own event log has a turn open: its last turn boundary is
-//! `task_started` rather than `task_complete` or `turn_aborted`. A process and its writer lock remain alive at
+//! `task_started` rather than `task_complete` or `turn_aborted`, and the opening event is not older than the
+//! exact current writer process. A crash can leave an open boundary for a later resumed owner, so a writer lock
+//! alone cannot make that old turn current. A process and its writer lock remain alive at
 //! the CLI's paused prompt after an interruption, so the abort boundary is essential. The conversation that
 //! was answering during measurement had `task_complete` at 07:20:36.672Z followed by `task_started` at
 //! 07:20:36.804Z, and everything written since. This is a state, not a heartbeat, so it stays true through a
-//! long tool call that writes nothing for minutes. That is what a timestamp cannot do, and why the timestamp
-//! is not the signal. The other CLI was first read through timestamps and it failed both ways there too.
+//! long tool call that writes nothing for minutes. The event timestamp only rejects a boundary from before the
+//! current owner existed. Its age, file modification time, and output silence never end an established turn.
 //!
 //! Nothing here reads a message. The lock is a file name, and the log is read for the names of its event
-//! types and the byte offset reached.
+//! types, their envelope timestamps, and the byte offset reached. Only the bounded structural record prefix is
+//! decoded; a message body cannot supply a boundary.
 //!
 //! # What it costs
 //!
@@ -44,7 +47,8 @@ use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 
 use runtrol_provider::{
-    NativeProcessActivity, NativeProcessBinding, NativeSessionId, ProviderError, ProviderId,
+    NativeProcessActivity, NativeProcessBinding, NativeSessionId, ProcessIdentity, ProviderError,
+    ProviderId, WallMs,
 };
 
 use crate::operator::{HomeProblem, provider_home};
@@ -93,16 +97,20 @@ const MAX_BACKWARD_SCAN_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_FOLLOW_BYTES: u64 = 8 * 1024 * 1024;
 
 /// The event that opens a turn, in the CLI's own words.
-const TURN_OPENED: &[u8] = b"\"type\":\"task_started\"";
+const TURN_OPENED: &[u8] = b"task_started";
 
 /// The event that closes a turn after a normal answer.
-const TURN_CLOSED: &[u8] = b"\"type\":\"task_complete\"";
+const TURN_CLOSED: &[u8] = b"task_complete";
 
 /// The event that closes a turn after the operator or host interrupts it.
 ///
 /// Codex keeps the conversation process and writer lock alive after this record. Treating only
 /// [`TURN_CLOSED`] as a boundary therefore leaves an interrupted, idle conversation answering forever.
-const TURN_ABORTED: &[u8] = b"\"type\":\"turn_aborted\"";
+const TURN_ABORTED: &[u8] = b"turn_aborted";
+
+/// The measured event envelope fits here, including its timestamp and event type. Neither a message nor the
+/// remainder of a turn event is decoded. Adjacent scan chunks overlap by this bound to keep split prefixes whole.
+const MAX_BOUNDARY_PREFIX_BYTES: usize = 256;
 
 /// How long one answer about which conversations are held is reused.
 ///
@@ -119,8 +127,50 @@ struct Followed {
     log: PathBuf,
     /// How far the log had been read.
     read_to: u64,
-    /// Whether a turn was open at that point.
+    /// The last structural boundary, kept independently of whichever process currently holds the lock.
+    boundary: Option<TurnBoundary>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct TurnBoundary {
     answering: bool,
+    at: Option<WallMs>,
+}
+
+impl TurnBoundary {
+    fn answers_for(self, owner: ProcessIdentity) -> bool {
+        self.answering
+            && self
+                .at
+                .zip(owner_started_at(owner))
+                .is_some_and(|(opened, born)| opened >= born)
+    }
+}
+
+/// Windows publishes an absolute FILETIME birth stamp. Other platforms use different identity units, including
+/// boot-relative ticks, so they cannot prove this comparison through the current holder surface.
+fn owner_started_at(owner: ProcessIdentity) -> Option<WallMs> {
+    #[cfg(windows)]
+    {
+        const FILETIME_TICKS_PER_MILLISECOND: u64 = 10_000;
+        const WINDOWS_TO_UNIX_EPOCH_MS: u64 = 11_644_473_600_000;
+        let millis = (owner.started() / FILETIME_TICKS_PER_MILLISECOND)
+            .checked_sub(WINDOWS_TO_UNIX_EPOCH_MS)?;
+        Some(WallMs::from_millis(millis))
+    }
+    #[cfg(not(windows))]
+    {
+        let _unavailable = owner;
+        None
+    }
+}
+
+fn live_identity(pid: u32) -> Option<ProcessIdentity> {
+    // A process retained by an open parent handle can still expose its birth after exit. Both facts are needed.
+    if !runtrol_childproc::alive(pid) {
+        return None;
+    }
+    runtrol_childproc::process_identity(pid)
 }
 
 /// The process a conversation's lock named, and where that conversation works.
@@ -130,7 +180,7 @@ struct Followed {
 /// changes when the conversation changes hands, and the holder ending is what this checks before reusing it.
 #[derive(Clone, Debug)]
 struct Bound {
-    pid: u32,
+    identity: ProcessIdentity,
     cwd: Option<String>,
 }
 
@@ -159,6 +209,8 @@ pub(super) struct CodexRoster {
     /// cost of that machinery out of the Runtime; a test asks in its own process, because a test binary is not
     /// a helper this executable knows how to be.
     ask_holder: fn(&Path) -> Option<u32>,
+    /// Exact live incarnation lookup, replaceable by deterministic identities in the roster fixtures.
+    identify: fn(u32) -> Option<ProcessIdentity>,
 }
 
 /// What this machine has been told about its own conversations, kept for the life of the process.
@@ -205,6 +257,7 @@ impl CodexRoster {
             followed: Arc::clone(&MACHINE.followed),
             bound: Arc::clone(&MACHINE.bound),
             ask_holder: runtrol_childproc::holder_of,
+            identify: live_identity,
         }
     }
 
@@ -219,12 +272,15 @@ impl CodexRoster {
             followed: Arc::new(Mutex::new(HashMap::new())),
             bound: Arc::new(Mutex::new(HashMap::new())),
             ask_holder: runtrol_childproc::holder_of_here,
+            identify: live_identity,
         }
     }
 
     #[cfg(test)]
     fn rooted(home: PathBuf) -> Self {
-        Self::alone(Ok(home), Duration::ZERO)
+        let mut roster = Self::alone(Ok(home), Duration::ZERO);
+        roster.identify = tests::fixture_identity;
+        roster
     }
 
     /// The directory this CLI keeps one writer lock per open conversation in. Its file set changing is this
@@ -280,15 +336,19 @@ impl CodexRoster {
         let mut followed = self.followed.blocking_lock();
         followed.retain(|thread, _| owned.iter().any(|owned| owned.as_str() == thread.as_ref()));
         for thread in owned {
-            let answering = answering(home, &mut followed, thread.as_str());
-            if answering {
-                active.push(thread.clone());
-            }
-            if let Some(binding) =
-                holder(self.ask_holder, &locks, home, &mut bound, thread.as_str())
-            {
+            if let Some(binding) = holder(
+                self.ask_holder,
+                self.identify,
+                &locks,
+                home,
+                &mut bound,
+                thread.as_str(),
+            ) {
+                if answering(home, &mut followed, thread.as_str(), binding.identity) {
+                    active.push(thread.clone());
+                }
                 processes.push(NativeProcessBinding {
-                    pid: binding.pid,
+                    pid: binding.identity.pid(),
                     native: thread.clone(),
                     cwd: binding.cwd.clone(),
                     // Whether that process draws a screen another window can join is a separate question
@@ -322,19 +382,21 @@ impl CodexRoster {
 /// conversation rather than on every observation.
 fn holder(
     ask: fn(&Path) -> Option<u32>,
+    identify: fn(u32) -> Option<ProcessIdentity>,
     locks: &Path,
     home: &Path,
     bound: &mut HashMap<Box<str>, Bound>,
     thread: &str,
 ) -> Option<Bound> {
     if let Some(known) = bound.get(thread)
-        && runtrol_childproc::alive(known.pid)
+        && identify(known.identity.pid()) == Some(known.identity)
     {
         return Some(known.clone());
     }
+    bound.remove(thread);
     let pid = ask(&locks.join(format!("{thread}.{LOCK_EXTENSION}")))?;
     let fresh = Bound {
-        pid,
+        identity: identify(pid)?,
         cwd: workspace_of(home, thread),
     };
     bound.insert(thread.into(), fresh.clone());
@@ -423,7 +485,12 @@ fn owned_threads(
 }
 
 /// Whether this conversation has a turn open, reading only what its log grew by.
-fn answering(home: &Path, followed: &mut HashMap<Box<str>, Followed>, thread: &str) -> bool {
+fn answering(
+    home: &Path,
+    followed: &mut HashMap<Box<str>, Followed>,
+    thread: &str,
+    owner: ProcessIdentity,
+) -> bool {
     if let Some(known) = followed.get_mut(thread) {
         let Ok(size) = fs::metadata(&known.log).map(|metadata| metadata.len()) else {
             // The log went away underneath a live process: nothing can be said about a turn, and saying
@@ -431,39 +498,40 @@ fn answering(home: &Path, followed: &mut HashMap<Box<str>, Followed>, thread: &s
             return false;
         };
         if size == known.read_to {
-            return known.answering;
+            return known
+                .boundary
+                .is_some_and(|boundary| boundary.answers_for(owner));
         }
         if size < known.read_to || size - known.read_to > MAX_FOLLOW_BYTES {
             // Truncated, replaced, or grown further than one look may read. Ask the file again from the
             // end rather than trusting an offset into a file that is no longer the same one.
             let Some(fresh) = last_boundary(&known.log) else {
-                return known.answering;
+                return known
+                    .boundary
+                    .is_some_and(|boundary| boundary.answers_for(owner));
             };
             known.read_to = fresh.0;
-            known.answering = fresh.1;
-            return known.answering;
+            known.boundary = fresh.1;
+            return known
+                .boundary
+                .is_some_and(|boundary| boundary.answers_for(owner));
         }
         // Back over the straddle: the previous size may have landed inside a boundary token, and a token
         // that neither look sees is a turn that never starts or never ends until the next one.
-        let straddle = u64::try_from(
-            TURN_OPENED
-                .len()
-                .max(TURN_CLOSED.len())
-                .max(TURN_ABORTED.len())
-                - 1,
-        )
-        .unwrap_or(0);
+        let straddle = MAX_BOUNDARY_PREFIX_BYTES as u64;
         let from = known.read_to.saturating_sub(straddle);
         if let Some(state) = boundary_in_range(&known.log, from, size) {
-            known.answering = state;
+            known.boundary = Some(state);
         }
         known.read_to = size;
-        return known.answering;
+        return known
+            .boundary
+            .is_some_and(|boundary| boundary.answers_for(owner));
     }
     let Some(log) = locate_log(home, thread) else {
         return false;
     };
-    let Some((read_to, answering)) = last_boundary(&log) else {
+    let Some((read_to, boundary)) = last_boundary(&log) else {
         return false;
     };
     followed.insert(
@@ -471,10 +539,10 @@ fn answering(home: &Path, followed: &mut HashMap<Box<str>, Followed>, thread: &s
         Followed {
             log,
             read_to,
-            answering,
+            boundary,
         },
     );
-    answering
+    boundary.is_some_and(|boundary| boundary.answers_for(owner))
 }
 
 /// The log file this conversation writes to.
@@ -543,7 +611,7 @@ fn collect_day_directories(at: &Path, depth: usize, into: &mut Vec<PathBuf>) {
 ///
 /// A log whose last boundary is further back than that reads as no open turn: a conversation turns only on
 /// proof that a turn is open.
-fn last_boundary(log: &Path) -> Option<(u64, bool)> {
+fn last_boundary(log: &Path) -> Option<(u64, Option<TurnBoundary>)> {
     let Ok(mut file) = fs::File::open(log) else {
         return None;
     };
@@ -554,34 +622,40 @@ fn last_boundary(log: &Path) -> Option<(u64, bool)> {
     let floor = size.saturating_sub(MAX_BACKWARD_SCAN_BYTES);
     // A boundary written across a chunk edge belongs to neither chunk alone, so each chunk carries the first
     // bytes of the one after it.
-    let straddle = u64::try_from(
-        TURN_OPENED
-            .len()
-            .max(TURN_CLOSED.len())
-            .max(TURN_ABORTED.len())
-            - 1,
-    )
-    .unwrap_or(0);
+    let straddle = MAX_BOUNDARY_PREFIX_BYTES as u64;
     let mut end = size;
     while end > floor {
         let start = end.saturating_sub(SCAN_CHUNK_BYTES).max(floor);
         let stop = (end + straddle).min(size);
-        let bytes = read_range(&mut file, start, stop)?;
-        if let Some(open) = last_open_turn(&bytes) {
-            return Some((size, open));
+        let bytes = read_range(&mut file, start.saturating_sub(1), stop)?;
+        if let Some(boundary) = boundary_in_read_range(&bytes, start == 0) {
+            return Some((size, Some(boundary)));
         }
         end = start;
     }
-    Some((size, false))
+    Some((size, None))
 }
 
 /// The state of the last boundary inside one range of the log, or `None` when the range holds none.
-fn boundary_in_range(log: &Path, from: u64, to: u64) -> Option<bool> {
+fn boundary_in_range(log: &Path, from: u64, to: u64) -> Option<TurnBoundary> {
     let Ok(mut file) = fs::File::open(log) else {
         return None;
     };
-    let bytes = read_range(&mut file, from, to)?;
-    last_open_turn(&bytes)
+    let bytes = read_range(&mut file, from.saturating_sub(1), to)?;
+    boundary_in_read_range(&bytes, from == 0)
+}
+
+/// A nonzero read starts one byte before the requested range. Its first complete line begins after the first LF:
+/// that may be the preceding byte itself, or the end of a partial record. Without this proof, a nested object
+/// exactly aligned with a chunk start could impersonate the provider's top-level event envelope.
+fn boundary_in_read_range(bytes: &[u8], starts_file: bool) -> Option<TurnBoundary> {
+    let complete = if starts_file {
+        bytes
+    } else {
+        let newline = bytes.iter().position(|byte| *byte == b'\n')?;
+        bytes.get(newline + 1..)?
+    };
+    last_turn_boundary(complete)
 }
 
 /// One range of an open log, or `None` for anything the filesystem refuses.
@@ -606,26 +680,35 @@ fn read_range(file: &mut fs::File, from: u64, to: u64) -> Option<Vec<u8>> {
 }
 
 /// Whether the last turn boundary in these bytes opens a turn, or `None` when they hold no boundary.
-fn last_open_turn(bytes: &[u8]) -> Option<bool> {
-    let opened = last_index_of(bytes, TURN_OPENED);
-    let closed = last_index_of(bytes, TURN_CLOSED).max(last_index_of(bytes, TURN_ABORTED));
-    match (opened, closed) {
-        (None, None) => None,
-        (Some(_), None) => Some(true),
-        (None, Some(_)) => Some(false),
-        (Some(opened), Some(closed)) => Some(opened > closed),
-    }
+fn last_turn_boundary(bytes: &[u8]) -> Option<TurnBoundary> {
+    bytes.rsplit(|byte| *byte == b'\n').find_map(turn_boundary)
 }
 
-fn last_index_of(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    if needle.is_empty() || haystack.len() < needle.len() {
+/// Read only this provider's measured compact envelope. A nested payload type, escaped message string, or
+/// incomplete envelope cannot claim a boundary by containing the same event name.
+fn turn_boundary(line: &[u8]) -> Option<TurnBoundary> {
+    let prefix = line.get(..line.len().min(MAX_BOUNDARY_PREFIX_BYTES))?;
+    let after_timestamp = prefix.strip_prefix(b"{\"timestamp\":\"")?;
+    let end = after_timestamp.iter().position(|byte| *byte == b'\"')?;
+    let timestamp = after_timestamp.get(..end)?;
+    let event = after_timestamp
+        .get(end..)?
+        .strip_prefix(b"\",\"type\":\"event_msg\",\"payload\":{\"type\":\"")?;
+    let end = event.iter().position(|byte| *byte == b'\"')?;
+    let answering = match event.get(..end)? {
+        TURN_OPENED => true,
+        TURN_CLOSED | TURN_ABORTED => false,
+        _ => return None,
+    };
+    if !matches!(event.get(end + 1), Some(b',' | b'}')) {
         return None;
     }
-    haystack
-        .windows(needle.len())
-        .enumerate()
-        .rfind(|(_, window)| *window == needle)
-        .map(|(at, _)| at)
+    // An unreadable timestamp is an unknown boundary, not permission to keep an older open turn active.
+    let at = match std::str::from_utf8(timestamp) {
+        Ok(timestamp) => WallMs::from_iso8601(timestamp),
+        Err(_) => None,
+    };
+    Some(TurnBoundary { answering, at })
 }
 
 #[cfg(test)]
@@ -656,21 +739,46 @@ mod tests {
     #[cfg(windows)]
     const DONE_THREAD: &str = "01a0471d-786c-7561-a8d5-db5ddb837c0c";
 
+    const TURN_AT: &str = "2026-08-29T00:00:01.000Z";
+
+    pub(super) fn fixture_identity(pid: u32) -> Option<ProcessIdentity> {
+        // Fixed FILETIME for 2026-08-29T00:00:00Z. The synthetic turn begins one second later.
+        ProcessIdentity::new(pid, 134_324_352_000_000_000)
+    }
+
+    #[cfg(windows)]
+    fn resumed_identity(pid: u32) -> Option<ProcessIdentity> {
+        // The same PID, reincarnated two seconds later, after the fixture turn began.
+        ProcessIdentity::new(pid, 134_324_352_020_000_000)
+    }
+
+    fn last_open_turn(bytes: &[u8]) -> Option<bool> {
+        last_turn_boundary(bytes).map(|boundary| boundary.answering)
+    }
+
+    fn chunk_bytes() -> usize {
+        usize::try_from(SCAN_CHUNK_BYTES).expect("the bounded scan chunk fits the test platform")
+    }
+
     fn opened(id: &str) -> String {
+        opened_at(id, TURN_AT)
+    }
+
+    fn opened_at(id: &str, at: &str) -> String {
         format!(
-            "{{\"timestamp\":\"t\",\"type\":\"event_msg\",\"payload\":{{\"type\":\"task_started\",\"turn_id\":\"{id}\"}}}}\n"
+            "{{\"timestamp\":\"{at}\",\"type\":\"event_msg\",\"payload\":{{\"type\":\"task_started\",\"turn_id\":\"{id}\"}}}}\n"
         )
     }
 
     fn closed(id: &str) -> String {
         format!(
-            "{{\"timestamp\":\"t\",\"type\":\"event_msg\",\"payload\":{{\"type\":\"task_complete\",\"turn_id\":\"{id}\"}}}}\n"
+            "{{\"timestamp\":\"{TURN_AT}\",\"type\":\"event_msg\",\"payload\":{{\"type\":\"task_complete\",\"turn_id\":\"{id}\"}}}}\n"
         )
     }
 
     fn aborted(id: &str) -> String {
         format!(
-            "{{\"timestamp\":\"t\",\"type\":\"event_msg\",\"payload\":{{\"type\":\"turn_aborted\",\"turn_id\":\"{id}\"}}}}\n"
+            "{{\"timestamp\":\"{TURN_AT}\",\"type\":\"event_msg\",\"payload\":{{\"type\":\"turn_aborted\",\"turn_id\":\"{id}\"}}}}\n"
         )
     }
 
@@ -738,6 +846,119 @@ mod tests {
         assert!(
             activity.live.is_empty(),
             "a lock file left behind by a finished process owns nothing"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_resumed_owner_does_not_inherit_an_unfinished_turn() {
+        let old_turn = opened_at("old", "2020-01-01T00:00:00Z");
+        let (_kept, root) = home(&[(OPEN_THREAD, old_turn)]);
+        let _held = hold(&root, OPEN_THREAD);
+        let roster = CodexRoster::rooted(root);
+        let activity = roster.activity(codex()).expect("the home is readable");
+        assert_eq!(activity.live.len(), 1, "the resumed owner remains live");
+        assert!(
+            activity.active.is_empty(),
+            "the new owner cannot inherit a turn opened before that process existed"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_recycled_holder_pid_cannot_keep_a_cached_turn_active() {
+        let (_kept, root) = home(&[(OPEN_THREAD, opened("old"))]);
+        let _held = hold(&root, OPEN_THREAD);
+        let mut roster = CodexRoster::rooted(root);
+        let first = roster.activity(codex()).expect("the home is readable");
+        assert_eq!(first.active.len(), 1, "the original owner opened this turn");
+
+        roster.identify = resumed_identity;
+        let second = roster.activity(codex()).expect("the home is readable");
+        assert_eq!(second.live.len(), 1, "the replacement holder stays live");
+        assert!(
+            second.active.is_empty(),
+            "cached bytes belong to the old owner"
+        );
+        assert_eq!(
+            roster
+                .bound
+                .blocking_lock()
+                .get(OPEN_THREAD)
+                .expect("the replacement is cached")
+                .identity,
+            resumed_identity(std::process::id()).expect("the replacement has an identity")
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_silent_turn_stays_active_for_the_same_exact_owner() {
+        let (_kept, root) = home(&[(OPEN_THREAD, opened("only"))]);
+        let _held = hold(&root, OPEN_THREAD);
+        let roster = CodexRoster::rooted(root);
+        for _ in 0..3 {
+            let activity = roster.activity(codex()).expect("the home is readable");
+            assert_eq!(activity.active.len(), 1, "no newer output is required");
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn an_unknown_holder_identity_keeps_ownership_without_claiming_work() {
+        let (_kept, root) = home(&[(OPEN_THREAD, opened("only"))]);
+        let _held = hold(&root, OPEN_THREAD);
+        let mut roster = CodexRoster::rooted(root);
+        assert_eq!(roster.activity(codex()).expect("readable").active.len(), 1);
+        roster.identify = |_pid| None;
+        let activity = roster.activity(codex()).expect("the home is readable");
+        assert_eq!(activity.live.len(), 1);
+        assert!(activity.active.is_empty());
+        assert!(activity.processes.is_empty());
+        assert!(roster.bound.blocking_lock().is_empty());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_kernel_birth_uses_the_same_wall_epoch_as_the_structural_boundary() {
+        let owner = live_identity(std::process::id()).expect("the test process is live");
+        let born = owner_started_at(owner).expect("Windows publishes an absolute birth");
+        assert!(born <= WallMs::now());
+        let before = born
+            .as_millis()
+            .checked_sub(1)
+            .expect("the process started after the epoch");
+        assert!(
+            !TurnBoundary {
+                answering: true,
+                at: Some(WallMs::from_millis(before))
+            }
+            .answers_for(owner)
+        );
+        assert!(
+            TurnBoundary {
+                answering: true,
+                at: Some(WallMs::now())
+            }
+            .answers_for(owner)
+        );
+        assert_eq!(
+            owner_started_at(fixture_identity(1).expect("fixture identity")),
+            WallMs::from_iso8601("2026-08-29T00:00:00Z")
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn an_opaque_non_windows_birth_is_not_compared_with_wall_time() {
+        let owner = fixture_identity(1).expect("fixture identity");
+        assert_eq!(owner_started_at(owner), None);
+        assert!(
+            !TurnBoundary {
+                answering: true,
+                at: Some(WallMs::now())
+            }
+            .answers_for(owner)
         );
     }
 
@@ -923,6 +1144,169 @@ mod tests {
         assert_eq!(
             last_open_turn((closed("a") + &opened("b") + &aborted("b")).as_bytes()),
             Some(false)
+        );
+    }
+
+    #[test]
+    fn a_body_with_a_turn_named_type_is_not_a_boundary() {
+        let body = concat!(
+            "{\"timestamp\":\"2026-08-29T00:00:01Z\",\"type\":\"response_item\",",
+            "\"payload\":{\"type\":\"task_started\"}}\n"
+        );
+        assert_eq!(last_open_turn(body.as_bytes()), None);
+        let body = serde_json::to_string(&serde_json::json!({
+            "timestamp": TURN_AT,
+            "type": "response_item",
+            "payload": {"text": opened("quoted")}
+        }))
+        .expect("the synthetic message is JSON");
+        assert_eq!(
+            last_open_turn((closed("real") + &body).as_bytes()),
+            Some(false)
+        );
+        let nested = format!(
+            "{{\"timestamp\":\"{TURN_AT}\",\"type\":\"event_msg\",\"payload\":{{\"type\":\"other\",\"body\":{{\"type\":\"task_started\"}}}}}}\n"
+        );
+        assert_eq!(last_open_turn(nested.as_bytes()), None);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn an_unreadable_opening_time_cannot_reuse_an_earlier_current_turn() {
+        let bytes = opened("valid") + &opened_at("unknown", "unavailable");
+        let boundary =
+            last_turn_boundary(bytes.as_bytes()).expect("the last event is a turn start");
+        assert!(boundary.answering);
+        assert_eq!(boundary.at, None);
+        assert!(!boundary.answers_for(fixture_identity(1).expect("fixture owner")));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_boundary_prefix_split_between_observations_is_seen_once_complete() {
+        for split in [10, 80] {
+            let complete = opened("split");
+            let (_kept, root) = home(&[(OPEN_THREAD, complete[..split].to_owned())]);
+            let log = locate_log(&root, OPEN_THREAD).expect("the fixture log exists");
+            let owner = fixture_identity(1).expect("fixture owner");
+            let mut followed = HashMap::new();
+            assert!(!answering(&root, &mut followed, OPEN_THREAD, owner));
+            let mut file = OpenOptions::new()
+                .append(true)
+                .open(log)
+                .expect("append fixture");
+            file.write_all(
+                complete
+                    .as_bytes()
+                    .get(split..)
+                    .expect("fixture split is in range"),
+            )
+            .expect("finish the prefix");
+            assert!(answering(&root, &mut followed, OPEN_THREAD, owner));
+        }
+    }
+
+    #[test]
+    fn a_boundary_prefix_split_across_backward_chunks_is_preserved() {
+        let mut body = opened("long_tool");
+        // The tail has no structural boundary. Its length puts the first backward chunk inside the event prefix.
+        body.extend(std::iter::repeat_n('x', chunk_bytes() - 20));
+        let (_kept, root) = home(&[(OPEN_THREAD, body)]);
+        let log = locate_log(&root, OPEN_THREAD).expect("the fixture log exists");
+        let (_size, boundary) = last_boundary(&log).expect("the fixture is readable");
+        assert_eq!(
+            boundary,
+            Some(TurnBoundary {
+                answering: true,
+                at: WallMs::from_iso8601(TURN_AT)
+            })
+        );
+    }
+
+    fn nested_turn_record(padding: usize) -> (usize, String) {
+        let prefix = format!(
+            "{{\"timestamp\":\"{TURN_AT}\",\"type\":\"response_item\",\"payload\":{{\"embedded\":"
+        );
+        let body = format!(
+            "{prefix}{},\"padding\":\"{}\"}}}}\n",
+            opened("nested").trim_end(),
+            "x".repeat(padding)
+        );
+        (prefix.len(), body)
+    }
+
+    #[test]
+    fn a_nested_object_at_the_backward_chunk_start_is_not_a_turn() {
+        let (prefix, initial) = nested_turn_record(0);
+        let padding = chunk_bytes() - (initial.len() - prefix);
+        let (prefix, body) = nested_turn_record(padding);
+        assert_eq!(body.len() - chunk_bytes(), prefix);
+        let (_kept, root) = home(&[(OPEN_THREAD, body)]);
+        let log = locate_log(&root, OPEN_THREAD).expect("the fixture log exists");
+        assert_eq!(last_boundary(&log).expect("readable fixture").1, None);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_nested_object_at_the_follow_start_is_not_a_turn() {
+        let (prefix, body) = nested_turn_record(512);
+        let observed = prefix + MAX_BOUNDARY_PREFIX_BYTES;
+        let (_kept, root) = home(&[(OPEN_THREAD, body[..observed].to_owned())]);
+        let log = locate_log(&root, OPEN_THREAD).expect("the fixture log exists");
+        let owner = fixture_identity(1).expect("fixture owner");
+        let mut followed = HashMap::new();
+        assert!(!answering(&root, &mut followed, OPEN_THREAD, owner));
+        let mut file = OpenOptions::new()
+            .append(true)
+            .open(log)
+            .expect("append fixture");
+        file.write_all(
+            body.as_bytes()
+                .get(observed..)
+                .expect("fixture split is in range"),
+        )
+        .expect("finish the fixture");
+        assert!(!answering(&root, &mut followed, OPEN_THREAD, owner));
+    }
+
+    #[test]
+    fn a_top_level_boundary_exactly_at_the_range_start_is_kept() {
+        let prefix = chatter();
+        let mut body = prefix.clone() + &opened("real");
+        body.extend(std::iter::repeat_n(
+            'x',
+            chunk_bytes() - opened("real").len(),
+        ));
+        assert_eq!(body.len() - chunk_bytes(), prefix.len());
+        let length = body.len() as u64;
+        let (_kept, root) = home(&[(OPEN_THREAD, body)]);
+        let log = locate_log(&root, OPEN_THREAD).expect("the fixture log exists");
+        let expected = Some(TurnBoundary {
+            answering: true,
+            at: WallMs::from_iso8601(TURN_AT),
+        });
+        assert_eq!(last_boundary(&log).expect("readable fixture").1, expected);
+        assert_eq!(
+            boundary_in_range(&log, prefix.len() as u64, length),
+            expected
+        );
+    }
+
+    #[test]
+    fn the_boundary_prefix_reader_is_bounded_and_rejects_incomplete_event_names() {
+        let oversized = opened_at("opaque", &"x".repeat(MAX_BOUNDARY_PREFIX_BYTES));
+        assert_eq!(last_turn_boundary(oversized.as_bytes()), None);
+        let incomplete = format!(
+            "{{\"timestamp\":\"{TURN_AT}\",\"type\":\"event_msg\",\"payload\":{{\"type\":\"task_started\""
+        );
+        assert_eq!(last_turn_boundary(incomplete.as_bytes()), None);
+        assert_eq!(
+            last_turn_boundary(
+                opened("a")
+                    .replace("task_started", "task_started_other")
+                    .as_bytes()
+            ),
+            None
         );
     }
 

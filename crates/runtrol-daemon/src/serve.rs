@@ -65,6 +65,10 @@ use crate::dispatch::{
     prepare_provider_updates, refuse,
 };
 
+#[cfg(test)]
+#[path = "tests/structured_worktree.rs"]
+pub(crate) mod structured_worktree_tests;
+
 /// How many answered requests may be waiting to reach the one task that answers them.
 ///
 /// A bound rather than an unbounded queue, because an unbounded one is a way for a caller to make the daemon grow
@@ -2598,6 +2602,17 @@ async fn converse_inner(
                     continue;
                 }
             };
+            if let Err(message) = crate::isolated_workspace::refuse_unbound_worktree(
+                &composed,
+                claim.identity().workspace(),
+            )
+            .await
+            {
+                if write(&mut connection, &refuse(&message)).await.is_err() {
+                    return;
+                }
+                continue;
+            }
             let Some(provider_text) = requested_provider(&request) else {
                 continue;
             };

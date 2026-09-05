@@ -102,7 +102,17 @@ fn read_file(path: &AbsPath) -> Result<Option<super::File>, String> {
                 record.legacy = true;
             }
         }
-        FILE_SCHEMA => {
+        2 | FILE_SCHEMA => {
+            if file.schema == 2
+                && file.records.iter().any(|record| {
+                    record
+                        .terminal
+                        .as_ref()
+                        .is_some_and(|owner| owner.resume.is_some())
+                })
+            {
+                return Err("the older worktree schema cannot carry resumed ownership".to_owned());
+            }
             if file.records.iter().any(|r| r.revision == 0) {
                 return Err("invalid worktree ownership revision".to_owned());
             }
@@ -127,11 +137,48 @@ fn require_writable(file: Option<&super::File>) -> Result<(), String> {
 pub(super) fn check_writable(path: &AbsPath) -> Result<(), String> {
     let _held = lock(&path.as_std_path().with_extension("lock"))?;
     migration::publish(path)?;
+    if let Some(file) = read_file(path)?
+        && file.schema == 2
+    {
+        // Schema two writers use this same lock and reject a newer document before every RMW.
+        // Publishing the new schema first makes an old cleanup refuse rather than ignore a live resume.
+        write_file(path, &file.records)?;
+    }
     require_writable(read_file(path)?.as_ref())
 }
 
-pub(super) fn update(path: &AbsPath, mut changed: Record) -> Result<Vec<Record>, String> {
+pub(super) fn update(path: &AbsPath, changed: Record) -> Result<Vec<Record>, String> {
     let _held = lock(&path.as_std_path().with_extension("lock"))?;
+    update_locked(path, changed)
+}
+
+/// A pre-birth rollback runs off the reactor and outside terminal/gate locks. Unlike a new
+/// admission, it briefly waits for an unrelated row writer before leaving explicit recovery work.
+pub(super) fn rollback(path: &AbsPath, changed: Record) -> Result<Vec<Record>, String> {
+    let file = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(path.as_std_path().with_extension("lock"))
+        .map_err(|error| error.to_string())?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(250);
+    loop {
+        match file.try_lock() {
+            Ok(()) => break,
+            Err(std::fs::TryLockError::WouldBlock) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+            Err(error) => {
+                return Err(format!(
+                    "worktree cancellation is awaiting ownership recovery: {error}"
+                ));
+            }
+        }
+    }
+    update_locked(path, changed)
+}
+
+fn update_locked(path: &AbsPath, mut changed: Record) -> Result<Vec<Record>, String> {
     if data_path(path)? == path.as_std_path() {
         return Err("the worktree registry has not crossed its writer boundary".to_owned());
     }

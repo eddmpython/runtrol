@@ -6,13 +6,13 @@ pub(super) fn current_process() -> ProcessIdentity {
     runtrol_childproc::process_identity(std::process::id()).unwrap()
 }
 
-pub(super) struct ProcessScratch {
+pub(crate) struct ProcessScratch {
     child: Child,
-    pub(super) identity: ProcessIdentity,
+    pub(crate) identity: ProcessIdentity,
 }
 
 impl ProcessScratch {
-    pub(super) fn start(fixture: &Scratch) -> Self {
+    pub(crate) fn start(fixture: &Scratch) -> Self {
         Self::start_with_lock(fixture, false, false)
     }
 
@@ -67,7 +67,7 @@ impl ProcessScratch {
         fixture_process
     }
 
-    pub(super) fn stop(&mut self) {
+    pub(crate) fn stop(&mut self) {
         drop(self.child.stdin.take());
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         loop {

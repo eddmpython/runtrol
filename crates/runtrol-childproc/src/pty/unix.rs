@@ -206,6 +206,12 @@ impl Child {
         }
         Ok(())
     }
+
+    #[expect(
+        clippy::unused_self,
+        reason = "only ConPTY requires closing an undrained output pipe"
+    )]
+    pub(super) fn abandon_output(&mut self) {}
 }
 
 impl Drop for Child {

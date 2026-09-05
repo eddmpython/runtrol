@@ -31,6 +31,9 @@ transport or Studio navigation.
   and shared-state limits. [`terminal_surface/mod.rs`](../crates/runtrol-daemon/src/terminal_surface/mod.rs) binds hosted
   terminal admission to the Core hot-process ceiling and proves the complete-set memory bound. Viewers reuse that
   fan-out and add no payload ring of their own; control records are bounded separately.
+- A terminal that fails to initialize reports that failure. If its spawned process has not yet ended, the existing
+  terminal table still counts it, its native claim remains held, and the normal exit observer owns cleanup. Its
+  unavailable I/O cannot accept input or resize. Cleanup does not wait while holding the shared terminal table.
 - Runtime answers terminal capability and cursor-position queries once at the host. Viewers do not race to answer.
 - The host reads a burst whole: after a partial read it waits at most one millisecond for the rest, so a fast
   provider arrives as a few full chunks rather than hundreds of scraps and a healthy viewer never falls behind the
@@ -188,6 +191,8 @@ Documentation does not carry a second copy of those values.
 Fresh open needs `session.start`; native resume needs `session.resume`; listing and viewing need
 `session.output.read`; write and lifecycle mutations need the corresponding input or stop scope plus an unexpired
 control lease. Canonical root checks and provider capabilities are the same boundaries used by structured sessions.
+For a preserved Core-owned worker worktree, the [worktree controller](sessionDialogue.md#isolated-workers) binds
+native resume and subsequent view/input authority to its original approved project and exact filesystem identity.
 
 ## Live authority without a database hot path
 

@@ -80,6 +80,13 @@ and refactoring that no user can observe do not belong here.
 
 ### Fixed
 
+- A preserved worker conversation can reopen in its original isolated worktree after its process ends. Reopening
+  retains the original project's permissions and protects the worktree from cleanup while its new process is live.
+- Failed terminal startup keeps its process counted and prevents a duplicate conversation until that process ends,
+  without waiting for cleanup while holding up input to other terminals.
+- On Windows, a conversation resumed after an interrupted process no longer inherits that process's unfinished
+  working state.
+  A turn started by the current process remains working through silent tool calls until it ends or is interrupted.
 - A delayed input failure from a disconnected terminal view no longer closes its replacement. Uncertain input is
   never replayed, and later typing resumes after the exact terminal reconnects.
 - Renewing control of an attached terminal reuses its current root proof instead of repeating filesystem work in

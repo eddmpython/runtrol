@@ -47,7 +47,7 @@ pub(super) struct Child {
     /// The process id, for the caller's own bookkeeping.
     pid: u32,
     /// Our end of the child's output.
-    output: File,
+    output: Option<File>,
     /// Our end of the child's input.
     input: File,
 }
@@ -398,7 +398,7 @@ impl Child {
             console: AtomicIsize::new(console),
             process: process.hProcess,
             pid: process.dwProcessId,
-            output,
+            output: Some(output),
             input,
         })
     }
@@ -408,7 +408,11 @@ impl Child {
     }
 
     pub(super) fn reader(&self) -> Result<Box<dyn super::TerminalRead>, SpawnError> {
-        let file = self.output.try_clone().map_err(|error| SpawnError::Pty {
+        let output = self.output.as_ref().ok_or_else(|| SpawnError::Pty {
+            doing: "duplicating the terminal output",
+            detail: "the failed terminal's output was closed".to_owned(),
+        })?;
+        let file = output.try_clone().map_err(|error| SpawnError::Pty {
             doing: "duplicating the terminal output",
             detail: error.to_string(),
         })?;
@@ -479,6 +483,10 @@ impl Child {
         }
         Ok(())
     }
+
+    pub(super) fn abandon_output(&mut self) {
+        drop(self.output.take());
+    }
 }
 
 impl Child {
@@ -514,6 +522,9 @@ impl Drop for Child {
     fn drop(&mut self) {
         // A dropped terminal ends its child the way a closed window does. The console is closed first so a
         // client that exits on end of input goes quietly; whatever is still running is then terminated.
+        // A failed host may have no reader thread. Closing our unused pipe first avoids waiting for
+        // that nonexistent reader on Windows versions where ClosePseudoConsole is synchronous.
+        drop(self.output.take());
         self.close_console_once();
         // Reported nowhere on purpose: `Drop` has no error channel, and a process that already ended makes
         // this call fail by design.

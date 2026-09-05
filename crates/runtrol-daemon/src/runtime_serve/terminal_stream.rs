@@ -466,7 +466,8 @@ pub(super) async fn relay_terminal(
                     root_check = Some(tokio::spawn(check_terminal_roots(
                         composed.terminal_root_checks.clone(),
                         row,
-                        view.hosted.workspace.clone(),
+                        view.hosted.project_root().clone(),
+                        view.hosted.worktree().cloned(),
                         view.hosted.generation,
                     )));
                 }
@@ -614,6 +615,7 @@ async fn check_terminal_roots(
     permits: Arc<tokio::sync::Semaphore>,
     row: Arc<runtrol_store::IntegrationRow>,
     workspace: runtrol_provider::AbsPath,
+    binding: Option<crate::isolated_workspace::WorktreeBinding>,
     terminal_generation: u64,
 ) -> TerminalRootCheck {
     let stamp = (
@@ -623,6 +625,9 @@ async fn check_terminal_roots(
     );
     let checked = run_root_check(permits, move || {
         crate::runtime_terminal::validate_workspace_roots(&row, &workspace).is_ok()
+            && binding
+                .as_ref()
+                .is_none_or(|binding| binding.verify().is_ok())
     })
     .await;
     TerminalRootCheck {

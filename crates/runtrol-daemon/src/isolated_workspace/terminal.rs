@@ -18,9 +18,11 @@ pub(super) struct TerminalRecord {
     pub(super) ticket: SpawnTicket,
     root_identity: [u8; 24],
     store: Directory,
-    container: Directory,
-    directory: Option<Directory>,
-    process: Option<ProcessStamp>,
+    pub(super) container: Directory,
+    pub(super) directory: Option<Directory>,
+    pub(super) process: Option<ProcessStamp>,
+    #[serde(default)]
+    pub(super) resume: Option<super::resume::ResumeRecord>,
 }
 
 impl TerminalRecord {
@@ -42,10 +44,16 @@ impl TerminalRecord {
         if let Some(process) = self.process {
             process.validate()?;
         }
+        if let Some(resume) = &self.resume {
+            resume.validate()?;
+            if record.legacy || !matches!(record.state, State::Bound | State::PreservedDirty) {
+                return Err("an unavailable worktree has a resumed occupant".to_owned());
+            }
+        }
         Ok(())
     }
 
-    fn project(&self, record: &Record) -> VerifiedProject {
+    pub(super) fn project(&self, record: &Record) -> VerifiedProject {
         VerifiedProject {
             root: Directory {
                 path: record.project.clone(),
@@ -80,19 +88,24 @@ pub(crate) struct PreparedWorkspace {
     pub(crate) workspace: AbsPath,
     pub(crate) base_commit: Box<str>,
     pub(crate) workspace_identity: [u8; 24],
+    pub(crate) container_identity: [u8; 24],
 }
 
 impl PreparedWorkspace {
     fn from_record(record: &Record) -> Result<Self, String> {
-        let directory = record
+        let owner = record
             .terminal
             .as_ref()
-            .and_then(|owner| owner.directory.as_ref())
+            .ok_or("the prepared worktree has no owner")?;
+        let directory = owner
+            .directory
+            .as_ref()
             .ok_or("the prepared worktree has no captured directory identity")?;
         Ok(Self {
             workspace: record.workspace.clone(),
             base_commit: record.base_commit.clone(),
             workspace_identity: directory.identity,
+            container_identity: owner.container.identity,
         })
     }
 }
@@ -152,6 +165,7 @@ impl IsolatedWorkspaceController {
             container,
             directory: None,
             process: None,
+            resume: None,
         };
         self.records.push(Record {
             workspace_id: id.clone().into(),
@@ -334,7 +348,7 @@ impl IsolatedWorkspaceController {
         self.remove_terminal(ticket, &operation).await
     }
 
-    async fn remove_terminal(
+    pub(super) async fn remove_terminal(
         &mut self,
         ticket: &SpawnTicket,
         operation: &Operation<'_>,
@@ -344,6 +358,13 @@ impl IsolatedWorkspaceController {
             .terminal
             .as_ref()
             .ok_or("the terminal worktree owner disappeared")?;
+        if owned
+            .resume
+            .as_ref()
+            .is_some_and(super::resume::ResumeRecord::is_live)
+        {
+            return Err("the resumed worktree occupant is live or cannot be inspected".to_owned());
+        }
         if owned.process.is_some_and(ProcessStamp::is_live) {
             return Err("the owning terminal process is live or cannot be inspected".to_owned());
         }
@@ -409,7 +430,13 @@ impl IsolatedWorkspaceController {
         state: State,
         outcome: &str,
     ) -> Result<Response, String> {
-        self.terminal_record_mut(ticket)?.state = state;
+        let record = self.terminal_record_mut(ticket)?;
+        record.state = state;
+        if state == State::Released
+            && let Some(owned) = &mut record.terminal
+        {
+            owned.resume = None;
+        }
         self.save(&ticket.reservation_id())?;
         Ok(release_line(self.terminal_record(ticket)?, outcome))
     }
