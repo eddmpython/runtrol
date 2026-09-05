@@ -1,6 +1,6 @@
 //! Strict command words; message bodies never appear among them.
 
-use runtrol_courier::{CallId, Limits, ManagedSessionId, MessageId};
+use runtrol_courier::{CallId, IdError, Limits, ManagedSessionId, MessageId};
 
 use super::CourierFailure;
 
@@ -17,13 +17,22 @@ $OutputEncoding = [System.Text.UTF8Encoding]::new($false); [Console]::InputEncod
 PowerShell piping appends a newline. Use a raw UTF-8 input stream if the body must omit it.\n\
 A receipt confirms admission, not model understanding. An idle agent must explicitly wait to receive.";
 
+const IDENTIFIER_HELP: &str = "SESSION, MESSAGE, CALL, and ROOM must be canonical lowercase hyphenated UUIDv7 identifiers.\n\
+Copy target and received identifiers exactly from courier output; provider-native session IDs are not courier IDs.\n\
+Omit --message-id on tell, ask, reply, or room ask to generate a fresh outgoing message ID.\n\
+The positional reply MESSAGE is the received message_id, not the new outgoing ID.";
+
+pub(super) fn room_help() -> String {
+    format!("{IDENTIFIER_HELP}\n{}", super::rooms::help())
+}
+
 pub(super) fn help() -> String {
     let limits = Limits::INITIAL;
     format!(
         "{HELP}\n{}\n{}\nLimits: body {} UTF-8 bytes; mailbox {} envelopes / {} body bytes; \
         Runtime {} body bytes / {} active calls; default deadline {} seconds, maximum {} seconds; \
         forwarding {} hops / {} visited sessions.",
-        super::rooms::help(),
+        room_help(),
         super::spawn::HELP,
         limits.body_bytes,
         limits.mailbox_envelopes,
@@ -95,8 +104,14 @@ pub(super) fn wrong() -> CourierFailure {
     CourierFailure::Arguments(format!("invalid courier arguments\n{}", help()))
 }
 
-pub(super) fn identifier<T: std::str::FromStr>(text: Option<&str>) -> Result<T, CourierFailure> {
-    text.ok_or_else(wrong)?.parse().map_err(|_invalid| wrong())
+pub(super) fn identifier<T: std::str::FromStr<Err = IdError>>(
+    text: Option<&str>,
+) -> Result<T, CourierFailure> {
+    text.ok_or_else(wrong)?.parse().map_err(|invalid| {
+        CourierFailure::Arguments(format!(
+            "invalid courier identifier: {invalid}\n{IDENTIFIER_HELP}"
+        ))
+    })
 }
 
 pub(super) fn timeout(value: &str) -> Result<u64, CourierFailure> {
@@ -192,5 +207,129 @@ mod tests {
             parse(&["inbox".into()]).unwrap(),
             Command::Receive { timeout_ms: 0, .. }
         ));
+    }
+
+    #[test]
+    fn invalid_identifiers_explain_the_rule_without_echoing_input() {
+        let valid = "01901234-abcd-7abc-8abc-0123456789ab";
+        for (invalid, reason) in [
+            (
+                "01901234-abcd-4abc-8abc-0123456789ab",
+                "UUID version 4 where version 7 is required",
+            ),
+            (
+                "01901234-ABCD-7ABC-8ABC-0123456789AB",
+                "not the canonical lowercase hyphenated UUID spelling",
+            ),
+            (
+                "01901234abcd7abc8abc0123456789ab",
+                "not the canonical lowercase hyphenated UUID spelling",
+            ),
+            ("private-input-sentinel", "not a UUID"),
+        ] {
+            for arguments in [
+                vec!["tell", invalid],
+                vec!["ask", invalid],
+                vec!["reply", invalid],
+                vec!["cancel", invalid],
+                vec!["list", "--after", invalid],
+                vec!["inbox", "--from", invalid],
+                vec!["wait", "--from", invalid],
+                vec!["tell", valid, "--message-id", invalid],
+                vec!["ask", valid, "--message-id", invalid],
+                vec!["reply", valid, "--message-id", invalid],
+                vec!["room", "open", invalid],
+                vec!["room", "inspect", invalid],
+                vec!["room", "close", invalid],
+                vec!["room", "transfer", invalid, valid],
+                vec!["room", "transfer", valid, invalid],
+                vec!["room", "ask", invalid, valid],
+                vec!["room", "ask", valid, invalid],
+                vec!["room", "ask", valid, valid, "--message-id", invalid],
+            ] {
+                let error = parse(&arguments.into_iter().map(str::to_owned).collect::<Vec<_>>())
+                    .err()
+                    .expect("the noncanonical identifier must be refused")
+                    .to_string();
+                assert!(
+                    error.contains(reason),
+                    "the parse reason must be actionable"
+                );
+                assert!(error.contains("Omit --message-id"));
+                assert!(error.contains("reply MESSAGE"));
+                assert!(!error.contains(invalid), "an error must not echo its input");
+            }
+        }
+    }
+
+    #[test]
+    fn omitting_message_id_mints_an_outgoing_id_and_keeps_the_reply_target() {
+        let incoming = MessageId::now();
+        let target = incoming.to_string();
+        let mut minted = std::collections::BTreeSet::new();
+        for arguments in [
+            vec!["tell", target.as_str()],
+            vec!["ask", target.as_str()],
+            vec!["reply", target.as_str()],
+            vec!["room", "ask", target.as_str(), target.as_str()],
+        ] {
+            let words: Vec<_> = arguments.into_iter().map(str::to_owned).collect();
+            for _ in 0..2 {
+                let outgoing = match parse(&words).expect("an omitted outgoing id is supported") {
+                    Command::Send { message, .. }
+                    | Command::Room(super::super::rooms::RoomCommand::Ask { message, .. }) => {
+                        message
+                    }
+                    Command::Reply { message, outgoing } => {
+                        assert_eq!(message, incoming);
+                        outgoing
+                    }
+                    _ => panic!("the command must send an envelope"),
+                };
+                assert_ne!(outgoing, incoming);
+                assert!(
+                    minted.insert(outgoing),
+                    "each invocation must mint a fresh id"
+                );
+            }
+        }
+        let explicit = MessageId::now();
+        let words = ["reply", &target, "--message-id", &explicit.to_string()].map(str::to_owned);
+        let Command::Reply { message, outgoing } =
+            parse(&words).expect("an explicit id is supported")
+        else {
+            panic!("the command must be a reply");
+        };
+        assert_eq!(message, incoming);
+        assert_eq!(outgoing, explicit);
+    }
+
+    #[tokio::test]
+    async fn command_help_and_guides_share_one_identifier_reference() {
+        for arguments in [
+            vec!["--help"],
+            vec!["--guide"],
+            vec!["room", "--help"],
+            vec!["room", "ask", "--help"],
+        ] {
+            let output = super::super::execute(arguments.into_iter().map(Into::into).collect())
+                .await
+                .expect("help is available without a managed process");
+            assert!(output.success);
+            assert_eq!(output.stdout.matches(IDENTIFIER_HELP).count(), 1);
+        }
+        let valid = "01901234-abcd-7abc-8abc-0123456789ab";
+        let invalid = "01901234-abcd-4abc-8abc-0123456789ab";
+        for (source, message) in [(invalid, valid), (valid, invalid)] {
+            let arguments = ["--guide", "--from", source, "--message-id", message];
+            let error = super::super::execute(arguments.into_iter().map(Into::into).collect())
+                .await
+                .err()
+                .expect("an initial guide must refuse a noncanonical identifier")
+                .to_string();
+            assert!(error.contains("UUID version 4 where version 7 is required"));
+            assert!(error.contains(IDENTIFIER_HELP));
+            assert!(!error.contains(invalid), "an error must not echo its input");
+        }
     }
 }

@@ -26,7 +26,9 @@ writes. The courier endpoint itself has no operation that can enable dialogue.
 Run the executable inherited as `RUNTROL_COURIER_EXE` with `courier --help` for the command syntax. The parser and
 help text are owned by [`words.rs`](../crates/runtrol-cli/src/courier/words.rs). Bodies come from stdin. Command
 arguments contain structural identifiers and deadlines only. Stdout contains one JSON answer; a refusal or an
-unanswered wait exits unsuccessfully. Calling `courier` without a verb only checks admission.
+unanswered wait exits unsuccessfully. The same reference explains identifier format and when an outgoing message ID
+is generated. Identifier errors describe the rejected format without echoing the supplied value. Calling `courier`
+without a verb only checks admission.
 
 For a PowerShell shell tool, follow the invocation-local encoding setup in `courier --help` before piping a body.
 Windows PowerShell can prepend a BOM when its console input encoding still has a preamble, even if output encoding

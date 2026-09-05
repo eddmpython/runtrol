@@ -124,7 +124,7 @@ pub async fn execute(words: Vec<OsString>) -> Result<CommandOutput, CourierFailu
         && words.last().is_some_and(|word| word == "--help");
     if room_help {
         return Ok(CommandOutput {
-            stdout: super::rooms::help(),
+            stdout: super::words::room_help(),
             success: true,
         });
     }
