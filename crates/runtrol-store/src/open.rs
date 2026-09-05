@@ -178,8 +178,7 @@ impl Store {
 
         let table = match read.open_table(META) {
             Ok(table) => table,
-            // A fresh file has no tables at all. That is the one shape of this error that means "new", and it
-            // is matched narrowly so a genuinely broken file is still reported.
+            // Table absence is the one narrow error that means this file is new.
             Err(redb::TableError::TableDoesNotExist(_)) => return Ok(None),
             Err(error) => {
                 return Err(StoreError::Engine {
@@ -256,35 +255,95 @@ impl Store {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
     use super::*;
 
     /// A scratch directory that cleans up after itself.
     struct Scratch {
         root: AbsPath,
+        base: PathBuf,
+        marker: String,
     }
 
     impl Scratch {
         fn make(name: &str) -> Self {
-            let base = std::env::temp_dir().join(format!("runtrol-store-{name}"));
-            if base.exists() {
-                std::fs::remove_dir_all(&base).expect("clear the previous run");
-            }
-            std::fs::create_dir_all(&base).expect("create the scratch directory");
-            Self {
-                root: AbsPath::canonicalize(base.to_str().expect("temp dir is UTF-8"))
-                    .expect("canonicalize"),
-            }
+            static NEXT: AtomicU64 = AtomicU64::new(0);
+            #[cfg(windows)]
+            let shared = PathBuf::from(
+                std::env::var_os("LOCALAPPDATA").expect("Windows exposes local app data"),
+            )
+            .join("dev-workspace");
+            #[cfg(not(windows))]
+            let shared = PathBuf::from(std::env::var_os("HOME").expect("the user home is set"))
+                .join(".local/share/dev-workspace");
+            let base = std::env::var_os("CARGO_TARGET_DIR").map_or_else(
+                || shared.clone(),
+                |target| {
+                    PathBuf::from(target)
+                        .parent()
+                        .expect("the shared Cargo target has a parent")
+                        .to_path_buf()
+                },
+            );
+            assert!(
+                base.is_absolute() && base.starts_with(&shared),
+                "the fixture belongs beneath the shared execution root"
+            );
+            std::fs::create_dir_all(&base).expect("the shared target parent exists");
+            let base = std::fs::canonicalize(base).expect("the fixture base resolves");
+            let nonce = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("the fixture clock follows the epoch")
+                .as_nanos();
+            let marker = format!(
+                "store-open-{}-{nonce}-{}-{name}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            );
+            let root = base.join(&marker);
+            std::fs::create_dir(&root).expect("the fixture owns a new directory");
+            let scratch = Self {
+                root: AbsPath::canonicalize(root.to_str().expect("the fixture path is UTF-8"))
+                    .expect("the fixture resolves"),
+                base,
+                marker,
+            };
+            std::fs::write(
+                scratch.root.as_std_path().join("fixture-owner"),
+                scratch.marker.as_bytes(),
+            )
+            .expect("the fixture records its owner");
+            scratch
         }
 
         fn db_path(&self) -> AbsPath {
             self.root.join("runtrol.redb").expect("valid file name")
         }
+
+        fn cleanup(&self) -> std::io::Result<()> {
+            let root = std::fs::canonicalize(self.root.as_std_path())?;
+            if root.parent() != Some(self.base.as_path())
+                || std::fs::read(root.join("fixture-owner"))? != self.marker.as_bytes()
+            {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "the fixture no longer has its exact parent and owner marker",
+                ));
+            }
+            std::fs::remove_dir_all(root)
+        }
     }
 
     impl Drop for Scratch {
         fn drop(&mut self) {
-            if let Err(error) = std::fs::remove_dir_all(self.root.as_std_path()) {
-                eprintln!("could not clean up {}: {error}", self.root);
+            if let Err(error) = self.cleanup() {
+                if std::thread::panicking() {
+                    eprintln!("could not clean up {}: {error}", self.root);
+                } else {
+                    panic!("could not clean up {}: {error}", self.root);
+                }
             }
         }
     }
@@ -443,11 +502,9 @@ mod tests {
         ));
         let second =
             Store::open(&scratch.db_path()).expect("the successor opens the released file");
-        assert!(
-            second
-                .read_version()
-                .expect("the successor reads")
-                .is_some()
+        assert_eq!(
+            second.read_version().expect("the successor reads"),
+            Some(SCHEMA_VERSION)
         );
         drop(first);
         drop(second);
