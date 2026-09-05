@@ -1,9 +1,10 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, rename, writeFile } from "node:fs/promises";
 import { monitorEventLoopDelay } from "node:perf_hooks";
 import path from "node:path";
 
 import * as vscode from "vscode";
 
+import { HOST_DEADLINE_ENV, hostDeadline, readJourneyStep } from "../../tooling/courierHostLifetime.mjs";
 import type { RuntrolExtensionApi } from "../extension";
 import type { JourneyInputTiming } from "../runtimeTerminal";
 import { extensionUnderTest } from "./extensionUnderTest.test";
@@ -56,6 +57,7 @@ export async function run(): Promise<void> {
 }
 
 async function journey(coordination: string, role: string): Promise<void> {
+  const deadlineAtMs = hostDeadline(process.env[HOST_DEADLINE_ENV]);
   const extension = extensionUnderTest<RuntrolExtensionApi>();
   const api = extension.isActive ? extension.exports : await extension.activate();
   await within(api.ready, DEADLINE_MS, "extension readiness");
@@ -110,7 +112,7 @@ async function journey(coordination: string, role: string): Promise<void> {
     running = null;
     inputSampling = null;
     sinceMs = Date.now();
-    const step = await readPublished<Step>(coordination, `${role}-step-${index}.json`, DEADLINE_MS * 5);
+    const step = await readJourneyStep<Step>(coordination, `${role}-step-${index}.json`, DEADLINE_MS * 5, deadlineAtMs);
     if (step.kind === "done") break;
     running = step.kind;
     sinceMs = Date.now();
@@ -316,22 +318,6 @@ async function publish(coordination: string, name: string, value: unknown): Prom
   const temporary = `${finalPath}.${process.pid}.tmp`;
   await writeFile(temporary, JSON.stringify(value), "utf8");
   await rename(temporary, finalPath);
-}
-
-async function readPublished<T = Record<string, unknown>>(coordination: string, name: string, deadlineMs: number): Promise<T> {
-  const file = path.join(coordination, name);
-  const deadline = Date.now() + deadlineMs;
-  while (Date.now() < deadline) {
-    try {
-      const value: unknown = JSON.parse(await readFile(file, "utf8"));
-      if (value && typeof value === "object" && !Array.isArray(value)) return value as T;
-      throw new Error(`${name} is not a JSON object`);
-    } catch (error) {
-      if (!(error instanceof SyntaxError) && (error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    }
-    await delay(25);
-  }
-  throw new Error(`${name} did not arrive within ${deadlineMs} ms`);
 }
 
 function within<T>(work: Promise<T>, milliseconds: number, label: string): Promise<T> {
