@@ -2,21 +2,25 @@
 
 use std::collections::{BTreeMap, VecDeque};
 
-use crate::envelope::{CallEnvelope, CallKind, PROTOCOL_VERSION};
+use crate::envelope::{BoundedSessionSet, CallEnvelope, CallKind, PROTOCOL_VERSION, VisitedBound};
 use crate::id::{CallId, ManagedSessionId, MessageId};
 use crate::limits::{Limits, UnixMillis};
 use crate::receipt::{DeliveryState, Receipt, Refusal};
+
+mod commands;
 
 #[cfg(test)]
 mod tests;
 
 /// One ask waiting for its reply.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 struct ActiveCall {
     ask: MessageId,
     source: ManagedSessionId,
     target: ManagedSessionId,
     deadline: UnixMillis,
+    hop_count: u8,
+    visited: BoundedSessionSet,
     stage: CallStage,
 }
 
@@ -155,14 +159,16 @@ impl Courier {
             self.retire(envelope.message_id, DeliveryState::Cancelled);
         }
 
-        let ended: Vec<(CallId, ActiveCall)> = self
+        let ended: Vec<CallId> = self
             .calls
             .iter()
             .filter(|(_, call)| call.source == session || call.target == session)
-            .map(|(id, call)| (*id, *call))
+            .map(|(id, _call)| *id)
             .collect();
-        for (id, call) in ended {
-            self.calls.remove(&id);
+        for id in ended {
+            let Some(call) = self.calls.remove(&id) else {
+                continue;
+            };
             released.calls = released.calls.saturating_add(1);
             if call.stage == CallStage::Queued
                 && call.source == session
@@ -203,16 +209,36 @@ impl Courier {
                 self.route(envelope, true)
             }
             CallKind::Reply => self.reply(envelope, now),
-            CallKind::Cancel => self.cancel(envelope),
+            CallKind::Cancel => self.cancel(envelope, now),
         }
     }
 
     /// Hand `session` its oldest unexpired envelope, once. Mail that expired while waiting is dropped first.
     pub fn receive(&mut self, session: ManagedSessionId, now: UnixMillis) -> Option<CallEnvelope> {
+        self.receive_matching(session, None, None, now)
+    }
+
+    /// Consume the oldest matching envelope. A call filter receives only that call's reply; unrelated mail
+    /// stays in its original order and keeps its byte charge. The caller must authorize the session first.
+    pub fn receive_matching(
+        &mut self,
+        session: ManagedSessionId,
+        source: Option<ManagedSessionId>,
+        call: Option<crate::CallRef>,
+        now: UnixMillis,
+    ) -> Option<CallEnvelope> {
         let mut swept = Swept::default();
         self.expire_waiting(session, now, &mut swept);
         let mailbox = self.mailboxes.get_mut(&session)?;
-        let envelope = mailbox.queue.pop_front()?;
+        let index = mailbox.queue.iter().position(|envelope| {
+            source.is_none_or(|source| envelope.source == source)
+                && call.is_none_or(|call| {
+                    envelope.call_id == call.call_id
+                        && envelope.reply_to == Some(call.ask)
+                        && envelope.kind == CallKind::Reply
+                })
+        })?;
+        let envelope = mailbox.queue.remove(index)?;
         mailbox.bytes = mailbox.bytes.saturating_sub(envelope.body.len());
         self.charged_bytes = self.charged_bytes.saturating_sub(envelope.body.len());
         match envelope.kind {
@@ -229,7 +255,9 @@ impl Courier {
                 _ => self.retire(envelope.message_id, DeliveryState::Received),
             },
             CallKind::Reply => {
-                self.calls.remove(&envelope.call_id);
+                if self.matches_call(&envelope) {
+                    self.calls.remove(&envelope.call_id);
+                }
                 self.retire(envelope.message_id, DeliveryState::Received);
                 if let Some(ask) = envelope.reply_to {
                     self.retire(ask, DeliveryState::Replied);
@@ -246,14 +274,16 @@ impl Courier {
         for session in sessions {
             self.expire_waiting(session, now, &mut swept);
         }
-        let expired: Vec<(CallId, ActiveCall)> = self
+        let expired: Vec<CallId> = self
             .calls
             .iter()
             .filter(|(_, call)| call.deadline <= now)
-            .map(|(id, call)| (*id, *call))
+            .map(|(id, _call)| *id)
             .collect();
-        for (id, call) in expired {
-            self.calls.remove(&id);
+        for id in expired {
+            let Some(call) = self.calls.remove(&id) else {
+                continue;
+            };
             self.retire(call.ask, DeliveryState::Expired);
             swept.calls.push(id);
         }
@@ -330,6 +360,12 @@ impl Courier {
         if envelope.visited.contains(envelope.target) {
             return Err(Refusal::Cycle(envelope.target));
         }
+        if envelope.visited.len() > self.limits.visited_sessions {
+            return Err(Refusal::VisitedBound(VisitedBound {
+                len: envelope.visited.len(),
+                ceiling: self.limits.visited_sessions,
+            }));
+        }
         let visited = envelope
             .visited
             .with(envelope.source, self.limits.visited_sessions)?;
@@ -347,6 +383,8 @@ impl Courier {
                     source: delivered.source,
                     target: delivered.target,
                     deadline: delivered.deadline,
+                    hop_count: delivered.hop_count,
+                    visited: delivered.visited.clone(),
                     stage: CallStage::Queued,
                 },
             );
@@ -380,9 +418,11 @@ impl Courier {
             CallStage::Received => {}
         }
         self.room_for(envelope.target, envelope.body.len(), Freed::default())?;
-        // A reply cannot outlive the call it answers.
+        // A reply cannot outlive its call or reset the chain the target received.
         let delivered = CallEnvelope {
             deadline: envelope.deadline.min(call.deadline),
+            hop_count: call.hop_count,
+            visited: call.visited,
             ..envelope
         };
         if let Some(open) = self.calls.get_mut(&delivered.call_id) {
@@ -394,11 +434,14 @@ impl Courier {
 
     /// The asker withdrawing its ask: an unread ask leaves the target's mailbox, the call ends, and the target is
     /// told either way.
-    fn cancel(&mut self, envelope: CallEnvelope) -> Result<Receipt, Refusal> {
+    fn cancel(&mut self, envelope: CallEnvelope, now: UnixMillis) -> Result<Receipt, Refusal> {
         let answers = envelope
             .reply_to
             .ok_or(Refusal::MissingReplyTo(CallKind::Cancel))?;
         let call = self.call_named(&envelope, answers)?;
+        if call.deadline <= now {
+            return Err(Refusal::CallExpired(envelope.call_id));
+        }
         if call.source != envelope.source {
             return Err(Refusal::WrongSource {
                 expected: call.source,
@@ -426,7 +469,11 @@ impl Courier {
         }
         self.calls.remove(&envelope.call_id);
         self.retire(call.ask, DeliveryState::Cancelled);
-        Ok(self.enqueue(envelope))
+        Ok(self.enqueue(CallEnvelope {
+            hop_count: call.hop_count,
+            visited: call.visited,
+            ..envelope
+        }))
     }
 
     fn call_named(
@@ -444,7 +491,25 @@ impl Courier {
                 offered: answers,
             });
         }
-        Ok(*call)
+        Ok(call.clone())
+    }
+
+    fn matches_call(&self, envelope: &CallEnvelope) -> bool {
+        self.calls
+            .get(&envelope.call_id)
+            .is_some_and(|call| match envelope.kind {
+                CallKind::Ask => {
+                    call.ask == envelope.message_id
+                        && call.source == envelope.source
+                        && call.target == envelope.target
+                }
+                CallKind::Reply => {
+                    envelope.reply_to == Some(call.ask)
+                        && call.target == envelope.source
+                        && call.source == envelope.target
+                }
+                CallKind::Tell | CallKind::Cancel => false,
+            })
     }
 
     fn room_for(
@@ -547,7 +612,9 @@ impl Courier {
             self.retire(envelope.message_id, DeliveryState::Expired);
             match envelope.kind {
                 CallKind::Ask | CallKind::Reply => {
-                    if self.calls.remove(&envelope.call_id).is_some() {
+                    if self.matches_call(&envelope)
+                        && self.calls.remove(&envelope.call_id).is_some()
+                    {
                         swept.calls.push(envelope.call_id);
                     }
                     if let Some(ask) = envelope.reply_to {

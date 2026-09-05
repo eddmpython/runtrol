@@ -462,12 +462,15 @@ fn endpoint_past_a_draining_own(
 /// end. A refusal is a real answer and prints too, with a failing code; a process that is not a managed
 /// session cannot ask and says why on standard error.
 fn couriering() -> impl FnOnce(&tokio::runtime::Runtime) -> ExitCode {
-    |runtime| match runtime.block_on(runtrol_cli::courier()) {
-        Ok(admission) => {
-            say(&format!("courier: {}", admission.word()));
-            match admission {
-                runtrol_cli::Admission::Welcomed => ExitCode::SUCCESS,
-                runtrol_cli::Admission::Refused => ExitCode::FAILURE,
+    |runtime| match runtime.block_on(runtrol_cli::courier::execute(
+        std::env::args_os().skip(2).collect(),
+    )) {
+        Ok(output) => {
+            say(&output.stdout);
+            if output.success {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::FAILURE
             }
         }
         Err(error) => {

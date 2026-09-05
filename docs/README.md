@@ -14,6 +14,7 @@ the product remains outside this index.
 | [providerDiscovery.md](providerDiscovery.md) | lazy executable probes, binary-identity cache, required and optional flags, honest model catalogues, and drift boundaries |
 | [coreRuntime.md](coreRuntime.md) | thin daemon boundary, runtime admission, memory and CPU budgets, bounded replay, cursor gaps, process containment, and metadata-only storage |
 | [terminalSurface.md](terminalSurface.md) | one provider-owned TUI, live capture ladder, bounded multi-view transport, exact generation continuity, input authority, and latency evidence |
+| [sessionDialogue.md](sessionDialogue.md) | process-scoped opaque courier commands, exact reply correlation, bounded waits, cancellation, and no-residue verification |
 | [runtimeProtocol.md](runtimeProtocol.md) | public Runtime transport, identity, methods, scopes, mutations, streams, errors, and compatibility |
 | [runtimeIntegration.md](runtimeIntegration.md) | Rust, TypeScript, and Python SDK adoption, enrollment, exact-generation terminal continuity, least privilege, recovery, and credentials |
 | [runtimeSecurity.md](runtimeSecurity.md) | public endpoint trust layers, data ownership, authorization, hostile provider input, hosted companions, and incident response |

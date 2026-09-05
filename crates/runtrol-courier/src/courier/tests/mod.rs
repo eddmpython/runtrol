@@ -1,6 +1,9 @@
 //! Mutation tests: every ceiling and every rule is reached by an envelope that breaks it, and a refused
 //! envelope leaves the courier exactly as it was.
 
+mod commands;
+mod lifetime;
+
 use super::*;
 use crate::body::BoundedUtf8;
 use crate::envelope::VisitedBound;

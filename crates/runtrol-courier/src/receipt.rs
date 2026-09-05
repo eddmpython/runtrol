@@ -7,7 +7,8 @@ use crate::limits::UnixMillis;
 /// Where one message is in its mechanical life.
 ///
 /// None of these means the model read, understood, obeyed, completed, or agreed with the body.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum DeliveryState {
     /// Admitted to the target's mailbox.
     Accepted,
@@ -22,7 +23,7 @@ pub enum DeliveryState {
 }
 
 /// What `send` hands back: the message was admitted to the target's mailbox, and nothing more.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Receipt {
     /// The message that was admitted.
     pub message_id: MessageId,

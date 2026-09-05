@@ -5,6 +5,8 @@
 //! Windows with a real job object, which is where the product and its gates run.
 
 use base64ct::{Base64UrlUnpadded, Encoding as _};
+
+mod commands;
 use runtrol_childproc::Containment;
 use runtrol_courier::env::COURIER_TOKEN_ENV;
 use runtrol_courier::wire::Hello;

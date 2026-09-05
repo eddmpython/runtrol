@@ -1,8 +1,8 @@
-//! What crosses a courier connection: the hello that names a session, and the answer to it.
+//! Process-scoped admission and one bounded command per connection.
 //!
 //! Frames are the Runtime's own length-prefixed frames; what is inside them is JSON of the types here. A
-//! connection speaks exactly one hello first. Everything after a welcome belongs to the stamps that add the
-//! courier's verbs; a frame the Runtime does not know closes the connection.
+//! connection sends one invocation carrying a hello and an optional command. Welcome proves admission; the
+//! following command answer contains a receipt or consumed envelope. Unknown input closes the connection.
 
 use core::fmt;
 
@@ -11,11 +11,17 @@ use serde::{Deserialize, Serialize};
 use crate::envelope::PROTOCOL_VERSION;
 use crate::id::ManagedSessionId;
 
+mod commands;
+pub use commands::{
+    Answer, COMMAND_SLOTS, Invocation, Request, SESSION_PAGE, SESSION_WAIT_SLOTS, Session,
+    WAIT_SLOTS,
+};
+
 /// The largest frame the courier reads into a value.
 ///
-/// A body is at most 16 KiB and the envelope around it is small, so anything larger is not a courier frame.
+/// JSON may expand each body byte into six ASCII escape bytes. Reserve that worst case plus the envelope.
 /// The transport checks this ceiling against the length prefix before allocating or reading the payload.
-pub const MAX_FRAME_BYTES: usize = 64 * 1024;
+pub const MAX_FRAME_BYTES: usize = crate::Limits::INITIAL.body_bytes * 6 + 4096;
 
 /// The first frame on a connection: which managed session speaks, proved by the token it was born with.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]

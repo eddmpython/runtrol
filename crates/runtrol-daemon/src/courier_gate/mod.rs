@@ -20,6 +20,7 @@ use runtrol_courier::{Courier, Limits, ManagedSessionId, PROTOCOL_VERSION};
 use runtrol_provider::{ProcessIdentity, TerminalId};
 use zeroize::Zeroizing;
 
+mod commands;
 pub(crate) mod serve;
 
 #[cfg(test)]
@@ -29,6 +30,7 @@ mod tests;
 struct Registered {
     token: Zeroizing<[u8; TOKEN_BYTES]>,
     root: Option<ProcessIdentity>,
+    waits: std::sync::Arc<tokio::sync::Semaphore>,
 }
 
 /// A token and the environment for a process about to launch, minted without touching any shared state.
@@ -55,6 +57,7 @@ pub(crate) struct CourierGate {
     /// Where this generation's courier listens.
     endpoint: String,
     state: tokio::sync::Mutex<GateState>,
+    changed: tokio::sync::Notify,
 }
 
 /// Session authority and mailbox lifetime change together under one admission lock.
@@ -125,6 +128,7 @@ impl CourierGate {
                 sessions: BTreeMap::new(),
                 courier: Courier::new(Limits::INITIAL),
             }),
+            changed: tokio::sync::Notify::new(),
         }
     }
 
@@ -179,9 +183,13 @@ impl CourierGate {
             Registered {
                 token: minted.token,
                 root,
+                waits: std::sync::Arc::new(tokio::sync::Semaphore::new(
+                    runtrol_courier::wire::SESSION_WAIT_SLOTS,
+                )),
             },
         );
         state.courier.session_started(session);
+        self.changed.notify_waiters();
         Ok(started)
     }
 
@@ -194,6 +202,7 @@ impl CourierGate {
         let known = state.sessions.remove(&session).is_some();
         if known {
             state.courier.session_ended(session);
+            self.changed.notify_waiters();
         }
     }
 

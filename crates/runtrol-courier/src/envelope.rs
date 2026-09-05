@@ -8,7 +8,8 @@ use crate::limits::UnixMillis;
 pub const PROTOCOL_VERSION: u16 = 1;
 
 /// The routing intent a caller declares. It is never inferred from the body.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum CallKind {
     /// One-way. Delivery is the whole contract.
     Tell,
@@ -21,9 +22,23 @@ pub enum CallKind {
 }
 
 /// The sessions a message has already passed through, oldest first, without repeats and under a ceiling.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
+#[serde(transparent)]
 pub struct BoundedSessionSet {
     sessions: Vec<ManagedSessionId>,
+}
+
+impl<'de> serde::Deserialize<'de> for BoundedSessionSet {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let sessions = Vec::<ManagedSessionId>::deserialize(deserializer)?;
+        let mut visited = Self::new();
+        for session in sessions {
+            visited = visited
+                .with(session, crate::Limits::INITIAL.visited_sessions)
+                .map_err(serde::de::Error::custom)?;
+        }
+        Ok(visited)
+    }
 }
 
 /// More visits than the ceiling allows.
@@ -96,7 +111,8 @@ impl BoundedSessionSet {
 /// The fields are the wire layout. A caller builds an envelope through the constructors below, which is also
 /// what the courier command does; the courier validates every field on admission and stamps the hop count and
 /// the visited set on delivery, so a message that continues a chain carries the chain with it.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CallEnvelope {
     /// The layout version. Must equal [`PROTOCOL_VERSION`].
     pub protocol_version: u16,

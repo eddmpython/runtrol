@@ -1,13 +1,15 @@
 //! The courier command: a managed session's own line to the dialogue endpoint.
 //!
-//! For now it does one thing, and it is the thing every later verb stands on: it proves the connection is
-//! admitted. It reads the four values the Runtime gave this process at birth, connects to the endpoint, says
-//! hello as its session, and reports what the Runtime answered. A process the Runtime did not start as a managed
-//! session has none of those values and cannot even ask. The verbs (list, tell, ask) arrive in later stamps.
+//! Process birth values prove admission. Command words declare the operation, stdin supplies a bounded opaque
+//! body, and stdout receives the mechanical answer. An ask owns one connection through delivery or cancellation.
 
 use runtrol_courier::ManagedSessionId;
 use runtrol_courier::env::{COURIER_ENDPOINT_ENV, COURIER_TOKEN_ENV, MANAGED_SESSION_ENV};
 use runtrol_courier::wire::{Hello, HelloAnswer, MAX_FRAME_BYTES};
+
+mod commands;
+mod words;
+pub use commands::{CommandOutput, execute};
 
 /// What the courier connection came back with.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -47,6 +49,24 @@ pub enum CourierFailure {
     /// The answer was not one this build understands.
     #[error("the courier endpoint's answer was not one this build understands")]
     Unintelligible,
+    /// The command line did not describe a supported operation.
+    #[error("{0}")]
+    Arguments(String),
+    /// The standard input or interrupt handler failed.
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    /// The caller supplied more body bytes than the courier permits.
+    #[error(transparent)]
+    Body(#[from] runtrol_courier::BodyTooLarge),
+    /// A body must be UTF-8.
+    #[error("courier standard input is not UTF-8")]
+    Utf8,
+    /// The Runtime did not finish the bounded exchange.
+    #[error("the courier connection exceeded its deadline")]
+    Timeout,
+    /// The user cancelled the pending command.
+    #[error("courier command cancelled")]
+    Interrupted,
 }
 
 fn birth_value(name: &'static str) -> Result<String, CourierFailure> {

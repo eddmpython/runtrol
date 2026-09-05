@@ -1,14 +1,16 @@
 //! The ceilings, once.
 //!
-//! `mainPlan/session-fabric` fixes these as development ceilings and requires that they live in executable code
-//! exactly once. This is that place. Every check in the crate reads the table it was handed, so a test can shrink
+//! Development ceilings live in executable code exactly once. Every check in the crate reads the table it was handed, so a test can shrink
 //! a ceiling to reach an overflow with a few bytes, and a Runtime runs exactly the table it was built with.
 
 use core::fmt;
 
 /// A moment on the Unix clock, in milliseconds. The courier never reads a clock; every operation is handed the
 /// moment it happens at, which is what makes expiry a fact a test can state instead of a race it has to win.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
+#[serde(transparent)]
 pub struct UnixMillis(pub u64);
 
 impl UnixMillis {

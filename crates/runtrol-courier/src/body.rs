@@ -75,6 +75,19 @@ impl fmt::Debug for BoundedUtf8 {
     }
 }
 
+impl serde::Serialize for BoundedUtf8 {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.text)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for BoundedUtf8 {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        Self::new(text, crate::Limits::INITIAL.body_bytes).map_err(serde::de::Error::custom)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

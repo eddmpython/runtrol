@@ -4,10 +4,10 @@
 //! mailbox or refuses it, hands it over exactly once when the target asks, and correlates one reply to one ask.
 //! It reads the envelope's framing and nothing else: the body is bytes it charges for, carries, and forgets.
 //!
-//! What lives here is the mechanical core the `mainPlan/session-fabric` design fixes: the identifiers, the
+//! What lives here is the mechanical dialogue core: the identifiers, the
 //! envelope, the delivery states, the ceilings, and the accounting. What does not live here, by construction: a
 //! pipe, a clock, a process, a provider name, or any reading of what a body means. The Runtime wires this core to
-//! its local named pipe and its managed process tree in the stamps that follow.
+//! its local named pipe and its managed process tree.
 
 mod body;
 mod courier;
@@ -21,6 +21,6 @@ pub mod wire;
 pub use body::{BodyTooLarge, BoundedUtf8};
 pub use courier::{Courier, Released, Swept};
 pub use envelope::{BoundedSessionSet, CallEnvelope, CallKind, PROTOCOL_VERSION, VisitedBound};
-pub use id::{CallId, IdError, ManagedSessionId, MessageId, RoomId};
+pub use id::{CallId, CallRef, IdError, ManagedSessionId, MessageId, RoomId};
 pub use limits::{Limits, UnixMillis};
 pub use receipt::{DeliveryState, Receipt, Refusal};

@@ -10,7 +10,9 @@ use std::time::Duration;
 
 use runtrol_childproc::Containment;
 use runtrol_courier::ManagedSessionId;
-use runtrol_courier::wire::{Hello, HelloAnswer, MAX_FRAME_BYTES};
+use runtrol_courier::wire::{
+    Answer, COMMAND_SLOTS, HelloAnswer, Invocation, MAX_FRAME_BYTES, Request, WAIT_SLOTS,
+};
 use runtrol_ipc::transport::PeerProcess;
 use runtrol_ipc::{Connection, Listener, TransportError};
 use runtrol_provider::ProcessIdentity;
@@ -35,7 +37,19 @@ pub(crate) async fn serve(
     hello_wait: Duration,
 ) {
     let slots = Arc::new(tokio::sync::Semaphore::new(GREETING_SLOTS));
+    let commands = Arc::new(tokio::sync::Semaphore::new(COMMAND_SLOTS));
+    let waits = Arc::new(tokio::sync::Semaphore::new(WAIT_SLOTS));
+    let mut tasks = tokio::task::JoinSet::new();
+    let expiry = Arc::clone(&gate);
+    tasks.spawn(async move {
+        expiry.expire().await;
+    });
     loop {
+        while let Some(result) = tasks.try_join_next() {
+            if result.is_err() {
+                report_denied(None, "a courier connection task ended unexpectedly");
+            }
+        }
         // The semaphore is never closed, so this cannot fail; the honest shape for a closed one is to stop.
         let Ok(slot) = Arc::clone(&slots).acquire_owned().await else {
             return;
@@ -50,10 +64,19 @@ pub(crate) async fn serve(
         };
         let gate = Arc::clone(&gate);
         let containment = Arc::clone(&containment);
-        tokio::spawn(async move {
-            greet(&gate, &containment, connection, hello_wait).await;
-            // The greeting slot is held for exactly this connection's greeting, then released for the next.
-            drop(slot);
+        let commands = Arc::clone(&commands);
+        let waits = Arc::clone(&waits);
+        tasks.spawn(async move {
+            greet(
+                &gate,
+                &containment,
+                connection,
+                hello_wait,
+                slot,
+                commands,
+                waits,
+            )
+            .await;
         });
     }
 }
@@ -63,6 +86,9 @@ async fn greet(
     containment: &Containment,
     mut connection: Connection,
     hello_wait: Duration,
+    greeting: tokio::sync::OwnedSemaphorePermit,
+    commands: Arc<tokio::sync::Semaphore>,
+    waits: Arc<tokio::sync::Semaphore>,
 ) {
     // Silence past the deadline, a peer that left, or a broken read: nothing was admitted, and there is no one
     // to tell. The connection ends here.
@@ -79,19 +105,40 @@ async fn greet(
             Ok(Ok(None)) | Err(_) => return,
         };
     let peer = connection.peer_process().map(PeerProcess::identity);
-    let hello: Hello = match serde_json::from_slice(&frame) {
-        Ok(hello) => hello,
+    let invocation: Invocation = match serde_json::from_slice(&frame) {
+        Ok(invocation) => invocation,
         Err(_not_a_hello) => {
             report_denied(peer, "its first frame is not a hello");
             refuse(&mut connection).await;
             return;
         }
     };
-    match gate.admit(containment, peer, &hello).await {
+    drop(frame);
+    match gate.admit(containment, peer, &invocation.hello).await {
         Ok(session) => {
-            // Hello is the complete command at this stage. End its connection after the answer so an
-            // admitted peer cannot hold a greeting slot forever by leaving the connection idle.
-            welcome(&mut connection, session).await;
+            drop(greeting);
+            let Some(request) = invocation.request else {
+                welcome(&mut connection, session).await;
+                return;
+            };
+            let waiting = matches!(&request, Request::Ask { .. })
+                || matches!(&request, Request::Receive { timeout_ms, .. } if *timeout_ms > 0);
+            let _session_slot = if waiting {
+                let Some(slot) = gate.wait_slot(session).await else {
+                    refuse(&mut connection).await;
+                    return;
+                };
+                Some(slot)
+            } else {
+                None
+            };
+            let Ok(_slot) = if waiting { waits } else { commands }.try_acquire_owned() else {
+                refuse(&mut connection).await;
+                return;
+            };
+            if welcome(&mut connection, session).await {
+                command(gate, session, &mut connection, request).await;
+            }
         }
         Err(denied) => {
             report_denied(peer, &denied.to_string());
@@ -101,12 +148,40 @@ async fn greet(
 }
 
 /// Tell the peer it is in. A failed answer ends the connection just like a delivered one.
-async fn welcome(connection: &mut Connection, session: ManagedSessionId) {
+async fn welcome(connection: &mut Connection, session: ManagedSessionId) -> bool {
     let Ok(bytes) = serde_json::to_vec(&HelloAnswer::Welcome { session }) else {
-        return;
+        return false;
     };
     // No command is pending and this connection ends now, including when the peer has already left.
-    drop(connection.send(&bytes).await);
+    matches!(
+        tokio::time::timeout(HELLO_WAIT, connection.send(&bytes)).await,
+        Ok(Ok(()))
+    )
+}
+
+async fn command(
+    gate: &CourierGate,
+    session: ManagedSessionId,
+    connection: &mut Connection,
+    request: Request,
+) {
+    let mut call = None;
+    let answer = tokio::select! {
+        answer = gate.command_owned(session, request, &mut call) => Some(answer),
+        // One command per connection. Closing it or sending another frame cancels its pending wait.
+        _closed = connection.recv_bounded(MAX_FRAME_BYTES) => None,
+    };
+    if let Some(call) = call
+        && !matches!(&answer, Some(Answer::Received { envelope: Some(_) }))
+    {
+        gate.abandon(session, call).await;
+    }
+    if let Some(answer) = answer
+        && let Ok(bytes) = serde_json::to_vec(&answer)
+    {
+        // Receive is an at-most-once handoff. A peer that leaves after consuming it cannot roll delivery back.
+        drop(tokio::time::timeout(HELLO_WAIT, connection.send(&bytes)).await);
+    }
 }
 
 async fn refuse(connection: &mut Connection) {
@@ -115,7 +190,7 @@ async fn refuse(connection: &mut Connection) {
     if let Ok(bytes) = serde_json::to_vec(&HelloAnswer::Refused) {
         // ok: the peer is being refused and the connection ends here; whether the refusal notice reaches it
         // changes nothing, and there is no session to promote a write failure into.
-        drop(connection.send(&bytes).await);
+        drop(tokio::time::timeout(HELLO_WAIT, connection.send(&bytes)).await);
     }
 }
 

@@ -12,6 +12,9 @@ and refactoring that no user can observe do not belong here.
 
 ### Added
 
+- Managed sessions can list peers, send opaque messages, wait for mail, ask for an exact reply, and cancel a call
+  through the inherited courier executable. Bodies use stdin and stdout; bounded mailboxes and deadlines leave no
+  Runtime transcript. Long waits have separate connection slots so sends and replies remain available.
 - Observed mirrors: a provider started in an ordinary terminal of a Studio window (by absolute path, or by any
   spelling the transparent shim does not broker) appears as a hosted terminal fed by that window, with its origin
   and owner window in the descriptor; the shim now reports the processes above it (the invoking shell among them)

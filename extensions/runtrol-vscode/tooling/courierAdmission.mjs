@@ -3,12 +3,15 @@
 import assert from "node:assert/strict";
 import net from "node:net";
 import { spawn, spawnSync } from "node:child_process";
-import { mkdir, mkdtemp, open, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, open, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { once } from "node:events";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
+import { build } from "esbuild";
 import { isolatedRuntimeState, ownedTreeIdentities, terminateCapturedIdentities } from "./isolated-vscode.mjs";
 import { processRows, normalizedExecutable } from "./process-identity.mjs";
+import { commandJourney } from "./courierCommands.mjs";
 
 const root = fileURLToPath(new URL("../../../", import.meta.url));
 const core = option("--core");
@@ -28,7 +31,18 @@ const logs = [];
 const peers = new Set();
 let firstPeer;
 const firstConnected = new Promise((resolve) => { firstPeer = resolve; });
-const server = net.createServer((socket) => { peers.add(socket); firstPeer(linePeer(socket)); });
+const connected = [];
+let pendingPeer;
+const server = net.createServer((socket) => {
+  peers.add(socket);
+  const peer = linePeer(socket);
+  if (firstPeer) { firstPeer(peer); firstPeer = null; }
+  else if (pendingPeer) { pendingPeer(peer); pendingPeer = null; }
+  else connected.push(peer);
+});
+const extraTerminals = [];
+const viewers = [];
+let bodyMarker;
 try {
   server.listen(pipeName);
   await once(server, "listening");
@@ -63,17 +77,44 @@ try {
     RUNTROL_COURIER_ENDPOINT: birth.RUNTROL_COURIER_ENDPOINT + "-stale" }, encoding: "utf8",
     windowsHide: true, timeout: 10_000 });
   assert.notEqual(stale.status, 0, "a stale generation endpoint is not admitted");
+  if (process.argv.includes("--commands")) {
+    bodyMarker = await commandJourney(peer, birth.RUNTROL_MANAGED_SESSION, async () => {
+      const opened = command(probe, ["open", home, identity, "courier-fixture", workspace]);
+      extraTerminals.push(opened);
+      const peer = connected.shift() ?? await deadline(new Promise((resolve) => { pendingPeer = resolve; }), "another fixture");
+      const born = await peer.read();
+      assert.equal(born.first.answer, "welcome");
+      return { peer, session: born.birth.RUNTROL_MANAGED_SESSION };
+    });
+  }
+  // This long journey has no Studio window. Hold real SDK views across handover so the existing policy for
+  // retiring unwatched, quiet terminals does not legitimately end these fixture processes during the check.
+  await watch([opened, ...extraTerminals]);
   await start(nextCore, "next");
   await waitFor(async () => (await status()).some((generation) => generation.digest === opened.generation && generation.draining),
     "first generation draining");
+  process.stdout.write("courier handover: checking old managed hello\n");
   assert.equal((await peer.ask({ kind: "hello" })).answer, "welcome", "the draining generation still serves its child");
   assert.equal((await peer.ask({ kind: "command" })).welcome, true);
+  process.stdout.write("courier handover: stopping managed terminals\n");
   command(probe, ["stop", home, identity, opened.generation, opened.terminalId]);
+  for (const terminal of extraTerminals) command(probe, ["stop", home, identity, terminal.generation, terminal.terminalId]);
   await waitFor(async () => !(await status()).some((generation) => generation.digest === opened.generation), "drained generation exit");
   process.stdout.write(`RUNTROL_COURIER_ADMISSION ${JSON.stringify({ generation: enrolled.generation,
     firstHello: true, twelveHeldClients: true, wrongTokenRefused: true, outsideTreeRefused: true,
     staleEndpointRefused: true, survivedHandover: true, drainedAfterExit: true })}\n`);
+} catch (error) {
+  for (const label of ["first", "next"]) {
+    try {
+      const log = await readFile(path.join(temporary, `${label}.log`), "utf8");
+      process.stderr.write(`${label} Runtime: ${log.slice(-6000)}\n`);
+    } catch (readError) {
+      if (readError.code !== "ENOENT") throw readError;
+    }
+  }
+  throw error;
 } finally {
+  for (const viewer of viewers) viewer.close();
   for (const peer of peers) peer.destroy();
   server.close();
   for (const entry of processes.reverse()) {
@@ -87,7 +128,40 @@ try {
     }
   }
   for (const log of logs) await log.close();
+  if (bodyMarker) await noResidue(temporary, bodyMarker);
   await rm(temporary, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+}
+
+async function noResidue(directory, marker) {
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    const target = path.join(directory, entry.name);
+    if (entry.isDirectory()) await noResidue(target, marker);
+    else if (entry.isFile()) {
+      const bytes = await readFile(target);
+      assert.ok(!bytes.includes(Buffer.from(marker)) && !bytes.includes(Buffer.from(marker, "utf16le")),
+        `opaque body retained in ${path.basename(target)}`);
+    }
+  }
+}
+
+async function watch(terminals) {
+  const bundle = path.join(temporary, "runtimeClient.cjs");
+  await build({ entryPoints: [path.join(root, "clients/typescript/src/index.ts")], outfile: bundle,
+    bundle: true, platform: "node", format: "cjs", target: "node22", logLevel: "silent" });
+  const { RuntimeConnector, RuntimeLocator, IntegrationIdentity, IntegrationCredentials } = createRequire(import.meta.url)(bundle);
+  const stored = JSON.parse(await readFile(identity, "utf8"));
+  const key = IntegrationIdentity.fromPkcs8(Buffer.concat([
+    Buffer.from("302e020100300506032b657004220420", "hex"), Buffer.from(stored.secret),
+  ]));
+  const credentials = new IntegrationCredentials(key, stored.grant);
+  process.env.RUNTROL_HOME = home;
+  for (const terminal of terminals) {
+    const state = await RuntimeLocator.system({ runtimeExecutable: core, preferDigest: terminal.generation }).inspect();
+    assert.equal(state.state, "running");
+    const client = await new RuntimeConnector().connect(state.locator, { name: "runtrol-handover-probe", version: "0.0.0", credentials });
+    viewers.push(client);
+    await client.terminals().attach({ terminalId: terminal.terminalId });
+  }
 }
 
 function option(name) {

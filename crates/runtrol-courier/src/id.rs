@@ -106,6 +106,15 @@ courier_identity! {
     RoomId
 }
 
+/// One exact ask, even if a caller later reuses the enclosing call identifier.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct CallRef {
+    /// The enclosing call.
+    pub call_id: CallId,
+    /// The exact ask that opened this instance of the call.
+    pub ask: MessageId,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
