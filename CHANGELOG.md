@@ -76,6 +76,7 @@ and refactoring that no user can observe do not belong here.
 
 ### Fixed
 
+- Background service checks no longer pause terminal input while locating an installed CLI and checking its files.
 - Fresh conversations expose their live controls as soon as Runtime confirms the terminal, before the provider
   publishes a conversation. Opening progress ends when the view connects, and coloured sidebar icons render correctly.
 - A new worker uses its project name until the provider names the conversation, keeping internal worktree identifiers

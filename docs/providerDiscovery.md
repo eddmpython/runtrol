@@ -25,6 +25,11 @@ The exact `Program` that was probed is handed to the driver. A second path resol
 
 ## Probe cache
 
+Program resolution and file identity checks run outside the async executor through the bounded inspection lane in
+[`probe/inspection.rs`](../crates/runtrol-core/src/probe/inspection.rs). Cache hits still revalidate the installed
+program, but a slow filesystem call does not occupy the terminal input executor. Admission stays with the blocking
+worker until it finishes, including when its caller is cancelled, so cancellation cannot accumulate running scans.
+
 The cache is keyed by provider identifier and the complete resolved program identity: executable path, size, modification time, launcher-resolved leading arguments, and the same file facts for any leading argument that names an absolute regular file. This makes an interpreted package entry point part of the identity instead of trusting the unchanged interpreter. The reported version and the exact driver-owned flag question are stored observations. A hit is valid only when both the program identity and question surface still match. There is no time-based TTL.
 
 The cache is opened lazily from `RUNTROL_HOME/probe.json`, written through a flushed sibling file, and atomically replaced. Only driver discovery is serialized around that single file. Provider discovery, model lookup, process open, command writes, and cleanup are awaited in tasks rather than in the daemon's sole session owner. The owner therefore remains eligible to pump events and handle requests whose preparation has completed. This is an ownership guarantee, not an end-to-end latency bound. An unreadable or future-schema cache is treated as absent because every value can be asked again. A write failure is returned to the caller because repeated cold probes are user-visible latency.

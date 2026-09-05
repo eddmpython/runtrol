@@ -40,6 +40,7 @@
 //! the thread fits.
 
 pub mod cache;
+mod inspection;
 
 use core::time::Duration;
 
@@ -61,6 +62,12 @@ pub const QUESTION_DEADLINE: Duration = Duration::from_secs(15);
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum ProbeError {
+    /// The bounded filesystem inspection worker could not complete.
+    #[error("cannot inspect the installed program: {detail}")]
+    Inspection {
+        /// Why the runtime could not finish this inspection.
+        detail: String,
+    },
     /// None of the manifest's candidate names resolved to anything.
     ///
     /// Names every candidate, because the operator's next move is to install the CLI or to correct the
@@ -203,8 +210,7 @@ pub async fn probe_program(
     cache: &mut ProbeCache,
     contained_by: &Containment,
 ) -> Result<(Program, Entry), ProbeError> {
-    let program = locate(manifest)?;
-    let bin = BinFacts::of_program(&program)?;
+    let (program, bin) = inspection::inspect(manifest).await?;
 
     if let Some(known) = cache.get(manifest.id, &bin)
         && known
