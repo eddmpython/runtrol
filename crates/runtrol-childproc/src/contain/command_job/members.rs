@@ -28,6 +28,46 @@ struct ProcessList {
     ids: [usize; MAX_RETAINED_PROCESSES],
 }
 
+impl ProcessList {
+    #[expect(
+        unsafe_code,
+        reason = "initialize the integer-only API buffer directly on the heap"
+    )]
+    fn empty() -> Box<Self> {
+        let mut list = Box::<Self>::new_uninit();
+        // SAFETY: this aligned allocation holds one ProcessList. Every field is an integer, so zero
+        // initializes the complete buffer without creating a large stack temporary.
+        unsafe { list.as_mut_ptr().write_bytes(0, 1) };
+        // SAFETY: every byte in the complete ProcessList was initialized above.
+        unsafe { list.assume_init() }
+    }
+
+    fn listed_ids(&self) -> Result<&[usize], SpawnError> {
+        // A signaled process can leave the PID list before the assigned count catches up. The API's
+        // successful query fills the available list; unequal counts alone do not mean truncation.
+        // Preserve the capacity check even on success, and never index beyond the returned count.
+        if usize::try_from(self.assigned).map_or(true, |assigned| assigned > self.ids.len())
+            || self.count > self.assigned
+        {
+            return Err(failure(
+                "retaining command Job members",
+                format!(
+                    "invalid bounded list: assigned {}, returned {}, capacity {MAX_RETAINED_PROCESSES}",
+                    self.assigned, self.count
+                ),
+            ));
+        }
+        let count = usize::try_from(self.count)
+            .map_err(|_| failure("retaining command Job members", "invalid member count"))?;
+        self.ids.get(..count).ok_or_else(|| {
+            failure(
+                "retaining command Job members",
+                "the member count exceeds its buffer",
+            )
+        })
+    }
+}
+
 #[expect(
     unsafe_code,
     reason = "membership sealing and retained process handles are Windows kernel operations"
@@ -51,12 +91,7 @@ pub(super) fn seal(job: HANDLE) -> Result<Vec<OwnedHandle>, SpawnError> {
     {
         return Err(last_error("sealing command Job membership"));
     }
-    let mut list = Box::<ProcessList>::new_uninit();
-    // SAFETY: this allocation has space for one aligned ProcessList; every field is an integer,
-    // so zero initializes the complete buffer directly on the heap without a large stack temporary.
-    unsafe { list.as_mut_ptr().write_bytes(0, 1) };
-    // SAFETY: the complete ProcessList was initialized above, including its variable-list capacity.
-    let mut list = unsafe { list.assume_init() };
+    let mut list = ProcessList::empty();
     // SAFETY: this repr(C) buffer follows the documented variable-length process-list layout.
     if unsafe {
         QueryInformationJobObject(
@@ -70,21 +105,8 @@ pub(super) fn seal(job: HANDLE) -> Result<Vec<OwnedHandle>, SpawnError> {
     {
         return Err(last_error("retaining command Job members"));
     }
-    if list.count != list.assigned {
-        return Err(failure(
-            "retaining command Job members",
-            "the bounded list is incomplete",
-        ));
-    }
-    let count = usize::try_from(list.count)
-        .map_err(|_| failure("retaining command Job members", "invalid member count"))?;
-    let ids = list.ids.get(..count).ok_or_else(|| {
-        failure(
-            "retaining command Job members",
-            "the member count exceeds its buffer",
-        )
-    })?;
-    let mut handles = Vec::with_capacity(count);
+    let ids = list.listed_ids()?;
+    let mut handles = Vec::with_capacity(ids.len());
     for &id in ids {
         let pid = u32::try_from(id).map_err(|_| {
             failure(
@@ -135,4 +157,39 @@ pub(super) fn stopped(handles: &[OwnedHandle]) -> Result<bool, SpawnError> {
         }
     }
     Ok(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_departed_member_does_not_make_a_successful_snapshot_incomplete() {
+        // Observed on a sealed Windows Job: assigned=1, returned=0 while its retained root is signaled.
+        let mut list = ProcessList::empty();
+        list.assigned = 1;
+        assert!(
+            list.listed_ids()
+                .expect("the terminated member has left")
+                .is_empty()
+        );
+        list.assigned = 2;
+        list.count = 1;
+        list.ids[0] = 42;
+        assert_eq!(
+            list.listed_ids().expect("the remaining member is retained"),
+            &[42]
+        );
+    }
+
+    #[test]
+    fn oversized_or_inconsistent_membership_cannot_authorize_cleanup() {
+        let mut list = ProcessList::empty();
+        list.assigned = u32::try_from(MAX_RETAINED_PROCESSES + 1).expect("test capacity fits");
+        list.count = u32::try_from(MAX_RETAINED_PROCESSES).expect("test capacity fits");
+        assert!(list.listed_ids().is_err());
+        list.assigned = 0;
+        list.count = 1;
+        assert!(list.listed_ids().is_err());
+    }
 }

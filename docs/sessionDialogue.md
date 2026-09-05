@@ -90,6 +90,11 @@ Git operations retain their resource lock until their command and descendants ha
 worktrees are removed only after exact terminal exit; dirty or committed work is preserved. A finite restart sweep
 also requires the recorded Runtime incarnation to have ended. Unknown or replaced ownership is retained and reported.
 
+Windows command cleanup validates the bounded PID list returned by a successful Job query, retaining exact process
+handles and checking their membership and termination before releasing the operation. A finished process may remain
+briefly in the assigned count after leaving that list; count inequality alone is not a failed completion proof.
+Query errors, capacity overflow, invalid counts, and an unproven final Job state still preserve the resource lock.
+
 On Windows, migration publishes the existing registry inside a nonempty directory at its original path. Publication
 excludes the legacy commit source before reading the latest record, so an old process with cached metadata cannot
 overwrite the new document. Old rows remain readable, but automatic mutation preserves rows whose original format
