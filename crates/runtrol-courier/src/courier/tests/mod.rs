@@ -776,6 +776,21 @@ fn a_reply_after_the_call_deadline_is_refused_and_a_reply_cannot_outlive_its_cal
         ),
         Err(Refusal::CallExpired(ask.call_id))
     );
+    // The refusal changed nothing: the call is still open and its ask still received. The sweep, not the
+    // refused reply, is what expires it.
+    assert_eq!(
+        courier.state_of(ask.message_id),
+        Some(DeliveryState::Received)
+    );
+    assert_eq!(courier.active_calls(), 1);
+    assert_eq!(
+        courier.sweep(later(500)),
+        Swept {
+            messages: vec![],
+            calls: vec![ask.call_id],
+            bytes: 0,
+        }
+    );
     assert_eq!(
         courier.state_of(ask.message_id),
         Some(DeliveryState::Expired)
@@ -966,6 +981,90 @@ fn a_session_ending_releases_its_mail_and_its_calls_immediately() {
         ),
         Err(Refusal::UnknownTarget(bravo))
     );
+}
+
+#[test]
+fn a_fresh_message_cannot_reuse_an_open_call() {
+    let Fleet {
+        mut courier,
+        alpha,
+        bravo,
+        charlie,
+    } = fleet(Limits {
+        active_calls: 4,
+        ..Limits::INITIAL
+    });
+    let ask = CallEnvelope::ask(alpha, bravo, body("q"), later(1_000));
+    accepted(&mut courier, ask.clone());
+    let before = snapshot(&courier, &[alpha, bravo, charlie]);
+
+    // A second ask under the same call would overwrite the first's record and hide it from the ceiling.
+    let mut reused = CallEnvelope::ask(alpha, charlie, body("2"), later(1_000));
+    reused.call_id = ask.call_id;
+    assert_eq!(
+        courier.send(reused, NOW),
+        Err(Refusal::CallInUse(ask.call_id))
+    );
+    // A tell under the same call is refused too: a tell groups no request and its reply.
+    let mut tell = CallEnvelope::tell(alpha, charlie, body("t"), later(1_000));
+    tell.call_id = ask.call_id;
+    assert_eq!(
+        courier.send(tell, NOW),
+        Err(Refusal::CallInUse(ask.call_id))
+    );
+    assert_eq!(snapshot(&courier, &[alpha, bravo, charlie]), before);
+    assert_eq!(courier.active_calls(), 1);
+
+    // The original ask still resolves and retires cleanly: nothing was overwritten.
+    let heard = courier
+        .receive(bravo, NOW)
+        .expect("the one ask is delivered");
+    assert_eq!(heard.message_id, ask.message_id);
+    accepted(
+        &mut courier,
+        CallEnvelope::reply(&heard, body("r"), later(1_000)),
+    );
+    courier.receive(alpha, NOW).expect("the reply");
+    assert_eq!(courier.active_calls(), 0);
+    assert_eq!(courier.charged_bytes(), 0);
+    // The call is free again once it resolved.
+    let fresh = CallEnvelope::ask(alpha, bravo, body("again"), later(1_000));
+    accepted(&mut courier, fresh);
+}
+
+#[test]
+fn the_courier_enforces_its_own_body_ceiling_however_the_body_was_built() {
+    let Fleet {
+        mut courier,
+        alpha,
+        bravo,
+        charlie,
+    } = fleet(Limits {
+        body_bytes: 16,
+        ..Limits::INITIAL
+    });
+    // A body built with a larger ceiling than the courier's is still refused by the courier.
+    let oversized =
+        BoundedUtf8::new("x".repeat(17), usize::MAX).expect("built with a wide ceiling");
+    let before = snapshot(&courier, &[alpha, bravo, charlie]);
+    assert_eq!(
+        courier.send(
+            CallEnvelope::tell(alpha, bravo, oversized, later(1_000)),
+            NOW
+        ),
+        Err(Refusal::BodyTooLarge {
+            len: 17,
+            ceiling: 16
+        })
+    );
+    assert_eq!(snapshot(&courier, &[alpha, bravo, charlie]), before);
+    // A body at the ceiling passes.
+    let at_ceiling = BoundedUtf8::new("y".repeat(16), usize::MAX).expect("built");
+    accepted(
+        &mut courier,
+        CallEnvelope::tell(alpha, bravo, at_ceiling, later(1_000)),
+    );
+    assert_eq!(courier.charged_bytes(), 16);
 }
 
 #[test]

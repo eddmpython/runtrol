@@ -53,6 +53,17 @@ pub enum Refusal {
     /// The envelope names a room, and rooms are not open.
     #[error("rooms are not open")]
     RoomsClosed,
+    /// The body is larger than the courier's own ceiling, however it was constructed.
+    #[error("a body of {len} bytes exceeds the courier ceiling of {ceiling} bytes")]
+    BodyTooLarge {
+        /// The body size offered.
+        len: usize,
+        /// The courier's body ceiling.
+        ceiling: usize,
+    },
+    /// A tell or an ask names a call already open. A fresh message opens a fresh call.
+    #[error("call {0} is already open")]
+    CallInUse(CallId),
     /// The message identifier was seen before.
     #[error("message {0} was already sent")]
     DuplicateMessage(MessageId),

@@ -187,9 +187,9 @@ impl Courier {
     ///
     /// The refusal names the first check the envelope failed, in this order: the protocol version, a self-send,
     /// a live source, a live target, a room, a duplicate message identifier, the shape its kind requires, the
-    /// deadline; then for an ask the call ceiling; for a tell or an ask the hop bound, a cycle, the visit bound and
-    /// the room in the target's mailbox; for a reply or a cancel the call it names, the roles that call gives, and
-    /// the room in the target's mailbox.
+    /// deadline, the body ceiling; then for an ask the call ceiling; for a tell or an ask a call already open, the
+    /// hop bound, a cycle, the visit bound and the room in the target's mailbox; for a reply or a cancel the call it
+    /// names, the roles that call gives, and the room in the target's mailbox.
     pub fn send(&mut self, envelope: CallEnvelope, now: UnixMillis) -> Result<Receipt, Refusal> {
         self.admit_shape(&envelope, now)?;
         match envelope.kind {
@@ -220,12 +220,13 @@ impl Courier {
                 self.retire(envelope.message_id, DeliveryState::Received);
             }
             CallKind::Ask => match self.calls.get_mut(&envelope.call_id) {
-                Some(call) => {
+                Some(call) if call.ask == envelope.message_id => {
                     call.stage = CallStage::Received;
                     self.states
                         .insert(envelope.message_id, DeliveryState::Received);
                 }
-                None => self.retire(envelope.message_id, DeliveryState::Received),
+                // A stray ask whose call is gone or names another message is just delivered and forgotten.
+                _ => self.retire(envelope.message_id, DeliveryState::Received),
             },
             CallKind::Reply => {
                 self.calls.remove(&envelope.call_id);
@@ -302,11 +303,24 @@ impl Courier {
                 ceiling: self.limits.max_deadline_millis,
             });
         }
+        // The ceiling is the courier's, not the caller's: a body admitted through a `BoundedUtf8` built with a
+        // larger ceiling is still refused here, so this one place owns the limit the design fixed.
+        if envelope.body.len() > self.limits.body_bytes {
+            return Err(Refusal::BodyTooLarge {
+                len: envelope.body.len(),
+                ceiling: self.limits.body_bytes,
+            });
+        }
         Ok(())
     }
 
     /// A tell or an ask: check the chain, find room, stamp the delivery, and queue it.
     fn route(&mut self, envelope: CallEnvelope, opens_call: bool) -> Result<Receipt, Refusal> {
+        // A fresh message opens a fresh call. Naming a call already open would overwrite its record, so a
+        // caller could hide many asks behind one call and slip past the active-call ceiling.
+        if self.calls.contains_key(&envelope.call_id) {
+            return Err(Refusal::CallInUse(envelope.call_id));
+        }
         if envelope.hop_count >= self.limits.hop_count {
             return Err(Refusal::HopBound {
                 hops: envelope.hop_count,
@@ -357,8 +371,7 @@ impl Courier {
             });
         }
         if call.deadline <= now {
-            self.calls.remove(&envelope.call_id);
-            self.retire(call.ask, DeliveryState::Expired);
+            // A refusal changes nothing: the call is left for the sweep, which expires it and its ask together.
             return Err(Refusal::CallExpired(envelope.call_id));
         }
         match call.stage {

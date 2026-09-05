@@ -116,9 +116,12 @@ pub struct CallEnvelope {
     pub room_id: Option<RoomId>,
     /// The moment after which this envelope is worthless and its body is released.
     pub deadline: UnixMillis,
-    /// Hops travelled so far. Zero on a fresh message; the courier adds one per delivery.
+    /// Hops travelled so far. Zero on a fresh message; the courier adds one when it routes a tell or an ask.
+    /// A reply and a cancel carry the call's own count unchanged, because the call's deadline and its one
+    /// reply bound them rather than the hop ceiling.
     pub hop_count: u8,
-    /// Sessions this message passed through so far. The courier adds the source on delivery.
+    /// Sessions this message passed through so far. The courier adds the source when it routes a tell or an
+    /// ask; a reply and a cancel carry the call's set unchanged.
     pub visited: BoundedSessionSet,
     /// The opaque body.
     pub body: BoundedUtf8,
