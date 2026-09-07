@@ -750,6 +750,12 @@ pub(super) async fn native_activity(
             reconcile_native_activity(composed, provider, &activity).await;
             let attachable = attachable_native_sessions(&activity);
             let focusable = focusable_native_sessions(composed, provider).await;
+            // Observation and reconciliation can outlive an integration grant. No native identity is sent
+            // until the same current-authority canon has revalidated the completed read.
+            if let Err(failure) = authorized(state, composed, Some(AppScope::SessionNativeDiscover))
+            {
+                return Answer::failure(id, failure);
+            }
             Answer::success(
                 id,
                 &runtrol_runtime_protocol::NativeActivity {

@@ -236,3 +236,72 @@ fn provider_watch_retains_adjacent_authority_widening_witnesses() {
     );
     fixture.close();
 }
+
+#[tokio::test]
+async fn native_activity_rechecks_authority_after_observation_waits() {
+    use std::future::{Future as _, poll_fn};
+    use std::task::Poll;
+
+    use super::super::connection_state::{PublicAuthority, PublicState};
+    use runtrol_runtime_protocol::{ClientCapabilities, ClientInfo, JsonRpcId, JsonRpcResponse};
+
+    let mut fixture = Fixture::new();
+    fixture.row.grant_generation += 1;
+    fixture
+        .row
+        .scopes
+        .push(AppScope::SessionNativeDiscover.as_str().into());
+    fixture
+        .composed
+        .integration_authority
+        .publish_committed(fixture.authority.key, fixture.row.clone())
+        .unwrap();
+    refresh_provider_authority(&fixture.composed, &mut fixture.authority).unwrap();
+    let mut state = PublicState::Ready {
+        context: crate::runtime_auth::ClientContext {
+            challenge: crate::runtime_auth::challenge("native-activity-fixture").unwrap(),
+            supported_revisions: vec![runtrol_runtime_protocol::REVISION_2026_08_27],
+            selected_revision: runtrol_runtime_protocol::REVISION_2026_08_27,
+            client: ClientInfo {
+                name: "Native activity fixture".into(),
+                version: "1".into(),
+            },
+            capabilities: ClientCapabilities::default(),
+        },
+        authority: PublicAuthority::Authorized(fixture.authority.clone()),
+        token: crate::window_registry::ConnectionToken::next(),
+    };
+    let provider = runtrol_provider::ProviderId::parse("native-read-fixture").unwrap();
+    let discovering = crate::serve::DiscoveryGates::new(&fixture.composed.registry);
+    let lane = discovering.lane(provider).await.lock_owned().await;
+    let mut request = Box::pin(super::super::provider_requests::native_activity(
+        &mut state,
+        &fixture.composed,
+        &discovering,
+        JsonRpcId::Number(1),
+        serde_json::json!({"providerId": provider.as_str()}),
+    ));
+    poll_fn(|context| {
+        assert!(
+            request.as_mut().poll(context).is_pending(),
+            "the authorized read waits on its provider lane"
+        );
+        Poll::Ready(())
+    })
+    .await;
+    fixture.revoke();
+    // Supply the bounded observer cache while the request is parked. This exercises the real read path
+    // without starting or inspecting an installed provider process.
+    assert!(
+        !discovering
+            .remember_native_activity(provider, runtrol_provider::NativeProcessActivity::default())
+            .await
+    );
+    drop(lane);
+    let answered = request.await;
+    assert!(
+        matches!(answered.response, JsonRpcResponse::Error(error) if error.error.code == RuntimeErrorKind::IntegrationRevoked)
+    );
+    drop(discovering);
+    fixture.close();
+}
