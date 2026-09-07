@@ -42,8 +42,10 @@ export async function readRetainedHost(temporary, rows) {
   }
   assert.ok(typeof previous.coordination === "string" && samePath(path.dirname(previous.coordination), temporary)
     && /^coordination(?:-[A-Za-z0-9]+)?$/u.test(path.basename(previous.coordination)), "the retained coordination path is outside its host");
-  for (const relative of ["runtrol", "profile", "bin/runtrol.exe", "bin/handoverProbe.exe", "extension", "identity.json",
+  for (const relative of ["runtrol", "profile", "bin/runtrol.exe", "bin/handoverProbe.exe", "extension",
     path.basename(previous.coordination)]) await plainPath(temporary, relative);
+  // Studio enrolls its own integration. The separate command probe creates this identity only when invoked.
+  await plainPath(temporary, "identity.json", true);
   // Copy destinations and profile settings may already exist. A link must not redirect a recovery write.
   for (const relative of ["extension/dist", "extension/resources", "extension/package.json", "profile/User",
     "profile/User/settings.json", "extensions"]) await plainPath(temporary, relative, true);

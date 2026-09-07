@@ -48,6 +48,13 @@ test("same-home recovery preserves the recorded project, profile, identity and w
   } finally { await release(); }
 });
 
+test("a Studio-only journey resumes before a separate command probe has enrolled", async () => {
+  const expected = await fixture();
+  await rm(expected.identity);
+  assert.deepEqual(await readRetainedHost(expected.temporary, []), expected);
+  await assert.rejects(readFile(expected.identity), { code: "ENOENT" });
+});
+
 test("an exact old root, uncertain start time, old launcher or another profile owner refuses recovery", async () => {
   const previous = await fixture();
   const runtime = previous.processes[0];
