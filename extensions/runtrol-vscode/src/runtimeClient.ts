@@ -37,6 +37,9 @@ import {
   type WindowMirrorOutputParams,
   type WindowRegisterParams,
   type WindowUpdateParams,
+  type WindowRegistration,
+  type WatchWindowInputParams,
+  type WindowInputSubscription,
   type TerminalIndexSubscription,
   type TerminalView,
   type ValidatedLocator,
@@ -116,6 +119,7 @@ export class StudioRuntimeClient implements vscode.Disposable {
   private command: RuntimeClient | null = null;
   /// The command connection this window's registration was made on; a new connection needs a new one.
   private windowRegisteredOn: RuntimeClient | null = null;
+  private windowRegistration: WindowRegistration | null = null;
   /// The 250 ms process-roster clock must never queue in front of operator commands.
   ///
   /// A provider can take tens of milliseconds to validate its structural activity surface on Windows. Sharing
@@ -401,14 +405,39 @@ export class StudioRuntimeClient implements vscode.Disposable {
   /// Every hosted terminal the Runtime lists right now, with what each process holds in memory.
   /// Register this window and publish the terminals it observes, on the persistent command connection. A
   /// registration lives as long as its connection, so a fresh connection registers again before it updates.
-  async publishWindow(register: WindowRegisterParams, update: WindowUpdateParams): Promise<void> {
-    await this.read(async (runtime) => {
-      if (this.windowRegisteredOn !== runtime) {
-        await runtime.windows().register(register);
+  async publishWindow(register: WindowRegisterParams, update: WindowUpdateParams): Promise<WindowRegistration> {
+    return this.read(async (runtime) => {
+      if (this.windowRegisteredOn !== runtime || this.windowRegistration === null) {
+        this.windowRegistration = await runtime.windows().register(register);
         this.windowRegisteredOn = runtime;
       }
       await runtime.windows().update(update);
+      return this.windowRegistration;
     });
+  }
+
+  async withWindowInput(
+    params: WatchWindowInputParams,
+    run: (subscription: WindowInputSubscription) => Promise<void>,
+    signal: AbortSignal,
+  ): Promise<void> {
+    signal.throwIfAborted();
+    const runtime = await this.withRuntimeLocator(
+      (locator) => this.connector.connectWithRetry(locator, this.requireOptions(), { signal }),
+    );
+    let subscription: WindowInputSubscription | null = null;
+    const abort = () => { if (subscription) subscription.close(); else runtime.close(); };
+    signal.addEventListener("abort", abort, { once: true });
+    try {
+      signal.throwIfAborted();
+      subscription = await runtime.windows().watchInput(params);
+      signal.throwIfAborted();
+      await run(subscription);
+    } finally {
+      signal.removeEventListener("abort", abort);
+      subscription?.close();
+      runtime.close();
+    }
   }
 
   async listTerminals(): Promise<TerminalIndexSnapshot> {
@@ -1101,6 +1130,7 @@ export class StudioRuntimeClient implements vscode.Disposable {
     await this.serial(async () => {
       this.command?.close();
       this.command = null;
+      this.locator = null;
       if (this.options) {
         try {
           await this.commandClient();

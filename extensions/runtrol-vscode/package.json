@@ -86,6 +86,7 @@
     "onCommand:runtrol.startSession",
     "onCommand:runtrol.selectSession",
     "onCommand:runtrol.openConversation",
+    "onCommand:runtrol.openInputView",
     "onCommand:runtrol.renameSession",
     "onCommand:runtrol.openWorkspace",
     "onCommand:runtrol.interrupt",
@@ -219,6 +220,11 @@
         "category": "Runtrol"
       },
       {
+        "command": "runtrol.openInputView",
+        "title": "Open Input View Here",
+        "category": "Runtrol"
+      },
+      {
         "command": "runtrol.renameSession",
         "title": "Rename Conversation",
         "icon": "$(edit)",
@@ -289,6 +295,12 @@
         "command": "runtrol.newConversationInProject",
         "title": "New Conversation in Project",
         "icon": "$(add)",
+        "category": "Runtrol"
+      },
+      {
+        "command": "runtrol.archiveProjectConversations",
+        "title": "Archive All Conversations in Project...",
+        "icon": "$(archive)",
         "category": "Runtrol"
       },
       {
@@ -446,6 +458,14 @@
     ],
     "menus": {
       "commandPalette": [
+        {
+          "command": "runtrol.archiveProjectConversations",
+          "when": "false"
+        },
+        {
+          "command": "runtrol.openInputView",
+          "when": "false"
+        },
         {
           "command": "runtrol.selectSession",
           "when": "false"

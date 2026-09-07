@@ -128,8 +128,10 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
     }.items():
         if token in pane:
             found.append(f"{meaning} is back in runtimeTerminal.ts through `{token}`")
-    if "this.writeEmitter.fire(text)" not in pane or pane.count("this.writeEmitter.fire(") != 1:
-        found.append("runtimeTerminal.ts must write the pane from exactly one place, the filtered service bytes")
+    if ("this.writeEmitter.fire(text)" not in pane
+        or "if (tail.length > 0) this.writeEmitter.fire(tail);" not in pane
+        or pane.count("this.writeEmitter.fire(") != 2):
+        found.append("runtimeTerminal.ts must write only filtered service bytes and their final decoder tail")
 
     # One view, one document. A second file that builds a whole page brings a second `body` rule with it, and
     # the last one concatenated wins. The usage strip had one from when it was its own webview; folding it into
@@ -225,7 +227,7 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             "data:image/svg+xml;base64",
         ],
         "terminalTabs.ts": [
-            "projectAccentColor(",
+            "this.accentOf(",
             "iconPath: this.iconFor(",
             "vscode.ProgressLocation.Window",
         ],
@@ -306,7 +308,7 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             '"runtrol.isVerifyingProvider"',
             "awaitsVerification",
             "this.state.incompleteDiscovery",
-            "projectAccentColor(group.workspace)",
+            "accentForWorkspace(this.projectRecords.all(), group.workspace)",
             "this.tabs.isOpen(row.key)",
             "accentedConversationIcon(",
             "ROWS_PER_PROJECT",
@@ -484,11 +486,12 @@ def selftest() -> int:
             "this.socket.end()"
         ),
         "terminalTabs.ts": (
-            "projectAccentColor( iconPath: this.iconFor( vscode.ProgressLocation.Window"
+            "this.accentOf( iconPath: this.iconFor( vscode.ProgressLocation.Window"
         ),
         "runtimeTerminal.ts": (
             "this.presentation.opening(connecting) this.presentation.ended(notification.exitCode) "
-            "this.presentation.failed(message) this.writeEmitter.fire(text)"
+            "this.presentation.failed(message) this.writeEmitter.fire(text) "
+            "if (tail.length > 0) this.writeEmitter.fire(tail);"
         ),
         "conversationIcon.ts": (
             'vscode.Uri.joinPath(extensionUri, "resources", "provider-icons", `${icon}.svg`) '
@@ -534,7 +537,7 @@ def selftest() -> int:
             "Cannot reach the Runtrol Core. Connecting to the Runtrol Core... "
             "Checking the installed coding-agent CLI... No coding-agent CLI was found on this machine. "
             '"runtrol.hasUsableProvider" "runtrol.isVerifyingProvider" awaitsVerification '
-            "this.state.incompleteDiscovery projectAccentColor(group.workspace) this.tabs.isOpen(row.key) "
+            "this.state.incompleteDiscovery accentForWorkspace(this.projectRecords.all(), group.workspace) this.tabs.isOpen(row.key) "
             "accentedConversationIcon( ROWS_PER_PROJECT "
             "canDelete(row, capabilities)"
         ),
@@ -578,6 +581,7 @@ def selftest() -> int:
             "createReadStream copyFile(source, incoming) imageName(sourceDigest) writeFile( "
             "rename(incoming, executable) unlink(file) removeInactiveImages"
         ),
+        "core/uninstallRecord.ts": "writeFile(",
         "selectionStore.ts": (
             "MAX_FILE_BYTES MAX_SESSION_BYTES WRITE_ATTEMPTS schema: 1 validSession "
             "retryTransientWrite writeFile(file"
@@ -647,7 +651,7 @@ def selftest() -> int:
         (package, {**sources, "sidebarPage.ts": sources["sidebarPage.ts"].replace("assets.accentIconUris.get", "")}),
         (package, {**sources, "sidebarPage.ts": sources["sidebarPage.ts"] + '<span class="bar"></span>'}),
         (package, {**sources, "sidebarPage.ts": sources["sidebarPage.ts"].replace(".conv.open .glyph, .conv.working .glyph { filter: none; opacity: 1; }", "")}),
-        (package, {**sources, "sidebarView.ts": sources["sidebarView.ts"].replace("projectAccentColor(group.workspace)", "")}),
+        (package, {**sources, "sidebarView.ts": sources["sidebarView.ts"].replace("accentForWorkspace(this.projectRecords.all(), group.workspace)", "")}),
         (package, {**sources, "sidebarView.ts": sources["sidebarView.ts"].replace("this.tabs.isOpen(row.key)", "")}),
         (package, {**sources, "extension.ts": sources["extension.ts"].replace('executeCommand("runtrol.sidebar.focus")', "")}),
         (package, {**sources, "stateRows.ts": sources["stateRows.ts"].replace("discoveryNotice", "")}),

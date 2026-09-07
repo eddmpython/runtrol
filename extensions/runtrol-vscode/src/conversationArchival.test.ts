@@ -78,3 +78,11 @@ test("archive confirmation names the conversation and service", () => {
   assert.equal(question.message, 'Archive "Refactor the parser" in Codex?');
   assert.equal(question.button, "Archive in Codex");
 });
+
+test("an unconfirmed or foreign live owner cannot be archived", () => {
+  const available = capabilities({ availability: "available", provenance: "officialProtocol" });
+  for (const candidate of [row({ presence: { kind: "unconfirmed" } as Conversation["presence"] }),
+    row({ live: true, canStop: false })]) {
+    assert.equal(conversationArchival(candidate, available).kind, "unsupported");
+  }
+});

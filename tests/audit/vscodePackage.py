@@ -762,7 +762,8 @@ def sourceProblems(
         'path.join(codicons, "dist", "codicon.css")',
         'path.join(codicons, "dist", "codicon.ttf")',
         'path.join(codicons, "dist", "codicon.svg")',
-        'path.join(repositoryRoot, "crates", "runtrol-drivers", "manifests")',
+        "providerGlyphs.names.map",
+        "await buildProviderFont(providerIcons)",
         'path.join(providerIcons, `${name}.svg`)',
     ):
         if token not in buildScript:
@@ -947,6 +948,8 @@ def expectedEntries(target: str) -> set[str]:
         "extension/resources/NOTICE.txt",
         "extension/resources/icon.png",
         "extension/resources/symbol.svg",
+        "extension/resources/provider-icons/providerIcons.woff",
+        "extension/resources/provider-icons/iconMap.json",
         # Deleting a conversation is the one row action that does not come back, so its control is drawn in
         # the editor's error colour. A menu icon cannot be tinted through a theme token the way a tree item
         # can, so the colour is baked into a file the build generates from the pinned glyph set.
@@ -1218,7 +1221,7 @@ def selftest() -> int:
         'path.join(repositoryRoot, "LICENSE") path.join(repositoryRoot, "NOTICE") '
         'path.join(codicons, "LICENSE") path.join(codicons, "dist", "codicon.css") '
         'path.join(codicons, "dist", "codicon.ttf") path.join(codicons, "dist", "codicon.svg") '
-        'path.join(repositoryRoot, "crates", "runtrol-drivers", "manifests") '
+        'providerGlyphs.names.map await buildProviderFont(providerIcons) '
         'path.join(providerIcons, `${name}.svg`)'
     )
     releaseWorkflow = (ROOT / ".github" / "workflows" / "vscode-release.yml").read_text(encoding="utf-8")

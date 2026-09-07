@@ -44,8 +44,19 @@ test("the two git calls are combined, and a folder git refuses is null rather th
   };
   const run = (_workspace: string, args: readonly string[]) => Promise.resolve(answers[args.join(" ")] ?? "");
   assert.deepEqual(await readGitChanges(WORKSPACE, run), { added: 10, removed: 4, untracked: 1, ahead: 1 });
-  const refused = () => Promise.reject(new Error("fatal: not a git repository"));
+  const refused = () => Promise.reject(Object.assign(new Error("git failed"), {
+    code: 128, stderr: "fatal: not a git repository (or any of the parent directories): .git\n",
+  }));
   assert.equal(await readGitChanges(WORKSPACE, refused), null);
+});
+
+test("a failed Git read stays distinct from a repository with no first commit", async () => {
+  const failure = Object.assign(new Error("Git read timed out"), { killed: true, signal: "SIGTERM" });
+  await assert.rejects(readGitChanges(WORKSPACE, async () => { throw failure; }), (error) => error === failure);
+  assert.equal(await readGitChanges(WORKSPACE, async (_workspace, args) => {
+    if (args[0] === "status") return "# branch.oid (initial)\n# branch.head main\n? first.ts\n";
+    throw new Error("HEAD does not exist");
+  }), null);
 });
 
 test("only a non-zero count is something to draw", () => {
@@ -109,17 +120,98 @@ test("touches inside a burst settle into one measurement, and a burst that never
   watch.dispose();
 });
 
-test("a folder git refuses is measured once and never again on a write", async () => {
+test("a folder becomes measurable after its first commit without leaving the list", async () => {
   const git = counting();
   git.answer = null as unknown as GitChanges;
   const watch = new GitChangesWatch(git.read, 1, 10, 0);
   watch.ensure(WORKSPACE);
   await tick();
   assert.equal(git.reads.length, 1);
+  git.answer = { added: 4, removed: 0, untracked: 1, ahead: 0 };
   watch.touch(WORKSPACE);
   await new Promise((resolve) => setTimeout(resolve, 10));
-  assert.equal(git.reads.length, 1, "not a repository: a write spawns no git");
+  assert.equal(git.reads.length, 2, "a real change signal can recover an unborn or newly initialized repository");
+  assert.deepEqual(watch.get(WORKSPACE), git.answer);
   watch.dispose();
+});
+
+test("a slow measurement coalesces new signals and never overlaps another read of the same project", async (context) => {
+  context.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 1_000 });
+  const pending: ((changes: GitChanges) => void)[] = [];
+  const watch = new GitChangesWatch(() => new Promise((resolve) => pending.push(resolve)), 1, 10, 5);
+  try {
+    watch.ensure(WORKSPACE);
+    for (let index = 0; index < 10; index += 1) {
+      watch.touch(WORKSPACE);
+      context.mock.timers.tick(10);
+    }
+    assert.equal(pending.length, 1, "signals while Git is slow cannot start competing subprocesses");
+    const first = { added: 1, removed: 0, untracked: 0, ahead: 0 };
+    pending[0]!(first);
+    await Promise.resolve();
+    context.mock.timers.tick(1);
+    assert.equal(pending.length, 2, "one follow-up measures changes that arrived during the first read");
+    const second = { ...first, added: 2 };
+    pending[1]!(second);
+    await Promise.resolve();
+    assert.deepEqual(watch.get(WORKSPACE), second);
+    context.mock.timers.tick(100);
+    assert.equal(pending.length, 2, "idle projects do not poll");
+  } finally {
+    watch.dispose();
+    context.mock.timers.reset();
+  }
+});
+
+test("a transient failure is visible and an explicit refresh recovers without polling", async (context) => {
+  context.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 1_000 });
+  let reads = 0;
+  const answer = { added: 3, removed: 1, untracked: 0, ahead: 0 };
+  const watch = new GitChangesWatch(async () => {
+    reads += 1;
+    if (reads === 1) throw new Error("Git read timed out");
+    return answer;
+  }, 1, 10, 5);
+  try {
+    watch.ensure(WORKSPACE);
+    await Promise.resolve();
+    assert.equal(watch.get(WORKSPACE), null);
+    assert.equal(watch.getError(WORKSPACE), "Git read timed out");
+    context.mock.timers.tick(100);
+    assert.equal(reads, 1);
+    watch.refresh();
+    context.mock.timers.tick(1);
+    await Promise.resolve();
+    assert.deepEqual(watch.get(WORKSPACE), answer);
+    assert.equal(watch.getError(WORKSPACE), null);
+  } finally {
+    watch.dispose();
+    context.mock.timers.reset();
+  }
+});
+
+test("removing a project cancels its scheduled read and discards an older in-flight result", async (context) => {
+  context.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 1_000 });
+  const pending: ((changes: GitChanges) => void)[] = [];
+  const watch = new GitChangesWatch(() => new Promise((resolve) => pending.push(resolve)), 1, 10, 0);
+  try {
+    watch.ensure(WORKSPACE);
+    watch.touch(WORKSPACE);
+    watch.keep([]);
+    watch.ensure(WORKSPACE);
+    assert.equal(pending.length, 2);
+    const current = { added: 2, removed: 0, untracked: 0, ahead: 0 };
+    pending[1]!(current);
+    await Promise.resolve();
+    pending[0]!({ ...current, added: 1 });
+    await Promise.resolve();
+    context.mock.timers.tick(100);
+    assert.equal(pending.length, 2, "the removed incarnation leaves no scheduled subprocess");
+    assert.deepEqual(watch.get(WORKSPACE), current, "an older incarnation cannot overwrite the current row");
+  } finally {
+    watch.dispose();
+    context.mock.timers.reset();
+  }
 });
 
 test("two touches inside the floor become one measurement after it", async (context) => {

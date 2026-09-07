@@ -539,6 +539,7 @@ jobs:
           cache-dependency-path: extensions/runtrol-vscode/package-lock.json
       - name: Install deterministic frontend dependencies
         run: npm --prefix extensions/runtrol-vscode ci
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
       - name: Refuse a runner that differs from the release SSOT
         run: node -e "const actual=process.platform+'-'+process.arch; const expected='${{ matrix.target }}'; if(actual!==expected) throw new Error('runner is '+actual+', expected '+expected)"
       - name: Build the native release Core

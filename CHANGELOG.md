@@ -12,6 +12,8 @@ and refactoring that no user can observe do not belong here.
 
 ### Added
 
+- An observed terminal can accept explicitly authorized text through its owner window. Revocation ends that
+  authority, and an unconfirmed handoff is never silently replayed.
 - Courier help and visible activation explain message identifier requirements and the PowerShell encoding setup
   needed to prevent an added BOM. Rejected identifiers report the specific format error without echoing the input.
 - An enabled lead session can start workers in isolated worktrees, with discovered provider and model choices.
@@ -61,6 +63,9 @@ and refactoring that no user can observe do not belong here.
 
 ### Changed
 
+- Project change counts recover after a Git timeout, repository initialization, or first commit without reloading
+  the window. Failed reads show a reason, and Look again retries them. Concurrent changes share one read per project.
+
 - Workers start from the source checkout's committed HEAD even while local edits are in progress. Uncommitted
   changes stay in the original checkout, and each spawn receipt identifies the exact commit used.
 - A conversation tab's pane now holds the provider's bytes and nothing else. The Runtrol mark that was drawn while a
@@ -80,6 +85,22 @@ and refactoring that no user can observe do not belong here.
 
 ### Fixed
 
+- Conversation icons keep their project colour when a terminal editor moves into a separate window and back.
+- Concurrent input and newly attached views schedule filesystem checks from the shared proof's actual completion,
+  preventing a healthy terminal from losing its connection because a refresh notification arrived during a command.
+- Windows shutdown confirms the Runtime and its supervised process trees have ended before reporting success.
+  Uninstall retains files when completion is uncertain and verifies older generations with the current bundled Runtime.
+- First-run project and conversation buttons, and sidebar retry actions, no longer fail as unavailable rows.
+- Project-wide deletion reports the actual reason each retained conversation cannot be deleted, including a new
+  process that has not yet received a provider conversation identity.
+- Terminal output collection counts actual elapsed time, including OS queries and scheduling delays, so an already
+  delayed echo does not wait through another series of nominal sleeps.
+- Arranging conversations in a grid now uses supported editor commands and waits for each terminal to take focus.
+  Multiple aliases of the same open conversation no longer move its tab twice.
+- A temporarily missing Runtime executable can be restored and retried at the same path without reloading Studio.
+  Starting a conversation focuses the sidebar before opening its provider picker, so the picker stays visible.
+- Terminal completion preserves the final accepted output and reports host failures even when the process exits
+  successfully. Quiet conversations remain running through Runtime updates until their process exits or is stopped.
 - Concurrent terminal views share filesystem authority checks for the same approved location. A slow refresh no
   longer disconnects a view before its existing proof expires; denied or expired authority stops input and output.
 - Resumed worker conversations stay under their original project while keeping their exact working directory.

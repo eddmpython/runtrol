@@ -40,7 +40,7 @@ export type UsageChip = {
   readonly age: string | null;
   readonly meters: readonly UsageMeter[];
   /// The one action the panel offers, or null when the row is only information.
-  readonly action: "signIn" | "fix" | null;
+  readonly action: "signIn" | "fix" | "retryUsage" | null;
   /// The service publishes a sign-in line, so the panel can offer to sign in whatever the account's state is.
   readonly canSignIn: boolean;
   /// The service publishes its own sign-out command, so a signed-in account's panel can offer it.
@@ -86,7 +86,7 @@ export function usageChips(
       icon: row.icon,
       percent: shown ? shown.percent : null,
       rings: rings.length > 0 ? rings : shown ? [{ label: shown.label, percent: shown.percent }] : [],
-      caption: shown ? `${shown.percent}%` : shortCaption(row),
+      caption: shown ? `${shown.percent}%${row.state === "unread" ? " · Retry" : ""}` : shortCaption(row),
       reached: row.reached,
       state: row.state,
       position: row.position,
@@ -108,7 +108,8 @@ export function usageChips(
 /// than opening something to read (the operator's rule, and 2026-08-28: pressing a chip should reach that
 /// provider's sign-in). A service with a figure to show has its hover panel, which is the reading surface; a
 /// service that shows nothing has nothing to read, and signing in is the only lever this surface holds.
-function chipAction(row: UsageRow, hasFigure: boolean): "signIn" | "fix" | null {
+function chipAction(row: UsageRow, hasFigure: boolean): UsageChip["action"] {
+  if (row.state === "unread") return "retryUsage";
   if (row.state === "unavailable") return "fix";
   if (row.state === "signedOut" || row.state === "disconnected") return "signIn";
   // Still asking. Offering to sign in to an account nobody has finished checking would answer a question that
@@ -127,6 +128,8 @@ function shortCaption(row: UsageRow): string {
   switch (row.state) {
     case "checking":
       return "Checking";
+    case "unread":
+      return "Retry";
     case "unavailable":
       return "Fix";
     case "signedOut":
@@ -178,7 +181,9 @@ const WIDTH_STYLE = Array.from({ length: 101 }, (_unused, at) => `.meter .value.
 
 function chipHtml(chip: UsageChip, index: number, assets: UsageStripAssets): string {
   const iconUri = assets.iconUris.get(chip.icon) ?? "";
-  const spoken = chip.percent === null
+  const spoken = chip.state === "unread"
+    ? `${chip.name}: usage unreadable; retry usage${chip.percent === null ? "" : `; last reported ${chip.percent} percent`}`
+    : chip.percent === null
     ? `${chip.name}: ${chip.caption}`
     : `${chip.name}: seven day usage ${chip.percent} percent${chip.reached ? ", a limit is blocking" : ""}`;
   // No native tooltip: the hover panel is the one detail surface, and a browser tooltip floating over it was
@@ -219,8 +224,13 @@ function panelHtml(chip: UsageChip, index: number): string {
 ${chip.position ? `<p class="position${chip.reached ? " reached" : ""}">${escapeHtml(chip.position)}</p>` : ""}
 ${bars}
 ${chip.age ? `<p class="age">${escapeHtml(chip.age)}</p>` : ""}
-${troubleshootButton(chip)}${signInButton(chip)}${signOutButton(chip)}
+${retryUsageButton(chip)}${troubleshootButton(chip)}${signInButton(chip)}${signOutButton(chip)}
 </section>`;
+}
+
+function retryUsageButton(chip: UsageChip): string {
+  if (chip.state !== "unread") return "";
+  return `<button class="action" type="button" data-action="retryUsage" data-provider="${escapeHtml(chip.providerId)}">Retry usage</button>`;
 }
 
 /// An unavailable service keeps its cause in the detail panel and puts the route to the provider's own repair

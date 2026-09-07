@@ -9,6 +9,12 @@ export function conversationArchival(
   row: Conversation,
   capabilities: ProviderCapabilities | null,
 ): ConversationArchival {
+  if (row.presence.kind === "unconfirmed") {
+    return { kind: "unsupported", why: `Runtrol must confirm the owner of ${row.title} before archiving it.` };
+  }
+  if (row.live && !row.canStop) {
+    return { kind: "unsupported", why: `${row.title} is running outside Runtrol. Stop its original owner before archiving it.` };
+  }
   if (!row.native) {
     return { kind: "unsupported", why: `${row.title} has no provider-owned conversation to archive.` };
   }
@@ -33,7 +39,7 @@ export function conversationArchival(
 export function archivalQuestion(row: Conversation): { message: string; detail: string; button: string } {
   return {
     message: `Archive "${row.title}" in ${row.serviceName}?`,
-    detail: `${row.session ? "Runtrol stops supervising it first. " : ""}`
+    detail: `${row.live ? "Runtrol stops its process first. " : row.session ? "Runtrol closes its supervision first. " : ""}`
       + `The conversation leaves this list and can be restored with ${row.serviceName}.`,
     button: `Archive in ${row.serviceName}`,
   };

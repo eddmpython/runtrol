@@ -166,6 +166,8 @@ jobs:
       - name: VS Code 확장 의존성
         if: needs.detect.outputs.hasWorkspace == 'true'
         run: npm --prefix extensions/runtrol-vscode ci
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        if: needs.detect.outputs.hasWorkspace == 'true'
       - name: Linux 네이티브 자격 증명 저장소
         if: needs.detect.outputs.hasWorkspace == 'true'
         shell: bash
@@ -344,6 +346,7 @@ jobs:
           cache-dependency-path: extensions/runtrol-vscode/package-lock.json
       - name: VS Code 확장 의존성
         run: npm --prefix extensions/runtrol-vscode ci
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
       - name: Linux 네이티브 자격 증명 저장소
         if: matrix.os == 'ubuntu-latest'
         shell: bash

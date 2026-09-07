@@ -147,6 +147,7 @@ export type JourneyApi = {
   /// Installed-host proof of the actual editor terminal path. These methods are absent from release bundles.
   terminalStart(providerId: string, workspace: string, deadlineMs: number): Promise<JourneyTerminal>;
   terminalAttach(runtimeGeneration: string, terminalId: string, deadlineMs: number): Promise<JourneyTerminal>;
+  terminalWaitForView(runtimeGeneration: string, terminalId: string, deadlineMs: number): Promise<JourneyTerminal>;
   terminalWaitForOutput(
     runtimeGeneration: string,
     terminalId: string,
@@ -416,6 +417,8 @@ export function journeyApi(
       await controller.select(row);
       return terminals.waitForJourneyTerminal({ runtimeGeneration, terminalId }, deadlineMs);
     }),
+    terminalWaitForView: (runtimeGeneration, terminalId, deadlineMs) =>
+      terminals.waitForJourneyTerminal({ runtimeGeneration, terminalId }, deadlineMs),
     terminalWaitForOutput: (runtimeGeneration, terminalId, text, deadlineMs) =>
       terminals.waitForJourneyOutput(runtimeGeneration, terminalId, text, deadlineMs),
     terminalWrite: (runtimeGeneration, terminalId, text) =>

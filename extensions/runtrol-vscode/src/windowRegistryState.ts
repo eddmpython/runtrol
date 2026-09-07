@@ -3,6 +3,7 @@ import type {
   ObservedTerminal,
   WindowRegisterParams,
   WindowUpdateParams,
+  WindowInputBinding,
 } from "@runtrol/runtime-client";
 
 /// What this window publishes to the Runtime's window registry, kept as a pure record of the terminal events VS
@@ -83,6 +84,20 @@ export class WindowRegistryState {
     return this.terminals.get(handle)?.processId ?? null;
   }
 
+  inputTarget(binding: WindowInputBinding): object | null {
+    if (binding.windowSessionId !== this.identity.windowSessionId
+      || binding.hostGeneration !== this.identity.hostGeneration) return null;
+    const handle = this.handleOf(binding.terminalKey);
+    const terminal = handle === null ? undefined : this.terminals.get(handle);
+    return terminal?.shellIntegration
+      && terminal.processId === binding.processId
+      && terminal.command?.executionId === binding.executionId ? handle : null;
+  }
+
+  executionIdOf(handle: object): string | null {
+    return this.terminals.get(handle)?.command?.executionId ?? null;
+  }
+
   processResolved(handle: object, processId: number | undefined): boolean {
     const terminal = this.terminals.get(handle);
     // A process id below one is VS Code saying there is no shell process (a pseudoterminal answers -1), and the
@@ -115,9 +130,10 @@ export class WindowRegistryState {
     return executionId;
   }
 
-  executionEnded(handle: object): boolean {
+  executionEnded(handle: object, executionId?: string): boolean {
     const terminal = this.terminals.get(handle);
     if (!terminal || terminal.command === null) return false;
+    if (executionId !== undefined && terminal.command.executionId !== executionId) return false;
     terminal.command = null;
     return true;
   }

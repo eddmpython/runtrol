@@ -11,6 +11,7 @@ import {
   stateRootOf,
   standaloneRootOf,
   storageFromDaemons,
+  stopManagedDaemons,
 } from "./uninstall";
 
 const home = path.resolve("C:\\Users\\someone");
@@ -71,4 +72,48 @@ test("a running Studio daemon proves its global storage from the locator and the
   assert.equal(storageFromDaemons(null, processes), null);
   const decided = plan(null, env, () => false, "win32", home, storage);
   assert.equal(decided.globalStorage, storage);
+});
+
+test("shutdown stops published generations newest first and keeps the keeper outside stop requests", () => {
+  const core = path.join(home, "managed", "core");
+  const older = { pid: 11, executable: path.join(core, "older.exe") };
+  const newer = { pid: 21, executable: path.join(core, "newer.exe") };
+  const keeper = { pid: 22, executable: newer.executable };
+  let active = [older, newer, keeper];
+  const stopped: string[] = [];
+  const olderDigest = "a".repeat(64);
+  const newerDigest = "b".repeat(64);
+  stopManagedDaemons(core, JSON.stringify({ generations: [
+    { processId: older.pid, startedAtMs: 100, digest: olderDigest },
+    { processId: newer.pid, startedAtMs: 200, digest: newerDigest },
+  ] }), {
+    list: () => active,
+    stop: (digest) => {
+      stopped.push(digest);
+      active = active.filter((entry) => entry.executable !== (digest === newerDigest ? newer.executable : older.executable));
+    },
+  });
+  assert.deepEqual(stopped, [newerDigest, olderDigest]);
+});
+
+test("an unconfirmed keeper prevents removal instead of being killed to release the image", () => {
+  const core = path.join(home, "managed", "core");
+  const keeper = { pid: 22, executable: path.join(core, "newer.exe") };
+  assert.throws(() => stopManagedDaemons(core, JSON.stringify({ generations: [] }), {
+    list: () => [keeper],
+    stop: () => assert.fail("no live Runtime was published"),
+  }), /supervision is still active/u);
+  assert.throws(() => stopManagedDaemons(core, null, {
+    list: () => [keeper],
+    stop: () => assert.fail("no locator can authorize a Runtime request"),
+  }), /no readable locator/u);
+});
+
+test("failed process completion is surfaced before any remaining process is considered gone", () => {
+  const core = path.join(home, "managed", "core");
+  const runtime = { pid: 21, executable: path.join(core, "newer.exe") };
+  assert.throws(() => stopManagedDaemons(core, JSON.stringify({ generations: [{ processId: 21, startedAtMs: 100, digest: "a".repeat(64) }] }), {
+    list: () => [runtime],
+    stop: () => { throw new Error("keeper completion is unconfirmed"); },
+  }), /completion is unconfirmed/u);
 });

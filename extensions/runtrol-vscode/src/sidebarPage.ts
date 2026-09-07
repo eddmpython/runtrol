@@ -33,6 +33,7 @@ export type SidebarConversationRow = {
   readonly canOpen: boolean;
   /// The window that runs it can show it, even though it cannot be opened here.
   readonly canFocus: boolean;
+  readonly canOpenInput?: boolean;
   /// The Runtime was asked to stop its process and is waiting for it to exit.
   readonly stopping: boolean;
   /// Absent when this row has no live managed terminal that can own dialogue.
@@ -66,6 +67,7 @@ export type SidebarProjectRow = {
   readonly branch: string | null;
   /// What the repository holds uncommitted or unpushed, or null when nothing is known.
   readonly changes: GitChanges | null;
+  readonly changesError: string | null;
 };
 
 export type SidebarNotice = {
@@ -78,6 +80,7 @@ export type SidebarNotice = {
 export type SidebarServiceChoice = {
   readonly workspace: string;
   readonly services: ReadonlyArray<{ providerId: string; displayName: string; icon: string }>;
+  readonly unavailable?: string | null;
 };
 
 export type SidebarModel = {
@@ -175,7 +178,8 @@ ${usageChipsMarkup(model.usage, assets)}
 ///
 /// Lines rather than files, because "three files changed" says nothing about whether it was a typo or an
 /// afternoon. The chip vanishes at zero: a clean, pushed project has nothing to say and says nothing.
-function changesMarkup(changes: GitChanges | null): string {
+function changesMarkup(changes: GitChanges | null, error: string | null): string {
+  if (error) return `<span class="badge changes" title="${escapeHtml(`Git changes unavailable: ${error}. Use Look again to retry.`)}">Git unavailable</span>`;
   if (!hasChanges(changes)) return "";
   const parts = [
     changes.added > 0 ? `<span class="add">+${countText(changes.added)}</span>` : "",
@@ -207,7 +211,7 @@ function projectHtml(project: SidebarProjectRow, assets: SidebarAssets): string 
     project.attention > 0 ? `<span class="badge attention" title="${project.attention} waiting for you">${project.attention}</span>` : "",
     project.live > 0 ? `<span class="badge live" title="${project.live} running">${project.live}</span>` : "",
     project.branch ? `<span class="badge branch" title="On branch ${escapeHtml(project.branch)}"><i class="ci ci-git-branch" aria-hidden="true"></i><span class="what">${escapeHtml(project.branch)}</span></span>` : "",
-    changesMarkup(project.changes),
+    changesMarkup(project.changes, project.changesError),
   ].join("");
   const actions = project.kind === "created"
     ? `<span class="actions">
@@ -256,6 +260,7 @@ function conversationHtml(row: SidebarConversationRow, assets: SidebarAssets): s
         ? " working"
         : "";
   const actions = [
+    row.canOpenInput ? action("runtrol.openInputView", "Open input view here", "input") : "",
     row.dialogue !== undefined ? action(row.dialogue ? "runtrol.disableDialogue" : "runtrol.enableDialogue",
       row.dialogue ? "Disable dialogue for this live session" : "Enable dialogue for this live session", "dialogue") : "",
     row.activity === "needsYou" ? action("runtrol.allowFromRow", "Allow", "check") + action("runtrol.declineFromRow", "Decline", "circle-slash") : "",
@@ -272,7 +277,8 @@ function conversationHtml(row: SidebarConversationRow, assets: SidebarAssets): s
   // Running is a state of the whole row, said once on the row: the provider icon turns.
   const visibleTitle = conversationTitle(row.title);
   const titleDetail = visibleTitle === row.title ? null : row.title;
-  const tooltip = [row.blocked, titleDetail, row.spawnedBy ? `Started by lead ${row.spawnedBy}` : null]
+  const inputDetail = row.canOpenInput === false ? "Input is available in the terminal's own window." : null;
+  const tooltip = [row.blocked, inputDetail, titleDetail, row.spawnedBy ? `Started by lead ${row.spawnedBy}` : null]
     .filter(Boolean).join("\n");
   return `<div class="row conv${row.canOpen ? "" : " blocked"}${row.pinned ? " pinned" : ""}${row.open ? " open" : ""}${state ? " stateful" : ""}${signal}" role="button" tabindex="0" data-kind="conversation" data-key="${escapeHtml(row.key)}"${tooltip ? ` title="${escapeHtml(tooltip)}"` : ""}>
 <span class="glyph-slot"><img class="glyph" src="${escapeHtml(iconUri)}" alt="${escapeHtml(row.serviceName)}" draggable="false"></span>
@@ -337,6 +343,7 @@ function noticeHtml(notice: SidebarNotice): string {
 function serviceChoiceHtml(choice: SidebarServiceChoice, assets: SidebarAssets): string {
   return `<div class="choice" data-workspace="${escapeHtml(choice.workspace)}">
 <span class="choice-title">Start with</span>
+${choice.unavailable ? `<span role="status">${escapeHtml(choice.unavailable)}</span><button class="choice-item" type="button" data-command="runtrol.refresh">Try again</button>` : ""}
 ${choice.services.map((service) => `<button class="choice-item" type="button" data-command="runtrol.startSessionWith" data-kind="service" data-key="${escapeHtml(service.providerId)}"><img src="${escapeHtml(assets.iconUris.get(service.icon) ?? "")}" alt="">${escapeHtml(service.displayName)}</button>`).join("")}
 </div>`;
 }
@@ -483,6 +490,7 @@ button { font: inherit; color: inherit; }
 .ci-gauge { --ci: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M8 3a7 7 0 0 0-7 7v1h3v-1a4 4 0 1 1 8 0v1h3v-1a7 7 0 0 0-7-7z'/><path d='M8.9 10.6a1.3 1.3 0 1 1-1.8-1.8l4-2.6z'/></svg>"); }
 .ci-git-branch { --ci: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M11 2a2 2 0 0 0-1 3.7V7a2 2 0 0 1-2 2H6a3 3 0 0 0-1 .2V5.7a2 2 0 1 0-2 0v4.6a2 2 0 1 0 2 .1A2 2 0 0 1 6 10h2a4 4 0 0 0 4-4V5.7A2 2 0 0 0 11 2z'/></svg>"); }
 .ci-edit { --ci: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M12 1l3 3-8 8H4V9zM2 14h12v1H2z'/></svg>"); }
+.ci-input { --ci: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M1 2h14v12H1V2zm1 1v10h12V3H2zm2 2l3 3-3 3-.7-.7L5.6 8 3.3 5.7 4 5zm4 5h4v1H8v-1z'/></svg>"); }
 .ci-trash { --ci: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M6 1h4l1 1h3v2H2V2h3zM3 5h10l-1 10H4z'/></svg>"); }
 .ci-archive { --ci: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M1 2h14v4H1zM2 7h12v8H2zm4 2v1h4V9z'/></svg>"); }
 .ci-debug-stop { --ci: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect x='3' y='3' width='10' height='10' rx='1'/></svg>"); }
@@ -507,7 +515,7 @@ const SCRIPT = `
   function rowOf(element) { return element.closest(".row"); }
   function targetOf(element) {
     var row = rowOf(element);
-    if (!row) return null;
+    if (!row) return undefined;
     return { kind: row.dataset.kind, key: row.dataset.key };
   }
   // The service choice is a question, and a question a person walks away from is withdrawn: a click anywhere

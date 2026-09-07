@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { providerGlyphs } from "./provider-glyphs.mjs";
 
 export const extensionRoot = fileURLToPath(new URL("../", import.meta.url));
 export const repositoryRoot = fileURLToPath(new URL("../../../", import.meta.url));
@@ -13,7 +14,10 @@ export const packageManifest = Object.freeze(
   {
     ...sourceManifest,
     version: extensionReleasePolicy.version,
-    contributes: releaseContributions(sourceManifest.contributes, extensionReleasePolicy.version),
+    contributes: releaseContributions({
+      ...sourceManifest.contributes,
+      icons: providerGlyphs.icons,
+    }, extensionReleasePolicy.version),
   },
 );
 export const extensionReleaseTag = `${extensionReleasePolicy.tagPrefix}${extensionReleasePolicy.version}`;

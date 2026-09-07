@@ -13,6 +13,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { bundledCorePath } from "./core/managedCore";
 
 export const UNINSTALL_RECORD = "uninstall.json";
 export const EXTENSION_IDENTIFIER = "runtrol.runtrol-studio";
@@ -145,6 +146,7 @@ export function managedDaemons(managedCore: string, processes: readonly RunningP
 function runningProcesses(): RunningProcess[] {
   if (process.platform !== "win32") {
     const listed = spawnSync("ps", ["-axo", "pid=,comm="], { encoding: "utf8", timeout: 15_000 });
+    if (listed.error || listed.status !== 0) throw new Error("Cannot verify Runtime process completion.");
     return (listed.stdout ?? "")
       .split("\n")
       .map((line) => line.trim().match(/^(\d+)\s+(.+)$/u))
@@ -157,13 +159,12 @@ function runningProcesses(): RunningProcess[] {
       "Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath } | Select-Object ProcessId, ExecutablePath | ConvertTo-Json -Compress"],
     { encoding: "utf8", timeout: 30_000, windowsHide: true },
   );
+  if (listed.error || listed.status !== 0) throw new Error("Cannot verify Runtime process completion.");
   let parsed: unknown;
   try {
     parsed = JSON.parse(listed.stdout || "[]");
   } catch {
-    // ok: a process list that cannot be read means nothing can be proved to be ours, so nothing is stopped and
-    // the removal below fails visibly on the still-mapped image instead of guessing at a pid.
-    return [];
+    throw new Error("The Runtime process inventory is unreadable; its files were retained.");
   }
   const rows = Array.isArray(parsed) ? parsed : [parsed];
   return rows
@@ -173,29 +174,44 @@ function runningProcesses(): RunningProcess[] {
     .map((row) => ({ pid: row.ProcessId, executable: row.ExecutablePath }));
 }
 
-function sleep(ms: number): void {
-  const until = Date.now() + ms;
-  while (Date.now() < until) {
-    // Busy waiting is acceptable for a one-off hook that runs once per uninstall and holds nothing else.
-  }
+export type ShutdownOperations = {
+  list(): RunningProcess[];
+  stop(digest: string): void;
+};
+
+function shutdownOperations(hookDirectory = __dirname, env: Environment = process.env): ShutdownOperations {
+  return {
+    list: runningProcesses,
+    stop: (digest) => {
+      // An older image's CLI can mistake EOF for completion. Always use this extension's bundled verifier,
+      // targeting the exact published digest without starting a Runtime or touching another installation.
+      const stopped = spawnSync(bundledCorePath(path.resolve(hookDirectory, "..")), ["panic", "--generation", digest], {
+        encoding: "utf8", timeout: 40_000, windowsHide: true, env: { ...process.env, ...env },
+      });
+      if (stopped.error || stopped.status !== 0) {
+        throw new Error("Runtime process completion was not confirmed; its files were retained.");
+      }
+    },
+  };
 }
 
-/// Stop every daemon running from the managed Core directory through the product's own panic button, then
-/// end any that is still there by its exact pid.
-function stopManagedDaemons(managedCore: string): void {
-  const first = managedDaemons(managedCore, runningProcesses());
+/// Ask each published Runtime to stop with the current verifier. Never force-kill a keeper to release its image.
+export function stopManagedDaemons(managedCore: string, locator: string | null, operations: ShutdownOperations = shutdownOperations()): void {
+  const first = managedDaemons(managedCore, operations.list());
   if (first.length === 0) return;
-  spawnSync(first[0]!.executable, ["panic"], { encoding: "utf8", timeout: 30_000, windowsHide: true });
-  for (let attempt = 0; attempt < 30; attempt += 1) {
-    if (managedDaemons(managedCore, runningProcesses()).length === 0) return;
-    sleep(500);
+  const parsed: unknown = locator ? JSON.parse(locator) : null;
+  const generations = parsed && typeof parsed === "object" && "generations" in parsed ? parsed.generations : null;
+  if (!Array.isArray(generations)) throw new Error("Active Runtime processes have no readable locator; their files were retained.");
+  const ordered = generations.filter((value): value is { processId: number; startedAtMs: number; digest: string } =>
+    value && typeof value.processId === "number" && typeof value.startedAtMs === "number"
+    && typeof value.digest === "string" && /^[a-f0-9]{64}$/u.test(value.digest))
+    .sort((left, right) => right.startedAtMs - left.startedAtMs);
+  for (const generation of ordered) {
+    const runtime = first.find((candidate) => candidate.pid === generation.processId);
+    if (runtime) operations.stop(generation.digest);
   }
-  for (const remaining of managedDaemons(managedCore, runningProcesses())) {
-    if (process.platform === "win32") {
-      spawnSync("taskkill.exe", ["/PID", String(remaining.pid), "/T", "/F"], { encoding: "utf8", timeout: 15_000, windowsHide: true });
-    } else {
-      process.kill(remaining.pid, "SIGKILL");
-    }
+  if (managedDaemons(managedCore, operations.list()).length > 0) {
+    throw new Error("Runtime supervision is still active; its files were retained.");
   }
 }
 
@@ -232,10 +248,14 @@ export function main(hookDirectory = __dirname, env: Environment = process.env):
   );
   const failures: string[] = [];
   if (decided.globalStorage) {
-    stopManagedDaemons(path.join(decided.globalStorage, "core"));
-    removeTree(decided.globalStorage, failures);
+    try {
+      stopManagedDaemons(path.join(decided.globalStorage, "core"), locatorText(stateRoot), shutdownOperations(hookDirectory, env));
+      removeTree(decided.globalStorage, failures);
+    } catch (error) {
+      failures.push(error instanceof Error ? error.message : String(error));
+    }
   }
-  if (decided.removeStateRoot) {
+  if (decided.removeStateRoot && failures.length === 0) {
     removeTree(decided.stateRoot, failures);
   }
   for (const failure of failures) {

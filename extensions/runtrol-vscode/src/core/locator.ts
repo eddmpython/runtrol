@@ -5,7 +5,7 @@ import path from "node:path";
 import * as vscode from "vscode";
 
 import { FrameTransport } from "./framing";
-import { materializeManagedCore } from "./managedCore";
+import { bundledCorePath, materializeManagedCore } from "./managedCore";
 
 type LocatedCore = {
   executable: string;
@@ -33,7 +33,13 @@ export class CoreLocator {
   ) {}
 
   locate(): Promise<LocatedCore> {
-    this.located ??= this.discover();
+    if (this.located === null) {
+      const pending = this.discover().catch((error: unknown) => {
+        if (this.located === pending) this.located = null;
+        throw error;
+      });
+      this.located = pending;
+    }
     return this.located;
   }
 
@@ -62,21 +68,19 @@ export class CoreLocator {
   }
 
   private candidateExecutables(): Promise<Candidate[]> {
-    this.candidates ??= this.gatherCandidates().catch((error: unknown) => {
-      this.candidates = null;
-      throw error;
-    });
+    if (this.candidates === null) {
+      const pending = this.gatherCandidates().catch((error: unknown) => {
+        if (this.candidates === pending) this.candidates = null;
+        throw error;
+      });
+      this.candidates = pending;
+    }
     return this.candidates;
   }
 
   private async gatherCandidates(): Promise<Candidate[]> {
     const configured = vscode.workspace.getConfiguration("runtrol").get<string>("corePath", "").trim();
-    const bundled = vscode.Uri.joinPath(
-      this.context.extensionUri,
-      "resources",
-      "core",
-      process.platform === "win32" ? "runtrol.exe" : "runtrol",
-    ).fsPath;
+    const bundled = bundledCorePath(this.context.extensionUri.fsPath);
 
     const candidates: Candidate[] = [];
     if (configured) {

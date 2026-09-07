@@ -1,5 +1,5 @@
 import { isProjectless } from "./projectlessWorkspace";
-import type { ProjectRecord } from "./projects";
+import { projectForWorkspace, type ProjectRecord } from "./projects";
 import type { NativeChatLine, ProviderLine, SessionLine, TerminalDescriptor } from "./runtimeTypes";
 import { providerDisplayName, providerIcon, workspaceName } from "./sessionDisplay";
 import { workspaceCovers, workspaceIdentity } from "./workspaceCollision";
@@ -453,7 +453,7 @@ export type ProjectKind = "created" | "open";
 /// folder that held enough conversations, and the operator rejected the wall of folder names it produced. Now a
 /// heading exists because the person added the folder or opened this window on it, and nothing else. Adding a
 /// folder lists every conversation the coding services report inside it, at once: the CLI's own listing is the
-/// authority on which folder a conversation belongs to, and `projectOf` files each one under the deepest added
+/// authority on which folder a conversation belongs to, and `projectForWorkspace` files each one under the deepest added
 /// project that covers it.
 ///
 /// One heading per place. An added project wins over an open folder covering the same conversation, because
@@ -472,7 +472,7 @@ export function projects(
   const filed = new Map<string, Conversation[]>(records.map((record) => [record.key, []]));
   for (const row of rows) {
     if (intrinsicallyLoose(row)) continue;
-    const home = projectOf(records, row);
+    const home = projectForWorkspace(records, row.homeWorkspace);
     if (home) filed.get(home.key)?.push(row);
   }
   // Only what somebody added. The window's own folder used to become a heading of its own, which made the
@@ -565,19 +565,6 @@ function openFolderOf(openWorkspaces: readonly string[], row: Conversation): str
       home = identity;
       homeLength = identity.length;
     }
-  }
-  return home;
-}
-
-/// The created project a conversation belongs to, or null when nobody filed it anywhere.
-///
-/// Deepest folder wins when projects nest, because that is the one a person would call the conversation's home.
-function projectOf(records: readonly ProjectRecord[], row: Conversation): ProjectRecord | null {
-  if (!row.homeWorkspace.trim()) return null;
-  let home: ProjectRecord | null = null;
-  for (const record of records) {
-    if (!workspaceCovers(record.workspace, row.homeWorkspace)) continue;
-    if (!home || record.key.length > home.key.length) home = record;
   }
   return home;
 }

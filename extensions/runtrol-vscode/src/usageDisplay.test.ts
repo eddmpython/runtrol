@@ -13,6 +13,51 @@ import {
 
 const NOW = Date.parse("2026-08-18T12:00:00Z");
 
+test("an account read failure keeps the last gauge and its age without inventing sign-in state", () => {
+  const providers: ProviderLine[] = PROVIDERS.map((provider) => ({ ...provider,
+    account: { status: "unread", why: "Account request timed out", checkedAtMs: NOW },
+  }));
+  const prior = gauge({ windows: [window("five_hour", { usedPercent: 48 })] });
+  const previous = usageRows([prior], PROVIDERS, NOW).find((row) => row.providerId === "codex");
+  const rows = usageRows([prior], providers, NOW);
+  const retained = rows.find((row) => row.providerId === "codex");
+  assert.equal(retained?.state, "unread");
+  assert.deepEqual(retained?.meters, previous?.meters);
+  assert.equal(retained?.age, previous?.age);
+  assert.match(retained?.position ?? "", /timed out.*last report/u);
+  assert.equal(rows[0]?.detail, "Usage unreadable");
+  assert.equal(rows[0]?.age, null, "a first failed read invents no report date");
+  assert.doesNotMatch(rows[0]?.tooltip ?? "", /publishes no|sign in/iu);
+  const recovered = usageRows([prior], PROVIDERS, NOW).find((row) => row.providerId === "codex");
+  assert.equal(recovered?.state, "available");
+});
+
+test("a confirmed sign-out clears prior numbers even when usage and account pushes arrive separately", () => {
+  const providers: ProviderLine[] = PROVIDERS.map((provider) => ({ ...provider,
+    account: { status: "signedOut", checkedAtMs: NOW },
+  }));
+  const prior = gauge({ windows: [window("five_hour", { usedPercent: 48 })] });
+  const signedOut = usageRows([prior], providers, NOW).find((row) => row.providerId === "codex");
+  assert.equal(signedOut?.state, "signedOut");
+  assert.deepEqual(signedOut?.meters, []);
+  assert.equal(signedOut?.age, null);
+  const newer = usageRows([{ ...prior, atMs: NOW + 1 }], providers, NOW + 1).find((row) => row.providerId === "codex");
+  assert.equal(newer?.meters.length, 1, "a later provider turn remains new evidence");
+});
+
+test("a signed-in account whose limit read failed offers retry and keeps its known plan", () => {
+  const providers: ProviderLine[] = PROVIDERS.map((provider) => ({ ...provider,
+    account: { status: "signedIn", plan: "fixture", limitsAbsent: { kind: "unread", why: "Limit request timed out" }, checkedAtMs: NOW },
+  }));
+  const prior = gauge({ windows: [window("five_hour", { usedPercent: 48 })] });
+  const rows = usageRows([prior], providers, NOW);
+  assert.ok(rows.every((row) => row.state === "unread"));
+  const retained = rows.find((row) => row.providerId === "codex");
+  assert.equal(retained?.plan, "fixture plan");
+  assert.equal(retained?.meters[0]?.percent, 48);
+  assert.match(retained?.position ?? "", /Limit request timed out.*last report/u);
+});
+
 const PROVIDERS = [
   { providerId: "claude", displayName: "Claude Code", icon: "claude", installation: { state: "usable" } },
   { providerId: "codex", displayName: "Codex", icon: "openai", installation: { state: "usable" } },

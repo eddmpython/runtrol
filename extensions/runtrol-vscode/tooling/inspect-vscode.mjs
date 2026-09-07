@@ -112,6 +112,7 @@ async function main() {
     "-TitleMatch", request.title,
     "-X", String(request.x),
     "-Y", String(request.y),
+    ...(request.command ? ["-CommandLineMatch", request.command] : []),
   ]).catch((error) => fail(error.message, 4));
   process.stdout.write(`${said}\n`);
 }

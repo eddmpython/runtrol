@@ -45,6 +45,27 @@ export function normalizedExecutable(value) {
   return process.platform === "win32" ? resolved.toLocaleLowerCase("en-US") : resolved;
 }
 
+export function ownedProcessRoots(rows, marker, executable) {
+  if (!path.isAbsolute(marker) || path.parse(marker).root === marker) {
+    throw new Error("process cleanup requires an exact owned directory marker");
+  }
+  const expected = executable ? normalizedExecutable(executable) : "";
+  const normalizedMarker = normalizedExecutable(marker);
+  // A downloaded editor image is shared by unrelated test profiles. Only a private image below this owned
+  // directory can be selected by executable alone; shared images must still carry the exact directory marker.
+  const privateImage = expected.startsWith(normalizedMarker + path.sep);
+  return rows.filter((row) => {
+    const command = process.platform === "win32"
+      ? row.command.replaceAll("/", "\\").toLocaleLowerCase("en-US") : row.command;
+    for (let at = command.indexOf(normalizedMarker); at >= 0; at = command.indexOf(normalizedMarker, at + 1)) {
+      const end = at + normalizedMarker.length;
+      if ((at === 0 || /[=\s"']/u.test(command[at - 1]))
+        && (end === command.length || /[\\/\s"']/u.test(command[end]))) return true;
+    }
+    return privateImage && normalizedExecutable(row.executable) === expected;
+  });
+}
+
 function windowsRows() {
   const query = "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,ExecutablePath,CommandLine,"
     + "@{Name='CreationTimeMs';Expression={[DateTimeOffset]$_.CreationDate "

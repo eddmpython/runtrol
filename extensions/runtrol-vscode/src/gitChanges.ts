@@ -19,8 +19,9 @@ export type GitRunner = (workspace: string, args: readonly string[]) => Promise<
 
 const GIT_TIMEOUT_MS = 10_000;
 const GIT_OUTPUT_MAX_BYTES = 4 * 1024 * 1024;
+const ERROR_DETAIL_MAX_CHARS = 512;
 
-/// Both counts, or null when the folder is not a repository, has no commit yet, or git is not on this machine.
+/// Both counts, or null when the folder is not a repository or has no commit yet. Failed reads reject.
 ///
 /// A subprocess, unlike the branch chip, because line counts are not in any file git keeps. Two calls in
 /// parallel: `diff --shortstat` for the lines, `status --porcelain=v2 --branch` for untracked files and the
@@ -30,17 +31,21 @@ export async function readGitChanges(
   workspace: string,
   run: GitRunner = runGit,
 ): Promise<GitChanges | null> {
-  try {
-    const [shortstat, status] = await Promise.all([
-      run(workspace, ["diff", "--shortstat", "HEAD"]),
-      run(workspace, ["status", "--porcelain=v2", "--branch"]),
-    ]);
-    return { ...parseShortstat(shortstat), ...parseStatusBranch(status) };
-  } catch {
-    // Not a repository, an unborn branch, or no git at all: each means "nothing to show", never a number. The
-    // branch chip beside this one already says whether the folder is in a repository.
-    return null;
+  const [shortstat, status] = await Promise.allSettled([
+    run(workspace, ["diff", "--shortstat", "HEAD"]),
+    run(workspace, ["status", "--porcelain=v2", "--branch"]),
+  ]);
+  if (status.status === "rejected") {
+    const error = status.reason as { code?: unknown; stderr?: unknown } | null;
+    if (error?.code === 128 && typeof error.stderr === "string"
+      && /^fatal: not a git repository(?: \(|$)/u.test(error.stderr)) return null;
+    throw status.reason;
   }
+  if (shortstat.status === "rejected") {
+    if (/^# branch\.oid \(initial\)\r?$/mu.test(status.value)) return null;
+    throw shortstat.reason;
+  }
+  return { ...parseShortstat(shortstat.value), ...parseStatusBranch(status.value) };
 }
 
 /// ` 3 files changed, 120 insertions(+), 35 deletions(-)`, or an empty line when the tree is clean.
@@ -86,8 +91,8 @@ function runGit(workspace: string, args: readonly string[]): Promise<string> {
         windowsHide: true,
         env: { ...process.env, LC_ALL: "C", GIT_OPTIONAL_LOCKS: "0" },
       },
-      (error, stdout) => {
-        if (error) reject(error);
+      (error, stdout, stderr) => {
+        if (error) reject(Object.assign(error, { stderr }));
         else resolve(stdout);
       },
     );
@@ -109,18 +114,23 @@ const SETTLE_MAX_WAIT_MS = 15_000;
 /// enough to read and the process count low enough not to be felt.
 const MEASURE_FLOOR_MS = 5_000;
 
+type WatchedProject = {
+  readonly workspace: string;
+  value: GitChanges | null;
+  error: string | null;
+  measuredAt: number;
+  reading: boolean;
+  dirty: boolean;
+  pending?: { timer: NodeJS.Timeout; since: number };
+};
+
 /// The last answer per project folder, and when to ask again.
 ///
 /// No polling. A project is measured when it first appears, when a conversation in it writes to its screen
 /// (the moment an agent can have changed files), and when the editor's own git extension reports a change in a
 /// folder this window has open (a person committing by hand). A project nobody touches costs nothing.
 export class GitChangesWatch {
-  private readonly cache = new Map<string, GitChanges | null>();
-  /// The folder as the list spells it, per key, so git is run on the path the person sees.
-  private readonly folders = new Map<string, string>();
-  /// When each folder was last measured, so a burst of touches cannot turn into a burst of processes.
-  private readonly measuredAt = new Map<string, number>();
-  private readonly pending = new Map<string, { timer: NodeJS.Timeout; since: number }>();
+  private readonly projects = new Map<string, WatchedProject>();
   private readonly listeners = new Set<() => void>();
   private disposed = false;
 
@@ -133,45 +143,54 @@ export class GitChangesWatch {
 
   /// The last answer for this folder, or undefined when it has never been measured.
   get(workspace: string): GitChanges | null | undefined {
-    return this.cache.get(keyOf(workspace));
+    return this.projects.get(keyOf(workspace))?.value;
+  }
+
+  getError(workspace: string): string | null {
+    return this.projects.get(keyOf(workspace))?.error ?? null;
+  }
+
+  /// An explicit refresh retries every visible project through its ordinary coalescing limits.
+  refresh(): void {
+    for (const project of this.projects.values()) this.touch(project.workspace);
   }
 
   /// Measure a folder that has never been measured. Nothing happens for one that has.
   ensure(workspace: string): void {
+    if (this.disposed) return;
     const key = keyOf(workspace);
-    if (this.cache.has(key) || this.pending.has(key)) return;
-    this.cache.set(key, null);
-    this.folders.set(key, workspace);
-    void this.measure(key, workspace);
+    if (this.projects.has(key)) return;
+    const project: WatchedProject = { workspace, value: null, error: null, measuredAt: 0, reading: false, dirty: false };
+    this.projects.set(key, project);
+    void this.measure(key, project);
   }
 
   /// Something may have changed in this folder: measure once it settles.
   ///
-  /// A folder that is not a repository is not measured again from here: git said so once, and asking on every
-  /// write would spawn processes for an answer that cannot change until the person runs `git init`, which the
-  /// next listing (`ensure`) sees. A folder measured moments ago waits out the floor first.
+  /// A real change signal can recover a failed read, a new repository, or its first commit. Every state uses
+  /// the same floor and coalescing limits; an unavailable answer never starts its own retry poll.
   touch(workspace: string): void {
     if (this.disposed) return;
     const key = keyOf(workspace);
-    if (this.cache.has(key) && this.cache.get(key) === null && this.measuredAt.has(key)) return;
-    this.folders.set(key, workspace);
-    const now = Date.now();
-    const waiting = this.pending.get(key);
-    if (waiting) {
-      clearTimeout(waiting.timer);
-      if (now - waiting.since >= this.maxWaitMs) {
-        this.pending.delete(key);
-        void this.measure(key, workspace);
-        return;
-      }
+    const project = this.projects.get(key);
+    if (!project) {
+      this.ensure(workspace);
+      return;
     }
+    if (project.reading) {
+      project.dirty = true;
+      return;
+    }
+    const now = Date.now();
+    const waiting = project.pending;
+    if (waiting) clearTimeout(waiting.timer);
     const since = waiting?.since ?? now;
-    const floor = Math.max(0, (this.measuredAt.get(key) ?? 0) + this.floorMs - now);
+    const due = Math.max(project.measuredAt + this.floorMs, Math.min(now + this.settleMs, since + this.maxWaitMs));
     const timer = setTimeout(() => {
-      this.pending.delete(key);
-      void this.measure(key, workspace);
-    }, Math.max(this.settleMs, floor));
-    this.pending.set(key, { timer, since });
+      delete project.pending;
+      void this.measure(key, project);
+    }, Math.max(0, due - now));
+    project.pending = { timer, since };
   }
 
   /// Something wrote inside this folder: touch every followed folder that contains it, which is the project
@@ -179,27 +198,26 @@ export class GitChangesWatch {
   /// row, so the project's chip is what moves; the subfolder itself is never measured on its own.
   touchContaining(folder: string): void {
     const key = keyOf(folder);
-    for (const [known, spelled] of this.folders) {
-      if (key === known || key.startsWith(`${known}${path.sep}`)) this.touch(spelled);
+    for (const [known, project] of this.projects) {
+      if (key === known || key.startsWith(`${known}${path.sep}`)) this.touch(project.workspace);
     }
   }
 
   /// Something changed somewhere under this root: touch every folder measured under it.
   touchUnder(root: string): void {
     const prefix = keyOf(root);
-    for (const [key, folder] of this.folders) {
-      if (key === prefix || key.startsWith(`${prefix}${path.sep}`)) this.touch(folder);
+    for (const [key, project] of this.projects) {
+      if (key === prefix || key.startsWith(`${prefix}${path.sep}`)) this.touch(project.workspace);
     }
   }
 
   /// Forget folders the list no longer shows.
   keep(workspaces: readonly string[]): void {
     const wanted = new Set(workspaces.map(keyOf));
-    for (const key of [...this.cache.keys()]) {
+    for (const [key, project] of this.projects) {
       if (wanted.has(key)) continue;
-      this.cache.delete(key);
-      this.folders.delete(key);
-      this.measuredAt.delete(key);
+      if (project.pending) clearTimeout(project.pending.timer);
+      this.projects.delete(key);
     }
   }
 
@@ -210,19 +228,37 @@ export class GitChangesWatch {
 
   dispose(): void {
     this.disposed = true;
-    for (const waiting of this.pending.values()) clearTimeout(waiting.timer);
-    this.pending.clear();
+    for (const project of this.projects.values()) {
+      if (project.pending) clearTimeout(project.pending.timer);
+    }
+    this.projects.clear();
     this.listeners.clear();
   }
 
-  private async measure(key: string, workspace: string): Promise<void> {
-    this.measuredAt.set(key, Date.now());
-    const next = await this.read(workspace);
-    if (this.disposed) return;
-    const previous = this.cache.get(key);
-    this.cache.set(key, next);
-    if (previous !== undefined && sameChanges(previous, next)) return;
-    for (const listener of this.listeners) listener();
+  private async measure(key: string, project: WatchedProject): Promise<void> {
+    if (this.disposed || this.projects.get(key) !== project) return;
+    project.reading = true;
+    project.measuredAt = Date.now();
+    let next: GitChanges | null = null;
+    let error: string | null = null;
+    try {
+      next = await this.read(project.workspace);
+    } catch (failure) {
+      // A failed probe is visible and the next real change retries it through the same bounded scheduler.
+      // Do not retain a stale count as though it described the current working tree.
+      error = (failure instanceof Error ? failure.message : String(failure)).slice(0, ERROR_DETAIL_MAX_CHARS)
+        || "Git could not read this repository";
+    }
+    if (this.disposed || this.projects.get(key) !== project) return;
+    const changed = !sameChanges(project.value, next) || project.error !== error;
+    project.value = next;
+    project.error = error;
+    project.reading = false;
+    if (project.dirty) {
+      project.dirty = false;
+      this.touch(project.workspace);
+    }
+    if (changed) for (const listener of this.listeners) listener();
   }
 }
 

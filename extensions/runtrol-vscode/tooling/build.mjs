@@ -1,7 +1,8 @@
-import { cp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { cp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { build } from "esbuild";
+import { buildProviderFont, providerGlyphs } from "./provider-glyphs.mjs";
 
 const extensionRoot = fileURLToPath(new URL("../", import.meta.url));
 const repositoryRoot = fileURLToPath(new URL("../../../", import.meta.url));
@@ -31,6 +32,7 @@ await Promise.all([
 ]);
 
 await buildProviderIcons();
+await buildProviderFont(providerIcons);
 
 await Promise.all([
   build({
@@ -40,8 +42,7 @@ await Promise.all([
     platform: "node",
     format: "cjs",
     target: "node20",
-    // QR generation is a pairing-only feature. Its bounded sibling bundle is loaded by pairingQr.ts on demand,
-    // instead of charging every Extension Host activation for the encoder tables.
+    // Phone UI and QR generation share a bounded sibling bundle loaded only by an explicit pairing command.
     external: ["vscode", "./pairingQrVendor"],
     alias: {
       "@runtrol/runtime-client": path.join(repositoryRoot, "clients/typescript/src/index.ts"),
@@ -72,6 +73,7 @@ await Promise.all([
     platform: "node",
     format: "cjs",
     target: "node20",
+    external: ["vscode", "./pairingQrVendor"],
     minify: true,
     sourcemap: false,
     logLevel: "info",
@@ -90,14 +92,6 @@ async function buildProviderIcons() {
   const fallback = symbols.get("sparkle");
   if (!fallback) throw new Error("the pinned Codicons package has no sparkle glyph");
 
-  const names = new Set(["sparkle"]);
-  const manifests = path.join(repositoryRoot, "crates", "runtrol-drivers", "manifests");
-  for (const entry of await readdir(manifests, { withFileTypes: true })) {
-    if (!entry.isFile() || path.extname(entry.name) !== ".toml") continue;
-    const manifest = await readFile(path.join(manifests, entry.name), "utf8");
-    const icon = /^icon\s*=\s*"([a-z0-9-]{1,64})"\s*$/mu.exec(manifest)?.[1];
-    if (icon) names.add(icon);
-  }
 
   // Deleting a conversation is the one row action that does not come back, so its control is drawn in the
   // editor's own error colour rather than in the foreground grey every other action shares. A menu icon cannot
@@ -113,7 +107,7 @@ async function buildProviderIcons() {
     "utf8",
   );
 
-  await Promise.all([...names].map(async (name) => {
+  await Promise.all(providerGlyphs.names.map(async (name) => {
     const target = path.join(providerIcons, `${name}.svg`);
     // A repo-owned brand icon wins for a service the editor's icon font carries no mark for. Present means use
     // it; absent (stat rejects) means this name has no override and the editor glyph is rendered instead.

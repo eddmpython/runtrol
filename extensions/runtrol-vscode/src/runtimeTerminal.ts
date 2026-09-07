@@ -7,15 +7,24 @@ import {
   newMutationRequestId,
   type TerminalControlLease,
   type TerminalDescriptor,
+  type TerminalFailure,
   type TerminalView,
 } from "@runtrol/runtime-client";
 import type * as vscode from "vscode";
 
 import type { Conversation } from "./conversationList";
 import { MouseModeFilter } from "./mouseModeFilter";
+import { TerminalQueryFilter } from "./terminalQueryFilter";
 import type { StudioRuntimeClient } from "./runtimeClient";
 
 const MAX_PENDING_INPUT_ACTIONS = 256;
+
+const terminalFailureMessages: Record<TerminalFailure, string> = {
+  hostInitializationFailed: "The terminal stopped because its host could not initialize.",
+  outputReadFailed: "The terminal stopped because its output could not be read.",
+  controlStateLost: "The terminal stopped because its display state could not be maintained.",
+  inputDeliveryUnknown: "The terminal stopped because input delivery could not be confirmed.",
+};
 
 export type JourneyInputTiming = {
   receivedAtMs: number;
@@ -160,8 +169,9 @@ export class RuntimeTerminal implements vscode.Pseudoterminal {
   private recovery: ViewRecovery | null = null;
   private lease: TerminalControlLease | null = null;
   private decoder = new TextDecoder("utf-8");
-  /// The one control family this tab takes out of the service's bytes: the switches that would give the CLI
-  /// this terminal's mouse. Everything else the service drew passes through exactly.
+  /// Host-owned questions cannot reach the renderer: its replies share handleInput with indistinguishable keys.
+  private queries = new TerminalQueryFilter();
+  /// This viewer keeps selection and scrolling by consuming its mouse switches at the same presentation edge.
   private mouseModes = new MouseModeFilter();
   private closed = false;
   private commandTail = Promise.resolve();
@@ -335,11 +345,18 @@ export class RuntimeTerminal implements vscode.Pseudoterminal {
   }
 
   private writeFromService(raw: string): void {
-    const text = this.mouseModes.filter(raw);
+    const text = this.mouseModes.filter(this.queries.filter(raw));
     // Feed VS Code's terminal buffer before rebuilding sidebar state. The activity callback is bookkeeping;
     // it must never sit in front of bytes a person is waiting to see.
     this.writeEmitter.fire(text);
     if (text.length > 0) this.output();
+  }
+
+  private finishPresentation(): void {
+    const decoded = this.decoder.decode();
+    if (decoded.length > 0) this.writeFromService(decoded);
+    const tail = this.mouseModes.filter(this.queries.finish()) + this.mouseModes.finish();
+    if (tail.length > 0) this.writeEmitter.fire(tail);
   }
 
 
@@ -395,13 +412,20 @@ export class RuntimeTerminal implements vscode.Pseudoterminal {
     let dispatchedAtMs = 0;
     this.queueControl(async (view, lease) => {
       dispatchedAtMs = Date.now();
-      await view.write({
+      const control = {
         requestId: newMutationRequestId(),
         terminalId: view.opened.terminal.terminalId,
         leaseId: lease.leaseId,
         leaseGeneration: lease.leaseGeneration,
-        bytesBase64: Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString("base64"),
-      });
+      };
+      if (view.opened.terminal.origin === "observedMirror") {
+        await view.sendText({ ...control, text: new TextDecoder("utf-8", { fatal: true }).decode(bytes) });
+      } else {
+        await view.write({
+          ...control,
+          bytesBase64: Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString("base64"),
+        });
+      }
     }, (error) => {
       this.queuedInputBytes = Math.max(0, this.queuedInputBytes - bytes.byteLength);
       this.queuedInputActions = Math.max(0, this.queuedInputActions - 1);
@@ -487,11 +511,17 @@ export class RuntimeTerminal implements vscode.Pseudoterminal {
           case "lagged":
             // The Core re-sends the whole screen next; clear so the redraw lands on a clean page, and start
             // decoding afresh so a multibyte tail cut off by the lag never bleeds into it.
+            this.finishPresentation();
             this.decoder = new TextDecoder("utf-8");
-            this.mouseModes.reset();
             this.writeFromService(this.decoder.decode(notification.screen, { stream: true }));
             break;
           case "exited":
+            if (notification.failure) {
+              const message = terminalFailureMessages[notification.failure];
+              this.presentation.failed(message);
+              this.detach(false, message);
+              return;
+            }
             // A clean exit closes the tab like a shell's would. Anything else keeps the tab, with the
             // service's own last words on it: a resume the service refused (measured: an empty stored
             // conversation exits at once) must not vanish before the person can read why.
@@ -518,8 +548,8 @@ export class RuntimeTerminal implements vscode.Pseudoterminal {
         this.view = view;
         this.connected(view.opened.terminal);
         this.lease = null;
+        this.finishPresentation();
         this.decoder = new TextDecoder("utf-8");
-        this.mouseModes.reset();
         this.writeFromService(this.decoder.decode(view.initialScreen, { stream: true }));
         this.recovery = null;
         recovery.finish();
@@ -670,6 +700,7 @@ export class RuntimeTerminal implements vscode.Pseudoterminal {
   /// Stop carrying the view but leave the tab open, so what the service wrote last stays readable.
   private detach(notifyRuntime: boolean, reason = "terminal view disconnected"): void {
     if (this.closed) return;
+    this.finishPresentation();
     this.closed = true;
     const view = this.view;
     const recovery = this.recovery;

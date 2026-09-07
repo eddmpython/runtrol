@@ -4,10 +4,12 @@ import test from "node:test";
 import { PROJECT_ACCENTS, projectAccentColor } from "./projectColor";
 
 test("one project has one exact accent in every Windows path spelling", () => {
-  const first = projectAccentColor("C:/work/runtrol");
+  const first = projectAccentColor("C:/work/runtrol", "win32");
   assert.match(first, /^#[0-9a-f]{6}$/u);
-  assert.equal(projectAccentColor("C:/work/runtrol"), first);
-  assert.equal(projectAccentColor("c:/WORK/Runtrol"), first);
+  assert.equal(projectAccentColor("C:/work/runtrol", "win32"), first);
+  assert.equal(projectAccentColor("c:/WORK/Runtrol", "win32"), first);
+  assert.equal(projectAccentColor("C:\\work\\runtrol\\", "win32"), first);
+  assert.equal(projectAccentColor("C:/work/parent/../runtrol", "win32"), first);
   assert.equal(projectAccentColor(null), PROJECT_ACCENTS[0]);
   assert.equal(projectAccentColor("   "), PROJECT_ACCENTS[0]);
 });

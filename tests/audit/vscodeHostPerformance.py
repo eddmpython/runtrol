@@ -308,7 +308,10 @@ def runCommand(command: list[str], cwd: Path, environment: dict[str, str] | None
 
 def productBinaries() -> tuple[Path, Path]:
     """Build the current product Core and the external ACP fixture."""
-    target = ROOT / "target" / "vscode-performance"
+    configured = os.environ.get("CARGO_TARGET_DIR")
+    target = Path(configured) if configured else ROOT / "target" / "vscode-performance"
+    if not target.is_absolute():
+        target = ROOT / target
     commands = (
         [
             "cargo", "build", "-p", "runtrol", "--bin", "runtrol",

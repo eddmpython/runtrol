@@ -3,7 +3,7 @@ import { awaitsVerification, isBroken } from "./providerHealth";
 import { providerDisplayName, providerIcon } from "./sessionDisplay";
 
 /// `signedOut` is its own state because it has its own action (sign in), the way `unavailable` has "fix".
-export type UsageState = "available" | "checking" | "unavailable" | "disconnected" | "signedOut";
+export type UsageState = "available" | "checking" | "unavailable" | "disconnected" | "signedOut" | "unread";
 
 /// One provider-reported account window that can be drawn without inventing a denominator.
 export type UsageMeter = {
@@ -203,23 +203,46 @@ export function usageRows(
       };
     }
     const account = provider?.account ?? null;
+    if (account?.status === "unread"
+      || (account?.status === "signedIn" && account.limitsAbsent?.kind === "unread")) {
+      const why = account.status === "unread"
+        ? account.why ?? "The account status could not be read."
+        : account.limitsAbsent?.why ?? "Usage could not be read.";
+      return {
+        key: `usage:${encodeURIComponent(providerId)}`,
+        name,
+        icon: providerIcon(providerId, providers),
+        detail: "Usage unreadable",
+        meters: gauge ? usageMeters(gauge, nowMs) : [],
+        reached: gauge?.reached ?? false,
+        state: "unread",
+        providerId,
+        cost: gauge ? usageCost(gauge) : null,
+        tooltip: `${name}: ${why}${gauge ? "\nShowing the last report" : ""}`,
+        position: `${why}${gauge ? " Showing the last report." : ""}`,
+        unmetered: null,
+        plan: accountLine(account),
+        age: gauge ? reportAge(gauge, nowMs) : null,
+      };
+    }
     if (account?.status === "signedOut") {
+      const currentGauge = gauge && gauge.atMs > account.checkedAtMs ? gauge : null;
       return {
         key: `usage:${encodeURIComponent(providerId)}`,
         name,
         icon: providerIcon(providerId, providers),
         detail: "Not signed in · Sign in",
-        // A window a turn reported stays visible: the service's own number outranks its sign-in verdict.
-        meters: gauge ? usageMeters(gauge, nowMs) : [],
-        reached: gauge?.reached ?? false,
+        // A later turn can supersede a sign-out. Older cached numbers belong to the signed-out account.
+        meters: currentGauge ? usageMeters(currentGauge, nowMs) : [],
+        reached: currentGauge?.reached ?? false,
         state: "signedOut",
         providerId,
-        cost: gauge ? usageCost(gauge) : null,
+        cost: currentGauge ? usageCost(currentGauge) : null,
         tooltip: `${name}: not signed in`,
         position: "Not signed in",
         unmetered: null,
         plan: null,
-        age: gauge ? reportAge(gauge, nowMs) : null,
+        age: currentGauge ? reportAge(currentGauge, nowMs) : null,
       };
     }
     const plan = accountLine(account);
@@ -311,6 +334,7 @@ export function usageAbsenceCause(account: ProviderLine["account"] | null | unde
   // Not the bare "Checking" an unprobed install says: that one is about the executable, this one is about the
   // account, and a reader who saw the same word twice would not know which had stalled.
   if (!account) return "Checking usage";
+  if (account.status === "unread") return "Usage unreadable";
   if (account.status === "signedOut") return "Not signed in · Sign in";
   // The service was asked and answered that it has no usage surface at all. Nothing arrives later.
   if (account.status === "unpublished") return "No usage published";
@@ -342,6 +366,7 @@ export function accountLine(account: ProviderLine["account"] | null | undefined)
 /// when one will show.
 export function accountAbsence(name: string, account: ProviderLine["account"] | null | undefined): string {
   if (!account) return "Not checked yet";
+  if (account.status === "unread") return account.why ?? "The account status could not be read.";
   if (account.status === "unpublished") {
     return `${name} publishes no usage or sign-in status`;
   }

@@ -11,7 +11,7 @@ import {
 } from "@vscode/test-electron";
 
 import { extensionInstallPrefix } from "./extension-manifest.mjs";
-import { descendantPids, normalizedExecutable, processRows } from "./process-identity.mjs";
+import { descendantPids, normalizedExecutable, ownedProcessRoots, processRows } from "./process-identity.mjs";
 
 export const TESTED_VSCODE_VERSION = "1.132.1";
 
@@ -308,19 +308,9 @@ export async function fileDigest(file) {
 }
 
 export async function terminateExactProcesses(marker, executable) {
-  const expected = executable ? normalizedExecutable(executable) : "";
-  const normalizedMarker = process.platform === "win32"
-    ? marker.toLocaleLowerCase("en-US")
-    : marker;
   const matchingIdentities = () => {
     const rows = processRows();
-    const roots = rows.filter((row) => {
-      const command = process.platform === "win32"
-        ? row.command.toLocaleLowerCase("en-US")
-        : row.command;
-      return command.includes(normalizedMarker)
-        || (expected && normalizedExecutable(row.executable) === expected);
-    });
+    const roots = ownedProcessRoots(rows, marker, executable);
     const pids = new Set(roots.map((row) => row.pid));
     for (const root of roots) {
       for (const pid of descendantPids(rows, root.pid)) {

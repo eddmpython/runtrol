@@ -62,6 +62,13 @@ export class MouseModeFilter {
   reset(): void {
     this.tail = "";
   }
+
+  /// Finish unknown output before the stream ends or is replaced.
+  finish(): string {
+    const tail = this.tail;
+    this.tail = "";
+    return tail;
+  }
 }
 
 type ModeScan =

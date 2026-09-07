@@ -15,8 +15,9 @@ import * as vscode from "vscode";
 
 import { accentedConversationIcon, conversationIcon } from "./conversationIcon";
 import { canDelete } from "./conversationDeletion";
+import { canOpenInputView } from "./observedInput";
 import { loose, projects, stopping, type Conversation, type ProjectGroup } from "./conversationList";
-import type { ProjectRecord } from "./projects";
+import { accentForWorkspace, type ProjectRecord } from "./projects";
 import { projectAccentColor } from "./projectColor";
 import { readGitBranch } from "./gitBranch";
 import type { GitChanges } from "./gitChanges";
@@ -62,12 +63,14 @@ export type ProjectsPort = {
 /// The uncommitted and unpushed work per project folder, measured by `GitChangesWatch` on its own triggers.
 export type GitChangesPort = {
   get(workspace: string): GitChanges | null | undefined;
+  getError(workspace: string): string | null;
   ensure(workspace: string): void;
   keep(workspaces: readonly string[]): void;
   onDidChange(listener: () => void): { dispose(): void };
 };
 
 export type UsageActions = {
+  retryUsage(providerId: string): Promise<void>;
   signIn(providerId: string): Promise<void>;
   signOut(providerId: string): Promise<void>;
   fix(providerId: string): Promise<void>;
@@ -257,6 +260,7 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
       else if (action === "signOut") await this.usageActions.signOut(providerId);
       else if (action === "fix") await this.usageActions.fix(providerId);
       else if (action === "update") await this.usageActions.update(providerId);
+      else if (action === "retryUsage") await this.usageActions.retryUsage(providerId);
       return;
     }
     if (type === "command") {
@@ -365,6 +369,7 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
       live: group.live,
       branch: this.branches.get(group.key) ?? null,
       changes: this.changes.get(group.workspace) ?? null,
+      changesError: this.changes.getError(group.workspace),
       ...this.rowsOf(group),
     }));
     const looseRows = pinnedFirst(loose(rows)).map((row) => this.conversationRow(row, projectAccentColor(null)));
@@ -436,7 +441,7 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
     const ordered = pinnedFirst(group.rows);
     const shown = this.expanded.has(group.key) ? ordered : ordered.slice(0, ROWS_PER_PROJECT);
     return {
-      rows: shown.map((row) => this.conversationRow(row, projectAccentColor(group.workspace))),
+      rows: shown.map((row) => this.conversationRow(row, accentForWorkspace(this.projectRecords.all(), group.workspace))),
       hidden: ordered.length - shown.length,
     };
   }
@@ -457,6 +462,7 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
       canStop: row.canStop,
       canOpen: row.canOpen,
       canFocus: row.canFocus,
+      canOpenInput: row.hostedTerminal?.origin === "observedMirror" ? canOpenInputView(row) : undefined,
       stopping: stopping(row),
       dialogue: row.hostedTerminal && row.hostedTerminal.origin !== "observedMirror"
         && row.hostedTerminal.processState === "running" ? row.hostedTerminal.dialogueEnabled ?? false : undefined,
@@ -475,8 +481,16 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
 
   private serviceChoice(): SidebarServiceChoice | null {
     if (this.choosingFor === null) return null;
-    const services = this.services?.() ?? [];
-    return services.length === 0 ? null : { workspace: this.choosingFor, services };
+    const reached = this.state.coreReach === "reached";
+    const services = reached ? this.services?.() ?? [] : [];
+    const waiting = this.state.coreReach === "connecting" || this.state.providers.some(awaitsVerification);
+    return {
+      workspace: this.choosingFor,
+      services,
+      unavailable: services.length > 0 ? null : !reached
+        ? waiting ? "Connecting to Runtrol..." : "Runtrol is reconnecting. Try again to check now."
+        : waiting ? "Checking installed services..." : "No launchable service is available. Set up or repair a service below.",
+    };
   }
 
   private notices(usable: boolean): SidebarNotice[] {

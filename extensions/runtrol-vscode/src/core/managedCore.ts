@@ -14,6 +14,11 @@ export type ManagedCore = {
   replaced: boolean;
 };
 
+/// The Runtime packaged with this exact extension, also used by its uninstall hook to verify older generations.
+export function bundledCorePath(extensionRoot: string): string {
+  return path.join(extensionRoot, "resources", "core", process.platform === "win32" ? "runtrol.exe" : "runtrol");
+}
+
 /// Put the bundled Core where the daemon runs from, named by its content.
 ///
 /// Every build gets its own file (`runtrol-<digest>.exe`), and an existing file is never written over.

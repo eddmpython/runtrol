@@ -1,9 +1,9 @@
 // The observed-mirror journey (`EXT-02`): two isolated real VS Code windows on one isolated Runtime. A window runs
 // a provider in an ordinary terminal (the fixture TUI by absolute path, real Claude and real Codex by absolute
 // path, and a provider by name so the transparent shim brokers it); Studio's registry mirrors each on its own; this
-// harness attaches a viewer through the public wire, holds the viewer's exact live bytes against what the window
-// fed, holds the window's first bytes against a direct capture of the same program, checks the shim case yields one
-// row, and captures the windows. Prints one `RUNTROL_OBSERVED_MIRROR {json}` line.
+// harness attaches a viewer through the public wire, compares content only inside the synthetic fixture, observes
+// structural output counts for real providers, checks the shim case yields one row, and captures the native windows.
+// Prints one `RUNTROL_OBSERVED_MIRROR {json}` line. Real-provider output is never exported as text or hex.
 //
 // Usage: node tooling/observed-mirror-eye.mjs [--keep-shots] [--steps=fixture,claude,codex,shim]
 import { spawn, spawnSync } from "node:child_process";
@@ -11,10 +11,12 @@ import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises"
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
 
 import { build } from "esbuild";
 
 import { extensionIdentifier, extensionRoot } from "./extension-manifest.mjs";
+import { captureMirrorView } from "./observedMirrorCapture.mjs";
 import {
   acquireVSCode,
   isolatedExtensionTestArguments,
@@ -78,6 +80,7 @@ let daemonStderr = "";
 const windows = [];
 let executable = null;
 let generationDigest = null;
+let sdk = null;
 try {
   await Promise.all([coordination, runtrolHome, shots, path.join(runtrolHome, "providers")].map((d) => mkdir(d, { recursive: true })));
   await writeFile(
@@ -166,7 +169,7 @@ try {
   const runStep = async (window, label, commandLine, exitKeys, exitKeyGapMs, settleMs, options = {}) => {
     window.runs += 1;
     const index = window.runs;
-    await publish(`${window.role}-run-${index}.json`, { label, commandLine, exitKeys, exitKeyGapMs });
+    await publish(`${window.role}-run-${index}.json`, { label, commandLine, exitKeys, exitKeyGapMs, syntheticFixture: options.syntheticFixture === true });
     const opened = await waitForPublished(`${window.role}-mirror-${index}.json`, 90_000);
     const step = { label, role: window.role, commandLine, opened: { terminalId: opened.terminalId, refusal: opened.refusal, providerId: opened.providerId, terminalKey: opened.terminalKey } };
     if (opened.terminalId) {
@@ -175,24 +178,24 @@ try {
       process.stdout.write(`step ${label}: opened ${JSON.stringify(step.opened)} listed ${JSON.stringify(step.listedAtOpen)}
 `);
       // The viewer attaches while the provider is still starting; its live bytes must be a suffix of the feed.
-      const viewer = probeAsync(["bytes", runtrolHome, identity, generationDigest, opened.terminalId, String(settleMs)]);
+      const viewer = watchMirror(opened.terminalId, settleMs, options.syntheticFixture === true);
       await delay(Math.max(1_000, settleMs - 2_500));
       step.listedWhileRunning = probeJson(["terminals-list", runtrolHome, identity, generationDigest]).terminals.map((terminal) => ({ id: terminal.terminalId.slice(0, 8), providerId: terminal.providerId, origin: terminal.origin }));
       if (options.shot) capture(window.title, window.userData, path.join(shots, options.shot));
       await publish(`${window.role}-exit-${index}.json`, {});
       const [live, ended] = await Promise.all([viewer, waitForPublished(`${window.role}-ended-${index}.json`, 120_000)]);
       step.viewer = { origin: live.origin, ownerWindowSessionId: live.ownerWindowSessionId?.slice(0, 8) ?? null, ownerTerminalKey: live.ownerTerminalKey, checkpointBytes: live.checkpointBytes, chunks: live.chunks, lagged: live.lagged, liveBytes: live.liveBytes, exited: live.exited };
-      step.fed = { bytes: ended.bytes, chunks: ended.chunks, sha256: ended.sha256.slice(0, 16), ended: ended.ended, exitCode: ended.exitCode, shellExitCode: ended.shellExitCode, timedOut: ended.timedOut, openDelayMs: ended.openedAtMs === null ? null : ended.openedAtMs - ended.startedAtMs, firstChunkDelayMs: ended.firstChunkAtMs === null ? null : ended.firstChunkAtMs - ended.startedAtMs, headHex: ended.headHex.slice(0, 160) };
-      const fedHex = ended.headHex;
-      // The viewer reads for its settle period while the owner keeps feeding, so its bytes are one contiguous run
-      // of the feed: exactly the feed from where it attached to where it stopped reading.
-      const at = live.liveHex.length > 0 ? fedHex.indexOf(live.liveHex) : -1;
-      step.viewerIsRunOfFeed = at >= 0;
-      step.viewerMissedBytes = at >= 0 ? at / 2 : null;
-      step.ownerMatches = live.origin === "ObservedMirror" && live.ownerWindowSessionId === ready[window.role].sessionId && live.ownerTerminalKey === opened.terminalKey;
-      if (options.direct) {
+      step.fed = { bytes: ended.bytes, chunks: ended.chunks, sha256: ended.sha256.slice(0, 16), ended: ended.ended, exitCode: ended.exitCode, shellExitCode: ended.shellExitCode, timedOut: ended.timedOut, openDelayMs: ended.openedAtMs === null ? null : ended.openedAtMs - ended.startedAtMs, firstChunkDelayMs: ended.firstChunkAtMs === null ? null : ended.firstChunkAtMs - ended.startedAtMs };
+      step.ownerMatches = live.origin === "observedMirror" && live.ownerWindowSessionId === ready[window.role].sessionId && live.ownerTerminalKey === opened.terminalKey;
+      step.outputObserved = live.liveBytes > 0 || live.checkpointBytes > 0;
+      if (options.syntheticFixture === true) {
+        const fedHex = ended.fixtureHex;
+        const at = live.fixtureHex.length > 0 ? fedHex.indexOf(live.fixtureHex) : -1;
+        step.viewerIsRunOfFeed = at >= 0;
+        step.viewerMissedBytes = at >= 0 ? at / 2 : null;
+        if (!options.direct) throw new Error("the synthetic fixture needs its direct comparison");
         const direct = probeJson(["direct-program", window.workspace, "4000", "-", options.direct.program, ...options.direct.arguments]);
-        step.direct = { bytes: direct.bytes, exited: direct.exited, headHex: (direct.headHex ?? "").slice(0, 64) };
+        step.direct = { bytes: direct.bytes, exited: direct.exited };
         // The owner's stream begins with VS Code's own command-executed marker (OSC 633;C) before the program's
         // first byte; the direct capture has no shell in front of it.
         const marker = "1b5d3633333b4307";
@@ -230,6 +233,7 @@ try {
   const skipped = { opened: { terminalId: null, refusal: "skipped" }, listedAtOpen: [], listedAfterEnd: 0 };
   const maybe = (name, run) => (onlySteps.includes(name) ? run() : Promise.resolve(skipped));
   const fixtureStep = await maybe("fixture", () => runStep(alpha, "fixture", `${quoted(fixture)} --tui`, ["\u001a\r"], 2_500, 5_000, {
+    syntheticFixture: true,
     direct: { program: fixture, arguments: ["--tui"] },
     shot: "alphaFixtureMirror.png",
   }));
@@ -257,8 +261,8 @@ try {
   process.stdout.write(`${MARKER}${JSON.stringify({
     // A viewer that attached after the fixture's whole output (a few dozen bytes) sees it in the checkpoint only.
     fixtureMirrored: fixtureStep.opened.terminalId !== null && fixtureStep.ownerMatches === true && (fixtureStep.viewerIsRunOfFeed === true || (fixtureStep.viewer?.liveBytes === 0 && fixtureStep.viewer?.checkpointBytes > 0)),
-    claudeMirrored: claudeStep.opened.terminalId !== null && claudeStep.ownerMatches === true && claudeStep.viewerIsRunOfFeed === true,
-    codexMirrored: codexStep.opened.terminalId !== null && codexStep.ownerMatches === true && codexStep.viewerIsRunOfFeed === true,
+    claudeMirrored: claudeStep.opened.terminalId !== null && claudeStep.ownerMatches === true && claudeStep.outputObserved === true,
+    codexMirrored: codexStep.opened.terminalId !== null && codexStep.ownerMatches === true && codexStep.outputObserved === true,
     shimOneRow,
     allEnded: steps.every((step) => step.listedAfterEnd === 0),
     steps,
@@ -317,18 +321,25 @@ function probeJson(words) {
   return JSON.parse(ran.stdout.trim().split("\n").pop());
 }
 
-function probeAsync(words) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(probe, words, { env: daemonEnvironment, windowsHide: true });
-    let out = "";
-    let err = "";
-    child.stdout.on("data", (chunk) => { out += chunk; });
-    child.stderr.on("data", (chunk) => { err += chunk; });
-    child.on("exit", (code) => {
-      if (code !== 0) reject(new Error(`handoverProbe ${words[0]} failed: ${err}${out}`));
-      else resolve(JSON.parse(out.trim().split("\n").pop()));
-    });
-  });
+async function watchMirror(terminalId, milliseconds, syntheticFixture) {
+  if (!sdk) {
+    const bundle = path.join(temporary, "runtimeClient.cjs");
+    await build({ entryPoints: [path.join(repositoryRoot, "clients/typescript/src/index.ts")], outfile: bundle,
+      bundle: true, platform: "node", format: "cjs", target: "node22", logLevel: "silent" });
+    sdk = createRequire(import.meta.url)(bundle);
+  }
+  const stored = JSON.parse(await readFile(identity, "utf8"));
+  const key = sdk.IntegrationIdentity.fromPkcs8(Buffer.concat([
+    Buffer.from("302e020100300506032b657004220420", "hex"), Buffer.from(stored.secret),
+  ]));
+  process.env.RUNTROL_HOME = runtrolHome;
+  const state = await sdk.RuntimeLocator.system({ runtimeExecutable: core, preferDigest: generationDigest }).inspect();
+  if (state.state !== "running") throw new Error("the isolated mirror Runtime is unavailable");
+  const client = await new sdk.RuntimeConnector().connect(state.locator, { name: "runtrol-handover-probe", version: "0.0.0",
+    credentials: new sdk.IntegrationCredentials(key, stored.grant) });
+  try {
+    return await captureMirrorView(await client.terminals().attach({ terminalId }), milliseconds, syntheticFixture);
+  } finally { client.close(); }
 }
 
 async function waitForPublished(name, deadlineMs) {
@@ -368,4 +379,3 @@ function requiredEnvironment(name) {
   if (!value) throw new Error(`${name} is required`);
   return value;
 }
-

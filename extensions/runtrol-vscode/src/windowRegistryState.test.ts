@@ -2,8 +2,37 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { WindowRegistryState } from "./windowRegistryState";
+import type { WindowInputBinding } from "@runtrol/runtime-client";
 
 const identity = { windowSessionId: "window-1", hostGeneration: "host-1", vscodeVersion: "1.132.1", hostPid: 4321 };
+
+test("owner input follows the exact local shell execution and host lifetime", () => {
+  const state = new WindowRegistryState(identity, ["C:\\work"]);
+  const handle = {};
+  state.opened(handle, "shell");
+  state.processResolved(handle, 5);
+  state.shellIntegrationChanged(handle, "C:\\work");
+  state.executionStarted(handle, "fixture", 2, 1);
+  const binding: WindowInputBinding = {
+    windowSessionId: identity.windowSessionId, hostGeneration: identity.hostGeneration,
+    registrationGeneration: 1, terminalKey: "t1", executionId: "e1", terminalId: "terminal", processId: 5,
+  };
+  assert.equal(state.inputTarget(binding), handle);
+  for (const change of [
+    { windowSessionId: "other" }, { hostGeneration: "restarted" },
+    { terminalKey: "t2" }, { executionId: "e2" }, { processId: 6 },
+  ]) assert.equal(state.inputTarget({ ...binding, ...change }), null);
+  state.executionEnded(handle);
+  assert.equal(state.inputTarget(binding), null);
+  state.executionStarted(handle, "fixture", 2, 2);
+  assert.equal(state.inputTarget(binding), null);
+  const next = { ...binding, executionId: "e2" };
+  assert.equal(state.inputTarget(next), handle);
+  assert.equal(state.executionEnded(handle, "e1"), false, "a late prior end does not end its replacement");
+  assert.equal(state.inputTarget(next), handle);
+  state.closed(handle);
+  assert.equal(state.inputTarget(next), null);
+});
 
 test("a window registers its identity and folders, and publishes every terminal it knows with its command generation", () => {
   const state = new WindowRegistryState(identity, ["C:\\work"]);

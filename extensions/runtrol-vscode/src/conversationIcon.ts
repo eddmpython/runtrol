@@ -1,6 +1,8 @@
 import { existsSync, readFileSync } from "node:fs";
+import { basename } from "node:path";
 
 import * as vscode from "vscode";
+import { accentGlyph } from "./conversationGlyph";
 
 /// The coding-service glyph, for a conversation tab and for a sidebar row.
 ///
@@ -13,6 +15,8 @@ import * as vscode from "vscode";
 /// is written at build time and read from the installed extension.
 const resolved = new Map<string, vscode.Uri>();
 const accented = new Map<string, vscode.Uri>();
+const terminalIcons = new Map<string, vscode.ThemeIcon>();
+let terminalIconIds: Record<string, Record<string, string>> | undefined;
 
 export function conversationIcon(extensionUri: vscode.Uri, declared: string): vscode.Uri {
   const icon = /^[a-z0-9-]{1,64}$/u.test(declared) ? declared : "sparkle";
@@ -28,24 +32,44 @@ export function conversationIcon(extensionUri: vscode.Uri, declared: string): vs
 
 /// The provider's own glyph with one exact project accent embedded in its SVG.
 ///
-/// VS Code does not apply a `ThemeColor` to a custom terminal icon URI. The sidebar and terminal tab therefore use
-/// this same immutable data URI, which keeps the provider shape and makes their colour bytes identical. The source
-/// SVG is a shipped asset selected through the same closed filename rule as the ordinary icon.
+/// The sidebar uses this immutable data URI. Its exact accent and provider outline also feed the registered
+/// terminal color glyph. The source SVG uses the same closed filename rule as the ordinary icon.
 export function accentedConversationIcon(
   extensionUri: vscode.Uri,
   declared: string,
   accent: string,
 ): vscode.Uri {
-  if (!/^#[0-9a-f]{6}$/u.test(accent)) throw new Error("conversation accent must be a lowercase six-digit hex colour");
   const source = conversationIcon(extensionUri, declared);
   const key = `${source.fsPath}\0${accent}`;
   const remembered = accented.get(key);
   if (remembered) return remembered;
-  let svg = readFileSync(source.fsPath, "utf8")
-    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gu, "")
-    .replace(/\b(fill|stroke)="(?:currentColor|#[0-9a-fA-F]{3,8})"/gu, `$1="${accent}"`);
-  if (!/<svg\b[^>]*\bfill=/u.test(svg)) svg = svg.replace(/<svg\b/u, `<svg fill="${accent}"`);
+  const svg = accentGlyph(readFileSync(source.fsPath, "utf8"), accent);
   const answer = vscode.Uri.parse(`data:image/svg+xml;base64,${Buffer.from(svg, "utf8").toString("base64")}`);
   accented.set(key, answer);
+  return answer;
+}
+
+/// Registered color glyphs survive native editor moves because their font belongs to the global icon registry.
+/// The build derives both the palette and outline from the same sources as the sidebar SVG.
+export function terminalConversationIcon(
+  extensionUri: vscode.Uri,
+  declared: string,
+  accent: string,
+): vscode.ThemeIcon {
+  const source = conversationIcon(extensionUri, declared);
+  const icon = basename(source.fsPath, ".svg");
+  const key = `${icon}\0${accent}`;
+  const remembered = terminalIcons.get(key);
+  if (remembered) return remembered;
+  terminalIconIds ??= JSON.parse(readFileSync(
+    vscode.Uri.joinPath(extensionUri, "resources", "provider-icons", "iconMap.json").fsPath,
+    "utf8",
+  )) as Record<string, Record<string, string>>;
+  const id = terminalIconIds[icon]?.[accent];
+  if (typeof id !== "string" || !/^runtrol-[a-z0-9-]+-[0-9a-f]{6}$/u.test(id)) {
+    throw new Error("The installed terminal glyph does not match its project accent.");
+  }
+  const answer = new vscode.ThemeIcon(id);
+  terminalIcons.set(key, answer);
   return answer;
 }

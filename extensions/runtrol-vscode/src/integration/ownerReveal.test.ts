@@ -20,10 +20,15 @@ const DEADLINE_MS = 60_000;
 
 type Step =
   | { readonly kind: "done" }
+  | { readonly kind: "command"; readonly command: "runtrol.startSession" | "runtrol.refresh" }
   | { readonly kind: "addProject"; readonly folder: string }
   | { readonly kind: "start"; readonly label: string; readonly commandLine: string; readonly cwd?: string }
   | { readonly kind: "startTyped"; readonly label: string; readonly commandLine: string; readonly settleMs: number; readonly setupKeys?: readonly string[]; readonly setupGapMs?: number }
   | { readonly kind: "click"; readonly key: string }
+  | { readonly kind: "openInputView"; readonly key: string; readonly generation: string; readonly terminalId: string }
+  | { readonly kind: "ownerInput"; readonly generation: string; readonly terminalId: string; readonly text: string }
+  | { readonly kind: "revokeStart"; readonly integrationId: string }
+  | { readonly kind: "revokeConfirm"; readonly integrationId: string }
   | { readonly kind: "focusTerminal"; readonly generation: string; readonly terminalId: string }
   | { readonly kind: "rowFacts"; readonly key: string }
   | { readonly kind: "showDiff"; readonly original: string; readonly modified: string }
@@ -36,8 +41,11 @@ type Step =
   | { readonly kind: "inputSamples"; readonly generation: string; readonly terminalId: string; readonly text: string; readonly count: number; readonly gapMs: number }
   | { readonly kind: "listed"; readonly provider: string; readonly native: string }
   | { readonly kind: "startFresh"; readonly provider: string; readonly workspace: string }
+  | { readonly kind: "startStructured"; readonly provider: string; readonly workspace: string }
+  | { readonly kind: "closeStructured"; readonly sessionId: string }
   | { readonly kind: "showOther" }
   | { readonly kind: "report" }
+  | { readonly kind: "ownerFacts" }
   | { readonly kind: "type"; readonly label: string; readonly keys: readonly string[]; readonly gapMs: number }
   | { readonly kind: "exit"; readonly label: string; readonly keys: readonly string[]; readonly gapMs: number };
 
@@ -60,11 +68,21 @@ async function journey(coordination: string, role: string): Promise<void> {
   const deadlineAtMs = hostDeadline(process.env[HOST_DEADLINE_ENV]);
   const extension = extensionUnderTest<RuntrolExtensionApi>();
   const api = extension.isActive ? extension.exports : await extension.activate();
-  await within(api.ready, DEADLINE_MS, "extension readiness");
+  let initializationFailure: string | null = null;
+  if (process.env.RUNTROL_VSCODE_INITIAL_CORE_FAILURE === "1") {
+    try {
+      await within(api.ready, DEADLINE_MS, "extension readiness");
+    } catch (error) {
+      initializationFailure = error instanceof Error ? error.message : String(error);
+    }
+    if (!initializationFailure) throw new Error("the missing Core did not fail initial readiness");
+  } else {
+    await within(api.ready, DEADLINE_MS, "extension readiness");
+  }
   if (!api.journey) throw new Error("the journey API is unavailable");
   const journey = api.journey;
   await vscode.commands.executeCommand("workbench.view.extension.runtrol");
-  await publish(coordination, `${role}-ready.json`, { sessionId: vscode.env.sessionId, hostPid: process.pid });
+  await publish(coordination, `${role}-ready.json`, { sessionId: vscode.env.sessionId, hostPid: process.pid, initializationFailure });
 
   const terminals = new Map<string, vscode.Terminal>();
   // One beat a second with the step this window is on: a harness timeout can then tell a window that is waiting from
@@ -99,6 +117,7 @@ async function journey(coordination: string, role: string): Promise<void> {
       atMs: Date.now(), step: waitingFor, running,
       listing: journey.listing(), rows: journey.rows(),
       publishFailure: journey.windowPublishFailure(),
+      mirrors: journey.windowMirrors(),
       inputSampling,
     });
     throw error;
@@ -117,7 +136,14 @@ async function journey(coordination: string, role: string): Promise<void> {
     running = step.kind;
     sinceMs = Date.now();
     let result: Record<string, unknown> = {};
-    if (step.kind === "addProject") {
+    if (step.kind === "command") {
+      const started = Date.now();
+      const outcome = await Promise.race([
+        vscode.commands.executeCommand(step.command).then(() => "done", (error: unknown) => `failed: ${String(error)}`),
+        delay(4_000).then(() => "waiting"),
+      ]);
+      result = { outcome, elapsedMs: Date.now() - started, ...journey.listing() };
+    } else if (step.kind === "addProject") {
       await journey.addProject(step.folder);
     } else if (step.kind === "start") {
       const terminal = vscode.window.createTerminal({ name: `${role}-${step.label}`, cwd: step.cwd });
@@ -125,8 +151,9 @@ async function journey(coordination: string, role: string): Promise<void> {
       terminal.show(false);
       await terminal.processId;
       if (!(await waitForShellIntegration(terminal, 30_000))) throw new Error(`${step.label}: shell integration never attached`);
+      const before = journey.windowMirrors().length;
       terminal.shellIntegration?.executeCommand(step.commandLine);
-      const mirror = await waitForMirror(journey, 30_000);
+      const mirror = await waitForMirror(journey, 30_000, before);
       result = { terminalId: mirror.terminalId, refusal: mirror.refusal, terminalName: terminal.name };
     } else if (step.kind === "startTyped") {
       // Typed the way a person types it, with no shell integration to hand the command over: nothing here may
@@ -177,6 +204,36 @@ async function journey(coordination: string, role: string): Promise<void> {
         explanation: journey.lastExplanation(),
         activeTerminalName: journey.activeTerminalName(),
       };
+    } else if (step.kind === "openInputView") {
+      // Native identity publication can promote a provisional row key after launch. Keep the exact terminal
+      // binding and resolve the current public row, just as the user acts on the row currently displayed.
+      const hostedKey = `terminal:${step.generation}:${step.terminalId}`;
+      const row = journey.rows().find((candidate) => candidate.hostedKey === hostedKey);
+      if (!row) throw new Error("the exact observed terminal has no current input row");
+      await vscode.commands.executeCommand("runtrol.openInputView", { key: row.key });
+      result = await journey.terminalWaitForView(step.generation, step.terminalId, DEADLINE_MS);
+    } else if (step.kind === "ownerInput") {
+      // The explicit input view is already open. Selecting again would follow the default owner-reveal route.
+      await journey.terminalWaitForView(step.generation, step.terminalId, DEADLINE_MS);
+      result = await journey.terminalWriteDirect(step.generation, step.terminalId, step.text);
+    } else if (step.kind === "revokeStart") {
+      const executable = requiredEnvironment("RUNTROL_TEST_CORE");
+      if (!path.isAbsolute(executable) || !singleLineIdentity(step.integrationId)) {
+        throw new Error("fixture revocation requires the exact Core and integration identity");
+      }
+      const terminal = vscode.window.createTerminal({ name: "Fixture integration revocation", shellPath: executable,
+        shellArgs: ["integrations", "revoke", step.integrationId] });
+      terminals.set("revocation", terminal);
+      result = { processId: await terminal.processId };
+    } else if (step.kind === "revokeConfirm") {
+      const terminal = terminals.get("revocation");
+      if (!terminal || !singleLineIdentity(step.integrationId)) throw new Error("no exact fixture revocation is pending");
+      terminal.sendText(step.integrationId, true);
+      const deadline = Date.now() + DEADLINE_MS;
+      while (!terminal.exitStatus && Date.now() < deadline) await delay(25);
+      if (!terminal.exitStatus) throw new Error("the fixture revocation did not complete");
+      result = { exitCode: terminal.exitStatus.code ?? null };
+      terminal.dispose();
     } else if (step.kind === "focusTerminal") {
       // A provider may publish its native identity after launch. Resolve the current row from the stable
       // Runtime terminal binding at selection time instead of keeping the provisional presentation key.
@@ -234,6 +291,14 @@ async function journey(coordination: string, role: string): Promise<void> {
       const started = Date.now();
       await journey.startFresh(step.provider, step.workspace);
       result = { startedMs: Date.now() - started, rows: journey.rows() };
+    } else if (step.kind === "startStructured") {
+      const sessionId = await journey.start(step.provider, step.workspace);
+      const session = journey.sessions().find((candidate) => candidate.sessionId === sessionId);
+      result = { sessionId, nativeSessionId: session?.nativeSessionId ?? null };
+    } else if (step.kind === "closeStructured") {
+      await journey.close(step.sessionId, true);
+      await journey.refreshChats();
+      result = { closed: true };
     } else if (step.kind === "rowFacts") {
       // What the row says it can do, read without clicking: a click on a stored conversation would resume it.
       result = { facts: journey.rowFacts(step.key), present: journey.rowKeys().includes(step.key) };
@@ -262,6 +327,9 @@ async function journey(coordination: string, role: string): Promise<void> {
       result = { activeTerminalName: journey.activeTerminalName() };
     } else if (step.kind === "report") {
       result = { activeTerminalName: journey.activeTerminalName(), rowKeys: journey.rowKeys() };
+    } else if (step.kind === "ownerFacts") {
+      result = { mirrors: journey.windowMirrors(), publishFailure: journey.windowPublishFailure(),
+        update: journey.windowUpdatePayload() };
     } else if (step.kind === "type") {
       // Keys into a terminal this window started, the way a person answers a provider's question in it.
       const terminal = terminals.get(step.label);
@@ -290,13 +358,13 @@ async function journey(coordination: string, role: string): Promise<void> {
 async function waitForMirror(
   journey: NonNullable<RuntrolExtensionApi["journey"]>,
   deadlineMs: number,
+  before: number,
 ): Promise<{ terminalId: string | null; refusal: string | null }> {
-  const before = journey.windowMirrors().length;
   const deadline = Date.now() + deadlineMs;
   while (Date.now() < deadline) {
     const mirrors = journey.windowMirrors();
     const latest = mirrors[mirrors.length - 1];
-    if (mirrors.length >= before && latest && (latest.terminalId !== null || latest.refusal !== null)) {
+    if (mirrors.length > before && latest && (latest.terminalId !== null || latest.refusal !== null)) {
       return { terminalId: latest.terminalId, refusal: latest.refusal };
     }
     await delay(25);
@@ -340,4 +408,8 @@ function requiredEnvironment(name: string): string {
   const value = process.env[name];
   if (!value) throw new Error(`${name} is required`);
   return value;
+}
+
+function singleLineIdentity(value: string): boolean {
+  return value.length > 0 && value.length <= 256 && !/[\u0000-\u001f\u007f]/.test(value);
 }

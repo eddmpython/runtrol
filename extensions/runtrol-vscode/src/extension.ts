@@ -27,10 +27,10 @@ import {
 } from "./integrationAdministration";
 import { journeyApi, type JourneyApi } from "./journeyApi";
 import { projectlessRoot } from "./projectlessWorkspace";
-import { ProjectStore } from "./projects";
+import { accentForWorkspace, ProjectStore } from "./projects";
 import { isBroken, isUsable } from "./providerHealth";
 import { materializeProviderShims } from "./providerShims";
-import { managePhones, pairPhone, reviewPhonePairings } from "./pairingAdministration";
+import { managePhones, pairPhone, reviewPhonePairings } from "./pairingSurface";
 import type { RemoteConnection } from "./protocol";
 import { SelectionStore } from "./selectionStore";
 import { ServiceTroubleReported } from "./serviceHelp";
@@ -43,7 +43,7 @@ import { rememberedList, rememberList } from "./listMemory";
 import { rememberedUsage, rememberUsage } from "./usageMemory";
 import { setupRows } from "./usageDisplay";
 import { WorkspaceRootFollowing } from "./workspaceRoots";
-import { accentedConversationIcon, conversationIcon } from "./conversationIcon";
+import { conversationIcon, terminalConversationIcon } from "./conversationIcon";
 import { TerminalTabs } from "./terminalTabs";
 import { WindowRegistry } from "./windowRegistry";
 import { ConversationItem, ProjectItem, ServiceChoiceItem } from "./sidebarTargets";
@@ -145,6 +145,7 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
   state.restoreRememberedUsage(rememberedUsage(context.globalState, Date.now()));
   state.onRememberUsage((usage) => rememberUsage(context.globalState, usage));
   const selection = new SelectionStore(context.globalStorageUri.fsPath);
+  let initializationFailed = false;
   let settleReady: ((error?: unknown) => void) | null = null;
   let lifecycle: Promise<void> = new Promise<void>((resolve, reject) => {
     settleReady = (error) => {
@@ -157,6 +158,9 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     };
   });
   const afterReady = async <T>(action: () => Promise<T>): Promise<T> => {
+    // The next user action retries a failed activation. Concurrent actions share that same attempt;
+    // retaining only the original rejected promise would require reloading this window forever.
+    if (initializationFailed) lifecycle = initializeWindow();
     await lifecycle;
     return action();
   };
@@ -183,8 +187,8 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
   // The conversation surface: the service's own terminal interface in an editor tab, hosted by the Core.
   const terminals = new TerminalTabs(
     runtime,
-    (row, accent) => accentedConversationIcon(context.extensionUri, row.serviceIcon, accent),
-    (providerId, accent) => accentedConversationIcon(
+    (row, accent) => terminalConversationIcon(context.extensionUri, row.serviceIcon, accent),
+    (providerId, accent) => terminalConversationIcon(
       context.extensionUri,
       providerIcon(providerId, state.providers),
       accent,
@@ -201,6 +205,7 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
       if (home) changes.touchContaining(home);
     },
     (key) => state.conversations.find((row) => row.key === key)?.title ?? null,
+    (workspace) => accentForWorkspace(projectStore.all(), workspace),
   );
   context.subscriptions.push(terminals);
   // A tab started from here is filed under a placeholder until its service writes the conversation. The list
@@ -256,6 +261,9 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
   const help = new ProviderHelpCache((providerId) => controller.providerHelpLine(providerId, sideChannel));
   context.subscriptions.push(releases, help, sideChannel);
   const sidebar = new SidebarView(context, state, projectStore, changes, releases, help, {
+    retryUsage: () => afterReady(async () => {
+      await runtime.providersUsage();
+    }),
     signIn: (providerId) => afterReady(async () => {
       await controller.signInProvider(providerNamed(providerId));
     }),
@@ -306,7 +314,10 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     }),
     vscode.commands.registerCommand(
       "runtrol.refresh",
-      () => run(() => afterReady(() => controller.refreshChats())),
+      () => run(async () => {
+        changes.refresh();
+        await afterReady(() => controller.refreshChats());
+      }),
     ),
     vscode.commands.registerCommand(
       "runtrol.startSessionWith",
@@ -370,20 +381,20 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     ),
     vscode.commands.registerCommand(
       "runtrol.startSession",
-      (options?: unknown) => run(() => afterReady(() => controller.startSession(
+      (options?: unknown) => run(() => (
         options !== null && typeof options === "object" && (options as { interactive?: unknown }).interactive === false
-          ? { interactive: false }
-          : {},
-      ))),
+          ? afterReady(() => controller.startSession({ interactive: false }))
+          : controller.startSession()
+      )),
     ),
     vscode.commands.registerCommand(
       "runtrol.newConversationInProject",
-      (item: unknown) => run(() => afterReady(async () => {
+      (item: unknown) => run(async () => {
         // Inline on the project heading only, so the argument is always the heading. Guarded anyway, because a
         // command invoked with the wrong thing must refuse rather than start a session somewhere surprising.
         if (!(item instanceof ProjectItem)) return;
         await controller.startSessionInWorkspace(item.group.workspace);
-      })),
+      }),
     ),
     vscode.commands.registerCommand(
       "runtrol.createProject",
@@ -542,6 +553,10 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
         item instanceof ConversationItem ? controller.select(item) : controller.openConversation())),
     ),
     vscode.commands.registerCommand(
+      "runtrol.openInputView",
+      (item) => run(() => afterReady(() => controller.openInputView(item))),
+    ),
+    vscode.commands.registerCommand(
       "runtrol.renameSession",
       (item) => run(() => afterReady(() => controller.nameSession(item))),
     ),
@@ -609,6 +624,13 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
       }),
     ),
     vscode.commands.registerCommand(
+      "runtrol.archiveProjectConversations",
+      (item: unknown) => run(async () => {
+        if (!(item instanceof ProjectItem)) return;
+        await afterReady(() => controller.archiveProjectConversations(item));
+      }),
+    ),
+    vscode.commands.registerCommand(
       "runtrol.projectMenu",
       // The project row's fuller menu, from a right click on the row: the hover actions plus the one action
       // too destructive to sit among them. The menu names the project so a misread row is caught before
@@ -629,6 +651,7 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
               ]
             : [{ label: "$(folder-library) Keep this folder as a project", command: "runtrol.createProjectHere" }]),
           { label: "$(link-external) Open this folder in a window", command: "runtrol.openProjectWorkspace" },
+          { label: "$(archive) Archive all conversations...", command: "runtrol.archiveProjectConversations" },
           { label: "$(trash) Delete all conversations...", command: "runtrol.deleteProjectConversations" },
           ...(created
             ? [{ label: "$(close) Remove from the sidebar (the folder stays)", command: "runtrol.removeProject" }]
@@ -678,6 +701,12 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
         lifecycle = previous.catch(() => undefined).then(async () => {
           locator.invalidate();
           await controller.reconnect();
+          initializationFailed = false;
+          startWindowServices();
+        }).catch((error: unknown) => {
+          initializationFailed = true;
+          if (state.coreReach !== "reached") state.setCoreReach("unreachable");
+          throw error;
         });
         void run(async () => {
           await lifecycle;
@@ -708,53 +737,69 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
   // The generation supervision (re-check and reconnect to the installed build) runs, but says nothing on the
   // sidebar: the "update applies when the running conversations end" line read as out of nowhere on a machine
   // with several generations alive, especially when this window sees none of them running (operator, 2026-08-29).
-  const runtimeInitialization = superviseCoreCurrency(client, locator).then(() => runtime.initialize());
-  const controllerInitialization = runtimeInitialization.then(async () => {
-    initializationStage = "controller";
-    await controller.initialize();
-  });
-  const readyInitialization = controllerInitialization;
+  const workingDirectory = vscode.workspace.workspaceFolders
+    ?.find((folder) => folder.uri.scheme === "file")
+    ?.uri.fsPath ?? vscode.env.appRoot;
   let windowRegistry: WindowRegistry | null = null;
   // Whether the Core has been away since this window last registered with it.
   let coreLeft = false;
-  readyInitialization.then(
-    () => {
+  async function initializeWindow(): Promise<void> {
+    initializationFailed = false;
+    initializationStage = "core:currency";
+    state.setCoreReach("connecting");
+    try {
+      await superviseCoreCurrency(client, locator);
+      await runtime.initialize();
+      initializationStage = "controller";
+      await controller.initialize();
       initializationStage = "ready";
-      settleReady?.();
-      // After ready rather than at enrollment, so a window opened onto a not-yet-approved folder catches up on
-      // its own activation, which is the same physical act the first enrollment trusted.
-      void run(() => rootFollowing.follow());
-      void run(async () => {
-        await materializeProviderShims(await locator.runtimeExecutable(), providerShimDirectory);
-      });
-      // This window's entry in the Runtime's window registry: what it is and which terminals it observes, kept
-      // current by VS Code's own events so another window can name this one exactly.
-      windowRegistry = new WindowRegistry(runtime, (message) => {
-        void vscode.window.showWarningMessage(`Runtrol could not publish this window to the Runtime: ${message}`);
-      });
-      context.subscriptions.push(windowRegistry);
-      windowRegistry.start();
-      // Another window's click on one of this window's terminals arrives here; the terminal is shown as if its
-      // tab were clicked, and the Runtime brings this window forward itself.
-      const reveals = new AbortController();
-      context.subscriptions.push({ dispose: () => reveals.abort() });
-      void runtime.watchWindowReveals(vscode.env.sessionId, (terminalKey) => {
-        windowRegistry?.showTerminal(terminalKey);
-      }, reveals.signal);
-    },
-    (error: unknown) => {
-      // Activation itself failed. If nothing was ever listed the Core never answered, so say that rather than
-      // leaving the sidebar on "Connecting..." for the rest of the window's life: a wait with no end is the
-      // same lie as the wrong sentence it replaced, just quieter. A failure after the first listing is
-      // something else failing, and it must not rewrite a Core that demonstrably answered.
+      startWindowServices();
+    } catch (error) {
+      initializationFailed = true;
       if (state.coreReach !== "reached") state.setCoreReach("unreachable");
-      settleReady?.(error);
-    },
+      throw error;
+    }
+  }
+  function startWindowServices(): void {
+    if (windowRegistry) return;
+    // After ready rather than at enrollment, so a window opened onto a not-yet-approved folder catches up on
+    // its own activation, which is the same physical act the first enrollment trusted.
+    void run(() => rootFollowing.follow());
+    void run(async () => {
+      await materializeProviderShims(await locator.runtimeExecutable(), providerShimDirectory);
+    });
+    // This window's entry in the Runtime's window registry: what it is and which terminals it observes, kept
+    // current by VS Code's own events so another window can name this one exactly.
+    windowRegistry = new WindowRegistry(runtime, (message) => {
+      void vscode.window.showWarningMessage(`Runtrol could not publish this window to the Runtime: ${message}`);
+    });
+    context.subscriptions.push(windowRegistry);
+    windowRegistry.start();
+    // Another window's click on one of this window's terminals arrives here; the terminal is shown as if its
+    // tab were clicked, and the Runtime brings this window forward itself.
+    const reveals = new AbortController();
+    context.subscriptions.push({ dispose: () => reveals.abort() });
+    void runtime.watchWindowReveals(vscode.env.sessionId, (terminalKey) => {
+      windowRegistry?.showTerminal(terminalKey);
+    }, reveals.signal);
+    // These follow the first successful initialization, including an explicit retry after initial failure.
+    void run(async () => { await configureRemoteConnection(client); });
+    void run(async () => {
+      const managedDigest = await locator.managedDigest();
+      if (legacyCleanupDue(context.globalState.get<string>(LEGACY_CLEANUP_KEY), managedDigest)) {
+        await legacyCleanup.run(workingDirectory);
+        await context.globalState.update(LEGACY_CLEANUP_KEY, legacyCleanupStamp(managedDigest));
+      }
+    });
+  }
+  initializeWindow().then(
+    () => settleReady?.(),
+    (error: unknown) => settleReady?.(error),
   );
   sidebar.offerServices(offerServices);
-  controller.chooseService = (workspace) => {
+  controller.chooseService = async (workspace) => {
+    await vscode.commands.executeCommand("runtrol.sidebar.focus");
     sidebar.chooseService(workspace);
-    void vscode.commands.executeCommand("runtrol.sidebar.focus");
   };
   // Whether this window knows the views this build declares.
   //
@@ -769,23 +814,6 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     );
   });
   void run(() => lifecycle);
-  void run(async () => {
-    await lifecycle;
-    await configureRemoteConnection(client);
-  });
-  const workingDirectory = vscode.workspace.workspaceFolders
-    ?.find((folder) => folder.uri.scheme === "file")
-    ?.uri.fsPath ?? vscode.env.appRoot;
-  void run(async () => {
-    await lifecycle;
-    // A Core image cleans up after its predecessors exactly once: the provider registrations, Runtime grants,
-    // and local credentials that earlier Runtrol builds left behind. An entry that is not exactly ours stays.
-    const managedDigest = await locator.managedDigest();
-    if (legacyCleanupDue(context.globalState.get<string>(LEGACY_CLEANUP_KEY), managedDigest)) {
-      await legacyCleanup.run(workingDirectory);
-      await context.globalState.update(LEGACY_CLEANUP_KEY, legacyCleanupStamp(managedDigest));
-    }
-  });
   return {
     get ready() {
       return lifecycle;

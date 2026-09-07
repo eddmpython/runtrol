@@ -8,16 +8,22 @@ import type {
   WindowMirrorOutputParams,
   WindowRegisterParams,
   WindowUpdateParams,
+  WindowRegistration,
+  WatchWindowInputParams,
+  WindowInputSubscription,
 } from "@runtrol/runtime-client";
 
 import { mirrorChunks, providerOfCommand } from "./observedMirrorState";
 import { DEFAULT_VIEW_GEOMETRY } from "./runtimeTerminal";
 import { errorKindOf } from "./serviceHelp";
 import { WindowRegistryState } from "./windowRegistryState";
+import { OwnerText } from "./ownerText";
+import { abortableDelay } from "./abortableDelay";
 
 /// Where the window's record and its observed mirrors go.
 export type WindowPublisher = {
-  publishWindow(register: WindowRegisterParams, update: WindowUpdateParams): Promise<void>;
+  publishWindow(register: WindowRegisterParams, update: WindowUpdateParams): Promise<WindowRegistration>;
+  withWindowInput(params: WatchWindowInputParams, run: (subscription: WindowInputSubscription) => Promise<void>, signal: AbortSignal): Promise<void>;
   providerCommandNames(): Promise<ReadonlyMap<string, string>>;
   mirrorOpen(params: WindowMirrorOpenParams): Promise<WindowMirrorOpened>;
   mirrorOutput(params: WindowMirrorOutputParams): Promise<void>;
@@ -35,8 +41,6 @@ export type MirrorEvidence = {
   readonly bytes: number;
   readonly chunks: number;
   readonly sha256: string;
-  /// The first 256 KiB fed, as hex, so a viewer's live bytes can be held against the feed exactly.
-  readonly headHex: string;
   readonly ended: boolean;
   readonly exitCode: number | null;
   readonly startedAtMs: number;
@@ -44,7 +48,7 @@ export type MirrorEvidence = {
   readonly firstChunkAtMs: number | null;
 };
 
-const HEAD_BYTES = 256 * 1024;
+const MIRROR_HISTORY_LIMIT = 64;
 
 type Mirror = {
   readonly terminalKey: string;
@@ -56,8 +60,6 @@ type Mirror = {
   bytes: number;
   chunks: number;
   readonly digest: ReturnType<typeof createHash>;
-  readonly head: Buffer[];
-  headBytes: number;
   ended: boolean;
   /// The end was already sent by the close path; the pump must not send a second one.
   endSent: boolean;
@@ -81,13 +83,16 @@ export class WindowRegistry implements vscode.Disposable {
   private readonly state: WindowRegistryState;
   private readonly subscriptions: vscode.Disposable[] = [];
   private readonly mirrors = new Map<vscode.Terminal, Mirror>();
+  private readonly executions = new WeakMap<vscode.TerminalShellExecution, string>();
   private readonly history: Mirror[] = [];
-  private inFlight = false;
+  private inFlight: Promise<WindowRegistration> | null = null;
   private dirty = false;
   private disposed = false;
   private lastReported: string | null = null;
   private commandNames: ReadonlyMap<string, string> | null = null;
   private commandNamesReady: Promise<ReadonlyMap<string, string> | null> = Promise.resolve(null);
+  private owner: { registration: WindowRegistration; abort: AbortController; dispatcher: OwnerText } | null = null;
+  private readonly lifetime = new AbortController();
 
   constructor(
     private readonly publisher: WindowPublisher,
@@ -140,6 +145,7 @@ export class WindowRegistry implements vscode.Disposable {
           Date.now(),
         );
         if (executionId === null) return;
+        this.executions.set(start.execution, executionId);
         this.schedule();
         if (this.commandNames !== null) {
           const providerId = providerOfCommand(commandLine.value, this.commandNames);
@@ -159,8 +165,11 @@ export class WindowRegistry implements vscode.Disposable {
         });
       }),
       vscode.window.onDidEndTerminalShellExecution((end) => {
-        this.endMirror(end.terminal, end.exitCode ?? null);
-        if (this.state.executionEnded(end.terminal)) this.schedule();
+        const executionId = this.executions.get(end.execution);
+        if (executionId === undefined) return;
+        this.executions.delete(end.execution);
+        this.endMirror(end.terminal, end.exitCode ?? null, false, executionId);
+        if (this.state.executionEnded(end.terminal, executionId)) this.schedule();
       }),
       vscode.workspace.onDidChangeWorkspaceFolders(() => {
         this.state.foldersChanged(folders());
@@ -186,12 +195,16 @@ export class WindowRegistry implements vscode.Disposable {
     providerId: string,
     stream: AsyncIterable<string>,
   ): void {
+    if (this.state.executionIdOf(start.terminal) !== executionId) {
+      void drain(stream);
+      return;
+    }
     try {
       this.beginMirror(start.terminal, start.execution, executionId, providerId, stream);
     } catch (error) {
       // Nothing here may throw into a VS Code event handler, and a mirror that never began must still be
       // visible as evidence rather than as silence.
-      this.history.push(failedMirror(this.state.terminalKey(start.terminal) ?? "", executionId, providerId, start.execution.commandLine.value, error));
+      this.rememberMirror(failedMirror(this.state.terminalKey(start.terminal) ?? "", executionId, providerId, start.execution.commandLine.value, error));
       this.reportOnce(error);
     }
   }
@@ -222,7 +235,6 @@ export class WindowRegistry implements vscode.Disposable {
       bytes: mirror.bytes,
       chunks: mirror.chunks,
       sha256: mirror.digest.copy().digest("hex"),
-      headHex: Buffer.concat(mirror.head).toString("hex"),
       ended: mirror.ended,
       exitCode: mirror.exitCode,
       startedAtMs: mirror.startedAtMs,
@@ -233,8 +245,17 @@ export class WindowRegistry implements vscode.Disposable {
 
   dispose(): void {
     this.disposed = true;
+    this.lifetime.abort();
+    this.owner?.dispatcher.close();
+    this.owner?.abort.abort();
+    this.owner = null;
     for (const subscription of this.subscriptions) subscription.dispose();
     this.subscriptions.length = 0;
+  }
+
+  private rememberMirror(mirror: Mirror): void {
+    this.history.push(mirror);
+    if (this.history.length > MIRROR_HISTORY_LIMIT) this.history.shift();
   }
 
   private track(terminal: vscode.Terminal): void {
@@ -262,7 +283,7 @@ export class WindowRegistry implements vscode.Disposable {
     const terminalKey = this.state.terminalKey(terminal) ?? "";
     const cwd = this.state.cwdOf(terminal);
     const processId = this.state.processIdOf(terminal);
-    const open: WindowMirrorOpenParams = {
+    const open: Omit<WindowMirrorOpenParams, "registrationGeneration" | "ownerToken"> = {
       windowSessionId: vscode.env.sessionId,
       terminalKey,
       executionId,
@@ -282,8 +303,6 @@ export class WindowRegistry implements vscode.Disposable {
       bytes: 0,
       chunks: 0,
       digest: createHash("sha256"),
-      head: [],
-      headBytes: 0,
       ended: false,
       endSent: false,
       exitCode: null,
@@ -294,14 +313,21 @@ export class WindowRegistry implements vscode.Disposable {
     const previous = this.mirrors.get(terminal);
     if (previous && !previous.ended) previous.ended = true;
     this.mirrors.set(terminal, mirror);
-    this.history.push(mirror);
-    if (this.history.length > 64) this.history.shift();
+    this.rememberMirror(mirror);
     void (async () => {
       let terminalId: string;
       try {
         if (terminalKey === "") throw new Error("the terminal is not in this window's registry");
         if (cwd === null) throw new Error("shell integration reported no working directory for the terminal");
-        terminalId = (await this.publisher.mirrorOpen({ ...open, cwd })).terminalId;
+        if (processId === null) throw new Error("the terminal shell process is not known yet");
+        const registration = await this.publishCurrent();
+        if (!registration.ownerToken) throw new Error("This Runtime cannot authorize an observed terminal. Reconnect to the current Runtime.");
+        if (this.disposed || this.state.executionIdOf(terminal) !== executionId) {
+          throw new Error("the shell execution ended before its mirror opened");
+        }
+        terminalId = (await this.publisher.mirrorOpen({
+          ...open, cwd, registrationGeneration: registration.registrationGeneration, ownerToken: registration.ownerToken,
+        })).terminalId;
       } catch (error) {
         // The Runtime declined this mirror: the shell is brokered already, or the mirror table is full. The
         // stream is drained so VS Code does not hold it, and the refusal is evidence, not a warning.
@@ -322,11 +348,6 @@ export class WindowRegistry implements vscode.Disposable {
             mirror.bytes += chunk.length;
             mirror.chunks += 1;
             mirror.firstChunkAtMs ??= Date.now();
-            if (mirror.headBytes < HEAD_BYTES) {
-              const kept = chunk.subarray(0, HEAD_BYTES - mirror.headBytes);
-              mirror.head.push(kept);
-              mirror.headBytes += kept.length;
-            }
             await this.publisher.mirrorOutput({ terminalId, bytesBase64 });
           }
         }
@@ -346,9 +367,10 @@ export class WindowRegistry implements vscode.Disposable {
     })();
   }
 
-  private endMirror(terminal: vscode.Terminal, exitCode: number | null, closed = false): void {
+  private endMirror(terminal: vscode.Terminal, exitCode: number | null, closed = false, executionId?: string): void {
     const mirror = this.mirrors.get(terminal);
     if (!mirror || mirror.ended) return;
+    if (executionId !== undefined && mirror.executionId !== executionId) return;
     mirror.ended = true;
     mirror.exitCode = exitCode;
     this.mirrors.delete(terminal);
@@ -384,12 +406,16 @@ export class WindowRegistry implements vscode.Disposable {
 
   private schedule(): void {
     if (this.disposed) return;
+    void this.publishCurrent().catch((error: unknown) => this.reportOnce(error));
+  }
+
+  private publishCurrent(): Promise<WindowRegistration> {
+    if (this.disposed) return Promise.reject(new Error("the window registry is closed"));
     if (this.inFlight) {
       this.dirty = true;
-      return;
+      return this.inFlight;
     }
-    this.inFlight = true;
-    void (async () => {
+    const publishing = (async () => {
       // A registration lives as long as its Runtime connection. When the Runtime restarts, that connection is
       // replaced on its next use, so the first publish after a restart lands on the dead one and throws; a window
       // with no terminal event to follow it would then never register with the new generation (measured 2026-09-05:
@@ -399,24 +425,79 @@ export class WindowRegistry implements vscode.Disposable {
       let backoffMs = PUBLISH_RETRY_FIRST_MS;
       for (let attempt = 0; !this.disposed; attempt += 1) {
         try {
+          let registration: WindowRegistration;
           do {
             this.dirty = false;
             // Names settle after the shell starts and VS Code raises no event for that; read them at publish time.
             for (const terminal of vscode.window.terminals) this.state.renamed(terminal, terminal.name);
-            await this.publisher.publishWindow(this.state.register(), this.state.update());
+            registration = await this.publisher.publishWindow(this.state.register(), this.state.update());
+            this.followInput(registration);
           } while (this.dirty && !this.disposed);
-          break;
+          return registration;
         } catch (error) {
           // Nothing here may throw into a VS Code event handler, and the same failure is reported once, not on
           // every attempt. After the last attempt the next VS Code event is what tries again.
           this.reportOnce(error);
-          if (attempt + 1 >= PUBLISH_RETRY_ATTEMPTS || this.disposed) break;
-          await delay(backoffMs);
+          if (attempt + 1 >= PUBLISH_RETRY_ATTEMPTS || this.disposed) throw error;
+          await abortableDelay(backoffMs, this.lifetime.signal);
           backoffMs = Math.min(backoffMs * 2, PUBLISH_RETRY_MAX_MS);
           this.dirty = true;
         }
       }
-      this.inFlight = false;
+      throw new Error("the window registry is closed");
+    })();
+    this.inFlight = publishing;
+    const settled = () => { if (this.inFlight === publishing) this.inFlight = null; };
+    void publishing.then(settled, settled);
+    return publishing;
+  }
+
+  private followInput(registration: WindowRegistration): void {
+    if (this.disposed || this.owner?.registration === registration) return;
+    this.owner?.dispatcher.close();
+    this.owner?.abort.abort();
+    this.owner = null;
+    const ownerToken = registration.ownerToken;
+    if (!ownerToken) return;
+    const abort = new AbortController();
+    let channel: WindowInputSubscription | null = null;
+    const dispatcher = new OwnerText({
+      current: (binding) => {
+        if (abort.signal.aborted || binding.registrationGeneration !== registration.registrationGeneration) return null;
+        const handle = this.state.inputTarget(binding) as vscode.Terminal | null;
+        const mirror = handle === null ? undefined : this.mirrors.get(handle);
+        return mirror && !mirror.ended && mirror.terminalId === binding.terminalId ? handle : null;
+      },
+      authorize: (sequence) => {
+        if (!channel) return Promise.reject(new Error("the owner input connection is closed"));
+        return channel.claimInput(sequence);
+      },
+      complete: (receipt) => {
+        if (!channel) return Promise.reject(new Error("the owner input connection is closed"));
+        return channel.inputReceipt(receipt);
+      },
+    });
+    this.owner = { registration, abort, dispatcher };
+    void (async () => {
+      while (!abort.signal.aborted) {
+        try {
+          await this.publisher.withWindowInput({
+            windowSessionId: vscode.env.sessionId, registrationGeneration: registration.registrationGeneration, ownerToken,
+          }, async (subscription) => {
+            channel = subscription;
+            while (!abort.signal.aborted) {
+              const notification = await subscription.next();
+              if (notification.kind === "ended") return;
+              await dispatcher.receive(notification.offered);
+            }
+          }, abort.signal);
+        } catch (error) {
+          if (!abort.signal.aborted) this.reportOnce(error);
+        } finally {
+          channel = null;
+        }
+        if (!abort.signal.aborted) await abortableDelay(PUBLISH_RETRY_MAX_MS, abort.signal);
+      }
     })();
   }
 }
@@ -426,10 +507,6 @@ export class WindowRegistry implements vscode.Disposable {
 const PUBLISH_RETRY_ATTEMPTS = 8;
 const PUBLISH_RETRY_FIRST_MS = 400;
 const PUBLISH_RETRY_MAX_MS = 4_000;
-
-function delay(milliseconds: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, milliseconds));
-}
 
 async function drain(stream: AsyncIterable<string>): Promise<void> {
   for await (const _ of stream) {
@@ -448,8 +525,6 @@ function failedMirror(terminalKey: string, executionId: string, providerId: stri
     bytes: 0,
     chunks: 0,
     digest: createHash("sha256"),
-    head: [],
-    headBytes: 0,
     ended: true,
     endSent: true,
     exitCode: null,

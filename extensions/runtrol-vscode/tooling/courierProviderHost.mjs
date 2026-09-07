@@ -2,7 +2,7 @@
 // Usage: node tooling/courierProviderHost.mjs --core <development executable> [--project <existing project> | --resume <retained host>]
 // The printed coordination folder speaks ownerReveal.test.ts. A stop.json file requests complete cleanup.
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { cp, mkdir, mkdtemp, open, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -21,6 +21,8 @@ const original = path.resolve(process.argv[coreIndex + 1]);
 await stat(original);
 const projectIndex = process.argv.indexOf("--project");
 const resumeIndex = process.argv.indexOf("--resume");
+const initialCoreFailure = process.argv.includes("--initial-core-failure");
+assert.ok(!initialCoreFailure || resumeIndex < 0, "initial Core failure requires a fresh isolated host");
 assert.ok(projectIndex < 0 || resumeIndex < 0, "--resume reuses its recorded project; do not combine it with --project");
 let existingProject = null;
 if (projectIndex >= 0) {
@@ -62,6 +64,8 @@ try {
     await mkdir(folder, { recursive: true });
   }
   await cp(original, core);
+  const heldCore = initialCoreFailure ? path.join(temporary, "bin", "held-runtrol.exe") : null;
+  if (heldCore) await rename(core, heldCore);
   await cp(path.join(path.dirname(original), "examples", "handoverProbe.exe"), probe);
   await cp(path.join(extensionRoot, "dist"), path.join(development, "dist"), { recursive: true });
   await cp(path.join(extensionRoot, "resources"), path.join(development, "resources"), { recursive: true });
@@ -82,15 +86,16 @@ try {
   const { executable } = await acquireVSCode(path.join(extensionRoot, ".vscode-test"));
   // Preparation owns no live Runtime. The one immutable lifetime starts immediately before the first spawn.
   const deadlineAtMs = Date.now() + HOST_LIFETIME_MS;
-  await start(core, ["daemon"], "runtime", environment, true);
+  if (!initialCoreFailure) await start(core, ["daemon"], "runtime", environment, true);
   await start(executable, isolatedExtensionTestArguments({ workspace, userData,
     extensions: path.join(temporary, "extensions"), testEntry, extensionRoot: development, visual: true }), "viewer", {
     ...environment, RUNTROL_TEST_CORE: core, RUNTROL_TEST_EXTENSION_ID: extensionIdentifier,
     RUNTROL_VSCODE_COORDINATION: coordination, RUNTROL_VSCODE_ROLE: "viewer",
     [HOST_DEADLINE_ENV]: String(deadlineAtMs),
     RUNTROL_VSCODE_REAL_PROVIDER_JOURNEY: "1", RUNTROL_TEST_INTEGRATION_ROOTS: JSON.stringify([workspace]),
+    ...(initialCoreFailure ? { RUNTROL_VSCODE_INITIAL_CORE_FAILURE: "1" } : {}),
   }, false);
-  const descriptor = { temporary, workspace, coordination, home, core, probe, identity, deadlineAtMs,
+  const descriptor = { temporary, workspace, coordination, home, core, heldCore, probe, identity, deadlineAtMs,
     logs: { runtime: path.join(coordination, "runtime.log"), viewer: path.join(coordination, "viewer.log") },
     resumedFrom: previous?.coordination ?? null, processes: processes.map(({ identity, label }) => ({ ...identity, label })) };
   await writeFile(path.join(coordination, "host.json"), JSON.stringify(descriptor));
@@ -114,7 +119,22 @@ try {
       const current = tree.find((row) => row.pid === entry.child.pid);
       if (current && entry.identity && current.startedAt === entry.identity.startedAt
         && normalizedExecutable(current.executable) === normalizedExecutable(entry.binary)) {
-        await terminateCapturedIdentities(tree);
+        if (entry.label === "runtime") {
+          await new Promise((resolve, reject) => {
+            const stopping = execFile(entry.binary, ["panic"], {
+              cwd: root, env: environment, windowsHide: true, timeout: 40_000,
+            }, (error) => error ? reject(error) : resolve());
+            process.stdout.write(`RUNTROL_PROVIDER_STOP_PROCESS ${JSON.stringify({
+              pid: stopping.pid, executable: entry.binary, home,
+            })}\n`);
+          });
+          const remaining = processRows().filter((candidate) => tree.some((owned) =>
+            owned.pid === candidate.pid && owned.startedAt === candidate.startedAt
+            && normalizedExecutable(owned.executable) === normalizedExecutable(candidate.executable)));
+          if (remaining.length > 0) throw new Error("owned Runtime processes remain after confirmed shutdown");
+        } else {
+          await terminateCapturedIdentities(tree);
+        }
       } else if (current) throw new Error(`cannot prove cleanup ownership for ${entry.child.pid}`);
     } catch (error) {
       // A failed viewer cleanup must not skip the separately owned Runtime and its provider processes.
@@ -135,7 +155,7 @@ try {
   if (cleanupErrors.length > 0) {
     throw new AggregateError(cleanupErrors, `owned provider host cleanup failed; evidence retained at ${temporary}`);
   }
-  if (!leaveEvidence) await rm(temporary, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+  if (!leaveEvidence) await rm(temporary, { recursive: true, maxRetries: 10, retryDelay: 200 });
   process.stdout.write(`RUNTROL_PROVIDER_HOST_CLOSED ${JSON.stringify({ temporary, retained: leaveEvidence })}\n`);
 }
 

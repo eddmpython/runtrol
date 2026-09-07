@@ -18,6 +18,7 @@ import {
   projects,
 } from "./conversationList";
 import type { ProjectRecord } from "./projects";
+import { projectAccentColor } from "./projectColor";
 import type { NativeChatLine, ProviderLine, SessionLine, TerminalDescriptor } from "./runtimeTypes";
 import { workspaceIdentity } from "./workspaceCollision";
 
@@ -47,6 +48,7 @@ function record(workspace: string, name?: string): ProjectRecord {
     name: name ?? workspace.split(/[\\/]/).pop() ?? workspace,
     workspace,
     pinned: false,
+    accent: projectAccentColor(workspace),
   };
 }
 

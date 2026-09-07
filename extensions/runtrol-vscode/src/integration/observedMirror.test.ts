@@ -22,6 +22,7 @@ type Run = {
   readonly commandLine: string;
   readonly exitKeys: readonly string[];
   readonly exitKeyGapMs: number;
+  readonly syntheticFixture?: boolean;
 };
 
 export async function run(): Promise<void> {
@@ -65,8 +66,22 @@ async function journey(coordination: string, role: string): Promise<void> {
       });
     });
     let startedCommandLine: string | null = null;
+    const fixtureChunks: Buffer[] = [];
+    let fixtureBytes = 0;
+    let fixtureCapture: Promise<void> | null = null;
     const startWatch = vscode.window.onDidStartTerminalShellExecution((start) => {
-      if (start.terminal === terminal) startedCommandLine = start.execution.commandLine.value;
+      if (start.terminal !== terminal) return;
+      startedCommandLine = start.execution.commandLine.value;
+      if (!step.syntheticFixture) return;
+      const stream = start.execution.read();
+      fixtureCapture = (async () => {
+        for await (const text of stream) {
+          const bytes = Buffer.from(text, "utf8");
+          fixtureBytes += bytes.length;
+          if (fixtureBytes > 256 * 1024) throw new Error("the synthetic owner stream exceeded its capture bound");
+          fixtureChunks.push(bytes);
+        }
+      })();
     });
     terminal.shellIntegration?.executeCommand(step.commandLine);
     let opened: MirrorEvidence;
@@ -92,10 +107,12 @@ async function journey(coordination: string, role: string): Promise<void> {
     if (exitCode === "timeout") terminal.dispose();
     // The pump feeds the last chunks and the end after the event; give it a moment to settle.
     const final = await waitForMirrorEnd(journey, opened.executionId, 10_000);
+    if (fixtureCapture) await fixtureCapture;
     await publish(coordination, `${role}-ended-${index}.json`, {
       ...final,
       shellExitCode: exitCode === "timeout" ? null : exitCode ?? null,
       timedOut: exitCode === "timeout",
+      ...(step.syntheticFixture ? { fixtureHex: Buffer.concat(fixtureChunks).toString("hex") } : {}),
     });
   }
 }

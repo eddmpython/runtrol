@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { ProjectStore, type ProjectMemento } from "./projects";
+import { accentForWorkspace, projectForWorkspace, ProjectStore, type ProjectMemento } from "./projects";
+import { projectAccentColor } from "./projectColor";
 import { workspaceIdentity } from "./workspaceCollision";
 
 // Built for the platform the tests run on. A project's name is the last path segment, and its
@@ -140,4 +141,51 @@ test("every change is announced once, after it is persisted", async () => {
   subscription.dispose();
   await store.create(BETA);
   assert.equal(announced, 3, "a disposed listener hears nothing");
+});
+
+test("six colliding projects keep distinct accents across reorder, removal, addition and another window", async () => {
+  const shared = memento();
+  const store = new ProjectStore(shared);
+  const folders = Array.from({ length: 400 }, (_, index) => [ROOT, `project-${index}`].join(SEP));
+  const preferred = projectAccentColor(folders[0]!);
+  const colliding = folders.filter((folder) => projectAccentColor(folder) === preferred).slice(0, 6);
+  assert.equal(colliding.length, 6);
+  for (const folder of colliding) await store.create(folder);
+  const before = new Map(store.all().map((record) => [record.key, record.accent]));
+  assert.equal(new Set(before.values()).size, 6, "path hash collisions do not become visible colour collisions");
+  await store.reorder([...before.keys()].reverse());
+  await store.setName(colliding[0]!, "renamed");
+  await store.setPinned(colliding[1]!, true);
+  await store.remove(colliding[5]!);
+  await store.create(BETA);
+  const reopened = new ProjectStore(shared);
+  for (const record of reopened.all()) {
+    if (before.has(record.key)) assert.equal(record.accent, before.get(record.key), "open tabs keep their colour");
+  }
+  assert.equal(new Set(reopened.all().map((record) => record.accent)).size, 6);
+});
+
+test("a subfolder tab and its sidebar group share the deepest registered project's accent", async () => {
+  const store = new ProjectStore(memento());
+  const parent = await store.create(ALPHA);
+  const nestedPath = [ALPHA, "nested"].join(SEP);
+  const nested = await store.create(nestedPath);
+  const child = [nestedPath, "src"].join(SEP);
+  assert.equal(projectForWorkspace(store.all(), child)?.key, nested.key);
+  assert.equal(accentForWorkspace(store.all(), child), nested.accent);
+  assert.equal(accentForWorkspace(store.all(), [ALPHA, "src"].join(SEP)), parent.accent);
+  assert.equal(accentForWorkspace(store.all(), null), projectAccentColor(null));
+});
+
+test("legacy project accents migrate consistently and survive the first persisted rearrangement", async () => {
+  const legacy = [{ name: "alpha", workspace: ALPHA }, { name: "beta", workspace: BETA }];
+  const shared = memento(legacy);
+  const store = new ProjectStore(shared);
+  const reverse = new ProjectStore(memento([...legacy].reverse()));
+  for (const record of store.all()) {
+    assert.equal(reverse.all().find((other) => other.key === record.key)?.accent, record.accent);
+  }
+  const before = new Map(store.all().map((record) => [record.key, record.accent]));
+  await store.reorder([...before.keys()].reverse());
+  for (const record of new ProjectStore(shared).all()) assert.equal(record.accent, before.get(record.key));
 });

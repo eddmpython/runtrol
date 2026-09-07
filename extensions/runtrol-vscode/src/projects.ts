@@ -1,6 +1,7 @@
 import * as path from "node:path";
 
-import { workspaceIdentity } from "./workspaceCollision";
+import { workspaceCovers, workspaceIdentity } from "./workspaceCollision";
+import { availableProjectAccent, isProjectAccent, projectAccentColor } from "./projectColor";
 
 /// One project the operator created, by hand, in the panel.
 ///
@@ -20,6 +21,8 @@ export type ProjectRecord = {
   readonly workspace: string;
   /// Whether the person pinned it to the top of the list. A placement choice, never a fact about the folder.
   readonly pinned: boolean;
+  /// The same stable accent in the sidebar and every terminal tab belonging to this project.
+  readonly accent: string;
 };
 
 /// The slice of a `vscode.Memento` this store needs, named so tests can hand in a plain object.
@@ -41,6 +44,7 @@ function sameRecords(left: readonly ProjectRecord[], right: readonly ProjectReco
     return other !== undefined
       && record.key === other.key
       && record.name === other.name
+      && record.accent === other.accent
       && record.pinned === other.pinned;
   });
 }
@@ -86,6 +90,7 @@ export class ProjectStore {
       name: (name ?? path.basename(workspace)).trim() || path.basename(workspace) || workspace,
       workspace,
       pinned: false,
+      accent: availableProjectAccent(workspace, new Set(this.records.map((record) => record.accent))),
     };
     await this.replace([...this.records, record]);
     return record;
@@ -154,6 +159,7 @@ export class ProjectStore {
       name: record.name,
       workspace: record.workspace,
       pinned: record.pinned,
+      accent: record.accent,
     })));
     this.records = next;
     for (const listener of this.listeners) listener();
@@ -170,13 +176,41 @@ function readRecords(raw: unknown): ProjectRecord[] {
   const seen = new Set<string>();
   for (const entry of raw) {
     if (!entry || typeof entry !== "object") continue;
-    const { name, workspace, pinned } = entry as { name?: unknown; workspace?: unknown; pinned?: unknown };
+    const { name, workspace, pinned, accent } = entry as {
+      name?: unknown; workspace?: unknown; pinned?: unknown; accent?: unknown;
+    };
     if (typeof name !== "string" || typeof workspace !== "string") continue;
     if (!name.trim() || !workspace.trim()) continue;
     const key = workspaceIdentity(workspace);
     if (seen.has(key)) continue;
     seen.add(key);
-    records.push({ key, name, workspace, pinned: pinned === true });
+    records.push({ key, name, workspace, pinned: pinned === true, accent: isProjectAccent(accent) ? accent : "" });
   }
-  return records;
+  // Migrate older records by identity, so two windows agree even if the operator has reordered the list.
+  // Reserve persisted colours first. A new or migrated project must never recolour an existing tab.
+  const used = new Set(records.map((record) => record.accent).filter(Boolean));
+  const assigned = new Map<string, string>();
+  for (const record of [...records].sort((left, right) => left.key.localeCompare(right.key))) {
+    if (record.accent) continue;
+    const accent = availableProjectAccent(record.workspace, used);
+    used.add(accent);
+    assigned.set(record.key, accent);
+  }
+  return records.map((record) => ({ ...record, accent: record.accent || assigned.get(record.key)! }));
+}
+
+/// Deepest registered folder wins. Grouping and terminal identity share this ownership decision.
+export function projectForWorkspace(records: readonly ProjectRecord[], workspace: string): ProjectRecord | null {
+  if (!workspace.trim()) return null;
+  let home: ProjectRecord | null = null;
+  for (const record of records) {
+    if (!workspaceCovers(record.workspace, workspace)) continue;
+    if (!home || record.key.length > home.key.length) home = record;
+  }
+  return home;
+}
+
+export function accentForWorkspace(records: readonly ProjectRecord[], workspace: string | null): string {
+  return workspace === null ? projectAccentColor(null)
+    : projectForWorkspace(records, workspace)?.accent ?? projectAccentColor(workspace);
 }

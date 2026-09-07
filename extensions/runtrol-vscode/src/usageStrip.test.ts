@@ -109,6 +109,20 @@ function strip(chips: readonly UsageChip[]): string {
   return `${usageChipsMarkup(chips, assets)}${chips.length === 0 ? "" : usagePanelsMarkup(chips)}`;
 }
 
+test("an unread account offers usage retry without signing in, signing out, or repairing its CLI", () => {
+  for (const meters of [[], [{ key: "window", label: "5h", percent: 48, resets: "", governing: true }]]) {
+    const chips = usageChips([row({ state: "unread", meters, position: "Account request timed out" })],
+      new Set(["codex"]), new Map(), new Set(["codex"]));
+    assert.equal(chips[0]?.action, "retryUsage");
+    assert.match(chips[0]?.caption ?? "", /Retry/u);
+    const html = strip(chips);
+    assert.ok(html.includes('data-action="retryUsage"'));
+    assert.ok(html.includes("Retry usage"));
+    assert.ok(html.includes("usage unreadable; retry usage"));
+    assert.doesNotMatch(html, /data-action="(?:signIn|signOut|fix)"/u);
+  }
+});
+
 const assets = {
   cspSource: "vscode-resource:",
   nonce: "n0nce",

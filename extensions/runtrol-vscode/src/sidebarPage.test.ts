@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { runInNewContext } from "node:vm";
 
 import {
   conversationTitle,
@@ -52,6 +53,7 @@ function project(overrides: Partial<SidebarProjectRow>): SidebarProjectRow {
     hidden: 0,
     branch: null,
     changes: null,
+    changesError: null,
     rows: [conversation({})],
     ...overrides,
   };
@@ -70,6 +72,15 @@ function model(overrides: Partial<SidebarModel>): SidebarModel {
   };
 }
 
+test("an observed input action is explicit and absent from read-only rows", () => {
+  const enabled = sidebarBody(model({ projects: [], loose: [conversation({ canOpenInput: true })] }), assets);
+  assert.match(enabled, /data-command="runtrol.openInputView" title="Open input view here"/);
+  const readOnly = sidebarBody(model({ projects: [], loose: [conversation({ canOpenInput: false })] }), assets);
+  assert.doesNotMatch(readOnly, /runtrol.openInputView/);
+  assert.match(readOnly, /Input is available in the terminal&#39;s own window/);
+  assert.match(enabled, /data-kind="conversation"/);
+});
+
 const assets = {
   cspSource: "vscode-resource:",
   nonce: "n0nce",
@@ -79,6 +90,44 @@ const assets = {
     ["codex\0#4e94ce", "https://icons/codex-blue.svg"],
   ]),
 };
+
+test("first-run and retry buttons send no stale row target while row actions keep their identity", () => {
+  const html = sidebarHtml(model({ firstRun: true }), assets);
+  const script = html.match(/<script nonce="n0nce">([\s\S]*?)<\/script>/)?.[1];
+  assert.ok(script);
+  const listeners = new Map<string, Array<(event: unknown) => void>>();
+  const sent: Array<{ type: string; command?: string; target?: unknown }> = [];
+  runInNewContext(script, {
+    window: { addEventListener() {} },
+    document: {
+      querySelector: () => null,
+      querySelectorAll: () => [],
+      addEventListener(name: string, listener: (event: unknown) => void) {
+        const group = listeners.get(name) ?? [];
+        group.push(listener);
+        listeners.set(name, group);
+      },
+    },
+    acquireVsCodeApi: () => ({ getState: () => null, postMessage: (message: unknown) => sent.push(JSON.parse(JSON.stringify(message))) }),
+  });
+  const clicks = listeners.get("click");
+  assert.ok(clicks?.length);
+  const click = (command: string, row: { dataset: { kind: string; key: string } } | null): void => {
+    const button = {
+      dataset: { command },
+      closest(selector: string): unknown { return selector === "[data-command]" ? button : selector === ".row" ? row : null; },
+    };
+    for (const listener of clicks) listener({ target: button, stopPropagation() {} });
+  };
+  for (const command of ["runtrol.createProject", "runtrol.startSession", "runtrol.refresh"]) {
+    click(command, null);
+    assert.deepEqual(sent.at(-1), { type: "command", command });
+  }
+  click("runtrol.newConversationInProject", { dataset: { kind: "project", key: "project:app" } });
+  assert.deepEqual(sent.at(-1), {
+    type: "command", command: "runtrol.newConversationInProject", target: { kind: "project", key: "project:app" },
+  });
+});
 
 test("the three zones are drawn in order with their own titles, and the project carries its conversations", () => {
   const html = sidebarHtml(model({}), assets);
@@ -268,9 +317,19 @@ test("first run offers the two starting actions and a chosen service offers its 
   assert.ok(html.includes('data-command="runtrol.createProject"'));
   assert.ok(html.includes('data-command="runtrol.startSession"'));
   assert.ok(html.includes('data-command="runtrol.startSessionWith" data-kind="service" data-key="claude"'));
+  const waiting = sidebarHtml(model({
+    serviceChoice: { workspace: "C:\\work\\app", services: [], unavailable: "Checking installed services..." },
+  }), assets);
+  assert.match(waiting, /class="choice"/u);
+  assert.match(waiting, /role="status">Checking installed services\.\.\./u);
+  assert.match(waiting, /data-command="runtrol.refresh">Try again/u);
+  assert.doesNotMatch(waiting, /data-command="runtrol.startSessionWith"/u);
 });
 
 test("a project shows its uncommitted lines, new files and unpushed commits, and nothing when it is clean", () => {
+  const failed = sidebarHtml(model({ projects: [project({ changesError: "Git read timed out" })] }), assets);
+  assert.match(failed, /Git unavailable/u);
+  assert.match(failed, /Git changes unavailable: Git read timed out\. Use Look again to retry\./u);
   const dirty = sidebarHtml(model({ projects: [project({ changes: { added: 120, removed: 35, untracked: 2, ahead: 3 } })] }), assets);
   assert.ok(dirty.includes('<span class="add">+120</span>'));
   assert.ok(dirty.includes('<span class="del">-35</span>'));

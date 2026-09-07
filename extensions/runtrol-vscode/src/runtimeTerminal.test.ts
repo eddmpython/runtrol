@@ -33,7 +33,7 @@ const descriptor: TerminalDescriptor = {
 type Step =
   | { kind: "output"; text: string }
   | { kind: "lagged"; screen: string }
-  | { kind: "exited"; exitCode: number }
+  | { kind: "exited"; exitCode: number; failure?: string }
   | { kind: "break" }
   | { kind: "hang" };
 
@@ -55,7 +55,7 @@ function fakeView(initialScreen: string, steps: Step[], writes: Uint8Array[] = [
       if (step.kind === "break") throw new Error("connection ended");
       if (step.kind === "output") return { kind: "output", sequence: 1, bytes: encoder.encode(step.text) };
       if (step.kind === "lagged") return { kind: "lagged", lostChunks: 1, screen: encoder.encode(step.screen), nextSequence: 2 };
-      return { kind: "exited", exitCode: step.exitCode };
+      return { kind: "exited", exitCode: step.exitCode, ...(step.failure ? { failure: step.failure } : {}) };
     },
     close() {},
     async write(params: { bytesBase64: string }) { writes.push(new Uint8Array(Buffer.from(params.bytesBase64, "base64"))); },
@@ -108,6 +108,85 @@ function deferred<T = void>() {
 }
 
 const continuations = () => new Promise<void>((resolve) => setImmediate(resolve));
+
+test("observed input waits for the owner text receipt and never uses the exact byte writer", async () => {
+  const receipt = deferred<Awaited<ReturnType<TerminalView["sendText"]>>>();
+  const texts: string[] = [];
+  const writes: Uint8Array[] = [];
+  const view = Object.assign(fakeView("", [{ kind: "hang" }], writes), {
+    sendText: (params: { text: string }) => { texts.push(params.text); return receipt.promise; },
+  });
+  Object.assign(view, { opened: { ...view.opened, terminal: { ...descriptor, origin: "observedMirror", ownerInputAvailable: true } } });
+  const { pty, openings } = harness([async () => view]);
+  pty.open(undefined);
+  await openings[0];
+  let acknowledged = false;
+  const measured = pty.handleMeasuredInput("한글\n\x03").then(() => { acknowledged = true; });
+  await continuations();
+  assert.equal(acknowledged, false);
+  assert.deepEqual(texts, ["한글\n\x03"]);
+  assert.equal(writes.length, 0);
+  receipt.resolve({ requestId: newMutationRequestId(), deliverySequence: 1, ownerRegistrationGeneration: 1, outcome: "ownerExtensionAccepted" });
+  await measured;
+  assert.equal(acknowledged, true);
+  pty.close();
+});
+
+test("an unknown observed text outcome rejects its measurement without replay", async () => {
+  let calls = 0;
+  const view = Object.assign(fakeView("", [{ kind: "hang" }]), {
+    sendText: async () => {
+      calls += 1;
+      throw new RuntimeRequestError({ code: "outcomeUnknown", correlationId: "fixture", message: "owner receipt was lost", retryable: false });
+    },
+  });
+  Object.assign(view, { opened: { ...view.opened, terminal: { ...descriptor, origin: "observedMirror", ownerInputAvailable: true } } });
+  const { pty, openings } = harness([async () => view]);
+  pty.open(undefined);
+  await openings[0];
+  await assert.rejects(pty.handleMeasuredInput("once"), /owner receipt was lost/);
+  await continuations();
+  assert.equal(calls, 1);
+  pty.close();
+});
+
+test("two renderer views never answer host-owned queries and preserve identical user key bytes", async () => {
+  const query = "\x1b[6n\x1b[>q\x1b[?u";
+  const user = "\x1b[1;2R\x1b[97u\x1b[200~literal \x1b[12;40R\x1b[201~\x1b";
+  for (let viewer = 0; viewer < 2; viewer += 1) {
+    const inputs: Uint8Array[] = [];
+    const view = fakeView("checkpoint" + query, [
+      { kind: "output", text: "draw" + query },
+      { kind: "hang" },
+    ], inputs);
+    const current = harness([async () => view]);
+    const raw: Uint8Array[] = [];
+    current.pty.onDidReceive((bytes) => raw.push(bytes));
+    // A real renderer sends CPR through the same onData/handleInput callback as Shift-F3.
+    current.pty.onDidWrite((text) => {
+      if (text.includes("\x1b[6n")) current.pty.handleInput("\x1b[1;2R");
+    });
+    current.pty.open(undefined);
+    await continuations();
+    current.pty.handleInput(user);
+    await continuations();
+    assert.equal(current.written.join(""), "checkpoint" + "\x1b\\".repeat(3) + "draw" + "\x1b\\".repeat(3));
+    assert.equal(Buffer.concat(raw).toString(), "draw" + query, "the received wire remains raw");
+    assert.equal(Buffer.concat(inputs).toString(), user, "no renderer reply is confused with a key");
+    current.pty.close();
+  }
+});
+
+test("presentation tails finish before replacement checkpoints and provider exit", async () => {
+  const current = harness([async () => fakeView("first\x1b[", [
+    { kind: "lagged", screen: "\x1b[2Jcheckpoint\x1b[6n\x1b[" },
+    { kind: "exited", exitCode: 1 },
+  ])]);
+  current.pty.open(undefined);
+  await continuations();
+  assert.equal(current.written.join(""), "first\x1b[\x1b[2Jcheckpoint\x1b\\\x1b[");
+  current.pty.close();
+});
 
 for (const failureKind of ["transport", "outcomeUnknown"] as const) {
   for (const failureAt of ["before output breaks", "while output resolves", "while attaching", "after replacement"] as const) {
@@ -447,6 +526,20 @@ test("a provider exit closes a clean tab and leaves a failed one standing with n
   assert.deepEqual(dirty.written, ["last words"]);
   assert.deepEqual(dirty.shown, ["opening", "ended 3"]);
   assert.deepEqual(dirty.closed, []);
+});
+
+test("a structural host failure preserves the pane and reports failure even with a zero process exit", async () => {
+  for (const exitCode of [0, 3]) {
+    const failed = harness([async () => fakeView("last screen", [
+      { kind: "exited", exitCode, failure: "outputReadFailed" },
+    ])]);
+    failed.pty.open(undefined);
+    await settle();
+    assert.deepEqual(failed.closed, [], "a host failure cannot clean-close the last screen");
+    assert.deepEqual(failed.written, ["last screen"], "structural failures never become provider output");
+    assert.deepEqual(failed.shown, ["opening", "failed The terminal stopped because its output could not be read."]);
+    assert.deepEqual(failed.attachments, [], "a completed failed generation is not reattached");
+  }
 });
 
 test("the pane's one exception still holds: mouse-mode switches never reach VS Code's terminal", async () => {

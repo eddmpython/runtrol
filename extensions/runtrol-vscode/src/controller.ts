@@ -11,7 +11,7 @@ import { CoreClient } from "./core/client";
 import { readGitBranch } from "./gitBranch";
 import { IsolatedWorkspaces } from "./isolatedWorkspace";
 import { isProjectless } from "./projectlessWorkspace";
-import { planProjectDeletion, projectDeletionQuestion } from "./projectDeletion";
+import { applyProjectConversations, planProjectConversations, projectConversationKept, projectConversationQuestion, type ProjectConversationAction } from "./projectConversations";
 import type { ProjectRecord } from "./projects";
 import type {
   IsolatedWorkspaceLine,
@@ -36,6 +36,7 @@ import type { Conversation } from "./conversationList";
 import { attentionCount, nextNeedingYou, projects, runningElsewhere, nativeProcessKey, namedPlaceholders } from "./conversationList";
 import { conversationDeletion, deletionQuestion } from "./conversationDeletion";
 import { editorPanelFor } from "./editorPanels";
+import { canOpenInputView } from "./observedInput";
 import { archivalQuestion, conversationArchival } from "./conversationArchival";
 import { awaitsVerification, isUsable, unaskedUsable } from "./providerHealth";
 import type { HelpOffer, ServiceTrouble } from "./serviceHelp";
@@ -101,6 +102,7 @@ export class Controller implements vscode.Disposable {
   private readonly status: vscode.StatusBarItem;
   private selectionTail: Promise<void> = Promise.resolve();
   private selectionPersistenceTail: Promise<void> = Promise.resolve();
+  private reconnecting: Promise<void> | null = null;
   private disposed = false;
   private readonly reportedRuntimeWarnings = new BoundedDedupe<string>(WARNING_DEDUPE_CAPACITY);
   private readonly reportedIsolatedWorkspaces = new BoundedDedupe<string>(WARNING_DEDUPE_CAPACITY);
@@ -328,6 +330,7 @@ export class Controller implements vscode.Disposable {
   }
 
   async refreshChats(): Promise<void> {
+    if (this.state.coreReach === "unreachable" || this.reconnecting) await this.reconnect();
     // The visible list repaints from its live watch snapshots immediately. The explicit provider list request is
     // retained beside it because it is the zero-configuration trigger for a CLI installed since the last refresh;
     // Runtime performs that filesystem restamp behind the provider watch rather than on this response path.
@@ -513,13 +516,24 @@ export class Controller implements vscode.Disposable {
     }
   }
 
-  async reconnect(): Promise<void> {
+  reconnect(): Promise<void> {
+    if (this.reconnecting) return this.reconnecting;
+    const pending = this.reconnectNow().finally(() => {
+      if (this.reconnecting === pending) this.reconnecting = null;
+    });
+    this.reconnecting = pending;
+    return pending;
+  }
+
+  private async reconnectNow(): Promise<void> {
     this.indexAbort?.abort();
     this.indexAbort = null;
     this.cancelNativeDiscoveries();
     this.chatDiscoveryAsked.clear();
     this.state.clearNativeCatalogues();
     await this.client.reset();
+    // The explicit recovery action starts the installed Runtime before its public clients rediscover it.
+    await this.client.ensureRuntime();
     await this.runtime.reset();
     await this.refreshAfterReconnect();
     // The catalogues were cleared above and the reconnect may exist precisely because the grant's roots grew
@@ -540,6 +554,18 @@ export class Controller implements vscode.Disposable {
 
   private selectConversation(conversation: Conversation): Promise<void> {
     return this.select(conversation);
+  }
+
+  async openInputView(value: SelectionTarget): Promise<void> {
+    const selected = this.resolve(value);
+    const row = "key" in selected
+      ? this.state.conversations.find((candidate) => candidate.key === selected.key)
+      : undefined;
+    if (!row || !canOpenInputView(row)) {
+      throw new Error("This terminal is no longer available for input here. Open it in its own window.");
+    }
+    this.terminals.show(row, false);
+    if (row.session) this.state.select(row.session.sessionId);
   }
 
   private async selectNow(
@@ -756,6 +782,11 @@ export class Controller implements vscode.Disposable {
   /// `interactive: false` never asks: the service used last, or the first usable one, opens. For callers
   /// with nobody at the keyboard (a journey, an automation), where a picker would wait forever.
   async startSessionInWorkspace(workspace: string, options: { interactive?: boolean } = {}): Promise<void> {
+    if (options.interactive !== false) {
+      if (!this.chooseService) throw new Error("The conversation picker is not available in this window.");
+      await this.chooseService(workspace);
+      return;
+    }
     const usable = this.state.providers.filter((provider) => isUsable(provider));
     if (usable.length === 0) {
       // Not an error: a machine with no service yet is a normal first day, and the Agent Usage view says
@@ -763,19 +794,11 @@ export class Controller implements vscode.Disposable {
       this.say("No coding service is installed and signed in yet. Add one from the Agent Usage view.", "warning");
       return;
     }
-    if (options.interactive === false) {
-      await this.startSessionWith(this.orderedServices(usable)[0]!.providerId, workspace);
-      return;
-    }
-    // An interactive start always names the available service, even when there is only one. Auto-opening the
-    // sole usable entry made a broken terminal launch look like an empty provider choice: the person pressed
-    // Add, saw no provider and no tab, and had no second action to identify which side failed. The choice is
-    // offered where they pressed the button (`docs/vscodeSurface.md`).
-    this.chooseService?.(workspace);
+    await this.startSessionWith(this.orderedServices(usable)[0]!.providerId, workspace);
   }
 
   /// Where the sidebar draws the service choice, set by the surface that owns the sections.
-  chooseService: ((workspace: string) => void) | null = null;
+  chooseService: ((workspace: string) => Promise<void>) | null = null;
 
   /// Start a conversation with one named service, which is what a chosen row asks for.
   async startSessionWith(providerId: string, workspace: string): Promise<void> {
@@ -1255,92 +1278,79 @@ export class Controller implements vscode.Disposable {
     void vscode.window.showInformationMessage(`Deleted ${title} from ${serviceName}.`);
   }
 
-  /// Delete every conversation of one project that its service can delete, after one confirmation carrying
-  /// the exact numbers (`projectDeletion.ts`). Reached from the project row's context menu, never from a
-  /// hover icon: a misclick beside "new conversation" must not be able to do this (operator, 2026-08-29).
   async deleteProjectConversations(item: ProjectItem): Promise<void> {
+    await this.changeProjectConversations(item, "delete");
+  }
+
+  async archiveProjectConversations(item: ProjectItem): Promise<void> {
+    await this.changeProjectConversations(item, "archive");
+  }
+
+  /// Both provider actions share one exact eligibility, confirmation, stop and failure boundary.
+  private async changeProjectConversations(item: ProjectItem, action: ProjectConversationAction): Promise<void> {
     const rows = item.group.rows;
     const capabilities = new Map<string, ProviderCapabilities | null>();
     for (const providerId of new Set(rows.map((row) => row.providerId))) {
       capabilities.set(providerId, await this.capabilitiesFor(providerId));
     }
-    const plan = planProjectDeletion(rows, (providerId) => capabilities.get(providerId) ?? null);
-    const question = projectDeletionQuestion(item.group.name, plan);
+    const plan = planProjectConversations(action, rows, (providerId) => capabilities.get(providerId) ?? null);
+    const question = projectConversationQuestion(item.group.name, plan);
+    const applied = action === "archive" ? "Archived" : "Deleted";
     if (!question) {
-      const kept = [...plan.undeletable]
-        .map(([service, count]) => `${count} of ${service} (no deletion published)`)
-        .join(", ");
-      const elsewhere = plan.runningElsewhere.length > 0
-        ? `${plan.runningElsewhere.length} running outside Runtrol`
-        : "";
-      const reasons = [kept, elsewhere].filter((reason) => reason !== "").join("; ");
+      const reasons = projectConversationKept(plan, false).join("; ");
       void vscode.window.showInformationMessage(
-        `Nothing in ${item.group.name} can be deleted right now${reasons ? `: ${reasons}` : ""}.`,
+        `Nothing in ${item.group.name} can be ${applied.toLowerCase()} right now${reasons ? `: ${reasons}` : ""}.`,
       );
       return;
     }
-    // The idle-only button first: the first button is what Enter presses, and Enter must not stop agents.
-    const buttons = [question.deleteIdle, question.stopAndDelete]
-      .filter((label): label is string => label !== null);
+    // Enter takes the first action, so idle-only must precede any action that stops a process.
+    const buttons = [question.idle, question.stopAndApply].filter((label): label is string => label !== null);
     const choice = await vscode.window.showWarningMessage(
-      question.message,
-      { modal: true, detail: question.detail },
-      ...buttons,
+      question.message, { modal: true, detail: question.detail }, ...buttons,
     );
-    if (!choice) return;
-    const stopping = choice === question.stopAndDelete ? plan.stoppable : [];
-    const intended = plan.deletable.length + stopping.length;
-    let deleted = 0;
-    const refused: string[] = [];
-    await vscode.window.withProgress(
-      {
-        location: vscode.ProgressLocation.Notification,
-        title: `Deleting ${intended} conversations from ${item.group.name}`,
-      },
-      async (progress) => {
-        // A stop answers before the process has ended, and the Core keeps the conversation's live claim
-        // until it has seen the exit (a settle of a few hundred milliseconds). Deleting inside that window
-        // is refused as "stop its original session first", which is nonsense to a person who just pressed
-        // Stop. So each stopped row is deleted only once this window's own row for it has gone idle, which
-        // is the Core saying the claim is gone; one that does not go idle in time is kept and said.
-        const stopped: Conversation[] = [];
-        for (const row of stopping) {
-          progress.report({ message: `stopping ${row.title}` });
-          try {
-            if (row.presence.kind === "hosted") {
-              await this.runtime.stopTerminal(row.presence.terminal);
-              if (!(await this.awaitIdle(row.key, STOP_SETTLE_MS))) {
-                refused.push(`${row.title}: still running after Stop, so it was kept`);
-                continue;
-              }
-            }
-            // A supervised session is closed by the deletion itself, which knows how (deleteNativeWithoutAsking).
-            stopped.push(row);
-          } catch (error) {
-            refused.push(`${row.title}: ${error instanceof Error ? error.message : String(error)}`);
-          }
-        }
-        for (const row of [...plan.deletable, ...stopped]) {
-          progress.report({ message: row.title });
-          try {
-            await this.deleteNativeWithoutAsking({ ...row, live: false });
-            deleted += 1;
-          } catch (error) {
-            refused.push(`${row.title}: ${error instanceof Error ? error.message : String(error)}`);
-          }
-        }
-      },
+    if (!choice || !buttons.includes(choice)) return;
+    const includeRunning = choice === question.stopAndApply;
+    const result = await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification,
+        title: `${action === "archive" ? "Archiving" : "Deleting"} conversations from ${item.group.name}` },
+      (progress) => applyProjectConversations(plan, includeRunning, {
+        stop: (row) => this.stopForNativeAction(row),
+        apply: async (row) => {
+          this.requireStoppedNative(row);
+          if (action === "archive") await this.archiveNativeWithoutAsking(row);
+          else await this.deleteNativeWithoutAsking(row);
+        },
+        report: (message) => progress.report({ message }),
+      }),
     );
     await this.refreshChats();
-    const kept = [...plan.undeletable].map(([service, count]) => `${count} (${service} cannot delete)`);
-    if (plan.runningElsewhere.length > 0) kept.push(`${plan.runningElsewhere.length} running outside Runtrol`);
+    const kept = projectConversationKept(plan, includeRunning);
     const tail = [
       kept.length > 0 ? `Kept: ${kept.join(", ")}.` : "",
-      refused.length > 0 ? `Refused: ${refused.join("; ")}` : "",
+      result.refused.length > 0 ? `Refused: ${result.refused.join("; ")}` : "",
     ].filter((line) => line !== "").join(" ");
-    const summary = `Deleted ${deleted} of ${intended} from ${item.group.name}.${tail ? ` ${tail}` : ""}`;
-    if (refused.length > 0) void vscode.window.showWarningMessage(summary);
+    const summary = `${applied} ${result.completed} of ${result.intended} from ${item.group.name}.${tail ? ` ${tail}` : ""}`;
+    if (result.refused.length > 0) void vscode.window.showWarningMessage(summary);
     else void vscode.window.showInformationMessage(summary);
+  }
+
+  private requireStoppedNative(row: Conversation): void {
+    const current = this.state.conversations.find((candidate) => candidate.key === row.key
+      || (row.native && candidate.native?.providerId === row.native.providerId
+        && candidate.native.nativeSessionId === row.native.nativeSessionId));
+    if (row.live || current?.live || current?.presence.kind === "unconfirmed") {
+      throw new Error(`${row.title} is still running or its owner is unconfirmed, so it was kept`);
+    }
+  }
+
+  private async stopForNativeAction(row: Conversation): Promise<void> {
+    if (!row.canStop) throw new Error(`${row.title} is running outside Runtrol, so it was kept`);
+    if (row.presence.kind === "hosted") await this.runtime.stopTerminal(row.presence.terminal);
+    else if (row.session) await this.closeResolvedSession(row.session, row.session.lifecycle === "hotRunning");
+    else throw new Error(`${row.title} has no exact owner Runtrol can stop`);
+    if (!(await this.awaitIdle(row.key, STOP_SETTLE_MS))) {
+      throw new Error(`${row.title} is still running after Stop, so it was kept`);
+    }
   }
 
   /// Whether this window's row for a conversation stops being live within the deadline: the Core's own word,
@@ -1402,10 +1412,12 @@ export class Controller implements vscode.Disposable {
       question.button,
     );
     if (choice !== question.button) return;
-    await this.archiveNativeWithoutAsking(row);
+    if (row.live) await this.stopForNativeAction(row);
+    await this.archiveNativeWithoutAsking({ ...row, live: false });
   }
 
   async archiveNativeWithoutAsking(row: Conversation): Promise<void> {
+    this.requireStoppedNative(row);
     const native = row.native;
     if (!native) throw new Error(`${row.title} has nothing left to archive`);
     if (row.session && this.state.sessions.some((session) => session.sessionId === row.session?.sessionId)) {

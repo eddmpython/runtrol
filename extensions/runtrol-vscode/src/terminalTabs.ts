@@ -41,9 +41,9 @@ export class TerminalTabs implements vscode.Disposable {
   constructor(
     private readonly runtime: StudioRuntimeClient,
     /// The glyph for a conversation's service, drawn on the tab so two services' tabs tell apart at a glance.
-    private readonly iconFor: (conversation: Conversation, accent: string) => vscode.Uri,
+    private readonly iconFor: (conversation: Conversation, accent: string) => vscode.ThemeIcon,
     /// The same glyph by service id, for a fresh conversation that has no row yet.
-    private readonly iconForProvider: (providerId: string, accent: string) => vscode.Uri,
+    private readonly iconForProvider: (providerId: string, accent: string) => vscode.ThemeIcon,
     /// Told whenever the set of not-yet-described conversations changes, so the list redraws at once.
     private readonly startedChanged: () => void = () => undefined,
     /// The same conversation after the provider catalogue was read again, or null when it is gone. A row's
@@ -56,6 +56,8 @@ export class TerminalTabs implements vscode.Disposable {
     /// The name this conversation carries now, or null when nothing in the list matches this tab. A tab opened
     /// before the service named the conversation is called after its folder, and the name arrives later.
     private readonly nameOf: (conversationKey: string) => string | null = () => null,
+    /// Uses the sidebar's registered project, including conversations in subfolders and isolated worktrees.
+    private readonly accentOf: (workspace: string | null) => string = projectAccentColor,
   ) {
     this.closing = vscode.window.onDidCloseTerminal((terminal) => {
       const known = this.hosts.has(terminal);
@@ -189,7 +191,7 @@ export class TerminalTabs implements vscode.Disposable {
     }, this.presentationFor(() => terminal));
     // The tab is named for the conversation and coloured for its project. The name answers "which conversation",
     // the colour answers "whose project", and the two together fit in the width a tab actually has.
-    const accent = projectAccentColor(conversation.projectless ? null : conversation.homeWorkspace);
+    const accent = this.accentOf(conversation.projectless ? null : conversation.homeWorkspace);
     terminal = vscode.window.createTerminal({
       name: tabName(conversation.title),
       iconPath: this.iconFor(conversation, accent),
@@ -227,7 +229,7 @@ export class TerminalTabs implements vscode.Disposable {
     }, (reason) => {
       if (terminal) this.retireDisconnected(terminal, reason);
     }, this.presentationFor(() => terminal));
-    const accent = projectAccentColor(projectless ? null : workspace);
+    const accent = this.accentOf(projectless ? null : workspace);
     terminal = vscode.window.createTerminal({
       name: tabName(name),
       iconPath: this.iconForProvider(providerId, accent),
@@ -335,6 +337,9 @@ export class TerminalTabs implements vscode.Disposable {
     for (;;) {
       const found = this.journeyHost(target)?.[1].descriptor() ?? null;
       if (found) return found;
+      if ("runtimeGeneration" in target && this.journeyEnds.has(terminalIdentity(target.runtimeGeneration, target.terminalId))) {
+        throw this.journeyUnavailable(target.runtimeGeneration, target.terminalId);
+      }
       if (Date.now() >= deadline) {
         throw new Error(`the VS Code terminal did not connect within ${deadlineMs} ms`);
       }
@@ -443,18 +448,52 @@ export class TerminalTabs implements vscode.Disposable {
     if (moved) this.changedEmitter.fire();
   }
 
-  /// Spread the open conversation tabs over editor groups: each tab after the first moves to a group of
-  /// its own, and four or more become the editor's two-by-two grid. Returns how many tabs were arranged.
+  /// Spread distinct conversation tabs over up to four native editor groups. Further tabs share those groups.
   async arrangeGrid(): Promise<number> {
-    const open = [...this.open.values()];
+    const open = [...new Set(this.open.values())];
     if (open.length < 2) return 0;
-    await vscode.commands.executeCommand("workbench.action.editorLayoutSingle");
+    const groupCount = Math.min(open.length, 4);
+    await vscode.commands.executeCommand("vscode.setEditorLayout", groupCount < 4
+      ? { orientation: 0, groups: Array.from({ length: groupCount }, () => ({})) }
+      : { orientation: 0, groups: [{ groups: [{}, {}] }, { groups: [{}, {}] }] });
     for (const [index, terminal] of open.entries()) {
-      terminal.show(false);
-      if (index > 0) await vscode.commands.executeCommand("workbench.action.moveEditorToNewGroup");
+      await this.focusEditor(terminal);
+      // The awaited native focus command finishes the editor reveal for that active terminal, including
+      // conversations whose tab labels happen to be identical. Terminal.show itself has no completion promise.
+      await vscode.commands.executeCommand("workbench.action.terminal.focus");
+      if (vscode.window.activeTerminal !== terminal) throw new Error("The active conversation changed during arrangement.");
+      await vscode.commands.executeCommand("moveActiveEditor", {
+        to: "position", by: "group", value: (index % groupCount) + 1,
+      });
     }
-    if (open.length >= 4) await vscode.commands.executeCommand("workbench.action.editorLayoutTwoByTwoGrid");
     return open.length;
+  }
+
+  /// Terminal.show returns before its renderer RPC settles. Observe the active terminal and editor before a
+  /// command that moves the active editor, so a slow reveal cannot move the tab that was focused before it.
+  private focusEditor(terminal: vscode.Terminal): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const subscriptions: vscode.Disposable[] = [];
+      const timer = setTimeout(() => finish(new Error(`Could not focus ${terminal.name} for arrangement.`)), 2_000);
+      let finished = false;
+      const finish = (error?: Error) => {
+        if (finished) return;
+        finished = true;
+        clearTimeout(timer);
+        for (const subscription of subscriptions) subscription.dispose();
+        if (error) reject(error);
+        else resolve();
+      };
+      const check = () => {
+        const tab = vscode.window.tabGroups.activeTabGroup.activeTab;
+        if (vscode.window.activeTerminal === terminal && tab?.input instanceof vscode.TabInputTerminal
+          && tab.label === terminal.name) finish();
+      };
+      subscriptions.push(vscode.window.onDidChangeActiveTerminal(check),
+        vscode.window.tabGroups.onDidChangeTabs(check), vscode.window.tabGroups.onDidChangeTabGroups(check));
+      terminal.show(false);
+      check();
+    });
   }
 
   dispose(): void {

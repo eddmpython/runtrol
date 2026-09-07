@@ -322,7 +322,7 @@ async function backProof(environment) {
     return seen;
   } finally {
     // A project switch can replace the original launcher with a new `Code.exe -n` root whose PID is not a child
-    // of the launcher any more. Match the isolated profile and this downloaded executable as well, otherwise the
+    // of the launcher any more. Match the isolated profile on that new root, otherwise the
     // visual pass leaves a desktop singleton that later automated gates attach to.
     if (child.exitCode === null) child.kill();
     await terminateExactProcesses(userData, executable);

@@ -30,6 +30,19 @@ Core discovery follows this order:
 2. the native Runtime bundled in a Marketplace package and materialized under extension global storage;
 3. a `runtrol` executable discovered on `PATH`.
 
+A failed discovery is retryable in the same window. Restore an unavailable configured executable at the same path,
+then use the visible retry action; neither a settings change nor an Extension Host reload is required. Concurrent
+actions share the current discovery attempt, and an older failed attempt cannot invalidate its replacement. Window
+registration and other startup services begin after the first successful initialization, including this recovery path.
+After a running Runtime becomes unreachable, the same retry action reopens the installed Runtime before replacing
+the public command connection and its cached locator. Concurrent explicit recoveries share one attempt; window
+registration resumes in the same Extension Host. An interrupted input or other effectful request is never replayed
+as part of recovery.
+
+The new-conversation command focuses the sidebar before showing its service picker, so the focus transition cannot
+dismiss the question it just opened. The picker remains visible while Runtime or service discovery is unavailable
+and offers a retry action. Once discovery succeeds, it shows the currently launchable services.
+
 Studio uses one approved public Runtime identity for provider inventory, managed sessions, approvals, and terminal
 views. It validates the owner-local locator before every new transport lifetime. A terminal tab owns a dedicated
 public streaming connection, so terminal output never poisons the ordinary request-response client.
@@ -55,10 +68,13 @@ The page has three zones with visible edges, in this order:
 
 - **Projects**: one row per folder the operator added (or has open in this window). A project row collapses,
   shows its conversation count, its attention and running counts, and on hover its actions: new conversation
-  here, pin, open in a window, delete every provider-owned conversation after exact
+  here, pin, open in a window, archive or delete every eligible provider-owned conversation after exact
   confirmation, or remove from the sidebar (the folder on disk stays). Projects
-  reorder by drag. Each project has one deterministic provider-glyph accent. A conversation tab and its open
-  sidebar row embed that exact colour in the exact same provider SVG. Rows have no left colour bar.
+  reorder by drag. The existing project record retains its provider-glyph accent, so adding or rearranging projects
+  keeps open tabs stable. Allocation uses an unused palette colour while one remains. A subfolder conversation uses
+  its deepest registered project's accent in both its tab and its open sidebar row. Rows have no left colour bar.
+  Closed rows keep their muted provider icon; project headings and conversation titles remain readable without colour,
+  following [W3C's use-of-colour guidance](https://www.w3.org/WAI/WCAG22/Understanding/use-of-color.html).
 - **Conversations**: the conversations that belong to no project, as plain rows.
 - **Usage**: one chip per installed service, its icon inside a ring gauge with the seven-day percentage; see below.
 
@@ -81,24 +97,53 @@ updates, phone pairing, Runtime integrations and requests, restarting the Extens
 which of four things is true (connecting, unreachable, verifying the installed CLI, no CLI installed), each with
 its own next step, and a first run offers the two starting actions as rows.
 
+Project-wide archival and permanent deletion live in the project's context menu. Studio first applies the shared
+[`conversationArchival`](../extensions/runtrol-vscode/src/conversationArchival.ts) or
+[`conversationDeletion`](../extensions/runtrol-vscode/src/conversationDeletion.ts) decision to every current row;
+[`projectConversations`](../extensions/runtrol-vscode/src/projectConversations.ts) owns the resulting plan and confirmation.
+The confirmation distinguishes conversations that can go immediately, supervised processes that require an explicit
+stop first, external live owners, and rows that cannot receive the chosen action. Retained rows show the actual reason,
+including an unconfirmed process or a new process without a provider conversation identity. A provider that supports
+the action is never blamed for those missing proofs. Cancel changes nothing. Choosing idle-only never stops a process.
+Choosing stop-and-archive or stop-and-delete waits for Runtime to confirm exit, and each action still revalidates current ownership.
+Provider refusal restores the row and is included in the final result. Removing the project heading is a separate
+sidebar action that leaves both its folder and provider-owned history intact.
+
+Project change counts are read by [`GitChangesWatch`](../extensions/runtrol-vscode/src/gitChanges.ts) after a real
+change signal settles. A project has at most one active Git read and one coalesced follow-up; a removed project's
+older result cannot populate a new row. A read failure shows `Git unavailable`, including its reason on hover,
+rather than a clean working tree. The next change signal or **Look again** retries within the same process-rate
+limits. Repositories created or first committed while the sidebar stays open can become measurable this way.
+An idle project starts no retry timer. Git's [porcelain status contract](https://git-scm.com/docs/git-status#_porcelain_format_version_2)
+distinguishes an unborn branch from a failed read; an absent executable or timeout is not an empty repository.
+
 ## Usage zone
 
 Each installed provider is one chip: the provider's icon inside a ring gauge, the number under it. No provider
 name is drawn; the icon is the label, so a chip's width never depends on a name and the zone reads the same with
 three providers or ten. The ring is the seven-day window when the provider publishes one, otherwise the window the
-provider says governs, otherwise an empty ring with a one-word cause (`No report`, `Sign in`, `Fix`, `Checking`,
-`Offline`). A blocking limit turns the ring and the number the theme's error colour.
+provider says governs, otherwise an empty ring with its current cause. A blocking limit turns the ring and the
+number the theme's error colour.
 
 Hovering or focusing a chip previews that provider's detail panel under the strip without adding a competing browser
 tooltip. Enter or click pins an informational panel, and Escape closes it. The panel lists the plan the provider
 named, one thin bar per reported window with the provider's own label and reset, and the report age. A chip whose state
-has one action (`Sign in`, `Fix`) performs that action instead. Studio never converts a missing percentage into zero
+has one action performs that action instead. Studio never converts a missing percentage into zero
 or derives account capacity from terminal text.
+
+When an account request fails, the chip offers `Retry` and its panel explains the failure. Use `Retry usage` to
+request a fresh provider report through the same bounded refresh path. A failed read is neither proof of sign-out
+nor a provider declaring that it publishes no usage. If an earlier report exists, its figures and original report
+age remain visible and are explicitly marked as the last report. A partial response that confirms sign-in but
+cannot read limits uses the same retry behavior. A confirmed sign-out removes figures measured for the previous
+account; only a later provider report may replace them.
 
 The Runtime subscription is the refresh clock. Structured provider account events publish immediately to the shared
 `providers/usageChanged` watch. Hosted terminal writes use a cheap quiet-edge clock only while a terminal is open, and
 the provider-owned process roster supplies the same busy-to-quiet edge for a conversation started outside Studio.
-Requests from multiple windows coalesce by provider. A manifest-declared protocol account surface has a shorter
+Requests from multiple windows coalesce by provider. Each provider has one running query and one pending refresh;
+its completion publishes independently, so another provider's slow or failed query cannot delay the result or its
+next eligible refresh. A manifest-declared protocol account surface has a shorter
 repeat floor than a process-backed reader because the latter can briefly use hundreds of MiB. With no open terminal
 and no unread report, the supervisor sleeps until an activity wake or its slow backstop instead of polling while
 idle. An activity edge inside a repeat floor stays in the same bounded provider set and runs when that floor expires;
@@ -112,6 +157,12 @@ model and effort controls, permissions, approvals, and history. Studio writes no
 The tab uses the provider's own glyph, accented with the same exact colour value as its open sidebar row. A generic
 conversation codicon is never substituted for a project identity.
 
+The sidebar uses the provider SVG while terminal tabs use registered color font glyphs generated from that SVG and
+the shared project palette. The global icon registry keeps those glyphs available when an editor moves to a separate
+window. On the pinned VS Code version, custom URI terminal styles are rebuilt from a transient editor-instance list;
+their presence during a move cannot guarantee the tab icon remains visible. Studio does not inject workbench CSS or
+change the user's theme to repair that boundary.
+
 `terminalTabs.ts` uses the public TypeScript Runtime terminal client. On transport loss it re-reads the locator and
 reattaches only to the descriptor's exact Runtime generation. The returned screen snapshot replaces the view. If an
 open returns `terminalAlreadyLive`, Studio lists generations and attaches to that exact owner. It never redirects to
@@ -119,6 +170,11 @@ the newest generation, retries input, or falls back to private IPC.
 
 Closing a tab detaches the viewer. Runtime keeps the provider terminal alive until its CLI exits or an authorized
 explicit stop occurs. Split, grid, focus, and full-screen behavior belong to VS Code.
+
+Arrange Open Conversations in a Grid distributes existing conversation tabs over native editor groups. It waits
+for the target terminal and its native editor reveal before moving the active editor, including when conversations
+share a title. Additional tabs share the layout; arrangement never creates another provider process. The public
+layout and move commands are defined by [VS Code's editor command implementation](https://github.com/microsoft/vscode/blob/main/src/vs/workbench/browser/parts/editor/editorCommands.ts).
 
 Studio activation never opens, continues, or resumes a conversation. It restores only the selected row and starts
 the provider, session, and terminal index watches. A live terminal row attaches to its exact Runtime and terminal
@@ -174,8 +230,8 @@ window by its session identity rather than being inferred from the connection: c
 person's click, and a chunk the Runtime refuses closes only the feed, never the command connection that holds this
 window's registration in the registry. The Runtime hosts the mirror as a terminal whose child is
 the feed (`runtrol-core::terminal::fed`): viewers, the raw lane, the checkpoint and the sidebar row apply
-unchanged; the descriptor says `origin: observedMirror` with the owner window's session identity and terminal key;
-input has nowhere to go, so viewer writes are refused and Stop answers that the owner window stops it. A provider
+unchanged; the descriptor says `origin: observedMirror` with the owner window's session identity and terminal key.
+Exact-byte viewer writes are refused and Stop answers that the owner window stops it. A provider
 typed by name is brokered by the transparent shim instead: the shim sends the processes above it (the invoking
 shell is among them, behind the `.cmd` launcher), the Runtime files the brokered terminal under each of them,
 refuses a mirror open for that shell, and retires a mirror that opened first (measured: the mirror opens about 20 ms
@@ -183,6 +239,15 @@ after the command starts and the shim's brokered open retires it within the seco
 is one row. A mirror ends with the connection that feeds it. `tooling/observed-mirror-eye.mjs`
 proves this on two isolated windows with the fixture TUI, real Claude and real Codex by absolute path, and Claude by
 name through the shim.
+
+When the exact registered owner has an active authorized input receiver, the row offers `Open input view here`.
+This explicit action attaches the existing mirror in the current window. Typing uses the Runtime's separate
+[observed-owner text contract](terminalSurface.md#observed-owner-input) and the owner's public `Terminal.sendText`
+API. The ordinary row click still reveals the owner. The owner verifies the same terminal object and shell execution
+after each claim, invokes its API once with automatic execution disabled, and returns a structural receipt. VS Code
+owns newline conversion; the receipt does not assert shell execution or exact stdin bytes. Disconnect, stale
+execution, cancellation and uncertain delivery never cause an automatic resend. Observation retains byte counts and
+bounded structural failures, with no captured output head or conversation sample.
 
 ### Owner reveal
 
@@ -300,6 +365,12 @@ Marketplace publication without rebuilding or changing its assets. [automaticUpd
 the operator procedure and recovery rules.
 
 ## Verification entry points
+
+Development builds require Node.js and `uv`. The font generator declares its exact build-only Python dependency in
+[`providerFont.py`](../extensions/runtrol-vscode/tooling/providerFont.py). The ordinary extension build derives the
+font, lookup map, and manifest registrations from the provider glyph inventory and project palette. Installed Studio
+loads these assets and runs no font generator. A clean checkout builds the registrations without a prior generated
+manifest, and CI installs the same required build tool before invoking the extension build.
 
 | Gate or command | Contract |
 |---|---|
