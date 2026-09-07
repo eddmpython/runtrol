@@ -49,6 +49,8 @@ authors = ["eddmpython"]
 [workspace.dependencies]
 # Shared event payloads are reference-counted across watchers. See docs/coreRuntime.md.
 bytes = "1.12.1"
+# Exact byte search over bounded provider metadata windows, without decoding conversation content.
+memchr = "2.8.3"
 # The screen model behind the terminal surface: what a hosted CLI has drawn, so a late viewer can be handed
 # the current screen and a click can be translated on it. Not a renderer and not a reader of meaning.
 vt100 = "0.16.2"

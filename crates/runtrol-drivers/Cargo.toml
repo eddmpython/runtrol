@@ -16,6 +16,7 @@ runtrol-childproc = { workspace = true }
 # Shared line buffers. A payload relayed to three watchers must cost three pointers, which means the line it
 # came from has to be shareable rather than copied.
 bytes = { workspace = true }
+memchr = { workspace = true }
 thiserror = { workspace = true }
 # Protocol envelopes. `raw_value` is what lets a payload stay a slice of the line it arrived on instead of being
 # rebuilt into a tree runtrol would then have to re-encode.

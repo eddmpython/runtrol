@@ -689,7 +689,7 @@ impl Scan {
 
 /// Find the first structural occurrence of `key` in the window and decode the JSON string that follows it.
 fn scan(window: &[u8], key: &[u8]) -> Scan {
-    let Some(at) = find(window, key) else {
+    let Some(at) = memchr::memmem::find(window, key) else {
         return Scan::Absent;
     };
     // The key ends with the opening quote of its value; the decoder wants the quotes included.
@@ -714,12 +714,6 @@ fn scan(window: &[u8], key: &[u8]) -> Scan {
         return Scan::Undecodable;
     }
     Scan::Incomplete
-}
-
-fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    haystack
-        .windows(needle.len())
-        .position(|window| window == needle)
 }
 
 #[cfg(test)]
