@@ -104,7 +104,7 @@ const validationKeywords = new Set([
 function compactValidationNode(node) {
   if (Array.isArray(node)) return node.map(compactValidationNode);
   if (!node || typeof node !== "object") return node;
-  return Object.fromEntries(
+  const compact = Object.fromEntries(
     Object.entries(node)
       .filter(([key]) => validationKeywords.has(key))
       .filter(([key, value]) => {
@@ -144,6 +144,16 @@ function compactValidationNode(node) {
         return [key, compactValidationNode(value)];
       }),
   );
+  // A disjoint union of constants is exactly an enum. Preserve duplicate/structured branches as oneOf.
+  const choices = compact.oneOf;
+  if (Array.isArray(choices)
+    && choices.length > 0
+    && choices.every((choice) => Object.keys(choice).length === 1 && Object.hasOwn(choice, "const"))
+    && new Set(choices.map((choice) => JSON.stringify(choice.const))).size === choices.length) {
+    delete compact.oneOf;
+    compact.enum = choices.map((choice) => choice.const);
+  }
+  return compact;
 }
 
 function compactValidationSchema(sourceDefinitions) {
@@ -222,6 +232,7 @@ if (!Array.isArray(revisions) || !limits || typeof limits !== "object") {
 const generated = `// Generated from crates/runtrol-runtime-protocol/schema/runtime.schema.json. Do not edit.\n\n`
   + `export const FINALIZED_REVISIONS = ${JSON.stringify(revisions)} as const;\n`
   + `export const PUBLIC_LIMITS = ${JSON.stringify(limits, null, 2)} as const;\n\n`
+  + `export const SDK_POLICY = ${JSON.stringify(schema["x-runtrol-sdk-policy"], null, 2)} as const;\n\n`
   + `${declarations.join("\n\n")}\n`;
 const validationSchema = compactValidationSchema(definitions);
 const generatedSchemaText = "// Generated validation projection. The complete public schema remains in schema/runtime.schema.json. Do not edit.\n\n"

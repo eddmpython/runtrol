@@ -1,8 +1,8 @@
 import * as path from "node:path";
 
-import { ask, expectDone } from "./core/ask";
 import type { CoreClient } from "./core/client";
 import type { IntegrationLine } from "./protocol";
+import { readIntegrationGrant, replaceIntegrationGrant } from "./integrationGrant";
 import { identityCovers, workspaceIdentity } from "./workspaceCollision";
 
 /// The window's open folders, followed into the integration's approved roots.
@@ -81,18 +81,7 @@ export class WorkspaceRootFollowing {
         if (!row || row.revoked) return;
         const before = row;
         try {
-          expectDone(
-            await ask(this.ports.client, {
-              ask: "integrationGrantChange",
-              with: {
-                integration_id: integrationId,
-                expected_grant_generation: before.grant_generation,
-                scopes: before.scopes,
-                roots: [...before.roots, folder],
-              },
-            }),
-            "workspace root following",
-          );
+          await replaceIntegrationGrant(this.ports.client, before, before.scopes, [...before.roots, folder]);
           widened = true;
           row = await this.ownRow(integrationId);
           break;
@@ -119,11 +108,7 @@ export class WorkspaceRootFollowing {
   }
 
   private async ownRow(integrationId: string): Promise<IntegrationLine | null> {
-    const rows = await ask(this.ports.client, { ask: "integrations" });
-    if (rows.say !== "integrations") {
-      throw new Error(`the daemon answered the integration listing with ${rows.say}`);
-    }
-    return rows.with.find((row) => row.integration_id === integrationId) ?? null;
+    return readIntegrationGrant(this.ports.client, integrationId);
   }
 }
 

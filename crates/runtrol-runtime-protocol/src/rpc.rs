@@ -109,6 +109,24 @@ pub struct ClientCapabilities {
     /// Whether the client preserves bounded unknown optional event extensions.
     #[serde(default)]
     pub opaque_event_extensions: bool,
+    /// Understand the owner-approved terminal input priority scope in wire grants.
+    /// Send only after this exact Runtime advertises terminal input priority support.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub terminal_input_priority: bool,
+}
+
+impl ClientCapabilities {
+    /// Project a grant to the scope vocabulary negotiated on this connection.
+    /// This never changes the Runtime's stored or effective authority.
+    #[must_use]
+    pub fn project_grant(&self, mut grant: IntegrationGrant) -> IntegrationGrant {
+        if !self.terminal_input_priority {
+            grant
+                .scopes
+                .retain(|scope| *scope != crate::AppScope::SessionInputPriority);
+        }
+        grant
+    }
 }
 
 /// Initialization is negotiation only. Inventory is a separate authorized request.
@@ -169,6 +187,12 @@ pub struct RuntimeCapabilities {
     /// Provider-faithful public terminal sessions are implemented for this generation.
     #[serde(default)]
     pub terminal_surface: bool,
+    /// This generation enforces owner-granted precedence for terminal input leases.
+    #[serde(default)]
+    pub terminal_input_priority: bool,
+    /// Wire grants honor the client's optional scope vocabulary capability.
+    #[serde(default)]
+    pub grant_scope_projection: bool,
 }
 
 /// Numeric public bounds advertised during initialization.
@@ -294,6 +318,39 @@ pub struct InitializeResult {
 mod tests {
     use super::*;
     use crate::revision::REVISION_2026_08_13;
+
+    #[test]
+    fn legacy_scope_vocabulary_preserves_signing_bytes_and_only_projects_the_wire_grant() {
+        for json in ["{}", r#"{"terminalInputPriority":false}"#] {
+            let capabilities: ClientCapabilities =
+                serde_json::from_str(json).expect("old capability");
+            assert_eq!(
+                serde_json::to_string(&capabilities).expect("canonical capability"),
+                r#"{"opaqueEventExtensions":false}"#
+            );
+        }
+        let grant = IntegrationGrant {
+            integration_id: crate::IntegrationId::new("int_fixture"),
+            scopes: vec![
+                crate::AppScope::SessionInputWrite,
+                crate::AppScope::SessionInputPriority,
+            ],
+            roots: vec!["C:/fixture".to_owned()],
+            key_generation: 2,
+            grant_generation: 3,
+        };
+        let mut expected = grant.clone();
+        expected.scopes.pop();
+        assert_eq!(
+            ClientCapabilities::default().project_grant(grant.clone()),
+            expected
+        );
+        let current = ClientCapabilities {
+            terminal_input_priority: true,
+            ..ClientCapabilities::default()
+        };
+        assert_eq!(current.project_grant(grant.clone()), grant);
+    }
 
     #[test]
     fn the_hello_tolerates_unknown_fields_and_grants_nothing_for_them() {

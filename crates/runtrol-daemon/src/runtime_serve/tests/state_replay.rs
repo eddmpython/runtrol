@@ -489,7 +489,8 @@ async fn the_terminal_engine_publishes_only_proved_generic_states() {
                 audit_writer.await.expect("audit writer remained healthy");
             });
             // The enrolling client, the index watcher, two viewers and the stop-path viewer.
-            for _ in 0..5 {
+            // Each SDK connection first negotiates the optional signed scope vocabulary.
+            for _ in 0..10 {
                 let connection = listener.accept().await.expect("accept a public client");
                 connections.spawn(serve_connection(
                     connection,

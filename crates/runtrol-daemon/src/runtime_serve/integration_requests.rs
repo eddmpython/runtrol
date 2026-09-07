@@ -1,5 +1,9 @@
 //! Runtime initialization, enrollment, and integration administration requests.
 
+#[cfg(test)]
+#[path = "tests/grant_projection.rs"]
+mod tests;
+
 use std::collections::BTreeSet;
 
 use runtrol_runtime_protocol::{
@@ -76,7 +80,9 @@ pub(super) async fn initialize(
         None => PublicAuthority::Anonymous,
     };
     let granted = match &authority {
-        PublicAuthority::Authorized(authorized) => Some(authorized.grant.clone()),
+        PublicAuthority::Authorized(authorized) => {
+            Some(context.capabilities.project_grant(authorized.grant.clone()))
+        }
         PublicAuthority::Anonymous | PublicAuthority::Pending(_) => None,
     };
     let result = InitializeResult {
@@ -96,6 +102,8 @@ pub(super) async fn initialize(
             session_control: true,
             session_events: true,
             terminal_surface: true,
+            terminal_input_priority: true,
+            grant_scope_projection: true,
         },
         limits: RuntimeLimits::default(),
         grant: granted,
@@ -168,7 +176,13 @@ pub(super) fn watch_integration(
         );
     };
     match enrollment_decision(&composed.store, *expected, &params.pending_id) {
-        Ok(decision) => Answer::success(id, &decision),
+        Ok(mut decision) => {
+            if let runtrol_runtime_protocol::EnrollmentDecision::Approved { grant } = &mut decision
+            {
+                *grant = state.capabilities().project_grant(grant.clone());
+            }
+            Answer::success(id, &decision)
+        }
         Err(failure) => Answer::failure(id, failure),
     }
 }
@@ -186,8 +200,9 @@ pub(super) fn grant(
             "integration grant parameters are invalid",
         );
     }
+    let capabilities = state.capabilities();
     match authorized(state, composed, None) {
-        Ok(authority) => Answer::success(id, &authority.grant),
+        Ok(authority) => Answer::success(id, &capabilities.project_grant(authority.grant.clone())),
         Err(failure) => Answer::failure(id, failure),
     }
 }
@@ -198,6 +213,7 @@ pub(super) async fn rotate_integration_key(
     id: JsonRpcId,
     params: serde_json::Value,
 ) -> Answer {
+    let capabilities = state.capabilities();
     let Ok(params) = serde_json::from_value::<RotateIntegrationKeyParams>(params) else {
         return Answer::plain(
             id,
@@ -233,7 +249,7 @@ pub(super) async fn rotate_integration_key(
     if row.key_generation == params.expected_key_generation + 1 && row.public_key == new_public_key
     {
         return match crate::runtime_auth::grant(authority.grant.integration_id, &row) {
-            Ok(grant) => Answer::success(id, &grant),
+            Ok(grant) => Answer::success(id, &capabilities.project_grant(grant)),
             Err(failure) => Answer::failure(id, failure),
         };
     }
@@ -277,24 +293,25 @@ pub(super) async fn rotate_integration_key(
             "Runtime could not publish committed integration authority",
         );
     }
-    key_rotation_answer(id, authority.grant.integration_id, outcome)
+    key_rotation_answer(id, authority.grant.integration_id, outcome, &capabilities)
 }
 
 fn key_rotation_answer(
     id: JsonRpcId,
     integration_id: runtrol_runtime_protocol::IntegrationId,
     outcome: Result<IntegrationKeyRotation, runtrol_store::StoreError>,
+    capabilities: &runtrol_runtime_protocol::ClientCapabilities,
 ) -> Answer {
     match outcome {
         Ok(IntegrationKeyRotation::Rotated(row)) => {
             match crate::runtime_auth::grant(integration_id, &row) {
-                Ok(grant) => Answer::success_and_close(id, &grant),
+                Ok(grant) => Answer::success_and_close(id, &capabilities.project_grant(grant)),
                 Err(failure) => Answer::failure(id, failure),
             }
         }
         Ok(IntegrationKeyRotation::Replayed(row)) => {
             match crate::runtime_auth::grant(integration_id, &row) {
-                Ok(grant) => Answer::success(id, &grant),
+                Ok(grant) => Answer::success(id, &capabilities.project_grant(grant)),
                 Err(failure) => Answer::failure(id, failure),
             }
         }

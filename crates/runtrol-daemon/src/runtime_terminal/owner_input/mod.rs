@@ -16,8 +16,8 @@ use super::{
     TerminalView, WallMs, current_roots, ensure_mutation_capacity, fingerprint,
     mutation_in_progress, mutation_key, prior_from_state, private_terminal_id,
     remember_pending_done, root_authority_failure, root_proof, run_root_check,
-    terminal_lane_failure, validate_input_grant, validate_lease_fields, validate_mutation_time,
-    visible_in, visible_terminal, visible_terminal_in_view,
+    validate_input_grant, validate_lease_fields, validate_mutation_time, visible_in,
+    visible_terminal, visible_terminal_in_view,
 };
 use crate::window_registry::input::InputTarget;
 
@@ -188,21 +188,23 @@ impl TerminalRuntimeAdapter {
             Some(view) => visible_terminal_in_view(composed, view, terminal_id).await?,
             None => visible_terminal(composed, authority, terminal_id).await?,
         };
-        let _operation = hosted
-            .terminal
-            .operation()
-            .await
-            .map_err(|error| terminal_lane_failure(&error))?;
+        let _operation = self
+            .input_operation(
+                composed,
+                authority,
+                &hosted,
+                &params.lease_id,
+                params.lease_generation,
+            )
+            .await?;
         let (root, owner_root, target) = self.pin_input_owner(composed, authority, &hosted).await?;
         let (completion, receipt) = oneshot::channel();
         let mut state = self.state.lock().await;
         validate_input_grant(composed, authority)?;
         validate_input_grant(composed, &target.authority)?;
-        root.proof.fresh().map_err(|_| root_authority_failure())?;
-        owner_root
-            .proof
-            .fresh()
-            .map_err(|_| root_authority_failure())?;
+        for pinned in [&root, &owner_root] {
+            pinned.proof.fresh().map_err(|_| root_authority_failure())?;
+        }
         if let Some(view) = view {
             view.require_fresh_root_proof()?;
         }

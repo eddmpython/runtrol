@@ -34,6 +34,15 @@ pub(super) enum PublicState {
 }
 
 impl PublicState {
+    pub(super) fn capabilities(&self) -> runtrol_runtime_protocol::ClientCapabilities {
+        match self {
+            Self::Fresh { .. } => runtrol_runtime_protocol::ClientCapabilities::default(),
+            Self::Negotiated { context, .. } | Self::Ready { context, .. } => {
+                context.capabilities.clone()
+            }
+        }
+    }
+
     /// The connection this state belongs to, for what the connection registers and takes with it.
     pub(super) const fn token(&self) -> ConnectionToken {
         match self {

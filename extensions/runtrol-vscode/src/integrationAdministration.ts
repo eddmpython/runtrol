@@ -3,6 +3,7 @@ import * as vscode from "vscode";
 import { ask, expectDone } from "./core/ask";
 import type { CoreClient } from "./core/client";
 import type { IntegrationEnrollmentLine, IntegrationLine, Response } from "./protocol";
+import { replaceIntegrationGrant } from "./integrationGrant";
 
 export async function reviewRuntimeRequests(client: CoreClient): Promise<void> {
   const forgets = await ask(client, { ask: "runtimeForgetRequests" });
@@ -324,16 +325,7 @@ async function changeIntegrationGrant(
     "Replace Authority",
   );
   if (confirmed !== "Replace Authority") return false;
-  const changed = await ask(client, {
-    ask: "integrationGrantChange",
-    with: {
-      integration_id: integration.integration_id,
-      expected_grant_generation: integration.grant_generation,
-      scopes: selectedScopes,
-      roots,
-    },
-  });
-  expectDone(changed, "integration authority replacement");
+  await replaceIntegrationGrant(client, integration, selectedScopes, roots);
   await vscode.window.showInformationMessage(`Updated ${integration.label}'s Runtime authority.`);
   return true;
 }
@@ -468,5 +460,4 @@ function uniquePaths(paths: readonly string[]): string[] {
     return true;
   });
 }
-
 

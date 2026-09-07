@@ -125,15 +125,21 @@ pub(super) fn current_authority_row(
     composed: &Composed,
     current: &AuthorizedIntegration,
 ) -> Result<Arc<runtrol_store::IntegrationRow>, AuthorizationFailure> {
+    current_integration_row(composed, current.key)
+}
+
+/// Read a holder's current authority through the same live or draining source as its caller.
+pub(crate) fn current_integration_row(
+    composed: &Composed,
+    key: runtrol_store::IntegrationKey,
+) -> Result<Arc<runtrol_store::IntegrationRow>, AuthorizationFailure> {
     if !composed.draining.load(std::sync::atomic::Ordering::Acquire) {
-        return match composed.integration_authority.row(current.key) {
+        return match composed.integration_authority.row(key) {
             Some(row) => Ok(row),
-            None if composed.integration_authority.was_revoked(current.key) => {
-                Err(AuthorizationFailure {
-                    kind: RuntimeErrorKind::IntegrationRevoked,
-                    message: "the integration grant was revoked",
-                })
-            }
+            None if composed.integration_authority.was_revoked(key) => Err(AuthorizationFailure {
+                kind: RuntimeErrorKind::IntegrationRevoked,
+                message: "the integration grant was revoked",
+            }),
             None => Err(AuthorizationFailure {
                 kind: RuntimeErrorKind::Unauthenticated,
                 message: "the integration grant no longer exists",
@@ -142,7 +148,7 @@ pub(super) fn current_authority_row(
     }
     let row = composed
         .generation_authority
-        .row(current.key)
+        .row(key)
         .map_err(relay_authorization_failure)?;
     Ok(Arc::new(row))
 }

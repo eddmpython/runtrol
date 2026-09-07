@@ -916,3 +916,6 @@ async fn a_proof_that_expires_while_control_is_queued_never_mints_a_lease() {
     );
     fixture.close().await;
 }
+
+#[path = "priority.rs"]
+mod priority_tests;

@@ -12,6 +12,8 @@ and refactoring that no user can observe do not belong here.
 
 ### Added
 
+- Studio and local CLI windows keep input control against ordinary automation while their interactive lease is
+  active. Other interactive windows can still take over, and owner changes to integration permissions remain in force.
 - An observed terminal can accept explicitly authorized text through its owner window. Revocation ends that
   authority, and an unconfirmed handoff is never silently replayed.
 - Courier help and visible activation explain message identifier requirements and the PowerShell encoding setup

@@ -178,6 +178,18 @@ pub fn public_schema() -> Result<serde_json::Value, serde_json::Error> {
             "x-runtrol-limits".to_owned(),
             serde_json::to_value(crate::RuntimeLimits::default())?,
         );
+        let (initial_delay_ms, maximum_delay_ms, deadline_ms) =
+            crate::DRAINING_AUTHENTICATION_RETRY_MS;
+        root.insert(
+            "x-runtrol-sdk-policy".to_owned(),
+            serde_json::json!({
+                "drainingAuthenticationRetry": {
+                    "initialDelayMs": initial_delay_ms,
+                    "maximumDelayMs": maximum_delay_ms,
+                    "deadlineMs": deadline_ms,
+                }
+            }),
+        );
     }
     Ok(schema)
 }

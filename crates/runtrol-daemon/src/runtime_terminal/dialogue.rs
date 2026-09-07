@@ -39,11 +39,15 @@ impl TerminalRuntimeAdapter {
         if self.prior_done(&key, fingerprint).await? {
             return Ok(());
         }
-        let _operation = hosted
-            .terminal
-            .operation()
-            .await
-            .map_err(|error| terminal_lane_failure(&error))?;
+        let _operation = self
+            .input_operation(
+                composed,
+                authority,
+                hosted,
+                &params.lease_id,
+                params.lease_generation,
+            )
+            .await?;
         let changes = composed.terminals.lock().await.change_sender();
         let mut state = self.state.lock().await;
         let mut now = WallMs::now().as_millis();

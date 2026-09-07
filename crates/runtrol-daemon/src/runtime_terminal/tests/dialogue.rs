@@ -256,7 +256,7 @@ async fn dialogue_rejects_replaced_expired_and_released_input_leases() {
         .get_mut(&fixture.hosted.id)
         .expect("current lease");
     active.lease_generation = fixture.params.lease_generation;
-    active.owner = IntegrationKey::from_bytes([6; 16]);
+    active.owner = IntegrationKey::from_bytes([6; 16]).into();
     drop(state);
     assert_eq!(
         fixture
@@ -272,7 +272,7 @@ async fn dialogue_rejects_replaced_expired_and_released_input_leases() {
         .leases
         .get_mut(&fixture.hosted.id)
         .expect("current lease");
-    active.owner = fixture.authority.key;
+    active.owner = fixture.authority.key.into();
     active.expires_at_ms = WallMs::now().as_millis().saturating_sub(1);
     drop(state);
     assert_eq!(

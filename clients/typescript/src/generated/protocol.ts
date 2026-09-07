@@ -30,6 +30,14 @@ export const PUBLIC_LIMITS = {
   "nativeCursorLifetimeMs": 300000
 } as const;
 
+export const SDK_POLICY = {
+  "drainingAuthenticationRetry": {
+    "deadlineMs": 2400,
+    "initialDelayMs": 100,
+    "maximumDelayMs": 400
+  }
+} as const;
+
 /** Acquire control only if the caller still sees this exact live state. */
 export interface AcquireControlParams { readonly expectedLifecycle: LifecycleState; readonly expectedSessionGeneration: number; readonly requestId: MutationRequestId; readonly sessionId: RuntimeSessionId; }
 
@@ -37,7 +45,7 @@ export interface AcquireControlParams { readonly expectedLifecycle: LifecycleSta
 export interface AdoptNativeSessionParams { readonly access: SessionWorkspaceAccess; readonly adoptionToken: string; readonly nativeSessionId: string; readonly providerId: ProviderId; readonly requestId: MutationRequestId; readonly workspace: string; }
 
 /** Public integration authority, separate from remote device scopes. */
-export type AppScope = "provider.read" | "model.read" | "session.list" | "session.native.discover" | "session.output.read" | "session.start" | "session.resume" | "session.input.write" | "session.stop" | "approval.respond.low" | "approval.respond.high" | "session.delete";
+export type AppScope = "provider.read" | "model.read" | "session.list" | "session.native.discover" | "session.output.read" | "session.start" | "session.resume" | "session.input.write" | "session.input.priority" | "session.stop" | "approval.respond.low" | "approval.respond.high" | "session.delete";
 
 /** Archive one provider-native conversation through the provider's own surface.
 
@@ -55,7 +63,7 @@ export type CatalogueCoverage = { readonly kind: "complete"; readonly source: Ca
 export type CatalogueSource = "officialProtocol" | "officialCli" | "providerStore";
 
 /** Client features understood by the initial read-only revision. */
-export interface ClientCapabilities { readonly opaqueEventExtensions?: boolean; }
+export interface ClientCapabilities { readonly opaqueEventExtensions?: boolean; readonly terminalInputPriority?: boolean; }
 
 /** Safe client presentation metadata. */
 export interface ClientInfo { readonly name: string; readonly version: string; }
@@ -324,7 +332,7 @@ export type RuntimeApprovalOptionKind = "allowOnce" | "allowAlways" | "rejectOnc
 export type RuntimeApprovalRisk = "low" | "high";
 
 /** Public product capabilities for the selected revision. */
-export interface RuntimeCapabilities { readonly integrationEnrollment: boolean; readonly managedSessionList: boolean; readonly modelDiscovery: boolean; readonly nativeSessionCatalogue: boolean; readonly providerInventory: boolean; readonly sessionControl: boolean; readonly sessionEvents: boolean; readonly terminalSurface?: boolean; }
+export interface RuntimeCapabilities { readonly grantScopeProjection?: boolean; readonly integrationEnrollment: boolean; readonly managedSessionList: boolean; readonly modelDiscovery: boolean; readonly nativeSessionCatalogue: boolean; readonly providerInventory: boolean; readonly sessionControl: boolean; readonly sessionEvents: boolean; readonly terminalInputPriority?: boolean; readonly terminalSurface?: boolean; }
 
 /** Local transport kind named by the platform locator. */
 export type RuntimeEndpointKind = "namedPipe" | "unixSocket";

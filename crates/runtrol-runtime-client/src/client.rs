@@ -257,6 +257,10 @@ fn retryable_connection_failure(error: &ClientError) -> bool {
     }
 }
 
+fn stale_draining_authentication(error: &ClientError) -> bool {
+    matches!(error, ClientError::Runtime(error) if error.code == RuntimeErrorKind::Unauthenticated)
+}
+
 fn jittered(delay: Duration) -> Duration {
     let mut random = [0_u8; 2];
     if getrandom::fill(&mut random).is_err() {
@@ -299,8 +303,78 @@ impl RuntimeClient {
         locator: ValidatedLocator,
         options: ClientOptions,
     ) -> Result<Self, ClientError> {
+        match Self::connect_negotiated(&locator, options.clone()).await {
+            Err(error) if locator.draining && stale_draining_authentication(&error) => {
+                Self::wait_for_draining_authority(&locator, options, error).await
+            }
+            result => result,
+        }
+    }
+
+    async fn wait_for_draining_authority(
+        locator: &ValidatedLocator,
+        options: ClientOptions,
+        mut last_failure: ClientError,
+    ) -> Result<Self, ClientError> {
+        let (initial, maximum, within) = runtrol_runtime_protocol::DRAINING_AUTHENTICATION_RETRY_MS;
+        let policy = ReconnectPolicy {
+            initial_delay: Duration::from_millis(initial),
+            maximum_delay: Duration::from_millis(maximum),
+            deadline: Duration::from_millis(within),
+        };
+        let deadline = tokio::time::Instant::now() + policy.deadline;
+        let mut delay = policy.initial_delay;
+        loop {
+            let now = tokio::time::Instant::now();
+            if now >= deadline {
+                return Err(last_failure);
+            }
+            tokio::time::sleep(jittered(delay).min(deadline - now)).await;
+            if tokio::time::Instant::now() >= deadline {
+                return Err(last_failure);
+            }
+            match tokio::time::timeout_at(
+                deadline,
+                Self::connect_negotiated(locator, options.clone()),
+            )
+            .await
+            {
+                Ok(Err(error)) if stale_draining_authentication(&error) => last_failure = error,
+                Ok(result) => return result,
+                Err(_) => return Err(last_failure),
+            }
+            delay = delay.saturating_mul(2).min(policy.maximum_delay);
+        }
+    }
+
+    async fn connect_negotiated(
+        locator: &ValidatedLocator,
+        options: ClientOptions,
+    ) -> Result<Self, ClientError> {
+        let mut initial = Self::connect_once(locator, options.clone()).await?;
+        if !initial
+            .initialized
+            .server_capabilities
+            .terminal_input_priority
+            || !initial
+                .initialized
+                .server_capabilities
+                .grant_scope_projection
+        {
+            return Ok(initial);
+        }
+        initial.connection.close();
+        let mut negotiated = options;
+        negotiated.capabilities.terminal_input_priority = true;
+        Self::connect_once(locator, negotiated).await
+    }
+
+    async fn connect_once(
+        locator: &ValidatedLocator,
+        options: ClientOptions,
+    ) -> Result<Self, ClientError> {
         let mut connection = Connection::connect(&locator.endpoint).await?;
-        let challenge = receive_challenge(&mut connection, &locator).await?;
+        let challenge = receive_challenge(&mut connection, locator).await?;
         let supported_revisions = FINALIZED_REVISIONS.to_vec();
         let client = ClientInfo {
             name: options.name,
@@ -358,7 +432,7 @@ impl RuntimeClient {
             },
         )
         .await?;
-        validate_initialization(&initialized, &locator, expected_grant.as_ref())?;
+        validate_initialization(&initialized, locator, expected_grant.as_ref())?;
         notify_connection(&mut connection, RuntimeMethod::Initialized, &EmptyParams {}).await?;
         Ok(Self {
             connection,
@@ -585,7 +659,9 @@ fn initialization_grant_matches(
             current.integration_id == expected.integration_id
                 && current.key_generation == expected.key_generation
                 && current.grant_generation >= expected.grant_generation
-                && (current.grant_generation != expected.grant_generation || current == expected)
+                && (current.grant_generation != expected.grant_generation
+                    || ClientCapabilities::default().project_grant(current.clone())
+                        == ClientCapabilities::default().project_grant(expected.clone()))
         }
         (None, Some(_)) | (Some(_), None) => false,
     }
@@ -2164,6 +2240,8 @@ mod tests {
                 session_control: true,
                 session_events: true,
                 terminal_surface: false,
+                terminal_input_priority: false,
+                grant_scope_projection: false,
             },
             limits: runtrol_runtime_protocol::RuntimeLimits::default(),
             grant: None,
@@ -2235,6 +2313,8 @@ mod tests {
                 session_control: true,
                 session_events: true,
                 terminal_surface: false,
+                terminal_input_priority: false,
+                grant_scope_projection: false,
             },
             limits: runtrol_runtime_protocol::RuntimeLimits::default(),
             grant: None,
@@ -2494,6 +2574,22 @@ mod tests {
         wrong_key.key_generation = 3;
         assert!(!initialization_grant_matches(
             Some(&wrong_key),
+            Some(&expected)
+        ));
+        let mut priority = expected.clone();
+        priority.scopes.push(AppScope::SessionInputPriority);
+        assert!(initialization_grant_matches(
+            Some(&priority),
+            Some(&expected)
+        ));
+        assert!(initialization_grant_matches(
+            Some(&expected),
+            Some(&priority)
+        ));
+        let mut other_scope = expected.clone();
+        other_scope.scopes.push(AppScope::SessionInputWrite);
+        assert!(!initialization_grant_matches(
+            Some(&other_scope),
             Some(&expected)
         ));
         let mut same_generation_changed = expected.clone();
@@ -2834,6 +2930,140 @@ mod tests {
             }
             drop(runtime);
             server.await.expect("join text fixture");
+        }
+    }
+
+    async fn refuse_initialization(
+        mut stream: fake_transport::Stream,
+        instance: &str,
+        attempt: u64,
+        code: RuntimeErrorKind,
+    ) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("test clock");
+        let challenge = ServerChallenge {
+            instance_id: instance.to_owned(),
+            nonce_id: format!("nonce_{attempt:032x}"),
+            nonce: Base64UrlUnpadded::encode_string(&[3; 32]),
+            expires_at_ms: u64::try_from(now.as_millis())
+                .expect("clock fits")
+                .saturating_add(30_000),
+        };
+        send_test_json(
+            &mut stream,
+            &JsonRpcNotification {
+                jsonrpc: "2.0".into(),
+                method: RuntimeMethod::Challenge.to_string(),
+                params: serde_json::to_value(challenge).expect("challenge"),
+            },
+        )
+        .await;
+        let request: JsonRpcRequest =
+            serde_json::from_slice(&receive_test_frame(&mut stream).await).expect("initialization");
+        assert_eq!(request.method, RuntimeMethod::Initialize.to_string());
+        let params: InitializeParams =
+            serde_json::from_value(request.params).expect("initialization params");
+        let proof = params
+            .authentication
+            .expect("same identity is signed on every attempt");
+        assert_eq!(
+            proof.integration_id.as_str(),
+            "int_09090909090909090909090909090909"
+        );
+        assert_eq!((proof.key_generation, proof.grant_generation), (2, 3));
+        assert!(!proof.signature.is_empty());
+        send_test_json(
+            &mut stream,
+            &JsonRpcResponse::Error(ErrorResponse {
+                jsonrpc: "2.0".into(),
+                id: request.id,
+                error: RuntimeError::plain(code, "fixture initialization refusal", "fixture"),
+            }),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn draining_authentication_retries_only_initialization_with_bounded_denial_and_cancellation()
+     {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicU64, Ordering},
+        };
+        for (draining, changes) in [(false, false), (true, true), (true, false)] {
+            let instance = "rtm_0123456789abcdef0123456789abcdef";
+            let (mut listener, endpoint) = fake_transport::Listener::bind();
+            let attempts = Arc::new(AtomicU64::new(0));
+            let server = tokio::spawn({
+                let attempts = Arc::clone(&attempts);
+                async move {
+                    loop {
+                        let stream = listener.accept().await;
+                        let attempt = attempts.fetch_add(1, Ordering::SeqCst) + 1;
+                        let code = if changes && attempt == 3 {
+                            RuntimeErrorKind::ScopeDenied
+                        } else {
+                            RuntimeErrorKind::Unauthenticated
+                        };
+                        refuse_initialization(stream, instance, attempt, code).await;
+                    }
+                }
+            });
+            let locator = ValidatedLocator {
+                instance_id: instance.into(),
+                endpoint,
+                runtime_version: "0.1.1".into(),
+                digest: "0".repeat(64),
+                draining,
+            };
+            let options = ClientOptions::new("draining fixture", "1").with_credentials(
+                IntegrationCredentials::new(
+                    IntegrationIdentity::from_secret_bytes([7; 32]),
+                    IntegrationGrant {
+                        integration_id: runtrol_runtime_protocol::IntegrationId::new(
+                            "int_09090909090909090909090909090909",
+                        ),
+                        scopes: vec![AppScope::SessionInputPriority],
+                        roots: Vec::new(),
+                        key_generation: 2,
+                        grant_generation: 3,
+                    },
+                ),
+            );
+            let started = tokio::time::Instant::now();
+            let result = RuntimeClient::connect_to(locator.clone(), options.clone()).await;
+            let expected = if changes {
+                RuntimeErrorKind::ScopeDenied
+            } else {
+                RuntimeErrorKind::Unauthenticated
+            };
+            assert!(matches!(result, Err(ClientError::Runtime(error)) if error.code == expected));
+            let count = attempts.load(Ordering::SeqCst);
+            assert!(started.elapsed() < Duration::from_secs(5));
+            if !draining {
+                assert_eq!(count, 1);
+            } else if changes {
+                assert_eq!(count, 3);
+            } else {
+                assert!(count > 1 && count < 40);
+                let cancelled = tokio::time::timeout(
+                    Duration::from_millis(30),
+                    RuntimeClient::connect_to(locator, options),
+                )
+                .await;
+                assert!(cancelled.is_err());
+                let after_cancel = attempts.load(Ordering::SeqCst);
+                tokio::time::sleep(Duration::from_millis(150)).await;
+                assert_eq!(attempts.load(Ordering::SeqCst), after_cancel);
+            }
+            server.abort();
+            assert!(
+                server
+                    .await
+                    .expect_err("fixture listener was cancelled")
+                    .is_cancelled()
+            );
         }
     }
 }

@@ -3,11 +3,27 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import { VALIDATION_SCHEMA } from "../src/generated/schema.js";
+import { validatePublic } from "../src/schema.js";
 
 const DOCUMENT_SCHEMA = new URL("../../schema/runtime.schema.json", import.meta.url);
 // A bloat tripwire, moved deliberately: 40 KiB until 2026-09-02, then 48 KiB for the window registry's thirteen
 // definitions (`windows/*`, the observed terminal and command records).
 const MAX_VALIDATION_SCHEMA_BYTES = 48 * 1024;
+
+test("compact constant unions accept exactly the documented values", async () => {
+  const document = JSON.parse(await readFile(DOCUMENT_SCHEMA, "utf8"));
+  for (const [name, definition] of Object.entries(document.$defs)) {
+    const branches = (definition as { oneOf?: { const?: unknown }[] }).oneOf;
+    if (!branches?.every((branch) => Object.hasOwn(branch, "const"))) continue;
+    const values = branches.map((branch) => branch.const);
+    for (const value of values) assert.deepEqual(validatePublic(name, value), value);
+    for (const invalid of ["unknown-fixture-value", 9001, null, {}, []]) {
+      if (!values.some((value) => JSON.stringify(value) === JSON.stringify(invalid))) {
+        assert.throws(() => validatePublic(name, invalid));
+      }
+    }
+  }
+});
 
 test("the runtime validator carries a bounded complete definition projection", async () => {
   const document = JSON.parse(await readFile(DOCUMENT_SCHEMA, "utf8")) as {

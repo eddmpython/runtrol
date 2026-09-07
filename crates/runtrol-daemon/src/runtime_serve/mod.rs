@@ -17,7 +17,7 @@ mod window_input;
 mod window_requests;
 pub(crate) use terminal_stream::VIEW_WRITE_DEADLINE;
 
-pub(crate) use authority::refresh_current;
+pub(crate) use authority::{current_integration_row, refresh_current};
 pub(crate) use connection::serve_connection;
 pub(crate) use provider_requests::{observe_native_activity, reconcile_native_activity};
 

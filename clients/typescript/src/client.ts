@@ -110,7 +110,7 @@ import type {
   WindowRegistration,
   WindowUpdateParams,
 } from "./generated/protocol.js";
-import { FINALIZED_REVISIONS, PUBLIC_LIMITS } from "./generated/protocol.js";
+import { FINALIZED_REVISIONS, PUBLIC_LIMITS, SDK_POLICY } from "./generated/protocol.js";
 import {
   RuntimeLocatorError,
   RuntimeProtocolError,
@@ -180,6 +180,9 @@ const runtimeClientToken = Symbol("initialized Runtime client");
 const runtimeStates = new WeakMap<RuntimeClient, RuntimeClientState>();
 
 export class RuntimeConnector {
+  // One most recently proved generation, bounded independently of the number of views or reconnects.
+  #scopeVocabulary: { key: string; terminalInputPriority: boolean } | undefined;
+
   public constructor(
     private readonly transportFactory: RuntimeTransportFactory = connectLocalTransport,
   ) {}
@@ -189,13 +192,52 @@ export class RuntimeConnector {
     options: ClientOptions,
     signal?: AbortSignal,
   ): Promise<RuntimeClient> {
+    try {
+      return await this.#connectNegotiated(locator, options, signal);
+    } catch (error) {
+      if (!locator.draining || !staleDrainingAuthentication(error)) throw error;
+      return retryConnection(
+        (attempt) => this.#connectNegotiated(locator, options, attempt),
+        { ...SDK_POLICY.drainingAuthenticationRetry, ...(signal ? { signal } : {}) },
+        staleDrainingAuthentication,
+      );
+    }
+  }
+
+  async #connectNegotiated(
+    locator: ValidatedLocator,
+    options: ClientOptions,
+    signal?: AbortSignal,
+  ): Promise<RuntimeClient> {
+    locator.assertSdkValidated();
+    const key = JSON.stringify([locator.instanceId, locator.digest, locator.endpoint]);
+    if (this.#scopeVocabulary?.key === key) {
+      return this.#connectOnce(locator, options, this.#scopeVocabulary.terminalInputPriority, signal);
+    }
+    const initial = await this.#connectOnce(locator, options, false, signal);
+    const terminalInputPriority = initial.initialization.serverCapabilities.terminalInputPriority === true
+      && initial.initialization.serverCapabilities.grantScopeProjection === true;
+    if (initial.initialization.runtime.buildDigest === locator.digest) {
+      this.#scopeVocabulary = { key, terminalInputPriority };
+    }
+    if (!terminalInputPriority) return initial;
+    initial.close();
+    return this.#connectOnce(locator, options, true, signal);
+  }
+
+  async #connectOnce(
+    locator: ValidatedLocator,
+    options: ClientOptions,
+    terminalInputPriority: boolean,
+    signal?: AbortSignal,
+  ): Promise<RuntimeClient> {
     locator.assertSdkValidated();
     const transport = await this.transportFactory(locator.endpoint, signal);
     const abort = (): void => abortTransport(transport);
     signal?.addEventListener("abort", abort, { once: true });
     try {
       signal?.throwIfAborted();
-      return await initializeRuntime(transport, locator, options);
+      return await initializeRuntime(transport, locator, options, terminalInputPriority);
     } catch (error) {
       transport.close();
       throw error;
@@ -1833,13 +1875,17 @@ async function initializeRuntime(
   transport: RuntimeTransport,
   locator: ValidatedLocator,
   options: ClientOptions,
+  terminalInputPriority: boolean,
 ): Promise<RuntimeClient> {
   if (options.identity && options.credentials) {
     throw new RuntimeProtocolError("client options cannot contain both identity and credentials");
   }
   const challenge = await receiveChallenge(transport, locator);
   const clientInfo: ClientInfo = { name: options.name, version: options.version };
-  const capabilities: ClientCapabilities = options.capabilities ?? { opaqueEventExtensions: false };
+  const capabilities: ClientCapabilities = {
+    opaqueEventExtensions: options.capabilities?.opaqueEventExtensions ?? false,
+    ...(terminalInputPriority ? { terminalInputPriority: true } : {}),
+  };
   const identity = options.credentials?.identity ?? options.identity;
   const expectedGrant = options.credentials?.grant;
   let authentication: IntegrationAuthentication | undefined;
@@ -1899,6 +1945,7 @@ function runtimeState(runtime: RuntimeClient): RuntimeClientState {
 async function retryConnection<T>(
   connect: (signal: AbortSignal) => Promise<T>,
   policy: ReconnectPolicy,
+  retryable: (error: unknown) => boolean = retryableConnectionFailure,
 ): Promise<T> {
   const initialDelayMs = boundedDelay(policy.initialDelayMs ?? 100, "initialDelayMs");
   const maximumDelayMs = boundedDelay(policy.maximumDelayMs ?? 2_000, "maximumDelayMs");
@@ -1910,11 +1957,12 @@ async function retryConnection<T>(
   }
   const deadline = performance.now() + deadlineMs;
   let delayMs = initialDelayMs;
+  let lastFailure: unknown;
   for (;;) {
     policy.signal?.throwIfAborted();
     const remainingMs = deadline - performance.now();
     if (remainingMs <= 0) {
-      throw new RuntimeTransportError("Runtime reconnect deadline expired");
+      throw lastFailure ?? new RuntimeTransportError("Runtime reconnect deadline expired");
     }
     const attempt = new AbortController();
     const signal = policy.signal
@@ -1927,7 +1975,8 @@ async function retryConnection<T>(
     try {
       return await connect(signal);
     } catch (error) {
-      if (!retryableConnectionFailure(error)) throw error;
+      if (!retryable(error)) throw error;
+      lastFailure = error;
       const retryRemainingMs = deadline - performance.now();
       if (retryRemainingMs <= 0) throw error;
       await abortableDelay(Math.min(jitteredDelay(delayMs), retryRemainingMs), policy.signal);
@@ -1957,6 +2006,10 @@ function retryableConnectionFailure(error: unknown): boolean {
   if (error instanceof RuntimeTransportError) return true;
   if (error instanceof RuntimeLocatorError) return error.code === "io";
   return error instanceof RuntimeRequestError && error.failure.retryable;
+}
+
+function staleDrainingAuthentication(error: unknown): boolean {
+  return error instanceof RuntimeRequestError && error.failure.code === "unauthenticated";
 }
 
 function jitteredDelay(delayMs: number): number {
@@ -2075,6 +2128,7 @@ function validateInitialization(
 ): void {
   if (initialized.runtime.instanceId !== locator.instanceId
     || initialized.runtime.version !== locator.runtimeVersion
+    || (initialized.runtime.buildDigest != null && initialized.runtime.buildDigest !== locator.digest)
     || !FINALIZED_REVISIONS.includes(initialized.selectedRevision as never)
     || !initializationGrantMatches(initialized.grant, expectedGrant)) {
     throw new RuntimeProtocolError("Runtime initialization does not match the locator or credentials");
@@ -2095,7 +2149,14 @@ function initializationGrantMatches(
     return false;
   }
   return current.grantGeneration !== expected.grantGeneration
-    || JSON.stringify(current) === JSON.stringify(expected);
+    || JSON.stringify(legacyGrant(current)) === JSON.stringify(legacyGrant(expected));
+}
+
+function legacyGrant(grant: IntegrationGrant): IntegrationGrant {
+  return {
+    ...grant,
+    scopes: grant.scopes.filter((scope) => scope !== "session.input.priority"),
+  };
 }
 
 async function callOn<T>(

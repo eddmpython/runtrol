@@ -6,7 +6,7 @@ from typing import ForwardRef, Literal, NotRequired, Required, TypeAlias, TypedD
 
 JsonValue: TypeAlias = None | bool | int | float | str | list["JsonValue"] | dict[str, "JsonValue"]
 JsonObject: TypeAlias = dict[str, JsonValue]
-SCHEMA_SHA256 = '23b86d874fc657b1d23326155f17b1cf5a2e93a4ca522dbacacc979217181145'
+SCHEMA_SHA256 = '6c2f7ab1fd5cd16b3d47f9d5355cb400ed02610b7fba4bffd30926ead3296525'
 
 AcquireControlParams = TypedDict('AcquireControlParams', {
     'expectedLifecycle': Required[ForwardRef('LifecycleState')],
@@ -22,7 +22,7 @@ AdoptNativeSessionParams = TypedDict('AdoptNativeSessionParams', {
     'requestId': Required[ForwardRef('MutationRequestId')],
     'workspace': Required[str],
 })
-AppScope: TypeAlias = Literal['provider.read'] | Literal['model.read'] | Literal['session.list'] | Literal['session.native.discover'] | Literal['session.output.read'] | Literal['session.start'] | Literal['session.resume'] | Literal['session.input.write'] | Literal['session.stop'] | Literal['approval.respond.low'] | Literal['approval.respond.high'] | Literal['session.delete']
+AppScope: TypeAlias = Literal['provider.read'] | Literal['model.read'] | Literal['session.list'] | Literal['session.native.discover'] | Literal['session.output.read'] | Literal['session.start'] | Literal['session.resume'] | Literal['session.input.write'] | Literal['session.input.priority'] | Literal['session.stop'] | Literal['approval.respond.low'] | Literal['approval.respond.high'] | Literal['session.delete']
 ArchiveNativeSessionParams = TypedDict('ArchiveNativeSessionParams', {
     'nativeSessionId': Required[str],
     'providerId': Required[ForwardRef('ProviderId')],
@@ -34,6 +34,7 @@ CatalogueCoverage: TypeAlias = JsonObject | JsonObject | JsonObject
 CatalogueSource: TypeAlias = Literal['officialProtocol'] | Literal['officialCli'] | Literal['providerStore']
 ClientCapabilities = TypedDict('ClientCapabilities', {
     'opaqueEventExtensions': NotRequired[bool],
+    'terminalInputPriority': NotRequired[bool],
 })
 ClientInfo = TypedDict('ClientInfo', {
     'name': Required[str],
@@ -355,6 +356,7 @@ RuntimeApprovalOption = TypedDict('RuntimeApprovalOption', {
 RuntimeApprovalOptionKind: TypeAlias = Literal['allowOnce'] | Literal['allowAlways'] | Literal['rejectOnce'] | Literal['rejectAlways']
 RuntimeApprovalRisk: TypeAlias = Literal['low'] | Literal['high']
 RuntimeCapabilities = TypedDict('RuntimeCapabilities', {
+    'grantScopeProjection': NotRequired[bool],
     'integrationEnrollment': Required[bool],
     'managedSessionList': Required[bool],
     'modelDiscovery': Required[bool],
@@ -362,6 +364,7 @@ RuntimeCapabilities = TypedDict('RuntimeCapabilities', {
     'providerInventory': Required[bool],
     'sessionControl': Required[bool],
     'sessionEvents': Required[bool],
+    'terminalInputPriority': NotRequired[bool],
     'terminalSurface': NotRequired[bool],
 })
 RuntimeEndpointKind: TypeAlias = Literal['namedPipe'] | Literal['unixSocket']

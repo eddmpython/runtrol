@@ -452,7 +452,8 @@ async fn public_runtime_keeps_one_owner_behind_an_official_attachment() {
             connections.spawn(async move {
                 audit_writer.await.expect("audit writer remained healthy");
             });
-            for _ in 0..5 {
+            // Each SDK connection first negotiates the optional signed scope vocabulary.
+            for _ in 0..10 {
                 let connection = listener.accept().await.expect("accept a public client");
                 connections.spawn(serve_connection(
                     connection,

@@ -676,7 +676,8 @@ async fn real_owner_only_runtime_initializes_but_reveals_nothing_before_enrollme
             connections.spawn(async move {
                 audit_writer.await.expect("audit writer remained healthy");
             });
-            for _ in 0..6 {
+            // Five successful SDK connections negotiate twice; the retired key fails its first hello.
+            for _ in 0..11 {
                 let connection = listener.accept().await.expect("accept public client");
                 connections.spawn(serve_connection(
                     connection,

@@ -34,6 +34,13 @@ watches still connect to the exact generation that owns them. Those connections 
 the negotiated revision and advertised capabilities. [Core generation continuity](coreRuntime.md#generations-a-running-runtime-and-the-build-that-replaces-it)
 and the [terminal contract](terminalSurface.md#public-runtime-contract) own generation selection and reconnect behavior.
 
+Grant scope additions also require a compatible vocabulary on each connection. `ClientCapabilities::project_grant`
+owns the projection of owner-approved grants to that vocabulary. A legacy client receives the scopes it understands;
+the projection never changes the stored grant or the server's effective authority. Current SDKs first initialize with
+the legacy capability shape, then opt in to terminal priority only when the server advertises both that policy and
+grant projection. The opt-in field is omitted from a legacy handshake so older servers still verify the same signed
+payload. TypeScript remembers one verified generation endpoint to avoid repeating discovery on its next connection.
+
 ## Local transport and locator
 
 Runtime publishes an owner-readable `runtime.locator.json` only after its public endpoint is ready. The locator names
@@ -67,12 +74,23 @@ The client then sends `runtime/initialize`. Runtime returns the selected revisio
 capabilities, numeric limits, and the current grant when authentication succeeds. The client must send
 `runtime/initialized` before any ordinary request.
 
+A draining generation may briefly lag the primary's latest owner-approved grant. The SDKs retry an initialization
+authentication refusal only for that exact draining locator, using the same identity and grant with a fresh challenge.
+The finite deadline and backoff are owned by `DRAINING_AUTHENTICATION_RETRY_MS` in the protocol crate and projected
+through the schema's SDK policy metadata. Primary-generation authentication refusal is immediate. Cancellation stops
+further attempts, and no ordinary request or mutation is replayed. Grant validation permits the negotiated priority
+scope projection to differ while retaining the other scope, root, identity, key and generation checks.
+
 An unenrolled identity may call `integrations/requestEnrollment` and `integrations/watchEnrollment`. Approval,
 denial, grant changes, and revocation happen through the owner-local administration surface. The standalone
 `runtrol integrations` and `runtrol requests` commands are the baseline interface; Studio provides an equivalent
 optional GUI. A public connection cannot approve itself.
 
 ## Methods and scopes
+
+`ServerCapabilities.terminalInputPriority` advertises terminal holder precedence. Its owner-approved scope and
+Studio enrollment behavior are defined in [the terminal input contract](terminalSurface.md#public-runtime-contract).
+Clients must not assume that an older generation enforces this policy.
 
 | Methods | Required public authority |
 |---|---|
@@ -159,9 +177,11 @@ rules live in [`process_tree.rs`](../crates/runtrol-childproc/src/process_tree.r
 or a structurally proven official attachment and never runs the provider's resume command; for a cold target it
 performs the explicit native resume.
 
-A folderless request is answered on the owner-only local endpoint, where a caller already holds
-machine-wide authority through the private administration wire, and where the managed session index
-made the same move for the same reason. It is refused by name for a provider whose own surface
+A folderless public request uses `session.native.discover` on the owner-only local endpoint and returns
+machine-wide metadata. Its activity projection has the same machine-wide scope. This does not move either
+operation onto the private administration wire: the local OS-user boundary already permits that separate
+administration interface, while remote companions carry their own admission contract. A request naming a root
+retains the approved-root filter described above. A folderless request is refused by name for a provider whose own surface
 cannot enumerate without a folder, so the caller knows to ask per folder rather than receiving one
 folder's worth that reads as everything. Catalogue cursors bind the scope they were issued for, so a
 machine-wide cursor cannot be replayed into a folder listing or the other way round.

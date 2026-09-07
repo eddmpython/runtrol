@@ -2833,7 +2833,22 @@ async fn converse_inner(
                 );
                 return;
             };
-            let control = crate::runtime_terminal::LocalTerminalControl::for_hosted(&hosted);
+            let control = match composed
+                .runtime_terminals
+                .local_control(&composed, &hosted)
+                .await
+            {
+                Ok(control) => control,
+                Err(failure) => {
+                    // Admission failed after this exact process was opened; retain its registry until exit.
+                    let stopped = crate::terminal_surface::stop_hosted(&hosted).await;
+                    if stopped.is_ok() {
+                        composed.terminals.lock().await.mark_stopping(terminal_id);
+                    }
+                    drop(write(&mut connection, &refuse(failure.message)).await);
+                    return;
+                }
+            };
             relay_local_broker(
                 &mut connection,
                 &composed,
@@ -3556,6 +3571,12 @@ async fn relay_local_broker(
         }
     };
     relayed.await;
+    if let Some(control) = &control {
+        composed
+            .runtime_terminals
+            .release_local(composed, control)
+            .await;
+    }
 }
 
 async fn replace_local_terminal(

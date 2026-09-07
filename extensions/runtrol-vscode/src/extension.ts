@@ -37,6 +37,7 @@ import { ServiceTroubleReported } from "./serviceHelp";
 import { providerDisplayName, providerIcon, sessionTitle, workspaceName } from "./sessionDisplay";
 import { RuntimeState } from "./state";
 import { StudioRuntimeClient } from "./runtimeClient";
+import { requestStudioInputPriority } from "./integrationGrant";
 import { workspaceCovers, workspaceIdentity } from "./workspaceCollision";
 import type { Conversation } from "./conversationList";
 import { rememberedList, rememberList } from "./listMemory";
@@ -127,6 +128,7 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     (pendingId, signature) => selfApproveIntegration(client, pendingId, signature),
     (confirmationId, sessionId) => confirmRuntimeForget(client, confirmationId, sessionId),
     (confirmationId, workspace) => confirmRuntimeSharedOpen(client, confirmationId, workspace),
+    (grant) => requestStudioInputPriority(client, grant),
     testIntegrationRoots(context),
     (stage) => {
       initializationStage = `runtime:${stage}`;

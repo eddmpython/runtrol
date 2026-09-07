@@ -69,6 +69,20 @@ fn every_shipped_hello_still_deserializes() {
 }
 
 #[test]
+fn an_older_hello_does_not_claim_terminal_input_priority() {
+    for (_, mut fixture) in corpus() {
+        fixture
+            .get_mut("serverCapabilities")
+            .expect("capability field")
+            .as_object_mut()
+            .expect("capability object")
+            .remove("terminalInputPriority");
+        let parsed: InitializeResult = serde_json::from_value(fixture).expect("older hello shape");
+        assert!(!parsed.server_capabilities.terminal_input_priority);
+    }
+}
+
+#[test]
 fn the_current_hello_shape_is_in_the_corpus() {
     let current = InitializeResult {
         selected_revision: REVISION_2026_08_27,
@@ -87,6 +101,8 @@ fn the_current_hello_shape_is_in_the_corpus() {
             session_control: true,
             session_events: true,
             terminal_surface: true,
+            terminal_input_priority: true,
+            grant_scope_projection: true,
         },
         limits: RuntimeLimits::default(),
         grant: None,

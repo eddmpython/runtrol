@@ -77,6 +77,10 @@ pub enum AppScope {
     /// Acquire control and submit caller-owned input.
     #[serde(rename = "session.input.write")]
     SessionInputWrite,
+    /// Give an owner-approved terminal surface precedence over ordinary input lease holders.
+    /// Input permission and an approved project root are still required.
+    #[serde(rename = "session.input.priority")]
+    SessionInputPriority,
     /// Interrupt or cool one controlled session.
     #[serde(rename = "session.stop")]
     SessionStop,
@@ -102,6 +106,7 @@ impl AppScope {
         Self::SessionStart,
         Self::SessionResume,
         Self::SessionInputWrite,
+        Self::SessionInputPriority,
         Self::SessionStop,
         Self::ApprovalRespondLow,
         Self::ApprovalRespondHigh,
@@ -120,6 +125,7 @@ impl AppScope {
             Self::SessionStart => "session.start",
             Self::SessionResume => "session.resume",
             Self::SessionInputWrite => "session.input.write",
+            Self::SessionInputPriority => "session.input.priority",
             Self::SessionStop => "session.stop",
             Self::ApprovalRespondLow => "approval.respond.low",
             Self::ApprovalRespondHigh => "approval.respond.high",

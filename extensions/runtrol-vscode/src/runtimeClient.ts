@@ -9,7 +9,6 @@ import {
   RuntimeRequestError,
   TerminalClient,
   newMutationRequestId,
-  type AppScope,
   type ClientOptions,
   type ControlLease,
   type EventCursor,
@@ -61,6 +60,8 @@ import { TerminalFleet } from "./terminalFleet";
 import { errorKindOf } from "./serviceHelp";
 import { workspaceIdentity } from "./workspaceCollision";
 import type { NativeChatCatalogue, NativeChatLine } from "./runtimeTypes";
+import { STUDIO_SCOPES, STUDIO_INPUT_PRIORITY, reviewStudioInputPriority,
+  readStudioInputPriorityReview, persistStudioInputPriorityReview } from "./studioInputPriority";
 
 const SECRET_KEY = "runtrol.runtime.integration.v1";
 
@@ -73,20 +74,6 @@ const RUNTIME_LOCATOR_POLL_MS = 25;
 // The in-memory lease is authoritative while the Extension Host is alive. Persisting it only
 // improves reload recovery, so SecretStorage latency must not delay an interactive session action.
 const CONTROL_PERSISTENCE_INLINE_MS = 0;
-const ALL_STUDIO_SCOPES: readonly AppScope[] = [
-  "provider.read",
-  "model.read",
-  "session.list",
-  "session.native.discover",
-  "session.output.read",
-  "session.start",
-  "session.resume",
-  "session.input.write",
-  "session.stop",
-  "approval.respond.low",
-  "approval.respond.high",
-  "session.delete",
-];
 
 type StoredIntegration = {
   schema: 1;
@@ -94,6 +81,7 @@ type StoredIntegration = {
   privateKeyPkcs8: string;
   grant?: IntegrationGrant;
   controlState?: StoredControlState;
+  inputPriorityReviewed?: true;
 };
 
 export type RuntimeInventory = {
@@ -138,7 +126,7 @@ export class StudioRuntimeClient implements vscode.Disposable {
   private firstInspection: Promise<ValidatedLocator | null> | null = null;
   private commandTail: Promise<void> = Promise.resolve();
   private activityTail: Promise<void> = Promise.resolve();
-  private controlPersistence: Promise<void> = Promise.resolve();
+  private integrationPersistence: Promise<void> = Promise.resolve();
   private readonly controls = new Map<string, ControlLease>();
   private providerSnapshot: ProviderList | null = null;
   private sessionSnapshot: ManagedSessionList | null = null;
@@ -165,6 +153,7 @@ export class StudioRuntimeClient implements vscode.Disposable {
       confirmationId: string,
       workspace: string,
     ) => Promise<boolean>,
+    private readonly prioritizeInput: (grant: IntegrationGrant) => Promise<boolean>,
     private readonly additionalEnrollmentRoots: readonly string[] = [],
     private readonly reportInitialization: (stage: string) => void = () => undefined,
   ) {}
@@ -1249,7 +1238,32 @@ export class StudioRuntimeClient implements vscode.Disposable {
   private async commandClient(): Promise<RuntimeClient> {
     if (this.command) return this.command;
     const expectedInstance = this.stored?.controlState?.runtimeInstanceId;
-    const connected = await this.connectCommand();
+    let connected = await this.connectCommand();
+    try {
+      const review = this.stored;
+      if (review?.grant && !review.inputPriorityReviewed
+        && await readStudioInputPriorityReview(this.context.secrets, review.grant)) {
+        review.inputPriorityReviewed = true;
+      }
+      if (review && await reviewStudioInputPriority(
+        connected.initialization.serverCapabilities.terminalInputPriority === true,
+        review,
+        async () => {
+          if (!review.grant) throw new Error("Runtrol Studio has no integration grant to review");
+          await persistStudioInputPriorityReview(this.context.secrets, review.grant);
+          const next = { ...review, inputPriorityReviewed: true as const };
+          await this.persistIntegration(next);
+        },
+        this.prioritizeInput,
+      )) {
+        connected.close();
+        // Reconnect reads the committed grant, including after a running Runtime upgrade.
+        connected = await this.connectCommand();
+      }
+    } catch (error: unknown) {
+      connected.close();
+      throw error;
+    }
     this.command = connected;
     if (
       expectedInstance
@@ -1332,13 +1346,19 @@ export class StudioRuntimeClient implements vscode.Disposable {
         leases,
       },
     };
+    await settleControlPersistence(this.persistIntegration(next), CONTROL_PERSISTENCE_INLINE_MS);
+  }
+
+  /// One ordered writer prevents an older lease snapshot from overwriting a grant or its review marker.
+  private persistIntegration(next: StoredIntegration): Promise<void> {
     this.stored = next;
-    const previous = this.controlPersistence;
+    const previous = this.integrationPersistence;
     const persistence = previous
+      // A failed save is reported to its caller; later complete state can still repair the durable identity.
       .catch(() => undefined)
       .then(() => this.context.secrets.store(SECRET_KEY, JSON.stringify(next)));
-    this.controlPersistence = persistence;
-    await settleControlPersistence(persistence, CONTROL_PERSISTENCE_INLINE_MS);
+    this.integrationPersistence = persistence;
+    return persistence;
   }
 
   private async connectCommand(): Promise<RuntimeClient> {
@@ -1346,28 +1366,27 @@ export class StudioRuntimeClient implements vscode.Disposable {
     const runtime = await this.withRuntimeLocator(
       (locator) => this.connector.connectWithRetry(locator, options),
     );
-    const current = runtime.initialization.grant;
-    const credentials = options.credentials;
-    if (!current || !credentials) {
-      runtime.close();
-      throw new Error("Runtrol Studio Runtime authentication returned no integration grant");
-    }
-    if (JSON.stringify(current) !== JSON.stringify(credentials.grant)) {
-      const stored = this.stored;
-      if (!stored) {
-        runtime.close();
-        throw new Error("Runtrol Studio has no integration identity to update");
+    try {
+      const current = runtime.initialization.grant;
+      const credentials = options.credentials;
+      if (!current || !credentials) {
+        throw new Error("Runtrol Studio Runtime authentication returned no integration grant");
       }
-      const next = { ...stored, grant: current };
-      await this.context.secrets.store(SECRET_KEY, JSON.stringify(next));
-      this.stored = next;
-      this.options = {
-        ...options,
-        credentials: new IntegrationCredentials(credentials.identity, current),
-      };
-      this.closeActivity();
+      if (JSON.stringify(current) !== JSON.stringify(credentials.grant)) {
+        const stored = this.stored;
+        if (!stored) throw new Error("Runtrol Studio has no integration identity to update");
+        await this.persistIntegration({ ...stored, grant: current });
+        this.options = {
+          ...options,
+          credentials: new IntegrationCredentials(credentials.identity, current),
+        };
+        this.closeActivity();
+      }
+      return runtime;
+    } catch (error: unknown) {
+      runtime.close();
+      throw error;
     }
-    return runtime;
   }
 
   private requireOptions(): ClientOptions {
@@ -1434,12 +1453,12 @@ export class StudioRuntimeClient implements vscode.Disposable {
       Buffer.from(stored.privateKeyPkcs8, "base64url"),
     );
     if (!stored.grant) this.reportInitialization("enrollment");
-    const grant = stored.grant ?? await this.enroll(stored, identity);
-    this.stored = { ...stored, grant };
+    const enrolled = stored.grant ? { ...stored, grant: stored.grant } : await this.enroll(stored, identity);
+    this.stored = enrolled;
     this.options = {
       name: "Runtrol Studio",
       version: extensionVersion(this.context),
-      credentials: new IntegrationCredentials(identity, grant),
+      credentials: new IntegrationCredentials(identity, enrolled.grant),
     };
     this.reportInitialization("command");
     this.command = await this.commandClient();
@@ -1475,7 +1494,7 @@ export class StudioRuntimeClient implements vscode.Disposable {
   private async enroll(
     stored: StoredIntegration,
     identity: IntegrationIdentity,
-  ): Promise<IntegrationGrant> {
+  ): Promise<StoredIntegration & { grant: IntegrationGrant }> {
     const options: ClientOptions = {
       name: "Runtrol Studio",
       version: extensionVersion(this.context),
@@ -1489,12 +1508,14 @@ export class StudioRuntimeClient implements vscode.Disposable {
         ...(vscode.workspace.workspaceFolders ?? []).map((folder) => folder.uri.fsPath),
         ...this.additionalEnrollmentRoots,
       ])];
+      const requestedScopes = STUDIO_SCOPES.filter((scope) => scope !== STUDIO_INPUT_PRIORITY
+        || runtime.initialization.serverCapabilities.terminalInputPriority === true);
       const receipt = await runtime.integrations().request({
         clientInstanceId: stored.clientInstanceId,
         manifestDigest: createHash("sha256")
-          .update(JSON.stringify({ product: "runtrol-studio", scopes: ALL_STUDIO_SCOPES }))
+          .update(JSON.stringify({ product: "runtrol-studio", scopes: requestedScopes }))
           .digest(),
-        requestedScopes: ALL_STUDIO_SCOPES,
+        requestedScopes,
         requestedRoots: roots,
       });
       // Studio approves its own request at once: it is the person's window, and a quarter second spent
@@ -1521,9 +1542,11 @@ export class StudioRuntimeClient implements vscode.Disposable {
       if (decision.state !== "approved") {
         throw new Error(`Runtrol Studio Runtime enrollment ended as ${decision.state}`);
       }
-      const next = { ...stored, grant: decision.grant };
-      await this.context.secrets.store(SECRET_KEY, JSON.stringify(next));
-      return decision.grant;
+      const next = { ...stored, grant: decision.grant,
+        ...(runtime.initialization.serverCapabilities.terminalInputPriority ? { inputPriorityReviewed: true as const } : {}) };
+      if (next.inputPriorityReviewed) await persistStudioInputPriorityReview(this.context.secrets, next.grant);
+      await this.persistIntegration(next);
+      return next;
     } finally {
       runtime.close();
     }
@@ -1692,6 +1715,7 @@ function parseStoredIntegration(raw: string | undefined): StoredIntegration | nu
       || value.privateKeyPkcs8.length > 512
       || (value.grant !== undefined && !validGrant(value.grant))
       || (value.controlState !== undefined && !validControlState(value.controlState))
+      || (value.inputPriorityReviewed !== undefined && value.inputPriorityReviewed !== true)
     ) {
       return null;
     }
@@ -1735,7 +1759,7 @@ function validGrant(value: unknown): value is IntegrationGrant {
   const grant = value as Partial<IntegrationGrant>;
   return typeof grant.integrationId === "string"
     && Array.isArray(grant.scopes)
-    && grant.scopes.every((scope) => ALL_STUDIO_SCOPES.includes(scope))
+    && grant.scopes.every((scope) => STUDIO_SCOPES.includes(scope))
     && Array.isArray(grant.roots)
     && grant.roots.every((root) => typeof root === "string")
     && Number.isSafeInteger(grant.keyGeneration)

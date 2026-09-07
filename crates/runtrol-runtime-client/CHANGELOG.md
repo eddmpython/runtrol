@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Negotiate terminal input priority without breaking older Runtime authentication or older grant vocabularies.
+- Allow a bounded initialization retry while a draining generation receives its current owner-approved grant.
+  Primary authentication failures remain immediate, and ordinary requests are never replayed.
 - Add typed observed-terminal text receipts and a bounded owner input duplex with cancellation-safe teardown.
 - Preserve unknown input outcomes without replay and reject mismatched receipts or queue overflow.
 

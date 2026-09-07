@@ -33,7 +33,7 @@ use bytes::Bytes;
 use runtrol_childproc::pty::TerminalRead;
 use runtrol_childproc::{Program, PtyChild, PtySize, PtySpawn, SpawnError};
 use runtrol_provider::AbsPath;
-use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore, broadcast, mpsc, oneshot, watch};
+use tokio::sync::{Mutex, broadcast, mpsc, oneshot, watch};
 
 mod completion;
 pub use completion::{TerminalCompletion, TerminalFailure};
@@ -45,6 +45,8 @@ pub mod fed;
 #[path = "tests/input.rs"]
 mod input_tests;
 mod opening;
+mod operation;
+use operation::{OperationAdmission, OperationGate, OperationReservation};
 #[cfg(test)]
 #[path = "tests/query_authority.rs"]
 mod query_authority_tests;
@@ -152,6 +154,9 @@ pub enum TerminalError {
     /// Both bounded per-terminal operation slots are occupied.
     #[error("the terminal operation lane is full")]
     Busy,
+    /// Control changed before this queued operation reached the terminal.
+    #[error("the queued terminal operation was superseded")]
+    Superseded,
     /// The runtime this was called from has no task executor.
     #[error("a terminal needs a runtime to watch its child: {0}")]
     Runtime(String),
@@ -327,43 +332,30 @@ struct WriteRequest {
     answered: oneshot::Sender<std::io::Result<()>>,
 }
 
-struct OperationGate {
-    slots: Arc<Semaphore>,
-    order: Mutex<()>,
-}
-
-struct OperationAdmission<'a> {
-    _slot: OwnedSemaphorePermit,
-    _ordered: tokio::sync::MutexGuard<'a, ()>,
-}
-
 /// One bounded, ordered operation on an exact terminal.
 ///
 /// Holding this value isolates a slow terminal from every other terminal while keeping input, resize, and
 /// stop ordered for this one process. Only the terminal host constructs it.
 pub struct TerminalOperation<'a> {
     shared: &'a Arc<Shared>,
-    _admission: OperationAdmission<'a>,
+    _admission: OperationAdmission,
 }
 
-impl Default for OperationGate {
-    fn default() -> Self {
-        Self {
-            slots: Arc::new(Semaphore::new(TERMINAL_OPERATION_ADMISSIONS)),
-            order: Mutex::new(()),
-        }
-    }
+/// One bounded reservation which has not yet touched the terminal.
+pub struct PendingTerminalOperation<'a> {
+    shared: &'a Arc<Shared>,
+    reservation: OperationReservation<'a>,
 }
 
-impl OperationGate {
-    async fn admit(&self) -> Result<OperationAdmission<'_>, TerminalError> {
-        let slot = Arc::clone(&self.slots)
-            .try_acquire_owned()
-            .map_err(|_| TerminalError::Busy)?;
-        let ordered = self.order.lock().await;
-        Ok(OperationAdmission {
-            _slot: slot,
-            _ordered: ordered,
+impl<'a> PendingTerminalOperation<'a> {
+    /// Wait for exact terminal ordering after the caller atomically reserves its authority.
+    ///
+    /// # Errors
+    /// Returns [`TerminalError::Superseded`] when control replaces this pending reservation.
+    pub async fn wait(self) -> Result<TerminalOperation<'a>, TerminalError> {
+        Ok(TerminalOperation {
+            shared: self.shared,
+            _admission: self.reservation.wait().await?,
         })
     }
 }
@@ -634,10 +626,24 @@ impl Terminal {
     ///
     /// [`TerminalError::Busy`] when this terminal already has one current operation and one bounded waiter.
     pub async fn operation(&self) -> Result<TerminalOperation<'_>, TerminalError> {
-        Ok(TerminalOperation {
+        self.reserve_operation()?.wait().await
+    }
+
+    /// Reserve bounded capacity without awaiting, while the caller holds its authority lock.
+    ///
+    /// # Errors
+    /// Returns [`TerminalError::Busy`] when both public operation slots are occupied.
+    pub fn reserve_operation(&self) -> Result<PendingTerminalOperation<'_>, TerminalError> {
+        Ok(PendingTerminalOperation {
             shared: &self.shared,
-            _admission: self.shared.operations.admit().await?,
+            reservation: self.shared.operations.reserve()?,
         })
+    }
+
+    /// Retire queued reservations synchronously when their control authority changes.
+    /// An operation already touching the terminal and its protocol query writer retain their order.
+    pub fn supersede_pending_operations(&self) {
+        self.shared.operations.supersede();
     }
 
     /// Current shared PTY geometry.

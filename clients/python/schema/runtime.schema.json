@@ -114,6 +114,11 @@
           "type": "string"
         },
         {
+          "const": "session.input.priority",
+          "description": "Give an owner-approved terminal surface precedence over ordinary input lease holders.\nInput permission and an approved project root are still required.",
+          "type": "string"
+        },
+        {
           "const": "session.stop",
           "description": "Interrupt or cool one controlled session.",
           "type": "string"
@@ -272,6 +277,10 @@
         "opaqueEventExtensions": {
           "default": false,
           "description": "Whether the client preserves bounded unknown optional event extensions.",
+          "type": "boolean"
+        },
+        "terminalInputPriority": {
+          "description": "Understand the owner-approved terminal input priority scope in wire grants.\nSend only after this exact Runtime advertises terminal input priority support.",
           "type": "boolean"
         }
       },
@@ -2359,6 +2368,11 @@
     "RuntimeCapabilities": {
       "description": "Public product capabilities for the selected revision.",
       "properties": {
+        "grantScopeProjection": {
+          "default": false,
+          "description": "Wire grants honor the client's optional scope vocabulary capability.",
+          "type": "boolean"
+        },
         "integrationEnrollment": {
           "description": "Local integration enrollment is implemented.",
           "type": "boolean"
@@ -2385,6 +2399,11 @@
         },
         "sessionEvents": {
           "description": "Bounded replay followed by live normalized events is implemented.",
+          "type": "boolean"
+        },
+        "terminalInputPriority": {
+          "default": false,
+          "description": "This generation enforces owner-granted precedence for terminal input leases.",
           "type": "boolean"
         },
         "terminalSurface": {
@@ -6438,5 +6457,12 @@
     "maxTerminalViewQueueChunks": 128,
     "maxTerminalWriteBytes": 65536,
     "nativeCursorLifetimeMs": 300000
+  },
+  "x-runtrol-sdk-policy": {
+    "drainingAuthenticationRetry": {
+      "deadlineMs": 2400,
+      "initialDelayMs": 100,
+      "maximumDelayMs": 400
+    }
   }
 }

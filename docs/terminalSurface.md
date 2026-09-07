@@ -229,9 +229,9 @@ and does not add a private renderer API to the extension.
 may open or attach another view on that same authenticated connection. Process exit, lost authority, malformed input,
 and transport failure still end the connection.
 
-Exactly one view holds a terminal's control lease, which is input and resize authority together. Acquiring control
-transfers it: the earlier holder's next write or resize is refused with `controlConflict`, and a client that wants to
-type asks again, which is a visible, ordered transfer rather than a race. The descriptor carries `controlGeneration`,
+Exactly one holder owns a terminal's control lease, which is input and resize authority together. Acquiring control
+transfers it when the caller has at least the current holder's input precedence. The earlier holder's next write or
+resize is refused with `controlConflict`. The descriptor carries `controlGeneration`,
 a per-terminal count that climbs on every transfer and renewal, and `controlHeld`; the terminal index publishes a
 change on every transfer and release, so every window sees who leads in order. Geometry follows the holder: a
 follower cannot resize the process under another unexpired lease. A resize can acquire an unheld or expired lease
@@ -239,6 +239,25 @@ with `onlyIfFree`; the same Runtime lock checks the condition and grants control
 both win. A Runtime generation that does not support this condition refuses it without an unconditional retry.
 A window that takes control by typing sends its own size once. Writes are serialized through the one PTY writer, so every viewer observes one
 input order and one resulting output stream, and a refused write is never applied twice.
+
+Generations advertising `terminalInputPriority` recognize the owner-approved `session.input.priority` scope.
+It raises an integration above ordinary writers while it retains its current input grant and approved root. It does
+not authorize input by itself or prove that bytes came from a physical keyboard. Equal-precedence writers may take
+control from each other. Lower-precedence writers cannot displace a live higher-precedence holder, including through
+initial open or attach. A refused initial lease leaves the view usable for observation. Revocation or removal of
+input authority ends the protection; precedence is read from current authority rather than cached in the lease.
+The authenticated owner-local CLI bridge uses that same holder table with interactive precedence. Its connection
+cleanup releases only its own holder. Passive geometry updates still obey `onlyIfFree` at either precedence.
+
+Studio requests this scope when the connected generation advertises support. An existing Studio identity reviews
+the capability once: a previously complete Studio grant may add only the new scope using a generation-checked owner
+administration call, preserving its roots and signing identity. A narrowed grant is left narrowed. The review is
+persisted before requesting the change in a separate, identity-bound SecretStorage entry. Older windows can replace
+their shared credential snapshot without erasing that decision, so a lost response or later owner removal cannot
+silently elevate the identity again. An older generation defers the review until a supporting command connection
+is established.
+Draining generations retain their original authority ceiling; adding a scope at the successor never retroactively
+changes the earlier generation's input policy.
 
 `vscodeMultiWindowTerminal` is the direct product proof. It runs two simultaneous real VS Code Extension Hosts with
 separate profiles, opens the provider TUI through the first editor terminal tab, and attaches the second tab to the

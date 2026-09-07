@@ -123,6 +123,10 @@ pub const MAX_SUBSCRIPTIONS: u16 = 32;
 /// Lifetime of one server-first connection challenge.
 pub const CHALLENGE_LIFETIME_MS: u64 = 60_000;
 
+/// SDK-only patience for a draining generation that has not received the successor's current grant yet.
+/// Values are initial delay, maximum delay, and total retry deadline, in milliseconds.
+pub const DRAINING_AUTHENTICATION_RETRY_MS: (u64, u64, u64) = (100, 400, 2_400);
+
 /// Lifetime of one local integration enrollment decision.
 pub const ENROLLMENT_LIFETIME_MS: u64 = 10 * 60_000;
 

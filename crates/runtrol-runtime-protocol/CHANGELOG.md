@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Advertise owner-approved terminal input precedence and negotiate grant scope projection for older clients.
+  Missing capability fields retain the previous initialization and input behavior.
 - Terminal control acquisition accepts `onlyIfFree` to atomically refuse replacing an unexpired holder.
   Omitting it preserves the existing request and explicit control transfer.
 - `CatalogueSource` gains `providerStore`: a native session catalogue named from the provider's own store
