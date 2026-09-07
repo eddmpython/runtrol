@@ -167,7 +167,7 @@ A Codex session will never appear in the Claude app. That is not a feature gap, 
 
 ## What runtrol is not
 
-- **Not a chat client.** Rendering the conversation is something each CLI already does. runtrol moves that output without interpreting it.
+- **Not a chat client.** Each CLI renders its conversation. runtrol neither interprets conversation meaning nor stores a transcript copy. Mechanical VT processing for screen recovery and terminal control follows the [terminal contract](docs/terminalSurface.md#host).
 - **Not a model proxy.** It does not call model APIs, read tokens, or relay requests. That is not a design preference, it is a survival condition.
 - **Not an IDE.** Showing a diff is the boundary. Editing one is outside it.
 - **Not its own agent framework.** Runtrol owns no planner or autonomous loop. It offers bounded Runtime tools to provider-owned agent loops without becoming one.
