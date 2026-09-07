@@ -138,15 +138,20 @@ async fn provider_watch_checks_authority_before_its_initial_usage() {
 
 #[tokio::test]
 async fn provider_watch_revocation_wakes_without_inventory_or_usage_changes() {
-    revoked_watch(false).await;
+    revoked_watch(None).await;
 }
 
 #[tokio::test]
-async fn provider_watch_revocation_wins_over_ready_usage_and_inventory() {
-    revoked_watch(true).await;
+async fn provider_watch_revocation_wins_over_ready_usage() {
+    revoked_watch(Some(true)).await;
 }
 
-async fn revoked_watch(publish_data: bool) {
+#[tokio::test]
+async fn provider_watch_revocation_wins_over_ready_inventory() {
+    revoked_watch(Some(false)).await;
+}
+
+async fn revoked_watch(publish_usage: Option<bool>) {
     let fixture = Fixture::new();
     let (mut server, mut client) = fixture.pair().await;
     let (publishing, updates) = watch::channel(Arc::new(ProviderList {
@@ -175,10 +180,12 @@ async fn revoked_watch(publish_data: bool) {
     );
     // No await separates revocation and data publication on this current-thread executor.
     fixture.revoke();
-    if publish_data {
+    if publish_usage == Some(false) {
         publishing.send_replace(Arc::new(ProviderList {
             providers: Vec::new(),
         }));
+    }
+    if publish_usage == Some(true) {
         usage_publishing.send_replace(Arc::new(ProviderUsageList {
             providers: vec![runtrol_runtime_protocol::ProviderUsageGauge {
                 provider_id: runtrol_runtime_protocol::ProviderId::new("fixture"),
