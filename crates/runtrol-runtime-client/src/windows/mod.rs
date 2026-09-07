@@ -1,11 +1,15 @@
 //! The window registry: a VS Code window registers itself and the terminals it observes; every reader lists or
 //! watches the index.
 
+mod input;
+pub use input::{WindowInputNotification, WindowInputSubscription};
+
 use runtrol_runtime_protocol::{
     ListWindowsParams, RuntimeMethod, WatchWindowIndexParams, WatchWindowIndexResult,
-    WindowIndexChangedNotification, WindowIndexEndedNotification, WindowIndexSnapshot,
-    WindowMirrorEndParams, WindowMirrorOpenParams, WindowMirrorOpened, WindowMirrorOutputParams,
-    WindowRegisterParams, WindowRegistration, WindowUpdateParams,
+    WatchWindowInputParams, WatchWindowInputResult, WindowIndexChangedNotification,
+    WindowIndexEndedNotification, WindowIndexSnapshot, WindowMirrorEndParams,
+    WindowMirrorOpenParams, WindowMirrorOpened, WindowMirrorOutputParams, WindowRegisterParams,
+    WindowRegistration, WindowUpdateParams,
 };
 use runtrol_runtime_protocol::{
     WatchWindowRevealsParams, WatchWindowRevealsResult, WindowRevealParams,
@@ -40,6 +44,22 @@ impl<'runtime> WindowClient<'runtime> {
         self.runtime
             .call(RuntimeMethod::WindowsRegister, params)
             .await
+    }
+
+    /// Dedicate this connection to one capability-bound owner input receiver.
+    ///
+    /// # Errors
+    ///
+    /// Authority, duplicate receiver, transport, protocol, or invalid negotiated queue bound.
+    pub async fn watch_input(
+        &mut self,
+        params: &WatchWindowInputParams,
+    ) -> Result<WindowInputSubscription<'_>, ClientError> {
+        let started: WatchWindowInputResult = self
+            .runtime
+            .call(RuntimeMethod::WindowsWatchInput, params)
+            .await?;
+        WindowInputSubscription::new(self.runtime, started)
     }
 
     /// Publish the terminals this connection's window observes now.

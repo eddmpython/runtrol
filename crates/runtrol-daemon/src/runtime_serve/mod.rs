@@ -13,7 +13,9 @@ mod session_control;
 mod session_requests;
 mod terminal_stream;
 mod watch_relay;
+mod window_input;
 mod window_requests;
+pub(crate) use terminal_stream::VIEW_WRITE_DEADLINE;
 
 pub(crate) use authority::refresh_current;
 pub(crate) use connection::serve_connection;

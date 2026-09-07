@@ -3,22 +3,17 @@
 //! The Runtime's outer Job remains unchanged. A cancelled command keeps any caller lease until the
 //! kernel reports that this Job has no active processes, including descendants with closed stdio.
 
-use std::os::windows::io::{AsRawHandle as _, FromRawHandle as _, OwnedHandle};
-use std::sync::{Arc, OnceLock};
+use std::os::windows::io::{AsRawHandle as _, OwnedHandle};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use windows_sys::Win32::Foundation::{
-    ERROR_NO_MORE_FILES, GetLastError, HANDLE, INVALID_HANDLE_VALUE, WAIT_OBJECT_0, WAIT_TIMEOUT,
+    ERROR_NO_MORE_FILES, GetLastError, WAIT_OBJECT_0, WAIT_TIMEOUT,
 };
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next,
 };
-use windows_sys::Win32::System::JobObjects::{
-    AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-    JOBOBJECT_BASIC_ACCOUNTING_INFORMATION, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-    JobObjectBasicAccountingInformation, JobObjectExtendedLimitInformation,
-    QueryInformationJobObject, SetInformationJobObject, TerminateJobObject,
-};
+use windows_sys::Win32::System::JobObjects::AssignProcessToJobObject;
 use windows_sys::Win32::System::Threading::{
     GetProcessIdOfThread, OpenThread, ResumeThread, THREAD_QUERY_LIMITED_INFORMATION,
     THREAD_SUSPEND_RESUME, TerminateProcess, WaitForSingleObject,
@@ -26,52 +21,35 @@ use windows_sys::Win32::System::Threading::{
 
 use crate::error::SpawnError;
 
-mod members;
-
-enum Completion {
-    Retained(Vec<OwnedHandle>),
-    Unproven(String),
-}
+use super::job::{Job, failure, last_error, owned};
 
 pub(super) type Lease = Arc<dyn Send + Sync>;
 const STOP_DEADLINE: Duration = Duration::from_secs(5);
 const STOP_POLL: Duration = Duration::from_millis(5);
 
 pub(super) struct CommandJob {
-    handle: OwnedHandle,
+    job: Job,
     lease: Option<Lease>,
     failed_root: Option<tokio::process::Child>,
-    completion: OnceLock<Completion>,
 }
 
 impl CommandJob {
-    #[expect(
-        unsafe_code,
-        reason = "the Windows Job API has no safe wrapper; each pointer is scoped to its call"
-    )]
+    #[cfg(test)]
     pub(super) fn new(lease: Option<Lease>) -> Result<Self, SpawnError> {
-        // SAFETY: null attributes and name create a private, non-inheritable Job handle.
-        let raw = unsafe { CreateJobObjectW(core::ptr::null(), core::ptr::null()) };
-        let handle = owned(raw, "creating a command Job")?;
-        let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
-        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-        // SAFETY: the information class matches the initialized struct and the Job handle is owned.
-        if unsafe {
-            SetInformationJobObject(
-                handle.as_raw_handle(),
-                JobObjectExtendedLimitInformation,
-                core::ptr::from_ref(&limits).cast(),
-                u32::try_from(size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>()).unwrap_or(0),
-            )
-        } == 0
-        {
-            return Err(last_error("setting command Job containment"));
-        }
+        Self::for_client(lease, None)
+    }
+
+    pub(super) fn for_client(
+        lease: Option<Lease>,
+        client: Option<&Arc<super::keeper::Client>>,
+    ) -> Result<Self, SpawnError> {
         Ok(Self {
-            handle,
+            job: match client {
+                Some(client) => Job::kept(client, super::keeper::Kind::Command)?,
+                None => Job::new(1)?,
+            },
             lease,
             failed_root: None,
-            completion: OnceLock::new(),
         })
     }
 
@@ -97,19 +75,16 @@ impl CommandJob {
         })?;
         // SAFETY: Tokio owns this still-suspended process handle throughout assignment and resume.
         // The private Job is empty, has no UI limits, and permits no breakaway from the Runtime Job.
-        if unsafe { AssignProcessToJobObject(self.handle.as_raw_handle(), process) } == 0 {
+        if unsafe { AssignProcessToJobObject(self.job.handle.as_raw_handle(), process) } == 0 {
             return Err(last_error("assigning a suspended command to its Job"));
         }
+        self.job.admit(
+            // SAFETY: the suspended child owns this exact handle through the admission ACK.
+            unsafe { std::os::windows::io::BorrowedHandle::borrow_raw(process) },
+        )?;
         let thread = primary_thread(pid)?;
-        // SAFETY: primary_thread opened and rechecked the sole thread of the retained process.
-        let previous = unsafe { ResumeThread(thread.as_raw_handle()) };
-        if previous != 1 {
-            return Err(failure(
-                "resuming the contained command",
-                format!("unexpected suspend count {previous}"),
-            ));
-        }
-        Ok(())
+        self.job.ready()?;
+        resume_suspended_thread(&thread, "resuming the contained command")
     }
 
     #[expect(
@@ -117,12 +92,6 @@ impl CommandJob {
         reason = "querying and terminating this private owned Job requires the Windows API"
     )]
     pub(super) fn request_stop(&self) -> Result<(), SpawnError> {
-        let completion =
-            self.completion
-                .get_or_init(|| match members::seal(self.handle.as_raw_handle()) {
-                    Ok(handles) => Completion::Retained(handles),
-                    Err(error) => Completion::Unproven(error.to_string()),
-                });
         if let Some(child) = &self.failed_root
             && !self.failed_root_stopped()?
         {
@@ -137,50 +106,11 @@ impl CommandJob {
                 return Err(last_error("stopping a failed suspended command"));
             }
         }
-        // SAFETY: only the command's private Job is targeted; the Runtime Job is never passed here.
-        if unsafe { TerminateJobObject(self.handle.as_raw_handle(), 1) } == 0 {
-            return Err(last_error("stopping a command Job"));
-        }
-        if let Completion::Unproven(error) = completion {
-            return Err(failure(
-                "retaining command cleanup ownership",
-                error.clone(),
-            ));
-        }
-        Ok(())
+        self.job.request_stop()
     }
 
-    #[expect(
-        unsafe_code,
-        reason = "the kernel active-process count is the completion evidence for a Job"
-    )]
     pub(super) fn is_empty(&self) -> Result<bool, SpawnError> {
-        match self.completion.get() {
-            None => return Ok(false),
-            Some(Completion::Unproven(error)) => {
-                return Err(failure("checking command cleanup", error.clone()));
-            }
-            Some(Completion::Retained(handles)) if !members::stopped(handles)? => return Ok(false),
-            Some(Completion::Retained(_)) => {}
-        }
-        if !self.failed_root_stopped()? {
-            return Ok(false);
-        }
-        let mut accounting = JOBOBJECT_BASIC_ACCOUNTING_INFORMATION::default();
-        // SAFETY: the output buffer and size match this information class and outlive the call.
-        if unsafe {
-            QueryInformationJobObject(
-                self.handle.as_raw_handle(),
-                JobObjectBasicAccountingInformation,
-                core::ptr::from_mut(&mut accounting).cast(),
-                u32::try_from(size_of::<JOBOBJECT_BASIC_ACCOUNTING_INFORMATION>()).unwrap_or(0),
-                core::ptr::null_mut(),
-            )
-        } == 0
-        {
-            return Err(last_error("checking command Job completion"));
-        }
-        Ok(accounting.ActiveProcesses == 0)
+        Ok(self.failed_root_stopped()? && self.job.is_empty()?)
     }
 
     pub(super) async fn stop(&self) -> Result<(), SpawnError> {
@@ -204,7 +134,7 @@ impl CommandJob {
         // Assignment itself can fail. An empty Job then proves nothing about the suspended root.
         self.failed_root = Some(child);
         // The sole root never completed its suspended launch. Its retained handle is the whole proof.
-        self.completion = OnceLock::from(Completion::Retained(Vec::new()));
+        self.job.retain_failed_assignment();
         self.retire();
     }
 
@@ -283,6 +213,27 @@ impl CommandJob {
     }
 }
 
+/// Execute a primary thread retained from suspended creation exactly once.
+#[expect(
+    unsafe_code,
+    reason = "the owned primary-thread handle identifies the execution boundary"
+)]
+pub(crate) fn resume_suspended_thread(
+    thread: &OwnedHandle,
+    doing: &'static str,
+) -> Result<(), SpawnError> {
+    // SAFETY: the caller owns this primary-thread handle throughout the call. Both callers obtain it
+    // from a process created suspended and surrender its resume authority after this single attempt.
+    let previous = unsafe { ResumeThread(thread.as_raw_handle()) };
+    if previous != 1 {
+        return Err(failure(
+            doing,
+            format!("unexpected suspend count {previous}"),
+        ));
+    }
+    Ok(())
+}
+
 #[expect(
     unsafe_code,
     reason = "thread enumeration retains handles and rechecks process ownership before resume"
@@ -336,29 +287,6 @@ fn primary_thread(pid: u32) -> Result<OwnedHandle, SpawnError> {
             "no owned thread was present",
         )
     })
-}
-
-#[expect(
-    unsafe_code,
-    reason = "a successful Windows handle is converted once into an owning safe wrapper"
-)]
-fn owned(raw: HANDLE, doing: &'static str) -> Result<OwnedHandle, SpawnError> {
-    if raw.is_null() || raw == INVALID_HANDLE_VALUE {
-        return Err(last_error(doing));
-    }
-    // SAFETY: the caller transfers the successful newly-opened handle exactly once.
-    Ok(unsafe { OwnedHandle::from_raw_handle(raw) })
-}
-
-fn failure(doing: &'static str, detail: impl Into<String>) -> SpawnError {
-    SpawnError::Containment {
-        doing,
-        detail: detail.into(),
-    }
-}
-
-fn last_error(doing: &'static str) -> SpawnError {
-    failure(doing, std::io::Error::last_os_error().to_string())
 }
 
 #[cfg(test)]

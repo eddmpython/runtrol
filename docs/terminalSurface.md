@@ -34,10 +34,14 @@ transport or Studio navigation.
 - A terminal that fails to initialize reports that failure. If its spawned process has not yet ended, the existing
   terminal table still counts it, its native claim remains held, and the normal exit observer owns cleanup. Its
   unavailable I/O cannot accept input or resize. Cleanup does not wait while holding the shared terminal table.
-- Runtime answers terminal capability and cursor-position queries once at the host. Viewers do not race to answer.
-- The host reads a burst whole: after a partial read it waits at most one millisecond for the rest, so a fast
-  provider arrives as a few full chunks rather than hundreds of scraps and a healthy viewer never falls behind the
-  bounded ring on a burst. Bytes and order are the provider's; only the read boundary is the host's.
+- Runtime answers terminal capability and cursor-position queries through one ordered host authority. Attaching a
+  view or taking a checkpoint never produces a reply. The dependency-free
+  [terminal grammar](../crates/runtrol-terminal-protocol/src/lib.rs) owns the mechanical query vocabulary.
+- The host coalesces partial reads using the elapsed-time budget in the terminal module. OS queries and scheduling
+  consume that same budget; an already delayed read never starts a fresh series of waits. Fast bursts arrive in
+  fewer chunks. Bytes and order are the provider's; only the read boundary is the host's. A reader interruption
+  retries the read. A real I/O fault follows all bytes already
+  accepted and closes the exact terminal generation instead of leaving an unreadable live owner.
 - A viewer that crosses the ring's lag boundary receives one replacement checkpoint and then live output at the
   announced sequence; one that stops taking output for ten seconds is closed explicitly. Neither delays a healthy
   viewer, which drains its own receiver from the shared ring.
@@ -46,24 +50,85 @@ transport or Studio navigation.
   ever written on top of a partial input; the Runtime answers such a write with `outcomeUnknown`, keeps its pending
   record so a retry of the same request identity is refused rather than written again, and a repeat of a completed
   request identity is answered from the record without a second write.
-- The raw lane publishes each chunk the host read, exactly and first, under one sequence. The passive checkpoint
-  projector reads that same ring afterwards and can neither delay nor change what a viewer receives; a panic
-  inside it, or falling a whole ring behind, resets it and marks the checkpoint unavailable while the provider and
-  every viewer stay live (the provider's next full redraw, which a resize makes, brings it back). Attachment is
-  atomic at one sequence: the checkpoint is the screen after sequence `n` and live output begins at `n + 1`, never
-  both and never neither; a projector that cannot be reached within a bounded wait yields an empty checkpoint
-  that says so, with the live stream still exact from the boundary on.
+- The raw lane publishes each chunk unchanged before projection. The single terminal authority consumes every byte
+  in order. Publication waits only before overwriting its oldest unapplied chunk in the existing bounded ring;
+  slow viewers do not participate in that bound. A checkpoint serialization failure makes that snapshot unavailable.
+  Losing authoritative parser state closes input and the exact terminal generation, because resetting the cursor
+  and continuing to answer would invent terminal state. Process exit or control failure releases publication
+  backpressure so final raw output can drain. Attachment is atomic at one sequence: a complete checkpoint is the
+  screen after sequence `n` and live output begins at `n + 1`. A checkpoint that cannot be obtained within its bounded
+  wait is explicitly unavailable, with the live receiver still exact from its announced boundary.
 - A viewer keeps its own terminal's selection, focus, and scroll behavior. Runtime forwards the provider's bytes
   exactly as the host read them, mouse-mode toggles included, never switches mouse reporting on toward a viewer,
   and turns no gesture into keys; what a viewer types, a mouse report included, reaches the provider exactly as
-  written, and only the terminal answers the viewer's own terminal sends are dropped because the host already
-  answered. The Studio tab takes the provider's mouse-mode control family out at its own edge
-  (`mouseModeFilter.ts`). Provider-specific launch behavior remains declarative in the manifest `[tui]` section
+  written. Input bytes cannot distinguish a cursor report from Shift-F3, so Runtime never removes reply-shaped
+  input or combines fragments from separate viewers. Studio and the CLI bridge instead replace host-owned output
+  queries with a nonprinting string terminator before their local emulators see them. This preserves control-sequence
+  cancellation and prevents duplicate emulator answers while the public raw stream stays unchanged. The Studio tab
+  also takes the provider's mouse-mode control family out at its own edge (`mouseModeFilter.ts`). Provider-specific
+  launch behavior remains declarative in the manifest `[tui]` section
   through `new`, `resume`, `attach`, `stop`, `env`, and `env_unset`.
 - No Runtime, Studio, SDK, or phone code selects behavior by a hardcoded provider name.
 
 The screen model exists only for geometry, host query answers, and late-view snapshots. It is dropped with the hosted
 terminal and is never persisted as a conversation copy.
+
+### Exact Windows lifetime
+
+Each managed terminal owns a private nested Windows Job, bound atomically at suspended process creation. Its root
+cannot execute until final admission validates the current grant, approved filesystem identity, caller and generation.
+Slow process creation and durable worktree binding run outside the shared terminal table and courier admission locks.
+Reservations still count against the existing capacity while preparation or failed-child cleanup is pending.
+
+One independent process from the same Runtime image retains the generation's Job handles and the exact process
+objects across Runtime exit. This keeper receives only bounded structural admissions through private inherited
+handles; it receives no terminal bytes, provider credentials or transcript. The terminal and short-command classes
+use their existing separate admission limits, so a full terminal set still permits supervised stop and probe work.
+Before a suspended child runs, the keeper must acknowledge its retained scope. An uncertain acknowledgement cannot
+authorize execution or release that reservation.
+
+The root and every retained Job member must signal completion before the terminal can retire. Windows thread-pool
+waits observe those exact handles without a per-terminal timer. Sealing and stopping a Job run outside the async
+executor; membership checks reuse the same Job and validate the caller's birth identity through its retained handle.
+A failed lifetime proof retains ownership and reports an operational error instead of publishing a fabricated exit.
+
+When Runtime ends, the keeper seals the same Jobs, waits for their retained process objects, and publishes completion
+only by an exact compare-and-swap on the existing workspace ownership records. It cannot remove a worktree or replace
+a newer occupant. Recovery preserves an older or failed generation whose completion is unproved. A missing PID,
+closed pipe or vanished locator alone is not successful cleanup. The owning implementation is
+[`contain/keeper`](../crates/runtrol-childproc/src/contain/keeper/mod.rs); local shutdown and uninstall procedures are in
+[runtimeOperations.md](runtimeOperations.md#uninstall).
+
+Process completion permits console closure; output-reader completion proves the accepted final bytes were published.
+The exit event also waits for the terminal authority to consume those bytes. Both public terminal views and the
+local broker drain their remaining accepted output before publishing completion. A structural host failure remains
+distinct from the process exit code, including when that code is zero; Studio retains the last provider screen and
+reports the failure in the workbench. A generation transition does not stop a managed owner because its output is quiet or
+because it has no viewers. Unused official attachment renderers can retire under their existing grace policy, and an
+observed mirror can release its feed without stopping the external owner.
+
+### Observed-owner input
+
+An observed mirror can offer text input when its exact owning extension has registered a live input receiver.
+The Runtime descriptor publishes this availability for the caller's current authority. The operation is
+`terminals/sendText`; `terminals/write` remains the exact-byte PTY contract and refuses mirrors. Stop still belongs
+to the original terminal owner.
+
+The registration response contains a private proof for one integration, window and registration generation. The
+owner binds a dedicated `windows/watchInput` connection using that proof. Offers carry only identity and sequence.
+`windows/claimInput` checks the current sender and owner grants, approved filesystem roots, control lease, mirror,
+registration, shell PID birth and execution before moving the transient text out of its one pending slot. The owner
+checks its exact local terminal and execution again before calling the public input API. Neither a saved window
+identifier nor a replacement Extension Host can claim an earlier registration's text.
+
+The caller succeeds only after `windows/inputReceipt` confirms `ownerExtensionAccepted`. This means one public
+owner-extension input call, not exact stdin bytes, shell processing or completed model work. The public API may
+normalize newlines. A failed claim sends no input; a lost connection, expired delivery or uncertain API result leaves
+an unknown outcome that must not be replayed. Repeating a completed mutation identity returns its structural receipt
+without a second owner call. Pending text is bounded by existing terminal operation admission and released with its
+receiver; the mutation ledger keeps only an authenticator and structural result. The executable contract is owned by
+[`owner_input`](../crates/runtrol-daemon/src/runtime_terminal/owner_input/mod.rs) and
+[`window_input`](../crates/runtrol-daemon/src/runtime_serve/window_input.rs).
 
 ## Process-birth broker
 
@@ -139,6 +204,12 @@ Open and attach return a terminal descriptor, a view ID, the current base64 scre
 Output sequence numbers are per view. A lag notification includes the complete replacement screen and next sequence,
 so a client never attempts to reconstruct missing bytes semantically.
 
+Studio forwards each received chunk through the public VS Code `Pseudoterminal.onDidWrite` event. That API has no
+renderer write acknowledgement, so Studio cannot implement xterm write-callback watermarks or claim that firing the
+event proves rendering completed. Runtime owns the bounded raw ring, per-view queues and explicit lag boundary;
+VS Code owns buffering after the event. The native renderer measurement below observes actual consumption separately
+and does not add a private renderer API to the extension.
+
 `terminals/detach` ends only the selected view and returns its dedicated connection to ordinary request mode. An SDK
 may open or attach another view on that same authenticated connection. Process exit, lost authority, malformed input,
 and transport failure still end the connection.
@@ -175,18 +246,32 @@ sample in each phase enters through VS Code's public `Terminal.sendText` surface
 `Pseudoterminal.handleInput` callback to measure Studio, the public TypeScript client, Runtime authorization, PTY echo,
 and cross-window fan-out without charging the test-control bounce through the renderer process to the product path.
 It records independent raw sample series for sender echo, second-view delivery, and writer handoff after the first
-window closes. Summaries are recomputed from those bounded series rather than trusted as standalone numbers.
-
-The 2026-08-31 deterministic two-window run used 21 warm samples per phase. Owner echo and second-window fan-out
-each measured 5 ms p95, and writer handoff measured 4 ms p95. Their separate first interactions measured 5 ms,
-5 ms, and 10 ms respectively. The preceding recorded run measured 110 ms, 110 ms, and 14 ms p95. These are observed
-results, not replacement ceilings; the executable catalogue below remains the release contract.
+window closes. Those observations finish at Studio's output callback, before VS Code paints the terminal. They do
+not measure source-read to visible-frame latency. Summaries are recomputed from bounded sample series; historical
+run values belong to their Git evidence, and the executable catalogue remains the release contract.
 
 [`performance-budget.json`](../extensions/runtrol-vscode/performance-budget.json) owns the first-use ceiling, warm p95
 ceiling, exact sample count, and installed-provider Runtime-client ceiling. The deterministic and real-provider gates
 read that catalogue directly. [`vscodeMultiWindowTerminal.py`](../tests/audit/vscodeMultiWindowTerminal.py) rejects
 missing samples, invalid summaries, a duplicate owner, a replaced process generation, or any task-owned survivor.
 Documentation does not carry a second copy of those values.
+
+A source-read-to-render measurement needs a separate, test-only observation boundary. Core's existing `test-support`
+feature can observe a successful original reader return before coalescing, then its raw publication ordinal and the
+exact checkpoint/live attachment origin. Public sequence one is relative to that attachment. A finite native probe
+joins the exact terminal and two view IDs to the actual Studio decoder/filter output lengths, xterm's write callback,
+and the following `onRender` watermark in both windows. The reported upper bound ends at the later renderer
+acknowledgement. The write callback alone means parsed output; neither it nor `onRender` proves DXGI presentation or
+physical display scanout. The probe verifies the native QPC and renderer clock relationship on the actual host.
+
+Only identities, ordinals, lengths, eligibility flags and times enter this observation. Provider bytes, fragments and
+content hashes are not retained. The actual decoder and presentation filters remain authoritative: split UTF-8 and
+unfinished VT carries delay eligibility, and missing mappings, replacement checkpoints, overflow or unresolved final
+output cannot count as successful samples. Report every read in the predeclared warm interval, with setup, ineligible
+and unresolved counts separately. A first-read-per-input distribution is a different statistic and cannot replace
+the complete eligible output distribution. Record observer overhead, GPU configuration and exact development build;
+repeat after affected source changes. This is a bounded native acceptance tool, not a shipping trace or public timing
+field.
 
 Fresh open needs `session.start`; native resume needs `session.resume`; listing and viewing need
 `session.output.read`; write and lifecycle mutations need the corresponding input or stop scope plus an unexpired
@@ -218,6 +303,8 @@ current grant and proof after waiting for control state, before issuing an initi
 screen snapshot.
 
 A proof's lifetime begins when its filesystem check finishes, so delayed observation cannot renew old authority.
+Each view schedules its next refresh from that shared completion time, including after admission or an inbound
+response replaces its notification receiver.
 A denied or failed filesystem check invalidates its shared proof. A refresh timeout provides no new authority: a
 view can use its prior successful proof only until that proof's original expiration. Every output frame, including
 exit drain and lag replacement, checks freshness before sending, and quiet views wake at the same absolute expiry.

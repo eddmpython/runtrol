@@ -350,6 +350,7 @@ pub(super) fn control_failure(id: JsonRpcId, failure: &RuntimeControlFailure) ->
 
 /// Convert a session owner's typed reply into the public JSON-RPC response.
 pub(super) async fn runtime_control_answer(
+    composed: &crate::Composed,
     id: JsonRpcId,
     reply: RuntimeControlReply,
     returning: &mpsc::UnboundedSender<RuntimeReturned>,
@@ -372,7 +373,7 @@ pub(super) async fn runtime_control_answer(
             None => runtime_owner_stopped(id),
         },
         RuntimeControlReply::Cooling(cooling) => {
-            match perform_runtime_cool(cooling, returning.clone()).await {
+            match perform_runtime_cool(composed, cooling, returning.clone()).await {
                 Some(Ok(())) => Answer::success(id, &EmptyResult {}),
                 Some(Err(failure)) => control_failure(id, &failure),
                 None => runtime_owner_stopped(id),
@@ -387,11 +388,8 @@ pub(super) async fn runtime_control_answer(
     }
 }
 
-#[expect(
-    clippy::manual_ok_err,
-    reason = "Result::ok is forbidden because owner channel loss must remain explicit"
-)]
 async fn perform_runtime_cool(
+    composed: &crate::Composed,
     cooling: RuntimeCooling,
     returning: mpsc::UnboundedSender<RuntimeReturned>,
 ) -> Option<Result<(), RuntimeControlFailure>> {
@@ -400,9 +398,29 @@ async fn perform_runtime_cool(
         agent: handed_agent,
         reservation,
     } = cooling;
+    let session = reservation.session();
     let guard = RuntimeCoolGuard::new(mutation, reservation, returning.clone());
     let agent = handed_agent;
     let outcome = agent.close(CloseMode::graceful()).await;
+    let (guard, recorded) = if outcome.is_ok() {
+        match crate::serve::record_completed_close(composed, session, guard).await {
+            Ok((guard, result)) => (
+                guard,
+                result.map_err(|message| RuntimeControlFailure {
+                    kind: RuntimeErrorKind::Internal,
+                    message: message.into(),
+                }),
+            ),
+            Err(message) => {
+                return Some(Err(RuntimeControlFailure {
+                    kind: RuntimeErrorKind::Internal,
+                    message: message.into(),
+                }));
+            }
+        }
+    } else {
+        (guard, Ok(()))
+    };
     let reservation = guard.take()?;
     let (answered, hearing) = oneshot::channel();
     if returning
@@ -417,7 +435,7 @@ async fn perform_runtime_cool(
         return None;
     }
     match hearing.await {
-        Ok(result) => Some(result),
+        Ok(result) => Some(result.and(recorded)),
         Err(_) => None,
     }
 }

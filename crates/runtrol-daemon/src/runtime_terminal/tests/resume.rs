@@ -27,7 +27,7 @@ impl Fixture {
         let process = runtrol_childproc::process_identity(std::process::id()).unwrap();
         let ticket = SpawnTicket::new(process, TerminalId::now(), TerminalId::now(), 1).unwrap();
         let workspace = {
-            let mut controller = composed.isolated_workspaces.lock().await;
+            let controller = &composed.isolated_workspaces;
             let prepared = controller
                 .prepare_terminal(&composed.containment, &ticket, &project)
                 .await
@@ -115,8 +115,6 @@ async fn original_resume_only_grant_keeps_project_visibility_without_fabricated_
         fixture
             .composed
             .isolated_workspaces
-            .lock()
-            .await
             .resume_binding(&fixture.workspace)
             .unwrap()
             .is_some()
@@ -371,9 +369,18 @@ async fn an_approved_owned_descendant_cannot_change_the_recorded_native_cwd() {
 }
 
 #[tokio::test]
-async fn worktree_observations_complete_while_an_unrelated_controller_operation_is_held() {
+async fn worktree_observations_complete_while_its_mutation_lease_is_held() {
     let fixture = Fixture::new().await;
-    let controller = fixture.composed.isolated_workspaces.lock().await;
+    let binding = fixture
+        .composed
+        .isolated_workspaces
+        .resume_binding(&fixture.workspace)
+        .unwrap()
+        .unwrap();
+    let operation = crate::isolated_workspace::tests::hold_operation(
+        fixture.composed.home.paths().isolated_workspaces(),
+        &binding.workspace_id,
+    );
     let composed = Arc::clone(&fixture.composed);
     let authority = fixture.authority.clone();
     let ordinary = fixture.scratch.project.clone();
@@ -414,7 +421,7 @@ async fn worktree_observations_complete_while_an_unrelated_controller_operation_
     let before_release =
         tokio::time::timeout(std::time::Duration::from_secs(2), &mut observations).await;
     let completed_while_held = before_release.is_ok();
-    drop(controller);
+    drop(operation);
     // Finish even the red-path reader before the fixture removes its owned files.
     let observed = match before_release {
         Ok(result) => result.unwrap(),
@@ -425,7 +432,7 @@ async fn worktree_observations_complete_while_an_unrelated_controller_operation_
     };
     assert!(
         completed_while_held,
-        "read-only observations must finish before the controller operation is released"
+        "read-only observations must finish before the mutation lease is released"
     );
     assert_eq!(observed, ((true, true), (true, true, true)));
 }

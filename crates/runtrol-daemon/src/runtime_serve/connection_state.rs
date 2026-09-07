@@ -74,6 +74,7 @@ pub(super) enum Watching {
         last: runtrol_runtime_protocol::WindowIndexSnapshot,
         updates: watch::Receiver<u64>,
     },
+    WindowInput(crate::window_registry::input::InputReceiver),
     WindowReveals {
         subscription_id: String,
         requests: tokio::sync::broadcast::Receiver<crate::window_registry::RevealRequest>,

@@ -366,6 +366,7 @@ async fn answer(
     }
     let discovered = discover(conversation, composed, &request).await;
     let prepared = complete_prepare_for(
+        composed,
         &request,
         discovered,
         reserved.as_ref().map(|one| one.reservation.session()),
@@ -439,6 +440,7 @@ pub(crate) async fn discover(
 
 /// Finish provider work for an optional slot reserved by the session owner.
 pub(crate) async fn complete_prepare_for(
+    composed: &Composed,
     request: &Request,
     discovered: Discovered,
     session: Option<SessionId>,
@@ -502,6 +504,7 @@ pub(crate) async fn complete_prepare_for(
         ) => Prepared::Start {
             provider,
             result: open_driver(
+                composed,
                 driver.as_ref(),
                 session,
                 workspace,
@@ -519,6 +522,7 @@ pub(crate) async fn complete_prepare_for(
         ) => Prepared::Resume {
             provider,
             result: open_driver(
+                composed,
                 driver.as_ref(),
                 session,
                 workspace,
@@ -937,6 +941,16 @@ pub(crate) async fn prepare_isolated_workspace(
     composed: &Composed,
     request: &Request,
 ) -> Prepared {
+    prepare_isolated_workspace_retaining(conversation, composed, request, None).await
+}
+
+/// A release keeps its session-owner exclusion until every contained Git command completes.
+pub(crate) async fn prepare_isolated_workspace_retaining(
+    conversation: &Conversation,
+    composed: &Composed,
+    request: &Request,
+    retained: Option<std::sync::Arc<crate::serve::WorkspaceCleanupGuard>>,
+) -> Prepared {
     if !conversation.greeted()
         || crate::scope::allowed(
             conversation.caller(),
@@ -954,8 +968,6 @@ pub(crate) async fn prepare_isolated_workspace(
         } => {
             let response = composed
                 .isolated_workspaces
-                .lock()
-                .await
                 .prepare(&composed.containment, request_id, project)
                 .await
                 .unwrap_or_else(|message| refuse(&message));
@@ -970,18 +982,21 @@ pub(crate) async fn prepare_isolated_workspace(
             session_id,
             workspace,
         } => {
-            let response = composed
-                .isolated_workspaces
-                .lock()
-                .await
-                .release(
-                    &composed.containment,
-                    workspace_id.as_deref(),
-                    session_id.as_deref(),
-                    workspace,
-                )
-                .await
-                .unwrap_or_else(|message| refuse(&message));
+            let response = if let Some(retained) = retained {
+                composed
+                    .isolated_workspaces
+                    .release_retaining(
+                        &composed.containment,
+                        workspace_id.as_deref(),
+                        session_id.as_deref(),
+                        workspace,
+                        retained,
+                    )
+                    .await
+            } else {
+                Err("the worktree release has no session-owner reservation".to_owned())
+            }
+            .unwrap_or_else(|message| refuse(&message));
             Prepared::IsolatedWorkspaceRelease {
                 workspace_id: workspace_id.clone(),
                 session_id: session_id.clone(),
@@ -1030,6 +1045,8 @@ pub(crate) async fn answer_prepared(
                     ),
                     push_public_key: push_public_key(composed, &conversation.caller),
                     build_digest: crate::build_identity::build_digest().map(Into::into),
+                    process_completion: process_completion(composed, &conversation.caller)
+                        .map(Box::new),
                 })
             }
             Err(ours) => Reply::One(refuse(&format!(
@@ -1108,23 +1125,18 @@ pub(crate) async fn answer_prepared(
             other => mismatched(other),
         },
 
-        Request::WorkspaceIsolateList => match composed.isolated_workspaces.try_lock() {
-            Ok(controller) => Reply::One(controller.list()),
-            Err(_) => Reply::One(refuse("the isolated workspace controller lock is damaged")),
-        },
+        Request::WorkspaceIsolateList => Reply::One(composed.isolated_workspaces.list()),
 
         Request::WorkspaceIsolateBind {
             workspace_id,
             session_id,
             workspace,
-        } => match composed.isolated_workspaces.try_lock() {
-            Ok(mut controller) => Reply::One(
-                controller
-                    .bind(&workspace_id, &session_id, &workspace)
-                    .unwrap_or_else(|message| refuse(&message)),
-            ),
-            Err(_) => Reply::One(refuse("the isolated workspace controller lock is damaged")),
-        },
+        } => Reply::One(
+            composed
+                .isolated_workspaces
+                .bind(&workspace_id, &session_id, &workspace)
+                .unwrap_or_else(|message| refuse(&message)),
+        ),
 
         Request::ProviderUpdate { provider } => {
             let Ok(provider) = ProviderId::parse(&provider) else {
@@ -1455,6 +1467,31 @@ pub(crate) async fn answer_prepared(
     }
 }
 
+fn process_completion(
+    composed: &Composed,
+    caller: &Caller,
+) -> Option<runtrol_ipc::wire::ProcessCompletion> {
+    #[cfg(windows)]
+    {
+        if !matches!(caller, Caller::AtTheMachine) {
+            return None;
+        }
+        composed.containment.keeper_identity().map(|identity| {
+            runtrol_ipc::wire::ProcessCompletion {
+                runtime_pid: identity.runtime().pid(),
+                runtime_started: identity.runtime().started(),
+                keeper_pid: identity.keeper().pid(),
+                keeper_started: identity.keeper().started(),
+            }
+        })
+    }
+    #[cfg(not(windows))]
+    {
+        _ = (composed, caller);
+        None
+    }
+}
+
 fn push_public_key(composed: &Composed, caller: &Caller) -> Option<Box<str>> {
     if !matches!(caller, Caller::Device { .. }) {
         return None;
@@ -1604,6 +1641,7 @@ async fn open(
 
 /// Build and open one driver process outside the single session owner.
 async fn open_driver(
+    composed: &Composed,
     driver: &dyn Provider,
     session: Option<SessionId>,
     workspace: &str,
@@ -1624,6 +1662,9 @@ async fn open_driver(
         reasoning_effort: None,
         permission,
     };
+    crate::serve::reopen_structured_workspace(composed, intent.session, intent.workspace.clone())
+        .await
+        .map_err(|message| refuse(&message))?;
     match driver.open(intent.clone()).await {
         Ok(agent) => Ok(Opened { intent, agent }),
         Err(error) => Err(Response::Failed(WireError::from_provider(&error))),
@@ -2467,12 +2508,17 @@ mod tests {
                 device,
                 push_public_key,
                 build_digest,
+                process_completion,
             }) => {
                 assert_eq!(wire, runtrol_ipc::WIRE_VERSION);
                 assert!(!providers.is_empty(), "a fresh install has providers");
                 assert!(providers.iter().any(|one| one.usable));
                 assert!(device.is_none());
                 assert!(push_public_key.is_none());
+                assert!(
+                    process_completion.is_none(),
+                    "a local test containment has no keeper proof"
+                );
                 assert!(
                     build_digest.is_some_and(|digest| digest.len() == 64),
                     "the greeting announces this executable's digest for supersession",

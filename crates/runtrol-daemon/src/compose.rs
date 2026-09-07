@@ -42,6 +42,10 @@ pub enum ComposeError {
     #[error("cannot contain the agents this daemon would start: {0}")]
     Containment(#[from] runtrol_childproc::SpawnError),
 
+    /// Blocking startup preparation ended before a complete Runtime was assembled.
+    #[error("Runtime assembly failed: {0}")]
+    Assembly(String),
+
     /// runtrol's own directory could not be established.
     #[error(transparent)]
     Home(#[from] HomeError),
@@ -297,7 +301,7 @@ pub struct Composed {
     /// The minimal session-pointer database. It has no type capable of holding conversation content.
     pub store: Arc<Store>,
     /// Core-owned ordinary-chat linked worktrees and their exact cleanup state.
-    pub(crate) isolated_workspaces: Mutex<crate::isolated_workspace::IsolatedWorkspaceController>,
+    pub(crate) isolated_workspaces: crate::isolated_workspace::IsolatedWorkspaceController,
     /// Local-only pending approval challenges for public Runtime integrations.
     pub(crate) integration_admin: crate::integration_admin::IntegrationAdmin,
     /// Commit-coupled integration grants read by public Runtime hot paths without a database transaction.
@@ -456,7 +460,29 @@ impl Composed {
         let guard_root = home.paths().process_guards().as_std_path().to_owned();
         let guard_directory = guard_root.join(generation.tag());
         runtrol_childproc::sweep_stale_guard_directories(&guard_root, &guard_directory);
+        #[cfg(not(windows))]
         let containment = Arc::new(Containment::establish_tracked(&guard_directory)?);
+        #[cfg(windows)]
+        let containment = {
+            let directory = home.paths().root();
+            let identity = ProjectRootIdentity::read(directory).map_err(|error| {
+                runtrol_childproc::SpawnError::Containment {
+                    doing: "binding the keeper to the Runtime home",
+                    detail: error.to_string(),
+                }
+            })?;
+            let target = runtrol_childproc::KeeperTarget::new(
+                directory.as_std_path().to_owned(),
+                identity.to_bytes(),
+            )?;
+            let limits = runtrol_childproc::KeeperLimits::new(
+                u16::try_from(runtrol_core::session::MAX_HOT)
+                    .map_err(|error| ComposeError::Assembly(error.to_string()))?,
+                u16::try_from(crate::MAX_BLOCKING_PROVIDER_OPERATIONS)
+                    .map_err(|error| ComposeError::Assembly(error.to_string()))?,
+            )?;
+            Arc::new(Containment::establish_kept(&target, limits)?)
+        };
         let registry = load(&home, builtin);
         let isolated_workspaces = crate::isolated_workspace::IsolatedWorkspaceController::open(
             home.paths().isolated_workspaces().clone(),
@@ -469,7 +495,7 @@ impl Composed {
         Ok(Self {
             home,
             store: Arc::new(store),
-            isolated_workspaces: Mutex::new(isolated_workspaces),
+            isolated_workspaces,
             integration_admin: crate::integration_admin::IntegrationAdmin::default(),
             integration_authority,
             generation_authority: crate::generation_authority::GenerationAuthorityRelay::default(),
@@ -543,7 +569,7 @@ impl Composed {
         Ok(Self {
             home,
             store: Arc::new(store),
-            isolated_workspaces: Mutex::new(isolated_workspaces),
+            isolated_workspaces,
             integration_admin: crate::integration_admin::IntegrationAdmin::default(),
             integration_authority,
             generation_authority: crate::generation_authority::GenerationAuthorityRelay::default(),

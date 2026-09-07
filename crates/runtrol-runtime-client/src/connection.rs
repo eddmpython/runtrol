@@ -7,14 +7,26 @@ use runtrol_runtime_protocol::MAX_FRAME_BYTES;
 
 /// One local public Runtime byte stream.
 pub(crate) struct Connection {
-    stream: platform::Stream,
+    stream: Option<platform::Stream>,
 }
 
 impl Connection {
     /// Connect to the validated locator endpoint.
     pub(crate) async fn connect(endpoint: &str) -> Result<Self, ClientError> {
         Ok(Self {
-            stream: platform::connect(endpoint).await?,
+            stream: Some(platform::connect(endpoint).await?),
+        })
+    }
+
+    /// End this exact connection, including a cancelled dedicated stream operation.
+    pub(crate) fn close(&mut self) {
+        drop(self.stream.take());
+    }
+
+    fn stream(&mut self) -> Result<&mut platform::Stream, ClientError> {
+        self.stream.as_mut().ok_or_else(|| ClientError::Transport {
+            doing: "using a closed connection",
+            detail: "the dedicated Runtime connection ended".to_owned(),
         })
     }
 
@@ -29,15 +41,16 @@ impl Connection {
         let length = u32::try_from(payload.len()).map_err(|_| {
             ClientError::Protocol("the frame length does not fit its header".to_owned())
         })?;
-        self.stream
+        let stream = self.stream()?;
+        stream
             .write_all(&length.to_be_bytes())
             .await
             .map_err(|error| transport("sending a frame header", &error))?;
-        self.stream
+        stream
             .write_all(payload)
             .await
             .map_err(|error| transport("sending a frame payload", &error))?;
-        self.stream
+        stream
             .flush()
             .await
             .map_err(|error| transport("flushing a frame", &error))
@@ -46,7 +59,8 @@ impl Connection {
     /// Receive one bounded JSON payload. The untrusted length is checked before allocation.
     pub(crate) async fn receive(&mut self) -> Result<Vec<u8>, ClientError> {
         let mut header = [0_u8; 4];
-        self.stream
+        let stream = self.stream()?;
+        stream
             .read_exact(&mut header)
             .await
             .map_err(|error| transport("receiving a frame header", &error))?;
@@ -59,7 +73,7 @@ impl Connection {
             )));
         }
         let mut payload = vec![0_u8; length];
-        self.stream
+        stream
             .read_exact(&mut payload)
             .await
             .map_err(|error| transport("receiving a frame payload", &error))?;
@@ -162,7 +176,9 @@ mod tests {
             .write_all(&u32::MAX.to_be_bytes())
             .await
             .expect("write hostile header");
-        let mut connection = Connection { stream: client };
+        let mut connection = Connection {
+            stream: Some(client),
+        };
         assert!(matches!(
             connection.receive().await,
             Err(ClientError::Protocol(_))
@@ -177,7 +193,9 @@ mod tests {
             .write_all(&u32::MAX.to_be_bytes())
             .await
             .expect("write hostile header");
-        let mut connection = Connection { stream };
+        let mut connection = Connection {
+            stream: Some(stream),
+        };
         assert!(matches!(
             connection.receive().await,
             Err(ClientError::Protocol(_))

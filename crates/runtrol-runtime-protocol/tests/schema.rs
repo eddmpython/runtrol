@@ -3,6 +3,23 @@
 use runtrol_runtime_protocol::{PUBLIC_SCHEMA_NAME, public_schema};
 
 #[test]
+fn an_unread_account_is_a_distinct_public_verdict() {
+    let encoded = serde_json::json!({
+        "status": "unread", "why": "account read timed out", "checkedAtMs": 25,
+    });
+    let account: runtrol_runtime_protocol::ProviderAccount =
+        serde_json::from_value(encoded.clone()).expect("failed reads have a public state");
+    assert_eq!(
+        account.status,
+        runtrol_runtime_protocol::ProviderAccountStatus::Unread
+    );
+    assert_eq!(
+        serde_json::to_value(account).expect("account round trip"),
+        encoded
+    );
+}
+
+#[test]
 fn checked_schema_is_the_exact_generated_public_contract() {
     let generated = public_schema().expect("public schema must serialize");
     let mut rendered = serde_json::to_string_pretty(&generated).expect("public schema must render");

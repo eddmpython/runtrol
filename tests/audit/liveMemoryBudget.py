@@ -6,7 +6,7 @@ hot-session admission set, then opens four real watch connections on an isolated
 Every admitted watcher
 must receive the complete payload, every rejected watcher must receive an explicit lag boundary, and RSS is sampled
 from outside the daemon through the operating system. The provider child and watch clients are deliberately excluded
-from the daemon's budget.
+from the Runtime and keeper budget.
 
 Usage::
 
@@ -16,19 +16,18 @@ Usage::
 
 from __future__ import annotations
 
-import ctypes
 import json
 import math
 import os
 import subprocess
 import sys
-import tempfile
 import time
 from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from pathlib import Path
 
 import genericAcpSmoke as acp
+import runtimeFootprint as footprint
 
 MIB = 1024 * 1024
 # Hosted Linux idle measurement is 39.6 MiB, while the same executable idles below 20 MiB elsewhere. Linux therefore
@@ -109,6 +108,7 @@ def watchProblems(outputs: list[bytes], reply_bytes: int, admitted: bool) -> lis
 
 def selftest() -> int:
     """Prove memory and delivery defects each make the gate red."""
+    footprint.selftest()
     green = Evidence(baseline=12 * MIB, peak=18 * MIB, residual=13 * MIB)
     defects = {
         "hard ceiling": replace(green, peak=HARD_CEILING + 1),
@@ -164,45 +164,12 @@ def selftest() -> int:
 
 
 def windowsResident(pid: int) -> int:
-    """Read one process working set through the Windows process API."""
-
-    class Counters(ctypes.Structure):
-        _fields_ = [
-            ("cb", ctypes.c_ulong),
-            ("page_fault_count", ctypes.c_ulong),
-            ("peak_working_set_size", ctypes.c_size_t),
-            ("working_set_size", ctypes.c_size_t),
-            ("quota_peak_paged_pool_usage", ctypes.c_size_t),
-            ("quota_paged_pool_usage", ctypes.c_size_t),
-            ("quota_peak_non_paged_pool_usage", ctypes.c_size_t),
-            ("quota_non_paged_pool_usage", ctypes.c_size_t),
-            ("pagefile_usage", ctypes.c_size_t),
-            ("peak_pagefile_usage", ctypes.c_size_t),
-        ]
-
-    query_information = 0x0400
-    read_memory = 0x0010
-    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
-    psapi = ctypes.WinDLL("psapi", use_last_error=True)
-    kernel.OpenProcess.argtypes = [ctypes.c_ulong, ctypes.c_int, ctypes.c_ulong]
-    kernel.OpenProcess.restype = ctypes.c_void_p
-    kernel.CloseHandle.argtypes = [ctypes.c_void_p]
-    psapi.GetProcessMemoryInfo.argtypes = [
-        ctypes.c_void_p,
-        ctypes.POINTER(Counters),
-        ctypes.c_ulong,
-    ]
-    handle = kernel.OpenProcess(query_information | read_memory, False, pid)
-    if not handle:
-        raise OSError(ctypes.get_last_error(), "OpenProcess failed")
+    """Read an exact process HANDLE; live cohorts retain it across the whole measurement."""
+    process = footprint.WindowsProcess(pid)
     try:
-        counters = Counters()
-        counters.cb = ctypes.sizeof(counters)
-        if not psapi.GetProcessMemoryInfo(handle, ctypes.byref(counters), counters.cb):
-            raise OSError(ctypes.get_last_error(), "GetProcessMemoryInfo failed")
-        return int(counters.working_set_size)
+        return process.resident()
     finally:
-        kernel.CloseHandle(handle)
+        process.close()
 
 
 def resident(pid: int) -> int:
@@ -227,17 +194,17 @@ def resident(pid: int) -> int:
     return int(measured.stdout.strip()) * 1024
 
 
-def sample(pid: int, seconds: float) -> int:
+def sample(pid: int | footprint.Cohort, seconds: float) -> int:
     """Return the largest RSS observed during a fixed window."""
     deadline = time.monotonic() + seconds
     peak = 0
     while time.monotonic() < deadline:
-        peak = max(peak, resident(pid))
+        peak = max(peak, pid.resident(resident) if isinstance(pid, footprint.Cohort) else resident(pid))
         time.sleep(0.01)
     return peak
 
 
-def settledResidual(pid: int, baseline: int) -> int:
+def settledResidual(pid: int | footprint.Cohort, baseline: int) -> int:
     """Require one complete RSS window to settle within the residual ceiling."""
     observations = (
         sample(pid, RESIDUAL_WINDOW_SECONDS) for _ in range(RESIDUAL_SETTLE_WINDOWS)
@@ -334,16 +301,18 @@ def finishBackgroundPreparation(binary: Path, environment: dict[str, str]) -> No
 
 def exerciseHotSet(binary: Path, fixture: Path) -> Evidence:
     """Measure the exact eight-session hot admission ceiling without conversation payloads."""
-    with tempfile.TemporaryDirectory(prefix="runtrol-hot-set-memory-") as raw_home:
-        home = Path(raw_home)
+    ownedHome = footprint.Home("runtrol-hot-set-memory-")
+    with ownedHome as home:
         manifest(home, fixture, REPLY_BYTES)
         environment = acp.environment(home, fixture)
         # The daemon narrates its boot and close steps under this switch; a "did not become ready"
         # then carries the last step reached instead of silence (measured 2026-08-27 on macOS).
         environment["RUNTROL_CLOSE_TRACE"] = "1"
         daemon = acp.startDaemon(binary, environment, home)
+        cohort: footprint.Cohort | None = None
         sessions: list[str] = []
         try:
+            cohort = footprint.Cohort(daemon, ownedHome)
             warm_workspace = home / "warm-workspace"
             warm_workspace.mkdir()
             if sys.platform.startswith("linux"):
@@ -353,7 +322,7 @@ def exerciseHotSet(binary: Path, fixture: Path) -> Evidence:
                 # than the first real session. A models request synchronizes the same preparation lane without that
                 # cleanup boundary, so this measurement isolates the eight sessions it claims to measure.
                 finishBackgroundPreparation(binary, environment)
-            baseline = sample(daemon.pid, 0.5)
+            baseline = sample(cohort, 0.5)
             peak = baseline
             for index in range(HOT_SESSIONS):
                 workspace = home / f"workspace-{index + 1}"
@@ -362,19 +331,19 @@ def exerciseHotSet(binary: Path, fixture: Path) -> Evidence:
                 if acp.SESSION_RE.fullmatch(session) is None:
                     raise Failed(f"hot-set start returned no session identifier: {session!r}")
                 sessions.append(session)
-                peak = max(peak, sample(daemon.pid, 0.1))
+                peak = max(peak, sample(cohort, 0.1))
 
             listing = acp.command(binary, environment, ["list"])
             for session in sessions:
                 row = next((line for line in listing.splitlines() if line.startswith(session)), "")
                 if "  idle  " not in row:
                     raise Failed(f"the eight-session set did not keep {session} hot and idle: {row!r}")
-            peak = max(peak, sample(daemon.pid, 0.5))
+            peak = max(peak, sample(cohort, 0.5))
             for session in reversed(sessions):
                 acp.command(binary, environment, ["close", session, "--now"])
             sessions.clear()
             time.sleep(0.25)
-            residual = settledResidual(daemon.pid, baseline)
+            residual = settledResidual(cohort, baseline)
             evidence = Evidence(baseline=baseline, peak=peak, residual=residual)
             found = hotSetProblems(evidence)
             if found:
@@ -383,7 +352,7 @@ def exerciseHotSet(binary: Path, fixture: Path) -> Evidence:
                     + f" (baseline={baseline}, peak={peak}, residual={residual})"
                 )
             return evidence
-        except (Failed, acp.Failed, OSError, subprocess.SubprocessError) as error:
+        except (Failed, footprint.Failed, acp.Failed, OSError, subprocess.SubprocessError) as error:
             if daemon.poll() is not None:
                 stdout, stderr = daemon.communicate(timeout=2.0)
                 detail = (stderr or stdout or "daemon exited without diagnostics").strip()
@@ -396,15 +365,18 @@ def exerciseHotSet(binary: Path, fixture: Path) -> Evidence:
                 except (acp.Failed, OSError, subprocess.SubprocessError):
                     # ok: the isolated daemon is stopped next, which reaps every remaining gate-owned session.
                     pass
-            acp.stopDaemon(daemon)
+            if cohort is not None:
+                cohort.stop()
+            else:
+                acp.stopDaemon(daemon)
 
 
 def exerciseCase(
     binary: Path, fixture: Path, reply_bytes: int, admitted: bool
 ) -> Evidence:
     """Measure one admitted event or three rejected events across four real watch connections."""
-    with tempfile.TemporaryDirectory(prefix="runtrol-live-memory-") as raw_home:
-        home = Path(raw_home)
+    ownedHome = footprint.Home("runtrol-live-memory-")
+    with ownedHome as home:
         workspace = home / "workspace"
         workspace.mkdir()
         manifest(home, fixture, reply_bytes)
@@ -413,9 +385,12 @@ def exerciseCase(
         # then carries the last step reached instead of silence (measured 2026-08-27 on macOS).
         environment["RUNTROL_CLOSE_TRACE"] = "1"
         daemon = acp.startDaemon(binary, environment, home)
+        cohort: footprint.Cohort | None = None
         watchers: list[subprocess.Popen[str]] = []
+        prompt: subprocess.Popen[str] | None = None
         outputPaths: list[Path] = []
         try:
+            cohort = footprint.Cohort(daemon, ownedHome)
             # Daemon readiness deliberately precedes asynchronous provider preparation. Serialize with that lane so
             # fixed startup code pages are present in the baseline instead of being charged to the first session.
             # Linux uses an empty session because its cleanup can return allocator pages. Windows EmptyWorkingSet
@@ -425,7 +400,7 @@ def exerciseCase(
                 warmIdleDaemon(binary, environment, workspace)
             elif sys.platform == "win32":
                 finishBackgroundPreparation(binary, environment)
-            baseline = sample(daemon.pid, 0.5)
+            baseline = sample(cohort, 0.5)
             peak = baseline
             cases = 1 if admitted else 3
             for case in range(cases):
@@ -461,7 +436,7 @@ def exerciseCase(
                 )
                 deadline = time.monotonic() + acp.TURN_WAIT_S
                 while time.monotonic() < deadline:
-                    peak = max(peak, resident(daemon.pid))
+                    peak = max(peak, cohort.resident(resident))
                     if prompt.poll() is not None and outputsReady(outputPaths, reply_bytes, admitted):
                         break
                     time.sleep(0.005)
@@ -474,7 +449,7 @@ def exerciseCase(
                 if not outputsReady(outputPaths, reply_bytes, admitted):
                     expected = "complete payload" if admitted else "explicit lag boundary"
                     raise Failed(f"not every watcher received the {expected}")
-                peak = max(peak, sample(daemon.pid, 0.5))
+                peak = max(peak, sample(cohort, 0.5))
 
                 for watcher in watchers:
                     stop(watcher)
@@ -485,7 +460,7 @@ def exerciseCase(
                     raise Failed("; ".join(deliveryProblems))
                 acp.command(binary, environment, ["close", session, "--now"])
                 time.sleep(0.25)
-            residual = settledResidual(daemon.pid, baseline)
+            residual = settledResidual(cohort, baseline)
             evidence = Evidence(baseline=baseline, peak=peak, residual=residual)
             found = problems(evidence, enforce_hot_increment=admitted)
             if found:
@@ -494,7 +469,7 @@ def exerciseCase(
                     + f" (baseline={baseline}, peak={peak}, residual={residual})"
                 )
             return evidence
-        except (Failed, acp.Failed, OSError, subprocess.SubprocessError) as error:
+        except (Failed, footprint.Failed, acp.Failed, OSError, subprocess.SubprocessError) as error:
             if daemon.poll() is None:
                 time.sleep(0.1)
             if daemon.poll() is not None:
@@ -503,14 +478,20 @@ def exerciseCase(
                 raise Failed(f"{error}; daemon exited: {detail}") from error
             raise
         finally:
+            if prompt is not None:
+                stop(prompt)
             for watcher in watchers:
                 stop(watcher)
-            acp.stopDaemon(daemon)
+            if cohort is not None:
+                cohort.stop()
+            else:
+                acp.stopDaemon(daemon)
 
 
 def exercise() -> tuple[Evidence, Evidence, Evidence]:
     """Measure the hot set, admitted delivery, and rejected oversize handling in isolated daemons."""
     binary, fixture = acp.build()
+    footprint.build()
     hot_set = exerciseHotSet(binary, fixture)
     admitted = exerciseCase(binary, fixture, REPLY_BYTES, admitted=True)
     rejected = exerciseCase(binary, fixture, REJECTED_REPLY_BYTES, admitted=False)
@@ -523,7 +504,7 @@ def main(argv: list[str]) -> int:
         return selftest()
     try:
         hot_set, admitted, rejected = exercise()
-    except (Failed, acp.Failed, OSError, subprocess.SubprocessError) as error:
+    except (Failed, footprint.Failed, acp.Failed, OSError, subprocess.SubprocessError) as error:
         print(f"[liveMemoryBudget] FAIL. {error}", file=sys.stderr)
         return 2
     print(

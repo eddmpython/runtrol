@@ -18,6 +18,16 @@ validation path, which is also used when the option is omitted.
 Version 0.1.1 implements finalized protocol revision `2026-08-13` and is tested with Runtime 0.1.1. Package SemVer and
 wire revision negotiation are independent compatibility checks.
 
+An input-enabled observed terminal accepts `TerminalView.sendText(params)` after the caller acquires its control
+lease. Its receipt acknowledges one owner-extension text API invocation, not exact bytes or shell execution.
+Never replay an unknown input outcome. The
+[terminal surface contract](../../docs/terminalSurface.md#observed-owner-input) owns the receipt semantics.
+
+An owning extension opens `windows().watchInput(params)` on a dedicated connection and serially calls `next()`,
+`claimInput(sequence)` and `inputReceipt(params)`. Offers are bounded by the Runtime's negotiated value and contain
+no text. Close the subscription when its owner ends; transport or protocol failure retires the exact receiver.
+A typed claim refusal needs no second receipt. Neither a lost claim response nor a lost receipt is retried.
+
 ```ts
 import { IntegrationIdentity, RuntimeConnector } from "@runtrol/runtime-client";
 

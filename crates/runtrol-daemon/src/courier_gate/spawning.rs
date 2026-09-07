@@ -20,20 +20,26 @@ enum Phase {
 }
 
 impl GateState {
-    pub(super) fn register(&mut self, minted: Minted, root: Option<ProcessIdentity>) {
-        self.sessions.insert(
-            minted.session,
-            Registered {
+    pub(super) fn register(
+        &mut self,
+        minted: Minted,
+        root: Option<ProcessIdentity>,
+    ) -> &mut Registered {
+        self.sessions
+            .entry(minted.session)
+            .insert_entry(Registered {
                 token: minted.token,
                 root,
+                #[cfg(windows)]
+                scope: None,
                 activation: 0,
                 enabled: false,
                 authority: None,
                 waits: std::sync::Arc::new(tokio::sync::Semaphore::new(
                     runtrol_courier::wire::SESSION_WAIT_SLOTS,
                 )),
-            },
-        );
+            })
+            .into_mut()
     }
 
     fn pending(&self, ticket: &SpawnTicket) -> Result<(), &'static str> {
@@ -55,6 +61,47 @@ impl GateState {
 }
 
 impl CourierGate {
+    /// A prepared Windows child exists but has executed no instruction. Final admission and resume
+    /// share one short transaction. Even a refused child is registered until its exact exit, so a
+    /// failed resume never frees worker capacity or its token while a process remains owned.
+    #[cfg(windows)]
+    pub(crate) async fn publish_prepared<E>(
+        &self,
+        minted: Option<Minted>,
+        ticket: Option<&SpawnTicket>,
+        root: Option<ProcessIdentity>,
+        scope: Option<runtrol_childproc::ProcessScope>,
+        execute: impl FnOnce() -> Result<(), E>,
+        refused: impl Fn(&'static str) -> E,
+    ) -> Result<(), E> {
+        let mut state = self.state.lock().await;
+        if let Some(ticket) = ticket
+            && minted.as_ref().is_none_or(|minted| {
+                !session_of(ticket.worker.terminal).is_ok_and(|session| minted.session == session)
+            })
+        {
+            return Err(refused(
+                "the prepared worker does not match its reservation",
+            ));
+        }
+        let admitted = match ticket {
+            Some(ticket) => state.pending(ticket).map_err(refused),
+            None => Ok(()),
+        };
+        let result = admitted.and_then(|()| execute());
+        if let Some(ticket) = ticket
+            && let Some(worker) = state.workers.get_mut(&ticket.worker.terminal)
+            && worker.ticket == *ticket
+        {
+            worker.phase = Phase::Live(root);
+        }
+        if let Some(minted) = minted {
+            state.register(minted, root).scope = scope;
+        }
+        self.changed.notify_waiters();
+        result
+    }
+
     pub(crate) async fn spawn_authority(
         &self,
         admitted: Admitted,
@@ -156,6 +203,7 @@ impl CourierGate {
     }
 
     /// Final authority and process creation have no cancellation point between them.
+    #[cfg(any(not(windows), test))]
     pub(crate) async fn launch_worker<T, E>(
         &self,
         minted: Minted,

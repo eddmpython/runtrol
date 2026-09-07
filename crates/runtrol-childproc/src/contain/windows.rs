@@ -36,7 +36,7 @@ use crate::error::SpawnError;
 ///
 /// Distinct from anything a coding CLI returns on its own, so a reader of an exit code can tell "runtrol
 /// stopped this" from "the program decided to stop".
-const TERMINATED_BY_RUNTROL: u32 = 0x_C000_0409;
+pub(crate) const TERMINATED_BY_RUNTROL: u32 = 0x_C000_0409;
 
 /// The job every runtrol child lives in.
 #[derive(Debug)]
@@ -66,6 +66,14 @@ unsafe impl Send for Containment {}
 unsafe impl Sync for Containment {}
 
 impl Containment {
+    pub(super) fn from_kept(handle: std::os::windows::io::OwnedHandle) -> Result<Self, SpawnError> {
+        use std::os::windows::io::IntoRawHandle as _;
+        let guard = Self {
+            job: handle.into_raw_handle(),
+        };
+        guard.join_this_process()?;
+        Ok(guard)
+    }
     /// Create the job, set kill-on-close, and put this process in it.
     #[expect(
         unsafe_code,

@@ -9,6 +9,7 @@ use runtrol_childproc::SpawnError;
 use runtrol_childproc::pty::TerminalRead;
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::mpsc::{Receiver, Sender, channel};
+use tokio::sync::watch;
 
 /// Chunks the feeder may run ahead of the reader before a feed is refused. The reader thread hands each
 /// chunk to the raw lane without waiting on any viewer, so the queue only fills when the machine is stalled.
@@ -21,7 +22,7 @@ pub struct FedChild {
     pid: u32,
     feed: RwLock<Option<Sender<Vec<u8>>>>,
     reader: RwLock<Option<Receiver<Vec<u8>>>>,
-    exit: RwLock<Option<i32>>,
+    exit: watch::Sender<Option<i32>>,
 }
 
 /// Why a chunk was not accepted.
@@ -51,7 +52,7 @@ impl FedChild {
             pid,
             feed: RwLock::new(Some(feed)),
             reader: RwLock::new(Some(reader)),
-            exit: RwLock::new(None),
+            exit: watch::channel(None).0,
         }
     }
 
@@ -104,11 +105,13 @@ impl FedChild {
     /// The observed command ended: the reader sees end of stream after the last fed chunk, and the host
     /// reports `exit_code` (a missing one as -1, the same as a process the platform lost) once it has drained.
     pub fn end(&self, exit_code: Option<i32>) {
-        let mut exit = self.exit.write().unwrap_or_else(PoisonError::into_inner);
-        if exit.is_none() {
+        self.exit.send_if_modified(|exit| {
+            if exit.is_some() {
+                return false;
+            }
             *exit = Some(exit_code.unwrap_or(-1));
-        }
-        drop(exit);
+            true
+        });
         drop(
             self.feed
                 .write()
@@ -117,8 +120,22 @@ impl FedChild {
         );
     }
 
+    #[cfg(test)]
     pub(super) fn try_wait(&self) -> Option<i32> {
-        *self.exit.read().unwrap_or_else(PoisonError::into_inner)
+        *self.exit.borrow()
+    }
+
+    pub(super) async fn wait(&self) -> Result<i32, SpawnError> {
+        let mut exit = self.exit.subscribe();
+        loop {
+            if let Some(code) = *exit.borrow_and_update() {
+                return Ok(code);
+            }
+            exit.changed().await.map_err(|error| SpawnError::Pty {
+                doing: "observing mirror exit",
+                detail: error.to_string(),
+            })?;
+        }
     }
 
     /// A stop of an observed mirror ends the feed; the owner's process is not ours to end.
@@ -230,5 +247,22 @@ mod tests {
         child.feed(vec![2]).expect("room again");
         child.kill();
         assert_eq!(child.try_wait(), Some(-1));
+    }
+
+    #[tokio::test]
+    async fn feed_exit_wakes_current_and_late_observers_without_polling() {
+        let child = FedChild::new(7);
+        let first = child.wait();
+        tokio::pin!(first);
+        assert!(
+            std::future::poll_fn(|context| std::task::Poll::Ready(
+                std::future::Future::poll(first.as_mut(), context).is_pending()
+            ))
+            .await
+        );
+        child.end(Some(3));
+        assert_eq!(first.await.expect("the feed publishes exit"), 3);
+        child.end(Some(9));
+        assert_eq!(child.wait().await.expect("the exit remains published"), 3);
     }
 }

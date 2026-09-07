@@ -22,6 +22,8 @@ cargo_metadata = { workspace = true }
 # process reporting on itself would report what its allocator believes rather than what it holds.
 runtrol-childproc = { workspace = true }
 runtrol-core = { workspace = true }
+runtrol-ipc = { workspace = true }
+runtrol-runtime-protocol = { workspace = true }
 runtrol-provider = { workspace = true }
 runtrol-security = { workspace = true }
 runtrol-store = { workspace = true }
@@ -31,7 +33,11 @@ runtrol-update = { workspace = true }
 semver = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true, features = ["std"] }
-tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "sync"] }
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "sync", "time"] }
+
+[[example]]
+name = "runtimeFootprint"
+path = "examples/runtimeFootprint.rs"
 
 [[test]]
 name = "dependencyDirection"

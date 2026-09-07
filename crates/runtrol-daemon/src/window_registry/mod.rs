@@ -20,6 +20,8 @@ use tokio::sync::{Mutex, broadcast, watch};
 /// Reveal requests a window may hold unread before the oldest is dropped; a window reads them at once.
 const REVEAL_QUEUE: usize = 16;
 
+pub(crate) mod input;
+
 /// One request for a window to show one of its terminals.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct RevealRequest {
@@ -68,6 +70,9 @@ const fn refused(kind: RuntimeErrorKind, message: &'static str) -> WindowRegistr
 
 struct Registered {
     connection: ConnectionToken,
+    owner_token: String,
+    owner_authority: Option<crate::runtime_auth::AuthorizedIntegration>,
+    input: Option<input::InputChannel>,
     descriptor: WindowDescriptor,
     /// The exact incarnation of each observed terminal's shell, by terminal key, stamped when the window published
     /// the process id. The window sends a bare number; a number alone can be reused by an unrelated process.
@@ -101,10 +106,11 @@ impl Default for WindowRegistry {
 
 impl WindowRegistry {
     /// Register a window on `connection`, replacing any earlier entry for the same window.
-    pub(crate) async fn register(
+    async fn register_inner(
         &self,
         connection: ConnectionToken,
         params: WindowRegisterParams,
+        authority: Option<crate::runtime_auth::AuthorizedIntegration>,
     ) -> Result<WindowRegistration, WindowRegistryFailure> {
         bounded_text(&params.window_session_id, "the window session identity")?;
         bounded_text(&params.host_generation, "the host generation")?;
@@ -118,7 +124,27 @@ impl WindowRegistry {
         for folder in &params.workspace_folders {
             bounded_label(folder, "a workspace folder")?;
         }
+        let mut capability = [0_u8; 32];
+        getrandom::fill(&mut capability).map_err(|_| {
+            refused(
+                RuntimeErrorKind::Internal,
+                "could not allocate an owner capability",
+            )
+        })?;
+        let owner_token = <base64ct::Base64 as base64ct::Encoding>::encode_string(&capability);
         let mut state = self.state.lock().await;
+        if let Some(previous) = state.windows.get(&params.window_session_id)
+            && previous.owner_authority.as_ref().is_some_and(|owner| {
+                authority
+                    .as_ref()
+                    .is_none_or(|incoming| owner.key != incoming.key)
+            })
+        {
+            return Err(refused(
+                RuntimeErrorKind::ScopeDenied,
+                "another integration owns this window registration",
+            ));
+        }
         // The same window again (a restarted host) keeps its slot; a new window needs a free one. A window this
         // connection registered under another identity (a reload changed it) gives its slot up first.
         state.windows.retain(|session, entry| {
@@ -140,6 +166,9 @@ impl WindowRegistry {
             params.window_session_id.clone(),
             Registered {
                 connection,
+                owner_token: owner_token.clone(),
+                owner_authority: authority,
+                input: None,
                 descriptor: WindowDescriptor {
                     window_session_id: params.window_session_id,
                     host_generation: params.host_generation,
@@ -157,7 +186,17 @@ impl WindowRegistry {
         self.publish();
         Ok(WindowRegistration {
             registration_generation,
+            owner_token,
         })
+    }
+
+    #[cfg(test)]
+    async fn register(
+        &self,
+        connection: ConnectionToken,
+        params: WindowRegisterParams,
+    ) -> Result<WindowRegistration, WindowRegistryFailure> {
+        self.register_inner(connection, params, None).await
     }
 
     /// Replace the observed terminals of the window `connection` registered.
@@ -264,7 +303,30 @@ impl WindowRegistry {
             .collect()
     }
 
+    pub(crate) async fn owns_registration(
+        &self,
+        session: &str,
+        generation: u64,
+        token: &str,
+        authority: &crate::runtime_auth::AuthorizedIntegration,
+    ) -> bool {
+        self.state
+            .lock()
+            .await
+            .windows
+            .get(session)
+            .is_some_and(|entry| {
+                entry.descriptor.registration_generation == generation
+                    && entry.owner_token == token
+                    && entry
+                        .owner_authority
+                        .as_ref()
+                        .is_some_and(|registered| input::same_authority(registered, authority))
+            })
+    }
+
     /// Whether a window with that session identity is registered right now.
+    #[cfg(test)]
     pub(crate) async fn is_registered(&self, window_session_id: &str) -> bool {
         self.state
             .lock()

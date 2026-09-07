@@ -103,6 +103,7 @@ pub(crate) async fn open_worker(
         false,
         Some(launch),
         None,
+        super::launch::LaunchAuthority::Worktree,
     )
     .await
 }

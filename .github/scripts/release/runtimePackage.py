@@ -211,6 +211,9 @@ $stateRoot = Join-Path $env:LOCALAPPDATA 'runtrol'
 $locator = Join-Path $stateRoot 'runtime.locator.json'
 if (Test-Path -LiteralPath $locator) { throw 'Runtime locator exists. Review active sessions and integrations, stop Runtime, and remove only a verified stale locator before uninstalling.' }
 if ((Split-Path -Leaf $productRoot) -ne 'RuntrolRuntime' -or (Split-Path -Leaf $stateRoot) -ne 'runtrol') { throw 'Refusing an unexpected uninstall path' }
+$imagePrefix = [IO.Path]::GetFullPath($productRoot).TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+$mapped = @(Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($imagePrefix, [StringComparison]::OrdinalIgnoreCase) })
+if ($mapped.Count -gt 0) { throw 'Runtime process completion is not confirmed. Wait for the stop command to confirm completion before uninstalling.' }
 $binRoot = Join-Path $productRoot 'bin'
 $shimRoot = Join-Path $productRoot 'shims'
 $profileLocal = [Environment]::GetFolderPath('LocalApplicationData')

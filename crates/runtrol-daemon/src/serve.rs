@@ -40,7 +40,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use runtrol_core::{
     AgentLease, ClosingReservation, OpenReservation, ProviderUpdateReservation, ReservedOpen,
-    SessionError, SessionManager, TakenAgent, WorkspaceClaim,
+    SessionError, SessionManager, TakenAgent, WorkspaceClaim, WorkspaceCleanupReservation,
 };
 use runtrol_ipc::transport::{Connection, Listener, TransportError};
 use runtrol_ipc::wire::{Request, Response, SessionListing, WireError};
@@ -68,6 +68,9 @@ use crate::dispatch::{
 #[cfg(test)]
 #[path = "tests/structured_worktree.rs"]
 pub(crate) mod structured_worktree_tests;
+#[cfg(test)]
+#[path = "tests/terminal_completion.rs"]
+mod terminal_completion_tests;
 
 /// How many answered requests may be waiting to reach the one task that answers them.
 ///
@@ -596,6 +599,11 @@ struct Asked {
 
 /// A connection asking the session owner for a bounded process slot.
 enum ReservationAsked {
+    ReserveWorkspaceCleanup {
+        claim: WorkspaceClaim,
+        answered: oneshot::Sender<Result<WorkspaceCleanupReservation, SessionError>>,
+    },
+    ReleaseWorkspaceCleanup(WorkspaceCleanupReservation),
     Reserve {
         provider: runtrol_provider::ProviderId,
         session: SessionId,
@@ -619,6 +627,8 @@ enum OpenReservationFailure {
     Session(#[from] SessionError),
     #[error(transparent)]
     Claim(#[from] crate::native_claims::TerminalClaimError),
+    #[error("{DRAINING_REFUSAL}")]
+    Draining,
 }
 
 struct AutomaticUpdateNotice {
@@ -687,6 +697,22 @@ mod stall_watchdog {
 struct ReservationGuard {
     reservation: Option<CleanupReservation>,
     cancelling: mpsc::UnboundedSender<ReservationAsked>,
+}
+
+pub(crate) struct WorkspaceCleanupGuard {
+    reservation: Option<WorkspaceCleanupReservation>,
+    cancelling: mpsc::UnboundedSender<ReservationAsked>,
+}
+
+impl Drop for WorkspaceCleanupGuard {
+    fn drop(&mut self) {
+        if let Some(reservation) = self.reservation.take() {
+            drop(
+                self.cancelling
+                    .send(ReservationAsked::ReleaseWorkspaceCleanup(reservation)),
+            );
+        }
+    }
 }
 
 impl ReservationGuard {
@@ -1262,13 +1288,16 @@ async fn serve_surfaces(
         });
     }
 
-    // A draining generation sweeps its terminals on this clock, closing the ones nobody is watching so it can
-    // finish and leave the locator instead of holding idle conversations for hours (operator, 2026-08-29).
+    // A draining generation releases unused attachment renderers. Its owned CLIs retain their full lifetime.
     let mut drain_sweep = tokio::time::interval(std::time::Duration::from_secs(5));
     drain_sweep.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
     let outcome = loop {
         tokio::select! {
+            failed = containment_failed(&composed) => {
+                break Err(ServeError::RuntimeBootstrap(failed.to_string()));
+            }
+
             _ = drain_sweep.tick(), if draining => {
                 crate::terminal_surface::close_idle_while_draining(&composed).await;
                 generation.update(live_work_of(&sessions, &composed), true);
@@ -1406,7 +1435,17 @@ async fn serve_surfaces(
                 ));
             }
 
-            Some(reservation) = reservations.recv() => match reservation {
+            Some(reservation) = reservations.recv() => {
+            match reservation {
+                ReservationAsked::ReserveWorkspaceCleanup { claim, answered } => {
+                    let reserved = sessions.reserve_workspace_cleanup(claim);
+                    if let Err(Ok(abandoned)) = answered.send(reserved) {
+                        sessions.release_workspace_cleanup(abandoned);
+                    }
+                }
+                ReservationAsked::ReleaseWorkspaceCleanup(reservation) => {
+                    sessions.release_workspace_cleanup(reservation);
+                }
                 ReservationAsked::Reserve {
                     provider,
                     session,
@@ -1415,6 +1454,10 @@ async fn serve_surfaces(
                     claim,
                     answered,
                 } => {
+                    if draining {
+                        drop(answered.send(Err(OpenReservationFailure::Draining)));
+                        continue;
+                    }
                     let reserved = composed
                         .native_claims
                         .reserve_structured(
@@ -1440,6 +1483,7 @@ async fn serve_surfaces(
                     );
                     if let Err(Ok(abandoned)) = answered.send(reserved) {
                         abandon_reserved(
+                            &composed,
                             &mut sessions,
                             &mut connections,
                             &reserving,
@@ -1473,6 +1517,11 @@ async fn serve_surfaces(
                     sessions.release_provider_update(reservation);
                     runtrol_childproc::footprint::release_unused_memory();
                 }
+            }
+            generation.update(live_work_of(&sessions, &composed), draining);
+            begin_runtime_audit_shutdown_if_drained(
+                draining, &sessions, &composed, &runtime_audit, &mut runtime_audit_closing,
+            );
             },
 
             Some(ask) = asked.recv() => {
@@ -1512,6 +1561,7 @@ async fn serve_surfaces(
                 // The connection stopped while its request was being answered. Nothing to report and nowhere to
                 // report it: the caller is gone, and the sessions already record everything the request did.
                 let abandoned_agent = deliver_answer(
+                    &composed,
                     answered,
                     Answered { conversation, reply },
                     &mut connections,
@@ -1597,6 +1647,7 @@ async fn serve_surfaces(
                                 *opening,
                             );
                             schedule_runtime_open_cleanup(
+                                &composed,
                                 &mut connections,
                                 &runtime_returning,
                                 completion,
@@ -1604,6 +1655,7 @@ async fn serve_surfaces(
                         }
                         crate::runtime_control::RuntimeControlReply::Cooling(cooling) => {
                             schedule_abandoned_runtime_cool(
+                                &composed,
                                 &mut connections,
                                 &runtime_returning,
                                 cooling,
@@ -1621,9 +1673,14 @@ async fn serve_surfaces(
                         &provider_update_notices,
                     );
                 }
+                generation.update(live_work_of(&sessions, &composed), draining);
+                begin_runtime_audit_shutdown_if_drained(
+                    draining, &sessions, &composed, &runtime_audit, &mut runtime_audit_closing,
+                );
             }
 
-            Some(returned_agent) = returned.recv() => match returned_agent {
+            Some(returned_agent) = returned.recv() => {
+            match returned_agent {
                 AgentReturned::Finished { lease, agent, outcome, answered } => {
                     let response = match sessions.return_agent(lease, agent) {
                         Ok(()) => match outcome {
@@ -1647,9 +1704,15 @@ async fn serve_surfaces(
                         &provider_update_notices,
                     );
                 }
+            }
+            generation.update(live_work_of(&sessions, &composed), draining);
+            begin_runtime_audit_shutdown_if_drained(
+                draining, &sessions, &composed, &runtime_audit, &mut runtime_audit_closing,
+            );
             },
 
-            Some(returned_agent) = runtime_returned.recv() => match returned_agent {
+            Some(returned_agent) = runtime_returned.recv() => {
+            match returned_agent {
                 crate::runtime_control::RuntimeReturned::Finished {
                     mutation,
                     taken,
@@ -1732,6 +1795,7 @@ async fn serve_surfaces(
                         agent,
                     ).await;
                     deliver_runtime_open_completion(
+                        &composed,
                         &mut connections,
                         &runtime_returning,
                         answered,
@@ -1757,6 +1821,7 @@ async fn serve_surfaces(
                         failure,
                     );
                     deliver_runtime_open_completion(
+                        &composed,
                         &mut connections,
                         &runtime_returning,
                         answered,
@@ -1776,6 +1841,7 @@ async fn serve_surfaces(
                         opening,
                     );
                     deliver_runtime_open_completion(
+                        &composed,
                         &mut connections,
                         &runtime_returning,
                         answered,
@@ -1795,6 +1861,7 @@ async fn serve_surfaces(
                         opening,
                     );
                     schedule_runtime_open_cleanup(
+                        &composed,
                         &mut connections,
                         &runtime_returning,
                         completion,
@@ -1824,6 +1891,11 @@ async fn serve_surfaces(
                         &provider_update_notices,
                     );
                 }
+            }
+            generation.update(live_work_of(&sessions, &composed), draining);
+            begin_runtime_audit_shutdown_if_drained(
+                draining, &sessions, &composed, &runtime_audit, &mut runtime_audit_closing,
+            );
             },
 
             // Events reach watchers through the session's own fan-out. This arm keeps the provider stream moving.
@@ -1938,9 +2010,12 @@ async fn serve_surfaces(
         }
     };
 
+    composed.draining.store(true, Ordering::Release);
     runtime_audit.begin_shutdown();
     connections.abort_all();
     while connections.join_next().await.is_some() {}
+    #[cfg(windows)]
+    let containment_shutdown = composed.containment.shutdown_scopes().await;
     drop(runtime_audit);
     let runtime_audit_writer = match runtime_audit_writer_joined {
         Some(joined) => joined,
@@ -1948,6 +2023,12 @@ async fn serve_surfaces(
     };
     // Removed before the process ends, so nothing reads an entry for a daemon that is gone.
     drop(generation);
+    #[cfg(windows)]
+    if let Err(error) = containment_shutdown {
+        return Err(ServeError::RuntimeBootstrap(format!(
+            "Process scope completion failed during shutdown: {error}; service outcome: {outcome:?}"
+        )));
+    }
     if outcome.is_ok() {
         match runtime_audit_writer {
             Ok(Ok(())) => {}
@@ -1964,6 +2045,26 @@ async fn serve_surfaces(
         }
     }
     outcome
+}
+
+/// Supervision loss ends this generation. The keeper's own successful exit is possible only after
+/// this Runtime exits, so seeing it while serving is always a failed containment boundary.
+async fn containment_failed(composed: &Composed) -> runtrol_childproc::SpawnError {
+    #[cfg(windows)]
+    {
+        match composed.containment.keeper_failed().await {
+            Err(error) => error,
+            Ok(()) => runtrol_childproc::SpawnError::Containment {
+                doing: "observing Runtime supervision",
+                detail: "supervision ended while the Runtime was serving".to_owned(),
+            },
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        _ = composed;
+        std::future::pending().await
+    }
 }
 
 /// What a draining generation tells anything that would open a new conversation here.
@@ -2001,7 +2102,7 @@ fn begin_drain(
     *relay_hub = None;
 }
 
-/// How much work is live here: every supervised session plus every open terminal. What keeps a draining
+/// How much work is live here: every supervised session or reserved owner plus every open terminal. What keeps a draining
 /// generation alive, and what `runtrol status` shows.
 ///
 /// # Why a session counts even when nothing is running in it
@@ -2015,6 +2116,7 @@ fn begin_drain(
 ///
 /// A hosted terminal counts for the same reason: it is a conversation somebody is looking at, and a generation
 /// that ended under it would take the screen with it.
+/// Opening, closing, and filesystem cleanup reservations retain that ownership until their exact work ends.
 fn live_work_of(sessions: &SessionManager, composed: &Composed) -> u32 {
     let terminals = u32::try_from(
         composed
@@ -2022,7 +2124,7 @@ fn live_work_of(sessions: &SessionManager, composed: &Composed) -> u32 {
             .load(std::sync::atomic::Ordering::Acquire),
     )
     .unwrap_or(u32::MAX);
-    let supervised = u32::try_from(sessions.live_sessions().count()).unwrap_or(u32::MAX);
+    let supervised = u32::try_from(sessions.process_owner_ids().count()).unwrap_or(u32::MAX);
     let operations = u32::try_from(
         composed
             .terminal_operations
@@ -2092,10 +2194,12 @@ impl Drop for PushWakeGuard {
 }
 
 fn schedule_abandoned_runtime_cool(
+    composed: &Arc<Composed>,
     tasks: &mut JoinSet<()>,
     returning: &mpsc::UnboundedSender<crate::runtime_control::RuntimeReturned>,
     cooling: crate::runtime_control::RuntimeCooling,
 ) {
+    let composed = Arc::clone(composed);
     let returning = returning.clone();
     tasks.spawn(async move {
         let crate::runtime_control::RuntimeCooling {
@@ -2103,25 +2207,30 @@ fn schedule_abandoned_runtime_cool(
             agent: handed_agent,
             reservation,
         } = cooling;
+        let session = reservation.session();
         let guard = crate::runtime_control::RuntimeCoolGuard::new(mutation, reservation, returning);
         let agent = handed_agent;
-        drop(agent.close(CloseMode::graceful()).await);
-        drop(guard);
+        if agent.close(CloseMode::graceful()).await.is_ok() {
+            // ok: the caller is gone; a failed record preserves the worktree for an explicit refusal.
+            drop(record_completed_close(&composed, session, guard).await);
+        }
     });
 }
 
 fn deliver_runtime_open_completion(
+    composed: &Arc<Composed>,
     tasks: &mut JoinSet<()>,
     returning: &mpsc::UnboundedSender<crate::runtime_control::RuntimeReturned>,
     answered: oneshot::Sender<crate::runtime_control::RuntimeOpenCompletion>,
     completion: crate::runtime_control::RuntimeOpenCompletion,
 ) {
     if let Err(completion) = answered.send(completion) {
-        schedule_runtime_open_cleanup(tasks, returning, completion);
+        schedule_runtime_open_cleanup(composed, tasks, returning, completion);
     }
 }
 
 fn schedule_runtime_open_cleanup(
+    composed: &Arc<Composed>,
     tasks: &mut JoinSet<()>,
     returning: &mpsc::UnboundedSender<crate::runtime_control::RuntimeReturned>,
     completion: crate::runtime_control::RuntimeOpenCompletion,
@@ -2131,20 +2240,16 @@ fn schedule_runtime_open_cleanup(
         return;
     };
     let returning = returning.clone();
+    let composed = Arc::clone(composed);
     tasks.spawn(async move {
-        drop(agent.close(CloseMode::Kill).await);
-        let (answered, _hearing) = oneshot::channel();
-        drop(
-            returning.send(crate::runtime_control::RuntimeReturned::OpenCleaned {
-                reservation,
-                answered,
-            }),
-        );
+        // ok: the caller is gone; the existing completion lane still retires this exact owner.
+        drop(close_runtime_open(&composed, agent, reservation, &returning).await);
     });
 }
 
 /// Release an unanswered reservation without exposing an extra live process during displaced cleanup.
 fn abandon_reserved(
+    composed: &Arc<Composed>,
     sessions: &mut SessionManager,
     tasks: &mut JoinSet<()>,
     cancelling: &mpsc::UnboundedSender<ReservationAsked>,
@@ -2159,6 +2264,7 @@ fn abandon_reserved(
         return;
     };
     let cancelling = cancelling.clone();
+    let composed = Arc::clone(composed);
     tasks.spawn(async move {
         let releasing_open = ReservationGuard {
             reservation: Some(CleanupReservation::Open(reservation)),
@@ -2168,19 +2274,23 @@ fn abandon_reserved(
             reservation: Some(CleanupReservation::Closing(displaced.reservation)),
             cancelling,
         };
+        // ok: no caller remains; an unrecorded close keeps its worktree preserved.
         drop(
-            displaced
-                .agent
-                .close(CloseMode::Graceful { grace_ms: 0 })
-                .await,
+            close_recorded_agent(
+                &composed,
+                displaced.agent,
+                CloseMode::Graceful { grace_ms: 0 },
+                Some(releasing_displaced),
+            )
+            .await,
         );
-        drop(releasing_displaced);
         drop(releasing_open);
     });
 }
 
 /// Deliver an answer or finish any process handoff whose connection disappeared first.
 fn deliver_answer(
+    composed: &Arc<Composed>,
     answered: oneshot::Sender<Answered>,
     answer: Answered,
     tasks: &mut JoinSet<()>,
@@ -2188,12 +2298,13 @@ fn deliver_answer(
     sessions: &mut SessionManager,
 ) -> bool {
     if let Err(abandoned) = answered.send(answer) {
-        return abandon_reply(tasks, cancelling, sessions, abandoned.reply);
+        return abandon_reply(composed, tasks, cancelling, sessions, abandoned.reply);
     }
     false
 }
 
 fn abandon_reply(
+    composed: &Arc<Composed>,
     tasks: &mut JoinSet<()>,
     cancelling: &mpsc::UnboundedSender<ReservationAsked>,
     sessions: &mut SessionManager,
@@ -2206,6 +2317,7 @@ fn abandon_reply(
             reservation,
         } => {
             spawn_abandoned_cleanup(
+                composed,
                 tasks,
                 cancelling,
                 agent,
@@ -2221,7 +2333,7 @@ fn abandon_reply(
                 reservation,
             } in agents
             {
-                spawn_abandoned_cleanup(tasks, cancelling, agent, how, reservation);
+                spawn_abandoned_cleanup(composed, tasks, cancelling, agent, how, reservation);
             }
             false
         }
@@ -2244,6 +2356,7 @@ fn abandon_reply(
 }
 
 fn spawn_abandoned_cleanup(
+    composed: &Arc<Composed>,
     tasks: &mut JoinSet<()>,
     cancelling: &mpsc::UnboundedSender<ReservationAsked>,
     agent: Box<dyn runtrol_provider::Agent>,
@@ -2251,13 +2364,14 @@ fn spawn_abandoned_cleanup(
     reservation: Option<CleanupReservation>,
 ) {
     let cancelling = cancelling.clone();
+    let composed = Arc::clone(composed);
     tasks.spawn(async move {
         let releasing = reservation.map(|reservation| ReservationGuard {
             reservation: Some(reservation),
             cancelling,
         });
-        drop(agent.close(how).await);
-        drop(releasing);
+        // ok: no caller remains; a failed close or record leaves the worktree unreleasable.
+        drop(close_recorded_agent(&composed, agent, how, releasing).await);
     });
 }
 
@@ -2269,6 +2383,198 @@ fn canonical_workspace_claim(
         .map_err(runtrol_core::ProjectError::from)
         .map_err(SessionError::from)?;
     WorkspaceClaim::discover(workspace, access).map_err(SessionError::from)
+}
+
+/// Successful close completion is recorded before its exact reservation can retire, including cancellation.
+pub(crate) async fn record_completed_close<G: Send + 'static>(
+    composed: &Composed,
+    session: SessionId,
+    retained: G,
+) -> Result<(G, Result<(), String>), String> {
+    let controller = composed.isolated_workspaces.clone();
+    tokio::task::spawn_blocking(move || {
+        let result = crate::isolated_workspace::EndedSession::after_close_completed(session)
+            .and_then(|ended| controller.complete_session(&ended));
+        (retained, result)
+    })
+    .await
+    .map_err(|error| format!("the completed session worktree could not be recorded: {error}"))
+}
+
+struct RuntimeCleanupReturn {
+    reservation: Option<crate::runtime_control::RuntimeOpenCleanup>,
+    returning: mpsc::UnboundedSender<crate::runtime_control::RuntimeReturned>,
+}
+
+impl Drop for RuntimeCleanupReturn {
+    fn drop(&mut self) {
+        if let Some(reservation) = self.reservation.take() {
+            let (answered, _hearing) = oneshot::channel();
+            drop(
+                self.returning
+                    .send(crate::runtime_control::RuntimeReturned::OpenCleaned {
+                        reservation,
+                        answered,
+                    }),
+            );
+        }
+    }
+}
+
+/// A rejected or abandoned opened process uses the same successful close record before returning its slot.
+pub(crate) async fn close_runtime_open(
+    composed: &Composed,
+    agent: Box<dyn runtrol_provider::Agent>,
+    reservation: crate::runtime_control::RuntimeOpenCleanup,
+    returning: &mpsc::UnboundedSender<crate::runtime_control::RuntimeReturned>,
+) -> Result<
+    runtrol_runtime_protocol::SessionOpenResult,
+    crate::runtime_control::RuntimeControlFailure,
+> {
+    use crate::runtime_control::{RuntimeControlFailure, RuntimeOpenCleanup, RuntimeReturned};
+    let session = match &reservation {
+        RuntimeOpenCleanup::Open(proof) => proof.session(),
+        RuntimeOpenCleanup::Closing(proof) => proof.session(),
+    };
+    let exact_agent = agent.session() == session;
+    let closed = agent.close(CloseMode::Kill).await;
+    // Created after close returns: cancellation during the close cannot assert completion.
+    let guard = RuntimeCleanupReturn {
+        reservation: Some(reservation),
+        returning: returning.clone(),
+    };
+    let (mut guard, recorded) = if closed.is_ok() && exact_agent {
+        record_completed_close(composed, session, guard)
+            .await
+            .map_err(|message| RuntimeControlFailure {
+                kind: runtrol_runtime_protocol::RuntimeErrorKind::Internal,
+                message: message.into(),
+            })?
+    } else {
+        (guard, Ok(()))
+    };
+    let reservation = guard
+        .reservation
+        .take()
+        .ok_or_else(RuntimeControlFailure::outcome_unknown)?;
+    let (answered, hearing) = oneshot::channel();
+    returning
+        .send(RuntimeReturned::OpenCleaned {
+            reservation,
+            answered,
+        })
+        .map_err(|_| RuntimeControlFailure::outcome_unknown())?;
+    let outcome = hearing
+        .await
+        .map_err(|_| RuntimeControlFailure::outcome_unknown())?;
+    recorded.map_err(|message| RuntimeControlFailure {
+        kind: runtrol_runtime_protocol::RuntimeErrorKind::Internal,
+        message: message.into(),
+    })?;
+    outcome
+}
+
+async fn close_recorded_agent(
+    composed: &Composed,
+    agent: Box<dyn runtrol_provider::Agent>,
+    how: CloseMode,
+    retained: Option<ReservationGuard>,
+) -> Result<(), String> {
+    let session = retained
+        .as_ref()
+        .and_then(|guard| guard.reservation.as_ref())
+        .map(CleanupReservation::session);
+    agent.close(how).await.map_err(|error| error.to_string())?;
+    if let Some(session) = session {
+        record_completed_close(composed, session, retained).await?.1
+    } else {
+        Ok(())
+    }
+}
+
+pub(crate) async fn reopen_structured_workspace(
+    composed: &Composed,
+    session: SessionId,
+    workspace: AbsPath,
+) -> Result<(), String> {
+    let controller = composed.isolated_workspaces.clone();
+    tokio::task::spawn_blocking(move || controller.reopen_session(session, &workspace))
+        .await
+        .map_err(|error| format!("the session worktree could not be reserved: {error}"))?
+}
+
+async fn reserve_workspace_release(
+    reserving: &mpsc::UnboundedSender<ReservationAsked>,
+    workspace: &str,
+) -> Result<Arc<WorkspaceCleanupGuard>, String> {
+    let workspace = workspace.to_owned();
+    let claim = tokio::task::spawn_blocking(move || {
+        let path = match std::fs::metadata(&workspace) {
+            Ok(_) => AbsPath::canonicalize(&workspace),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => AbsPath::new(&workspace),
+            Err(error) => return Err(error.to_string()),
+        }
+        .map_err(|error| error.to_string())?;
+        WorkspaceClaim::discover(path, WorkspaceAccess::Exclusive)
+            .map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|error| error.to_string())??;
+    let (answered, hearing) = oneshot::channel();
+    reserving
+        .send(ReservationAsked::ReserveWorkspaceCleanup { claim, answered })
+        .map_err(|_| "the Runtime session owner stopped".to_owned())?;
+    let reservation = hearing
+        .await
+        .map_err(|_| "the Runtime session owner stopped".to_owned())?
+        .map_err(|error| error.to_string())?;
+    Ok(Arc::new(WorkspaceCleanupGuard {
+        reservation: Some(reservation),
+        cancelling: reserving.clone(),
+    }))
+}
+
+async fn prepare_workspace_release(
+    conversation: &Conversation,
+    composed: &Composed,
+    request: &Request,
+    reserving: &mpsc::UnboundedSender<ReservationAsked>,
+) -> Prepared {
+    if !conversation.greeted()
+        || crate::scope::allowed_with_authority(
+            conversation.caller(),
+            request,
+            &composed.device_authority,
+        )
+        .is_err()
+    {
+        return Prepared::None;
+    }
+    let Request::WorkspaceIsolateRelease {
+        workspace_id,
+        session_id,
+        workspace,
+    } = request
+    else {
+        return Prepared::None;
+    };
+    match reserve_workspace_release(reserving, workspace).await {
+        Ok(guard) => {
+            crate::dispatch::prepare_isolated_workspace_retaining(
+                conversation,
+                composed,
+                request,
+                Some(guard),
+            )
+            .await
+        }
+        Err(message) => Prepared::IsolatedWorkspaceRelease {
+            workspace_id: workspace_id.clone(),
+            session_id: session_id.clone(),
+            workspace: workspace.clone(),
+            response: refuse(&message),
+        },
+    }
 }
 
 fn requested_workspace(request: &Request) -> Option<(&str, WorkspaceAccess)> {
@@ -2676,13 +2982,20 @@ async fn converse_inner(
                     reservation: Some(CleanupReservation::Closing(displaced.reservation)),
                     cancelling: reserving.clone(),
                 };
-                drop(
-                    displaced
-                        .agent
-                        .close(CloseMode::Graceful { grace_ms: 0 })
-                        .await,
-                );
-                drop(releasing);
+                if let Err(message) = close_recorded_agent(
+                    &composed,
+                    displaced.agent,
+                    CloseMode::Graceful { grace_ms: 0 },
+                    Some(releasing),
+                )
+                .await
+                {
+                    drop(guard);
+                    if write(&mut connection, &refuse(&message)).await.is_err() {
+                        return;
+                    }
+                    continue;
+                }
             }
             Some(guard)
         } else {
@@ -2703,7 +3016,7 @@ async fn converse_inner(
         let prepared = if let Request::Models { provider } = &request {
             let preparing = async {
                 let discovered = discover(&conversation, &composed, &request).await;
-                complete_prepare_for(&request, discovered, reserved_session).await
+                complete_prepare_for(&composed, &request, discovered, reserved_session).await
             };
             Box::pin(finish_model_preparation(
                 provider,
@@ -2721,10 +3034,9 @@ async fn converse_inner(
             prepare_integration_admin(&conversation, &composed, &request).await
         } else if crate::dispatch::is_pairing_admin(&request) {
             crate::dispatch::prepare_pairing_admin(&conversation, &composed, &request).await
-        } else if matches!(
-            request,
-            Request::WorkspaceIsolatePrepare { .. } | Request::WorkspaceIsolateRelease { .. }
-        ) {
+        } else if matches!(request, Request::WorkspaceIsolateRelease { .. }) {
+            prepare_workspace_release(&conversation, &composed, &request, &reserving).await
+        } else if matches!(request, Request::WorkspaceIsolatePrepare { .. }) {
             prepare_isolated_workspace(&conversation, &composed, &request).await
         } else {
             // The old gate's presence doubled as this signal; named directly now that the lanes are a set.
@@ -2736,7 +3048,7 @@ async fn converse_inner(
             if !provider_update {
                 preparation_gate.clear();
             }
-            complete_prepare_for(&request, discovered, reserved_session).await
+            complete_prepare_for(&composed, &request, discovered, reserved_session).await
         };
         // A provider update keeps its provider's lane through package mutation and verification. Its update
         // reservation blocks session processes, while this guard blocks short-lived probes that have no session slot.
@@ -2877,19 +3189,19 @@ async fn converse_inner(
                     cancelling: reserving.clone(),
                 };
                 close_trace("stopping: agent.close begins");
-                let outcome = match agent.close(how).await {
-                    Ok(()) => Response::Done,
-                    Err(error) => refuse(&error.to_string()),
-                };
+                let outcome =
+                    match close_recorded_agent(&composed, agent, how, Some(releasing)).await {
+                        Ok(()) => Response::Done,
+                        Err(message) => refuse(&message),
+                    };
                 close_trace("stopping: agent.close returned");
-                drop(releasing);
                 if write(&mut connection, &outcome).await.is_err() {
                     return;
                 }
             }
 
             reply @ Reply::Cleaning { .. } => {
-                let response = finish_connection_cleanup(reply, &reserving).await;
+                let response = finish_connection_cleanup(&composed, reply, &reserving).await;
                 if write(&mut connection, &response).await.is_err() {
                     return;
                 }
@@ -2977,6 +3289,7 @@ async fn perform_agent_command(
 }
 
 async fn finish_connection_cleanup(
+    composed: &Composed,
     reply: Reply,
     cancelling: &mpsc::UnboundedSender<ReservationAsked>,
 ) -> Response {
@@ -2998,10 +3311,9 @@ async fn finish_connection_cleanup(
             reservation: Some(reservation),
             cancelling: cancelling.clone(),
         });
-        if let Err(error) = agent.close(how).await {
-            failures.push(error.to_string());
+        if let Err(message) = close_recorded_agent(composed, agent, how, releasing).await {
+            failures.push(message);
         }
-        drop(releasing);
     }
     if !failures.is_empty()
         && let Response::Failed(error) = &response
@@ -3122,9 +3434,27 @@ async fn relay_local_broker(
             return;
         }
         loop {
-            let exit_code = *attachment.exited.borrow();
-            if let Some(code) = exit_code {
-                drop(write(connection, &Response::TerminalExited { code }).await);
+            let completion = *attachment.exited.borrow();
+            if let Some(code) = completion.exit_code {
+                if drain_local_terminal(connection, &terminal, &mut attachment)
+                    .await
+                    .is_ok()
+                {
+                    drop(
+                        write(
+                            connection,
+                            &Response::TerminalExited {
+                                code,
+                                failure: completion.failure.map(|failure| {
+                                    crate::runtime_terminal::terminal_failure(failure)
+                                        .as_str()
+                                        .into()
+                                }),
+                            },
+                        )
+                        .await,
+                    );
+                }
                 return;
             }
             tokio::select! {
@@ -3141,17 +3471,7 @@ async fn relay_local_broker(
                         }
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                        attachment = terminal.attach().await;
-                        if write(connection, &Response::TerminalLagged {}).await.is_err()
-                            || write(
-                                connection,
-                                &Response::TerminalOutput {
-                                    bytes: attachment.snapshot.to_vec().into(),
-                                },
-                            )
-                            .await
-                            .is_err()
-                        {
+                        if replace_local_terminal(connection, &terminal, &mut attachment).await.is_err() {
                             return;
                         }
                     }
@@ -3219,6 +3539,51 @@ async fn relay_local_broker(
         }
     };
     relayed.await;
+}
+
+async fn replace_local_terminal(
+    connection: &mut SurfaceConnection,
+    terminal: &runtrol_core::terminal::Terminal,
+    attachment: &mut runtrol_core::terminal::Attachment,
+) -> Result<(), ()> {
+    *attachment = terminal.attach().await;
+    write(connection, &Response::TerminalLagged {})
+        .await
+        .map_err(drop)?;
+    write(
+        connection,
+        &Response::TerminalOutput {
+            bytes: attachment.snapshot.to_vec().into(),
+        },
+    )
+    .await
+    .map_err(drop)
+}
+
+async fn drain_local_terminal(
+    connection: &mut SurfaceConnection,
+    terminal: &runtrol_core::terminal::Terminal,
+    attachment: &mut runtrol_core::terminal::Attachment,
+) -> Result<(), ()> {
+    loop {
+        match attachment.live.try_recv() {
+            Ok(chunk) => write(
+                connection,
+                &Response::TerminalOutput {
+                    bytes: chunk.bytes.to_vec().into(),
+                },
+            )
+            .await
+            .map_err(drop)?,
+            Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => {
+                replace_local_terminal(connection, terminal, attachment).await?;
+            }
+            Err(
+                tokio::sync::broadcast::error::TryRecvError::Empty
+                | tokio::sync::broadcast::error::TryRecvError::Closed,
+            ) => return Ok(()),
+        }
+    }
 }
 
 /// Relay coalesced current session snapshots, each projected to what this caller may see.
@@ -3452,6 +3817,64 @@ mod tests {
         assert_eq!(live_work_of(&sessions, &composed), 0);
         drop(composed);
         std::fs::remove_dir_all(&scratch).expect("clean the scratch home");
+    }
+
+    #[tokio::test]
+    async fn workspace_cleanup_and_process_reservations_keep_draining_alive() {
+        let scratch = crate::isolated_workspace::tests::Scratch::make();
+        let home = scratch.root.join("reservation-runtime");
+        std::fs::create_dir(&home).unwrap();
+        let composed = Arc::new(
+            Composed::for_tests(home.to_str().unwrap(), runtrol_drivers::builtin()).unwrap(),
+        );
+        let mut sessions = SessionManager::new();
+        let claim =
+            || WorkspaceClaim::discover(scratch.project.clone(), WorkspaceAccess::Shared).unwrap();
+        let opening = sessions.reserve_open(SessionId::now(), claim()).unwrap();
+        let opening_work = live_work_of(&sessions, &composed);
+        sessions.cancel_open(opening.reservation);
+
+        let session = SessionId::now();
+        attach_test_agent_in(
+            &mut sessions,
+            session,
+            Box::new(ReadyEvent {
+                session,
+                ready: false,
+            }),
+            scratch.project.as_str(),
+        );
+        let closing = sessions.close(session).unwrap();
+        let closing_work = live_work_of(&sessions, &composed);
+        closing.agent.close(CloseMode::Kill).await.unwrap();
+        sessions.release_closing(closing.reservation);
+
+        let cleanup = sessions.reserve_workspace_cleanup(claim()).unwrap();
+        let cleanup_work = live_work_of(&sessions, &composed);
+        let (audit, writer) = crate::runtime_audit::journal(Arc::clone(&composed));
+        let mut shutting_down = false;
+        begin_runtime_audit_shutdown_if_drained(
+            true,
+            &sessions,
+            &composed,
+            &audit,
+            &mut shutting_down,
+        );
+        let ended_while_cleanup_pending = shutting_down;
+        sessions.release_workspace_cleanup(cleanup);
+        begin_runtime_audit_shutdown_if_drained(
+            true,
+            &sessions,
+            &composed,
+            &audit,
+            &mut shutting_down,
+        );
+        drop(writer);
+        drop(audit);
+        drop(composed);
+        assert_eq!((opening_work, closing_work, cleanup_work), (1, 1, 1));
+        assert!(!ended_while_cleanup_pending);
+        assert!(shutting_down, "the final exact release permits shutdown");
     }
 
     #[tokio::test]
@@ -4620,6 +5043,162 @@ mod tests {
         running.stop();
     }
 
+    async fn release_worktree_fixture() -> (
+        crate::isolated_workspace::tests::Scratch,
+        Composed,
+        runtrol_ipc::wire::IsolatedWorkspaceLine,
+    ) {
+        let scratch = crate::isolated_workspace::tests::Scratch::make();
+        let home = scratch.root.join("release-runtime");
+        std::fs::create_dir(&home).expect("owned Runtime home");
+        let composed = Composed::for_tests(home.to_str().unwrap(), runtrol_drivers::builtin())
+            .expect("the isolated Runtime composes");
+        let Response::IsolatedWorkspace(worktree) = composed
+            .isolated_workspaces
+            .prepare(
+                &composed.containment,
+                &uuid::Uuid::now_v7().to_string(),
+                scratch.project.as_str(),
+            )
+            .await
+            .expect("prepare the real linked worktree")
+        else {
+            panic!("worktree response");
+        };
+        (scratch, composed, *worktree)
+    }
+
+    async fn serve_release_fixture(
+        composed: Composed,
+        sessions: SessionManager,
+    ) -> (Connection, tokio::task::JoinHandle<Result<(), ServeError>>) {
+        let address = composed.home.paths().endpoint().address().to_owned();
+        let listener = Listener::bind(&address).await.expect("owned pipe");
+        let serving = tokio::spawn(serve_sessions(composed, listener, sessions));
+        let mut caller = runtrol_ipc::transport::connect(&address).await.unwrap();
+        assert!(matches!(
+            ask(
+                &mut caller,
+                &Request::Hello {
+                    wire: runtrol_ipc::WIRE_VERSION,
+                }
+            )
+            .await,
+            Response::Welcome { .. }
+        ));
+        (caller, serving)
+    }
+
+    #[tokio::test]
+    async fn workspace_cleanup_refuses_ready_worktree_with_an_opening_owner() {
+        let (_scratch, composed, worktree) = release_worktree_fixture().await;
+        let mut sessions = SessionManager::new();
+        let workspace = AbsPath::canonicalize(&worktree.workspace).expect("owned workspace");
+        let reservation = sessions
+            .reserve_open(
+                SessionId::now(),
+                WorkspaceClaim::discover(workspace.clone(), WorkspaceAccess::Shared).unwrap(),
+            )
+            .expect("the process slot is held before slow provider startup");
+        assert!(reservation.displaced.is_none());
+        let (mut caller, serving) = serve_release_fixture(composed, sessions).await;
+        let response = ask(
+            &mut caller,
+            &Request::WorkspaceIsolateRelease {
+                workspace_id: Some(worktree.workspace_id),
+                session_id: None,
+                workspace: worktree.workspace,
+            },
+        )
+        .await;
+        let preserved = workspace.as_std_path().join("README.md").exists();
+        drop(caller);
+        serving.abort();
+        assert!(serving.await.is_err_and(|error| error.is_cancelled()));
+        assert!(
+            matches!(response, Response::Failed(error) if error.message.contains("overlaps")),
+            "a real release request must consult the process owner before Git mutation"
+        );
+        assert!(
+            preserved,
+            "an opening session's working files remain available"
+        );
+    }
+
+    #[tokio::test]
+    async fn workspace_cleanup_waits_for_exact_close_and_then_removes_the_bound_worktree() {
+        let (_scratch, composed, worktree) = release_worktree_fixture().await;
+        let session = SessionId::now();
+        let workspace = AbsPath::canonicalize(&worktree.workspace).unwrap();
+        composed
+            .isolated_workspaces
+            .bind(
+                &worktree.workspace_id,
+                &session.to_string(),
+                &worktree.workspace,
+            )
+            .unwrap();
+        let (started, closing) = oneshot::channel();
+        let (release, released) = oneshot::channel();
+        let mut sessions = SessionManager::new();
+        attach_test_agent_in(
+            &mut sessions,
+            session,
+            Box::new(PendingClose {
+                session,
+                started,
+                release: released,
+                panic_after_release: false,
+            }),
+            workspace.as_str(),
+        );
+        let address = composed.home.paths().endpoint().address().to_owned();
+        let (mut caller, serving) = serve_release_fixture(composed, sessions).await;
+        let mut closer = runtrol_ipc::transport::connect(&address).await.unwrap();
+        assert!(matches!(
+            ask(
+                &mut closer,
+                &Request::Hello {
+                    wire: runtrol_ipc::WIRE_VERSION,
+                }
+            )
+            .await,
+            Response::Welcome { .. }
+        ));
+        let closing_task =
+            tokio::spawn(
+                async move { ask(&mut closer, &Request::Close { session, now: true }).await },
+            );
+        tokio::time::timeout(Duration::from_secs(5), closing)
+            .await
+            .unwrap()
+            .unwrap();
+        let request = Request::WorkspaceIsolateRelease {
+            workspace_id: Some(worktree.workspace_id),
+            session_id: Some(session.to_string().into()),
+            workspace: worktree.workspace,
+        };
+        let refused = ask(&mut caller, &request).await;
+        let preserved_while_closing = workspace.as_std_path().join("README.md").exists();
+        release.send(()).unwrap();
+        let close_response = closing_task.await.unwrap();
+        let removed = ask(&mut caller, &request).await;
+        let absent = !workspace.as_std_path().exists();
+        drop(caller);
+        serving.abort();
+        assert!(serving.await.is_err_and(|error| error.is_cancelled()));
+        assert!(matches!(refused, Response::Failed(error) if error.message.contains("overlaps")));
+        assert!(preserved_while_closing);
+        assert!(matches!(close_response, Response::Done));
+        assert!(
+            matches!(removed, Response::IsolatedWorkspaceReleased(line) if line.outcome.as_ref() == "removed")
+        );
+        assert!(
+            absent,
+            "the exact positively closed session permits normal clean release"
+        );
+    }
+
     #[tokio::test]
     async fn a_paired_phone_and_local_surface_share_one_session_owner() {
         let session = SessionId::now();
@@ -5390,7 +5969,9 @@ mod tests {
         let (cancelling, mut cancelled) = mpsc::unbounded_channel();
         let mut tasks = JoinSet::new();
 
-        abandon_reserved(&mut sessions, &mut tasks, &cancelling, abandoned);
+        let (_scratch, composed, _) = release_worktree_fixture().await;
+        let composed = Arc::new(composed);
+        abandon_reserved(&composed, &mut sessions, &mut tasks, &cancelling, abandoned);
         tokio::time::timeout(core::time::Duration::from_secs(2), closing)
             .await
             .expect("cleanup start did not time out")
@@ -5427,6 +6008,57 @@ mod tests {
         Cleaning,
     }
 
+    impl DroppedCleanup {
+        fn reply(
+            self,
+            sessions: &mut SessionManager,
+            reserved: OpenReservation,
+            agent: Box<dyn Agent>,
+        ) -> Reply {
+            match self {
+                Self::Stopping => {
+                    let intent = runtrol_provider::OpenIntent {
+                        session: reserved.session(),
+                        workspace: runtrol_provider::AbsPath::new(if cfg!(windows) {
+                            r"C:\work"
+                        } else {
+                            "/work"
+                        })
+                        .expect("valid test path"),
+                        disposition: runtrol_provider::Disposition::Fresh,
+                        model: None,
+                        reasoning_effort: None,
+                        permission: None,
+                    };
+                    sessions
+                        .attach_opened(
+                            reserved,
+                            runtrol_provider::ProviderId::parse("test").expect("valid provider"),
+                            &intent,
+                            agent,
+                        )
+                        .expect("the cleanup fixture attaches");
+                    let closing = sessions
+                        .close(intent.session)
+                        .expect("the cleanup fixture starts closing");
+                    Reply::Stopping {
+                        agent: closing.agent,
+                        how: CloseMode::Kill,
+                        reservation: closing.reservation,
+                    }
+                }
+                Self::Cleaning => Reply::Cleaning {
+                    response: Response::Done,
+                    agents: vec![Cleanup {
+                        agent,
+                        how: CloseMode::Kill,
+                        reservation: Some(CleanupReservation::Open(reserved)),
+                    }],
+                },
+            }
+        }
+    }
+
     async fn dropped_answer_holds_slot_until_cleanup(
         kind: DroppedCleanup,
         panic_after_release: bool,
@@ -5449,47 +6081,7 @@ mod tests {
             release: released,
             panic_after_release,
         });
-        let reply = match kind {
-            DroppedCleanup::Stopping => {
-                let intent = runtrol_provider::OpenIntent {
-                    session: reserved.session(),
-                    workspace: runtrol_provider::AbsPath::new(if cfg!(windows) {
-                        r"C:\work"
-                    } else {
-                        "/work"
-                    })
-                    .expect("valid test path"),
-                    disposition: runtrol_provider::Disposition::Fresh,
-                    model: None,
-                    reasoning_effort: None,
-                    permission: None,
-                };
-                sessions
-                    .attach_opened(
-                        reserved,
-                        runtrol_provider::ProviderId::parse("test").expect("valid provider"),
-                        &intent,
-                        agent,
-                    )
-                    .expect("the cleanup fixture attaches");
-                let closing = sessions
-                    .close(intent.session)
-                    .expect("the cleanup fixture starts closing");
-                Reply::Stopping {
-                    agent: closing.agent,
-                    how: CloseMode::Kill,
-                    reservation: closing.reservation,
-                }
-            }
-            DroppedCleanup::Cleaning => Reply::Cleaning {
-                response: Response::Done,
-                agents: vec![Cleanup {
-                    agent,
-                    how: CloseMode::Kill,
-                    reservation: Some(CleanupReservation::Open(reserved)),
-                }],
-            },
-        };
+        let reply = kind.reply(&mut sessions, reserved, agent);
         let answer = Answered {
             conversation: Conversation::at_the_machine(),
             reply,
@@ -5499,7 +6091,16 @@ mod tests {
         let (cancelling, mut cancelled) = mpsc::unbounded_channel();
         let mut tasks = JoinSet::new();
 
-        deliver_answer(answered, answer, &mut tasks, &cancelling, &mut sessions);
+        let (_scratch, composed, _) = release_worktree_fixture().await;
+        let composed = Arc::new(composed);
+        deliver_answer(
+            &composed,
+            answered,
+            answer,
+            &mut tasks,
+            &cancelling,
+            &mut sessions,
+        );
         tokio::time::timeout(core::time::Duration::from_secs(2), closing)
             .await
             .expect("abandoned cleanup start did not time out")

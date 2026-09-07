@@ -161,6 +161,7 @@ pub(super) async fn dispatch_public(
             | RuntimeMethod::TerminalsAcquireControl
             | RuntimeMethod::TerminalsRenewControl
             | RuntimeMethod::TerminalsReleaseControl
+            | RuntimeMethod::TerminalsSendText
             | RuntimeMethod::TerminalsWrite
             | RuntimeMethod::TerminalsResize
             | RuntimeMethod::TerminalsDetach
@@ -187,6 +188,9 @@ pub(super) async fn dispatch_public(
             | RuntimeMethod::WindowsMirrorOutput
             | RuntimeMethod::WindowsMirrorEnd
             | RuntimeMethod::WindowsReveal
+            | RuntimeMethod::WindowsWatchInput
+            | RuntimeMethod::WindowsClaimInput
+            | RuntimeMethod::WindowsInputReceipt
             | RuntimeMethod::WindowsWatchReveals => {
                 super::window_requests::window_operation(state, composed, method, id, params).await
             }
@@ -207,6 +211,8 @@ pub(super) async fn dispatch_public(
             | RuntimeMethod::WindowsIndexChanged
             | RuntimeMethod::WindowsIndexEnded
             | RuntimeMethod::WindowsRevealRequested
+            | RuntimeMethod::WindowsInputOffered
+            | RuntimeMethod::WindowsInputEnded
             | RuntimeMethod::WindowsRevealsEnded => Answer::plain(
                 id,
                 RuntimeErrorKind::InvalidRequest,

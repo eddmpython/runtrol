@@ -324,6 +324,12 @@ pub struct ClosingReservation {
     generation: u64,
 }
 
+/// Exclusive ownership of an idle workspace while its files are being released.
+#[derive(Debug, PartialEq, Eq)]
+pub struct WorkspaceCleanupReservation {
+    reservation: OpenReservation,
+}
+
 /// Opaque proof that no process for one provider may start while its package tree changes.
 #[derive(Debug, PartialEq, Eq)]
 pub struct ProviderUpdateReservation {
@@ -359,6 +365,7 @@ impl OpenReservation {
 enum ReservationState {
     Opening,
     Closing,
+    ReleasingWorkspace,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -641,6 +648,47 @@ impl SessionManager {
         self.reserve_open_inner(Some(provider), session, claim)
     }
 
+    /// Reserve a workspace without starting or displacing a process.
+    ///
+    /// The caller retains this proof through file cleanup and releases it on every completion or cancellation.
+    ///
+    /// # Errors
+    /// Refuses overlapping live, opening or closing owners and a full bounded reservation set.
+    pub fn reserve_workspace_cleanup(
+        &mut self,
+        claim: WorkspaceClaim,
+    ) -> Result<WorkspaceCleanupReservation, SessionError> {
+        if self.live.len() + self.opening.len() >= MAX_HOT {
+            return Err(SessionError::OpeningCapacityReserved);
+        }
+        if let Some((session, occupied)) = self.workspace_conflict(claim.identity()) {
+            return Err(SessionError::WorkspaceOccupied {
+                requested: claim.identity().worktree().clone(),
+                occupied: occupied.worktree().clone(),
+                session,
+            });
+        }
+        let reservation = OpenReservation {
+            session: SessionId::now(),
+            generation: self.allocate_reservation_generation()?,
+        };
+        self.opening.insert(
+            reservation.session,
+            HeldReservation {
+                generation: reservation.generation,
+                state: ReservationState::ReleasingWorkspace,
+                project: claim.into_identity(),
+                provider: None,
+            },
+        );
+        Ok(WorkspaceCleanupReservation { reservation })
+    }
+
+    /// Retire only the exact workspace cleanup reservation.
+    pub fn release_workspace_cleanup(&mut self, reservation: WorkspaceCleanupReservation) {
+        self.cancel_open(reservation.reservation);
+    }
+
     fn reserve_open_inner(
         &mut self,
         provider: Option<ProviderId>,
@@ -655,9 +703,16 @@ impl SessionManager {
         if self.live.contains_key(&session) || self.opening.contains_key(&session) {
             return Err(SessionError::AlreadyLive { session });
         }
-        if claim.access() == WorkspaceAccess::Exclusive
-            && let Some((occupied_by, occupied)) = self.workspace_conflict(claim.identity())
-        {
+        let conflict = if claim.access() == WorkspaceAccess::Exclusive {
+            self.workspace_conflict(claim.identity())
+        } else {
+            self.opening.iter().find_map(|(session, held)| {
+                (held.state == ReservationState::ReleasingWorkspace
+                    && claim.identity().overlaps(&held.project))
+                .then_some((*session, &held.project))
+            })
+        };
+        if let Some((occupied_by, occupied)) = conflict {
             return Err(SessionError::WorkspaceOccupied {
                 requested: claim.identity().worktree().clone(),
                 occupied: occupied.worktree().clone(),
@@ -791,11 +846,13 @@ impl SessionManager {
             session,
             generation,
         } = reservation;
-        if held_matches(
-            self.opening.get(&session),
-            generation,
-            ReservationState::Opening,
-        ) {
+        if self.opening.get(&session).is_some_and(|held| {
+            held.generation == generation
+                && matches!(
+                    held.state,
+                    ReservationState::Opening | ReservationState::ReleasingWorkspace
+                )
+        }) {
             self.opening.remove(&session);
         }
     }
@@ -1997,6 +2054,52 @@ mod tests {
                 .reserve_open(SessionId::now(), claim("repo/src", WorkspaceAccess::Shared),)
                 .is_ok(),
             "the operator explicitly accepted concurrent writers"
+        );
+    }
+
+    #[test]
+    fn workspace_cleanup_blocks_even_shared_birth_until_its_exact_release() {
+        let mut manager = SessionManager::new();
+        let cleanup = manager
+            .reserve_workspace_cleanup(claim("releasing", WorkspaceAccess::Exclusive))
+            .expect("an idle workspace can be reserved for cleanup");
+        let started = manager.reserve_open(
+            SessionId::now(),
+            claim("releasing/child", WorkspaceAccess::Shared),
+        );
+        let refused = matches!(started, Err(SessionError::WorkspaceOccupied { .. }));
+        if let Ok(started) = started {
+            manager.cancel_open(started.reservation);
+        }
+        manager.release_workspace_cleanup(cleanup);
+        assert!(
+            refused,
+            "shared writer approval never authorizes birth during filesystem deletion"
+        );
+        let next = manager
+            .reserve_open(
+                SessionId::now(),
+                claim("releasing/child", WorkspaceAccess::Shared),
+            )
+            .expect("the next shared birth is possible after exact cleanup release");
+        manager.cancel_open(next.reservation);
+    }
+
+    #[test]
+    fn workspace_cleanup_requires_exclusion_even_when_its_claim_was_shared() {
+        let mut manager = SessionManager::new();
+        let opening = manager
+            .reserve_open(SessionId::now(), claim("claimed", WorkspaceAccess::Shared))
+            .expect("a provider owns the workspace before its slow open");
+        let cleanup = manager.reserve_workspace_cleanup(claim("claimed", WorkspaceAccess::Shared));
+        let refused = matches!(cleanup, Err(SessionError::WorkspaceOccupied { .. }));
+        if let Ok(cleanup) = cleanup {
+            manager.release_workspace_cleanup(cleanup);
+        }
+        manager.cancel_open(opening.reservation);
+        assert!(
+            refused,
+            "cleanup must never infer sharing permission from a writer's claim"
         );
     }
 

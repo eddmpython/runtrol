@@ -47,7 +47,7 @@ serving the home; `runtrol status` prints that list and whether each generation 
 |---|---|
 | Missing | Install Runtime or run an explicit installed Runtime command |
 | One current generation | Connect through the SDK and complete instance proof |
-| Two generations, one draining | An update is taking over; the draining one finishes its running turns and exits by itself |
+| Two generations, one draining | An update is taking over; existing managed terminals remain on their original generation until their owners exit or are explicitly stopped |
 | An entry that no longer answers | Left by a crash; the next generation to start removes it |
 | Unsafe owner or permissions | Refuse SDK connection and repair locally before replacement |
 | Incompatible revision | Install a signed compatible Runtime or roll back the consumer SDK |
@@ -82,10 +82,12 @@ switches the per-user launcher. Previous versioned executables remain available 
 using its current verified bytes until it stops, so launcher replacement does not mutate a live process.
 
 Nothing has to be finished before the new build serves. The first command run from it starts a new generation
-beside the running daemon; the running daemon hands over the store, stops taking new conversations, keeps serving
-the turns already running, and exits by itself when none is left. `runtrol status` shows both while both live.
-`runtrol panic` still stops every supervised provider process and the daemon at once; use it only after reviewing
-active work, because an active turn is interrupted.
+beside the running daemon; the running daemon hands over the store, stops taking new conversations, and keeps
+serving its existing terminal owners. A quiet prompt or a closed viewer does not end an owned terminal. The old
+generation exits after its owners have ended and their output has drained. `runtrol status` shows both while both live.
+`runtrol panic` interrupts supervised work and stops its Runtime generation. On Windows, a successful return waits
+for the exact Runtime process and its process-completion keeper. A closed connection or a missing locator is
+insufficient. Use it only after reviewing active work, because an active turn is interrupted.
 
 Rollback by running the installer from the earlier attested target archive. Verify that its protocol revision
 inventory overlaps every installed consumer and that its `rollbackSafeStoreSchema` accepts the current state. Release
@@ -95,8 +97,15 @@ new locator and must not resubmit ambiguous mutations or reacquire control silen
 ## Uninstall
 
 First review managed sessions and integrations in VS Code. Revoke consumers that should no longer authenticate.
-Finish, interrupt, or cool active work according to operator intent. Stop the daemon with `runtrol panic`, then confirm
-that `runtime.locator.json` is absent.
+Finish, interrupt, or cool active work according to operator intent. Stop each Runtime generation and require the
+stop command's successful completion before confirming that `runtime.locator.json` is absent. On Windows, an
+unconfirmed shutdown retains state and must not be repaired by killing the keeper or deleting its image. A generation
+that predates process-completion proofs cannot establish that proof merely by disconnecting.
+
+For one listed build, `runtrol panic --generation <full-build-digest>` uses the current executable's completion checks
+against that exact owner-local locator entry. It starts no replacement and, on Windows, refuses an older generation
+before sending a stop when it cannot retain its completion proof. Studio's uninstall hook uses this route through
+the Runtime bundled with the extension being removed, rather than trusting an older image's shutdown verdict.
 
 Run the uninstall script from the same verified archive:
 
@@ -108,7 +117,9 @@ Run the uninstall script from the same verified archive:
 ./uninstall.sh
 ```
 
-The script refuses while a Runtime locator exists. It removes the installed Runtime executable, launcher, locator,
+The script refuses while a Runtime locator exists. On Windows it also refuses while any process still maps an
+executable below the exact Runtime installation directory. Studio's uninstall hook requests orderly shutdown and
+retains its images and state if completion cannot be confirmed. It removes the installed Runtime executable, launcher, locator,
 grants, cache, install record, and Runtime-owned metadata. It does not inspect or remove provider installations,
 provider authentication, or provider-owned conversations. An external client then receives `runtimeNotInstalled` and
 must not recreate Runtime without user intent.
@@ -127,5 +138,5 @@ provider CLI if needed. Reinstallation creates a new Runtime instance and requir
 | Locator remains after a crash | Verify no Runtime process owns it before removing only that file |
 | SDK says `protocolIncompatible` | Compare revision inventories and choose a signed compatible update or rollback |
 | SDK says `integrationRevoked` | Remove obsolete consumer credentials and enroll a new identity with user intent |
-| Update leaves old daemon active | Complete work, stop the verified daemon, and issue a new explicit Runtime command |
-| Uninstaller reports an existing locator | Do not force deletion. Review sessions, stop Runtime, and retry |
+| Update leaves old daemon active | Review its exact terminal owners, finish their work and explicitly stop those terminals when appropriate; an idle prompt remains a live owner |
+| Uninstaller reports an existing locator or unconfirmed process completion | Review sessions, stop Runtime, and wait for confirmed completion before retrying; keep the completion process and retained state intact |

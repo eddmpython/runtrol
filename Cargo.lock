@@ -1620,7 +1620,9 @@ dependencies = [
  "cargo_metadata",
  "runtrol-childproc",
  "runtrol-core",
+ "runtrol-ipc",
  "runtrol-provider",
+ "runtrol-runtime-protocol",
  "runtrol-security",
  "runtrol-store",
  "runtrol-transport",
@@ -1652,6 +1654,7 @@ dependencies = [
  "runtrol-courier",
  "runtrol-ipc",
  "runtrol-provider",
+ "runtrol-terminal-protocol",
  "serde_json",
  "thiserror 2.0.19",
  "tokio",
@@ -1667,6 +1670,7 @@ dependencies = [
  "runtrol-provider",
  "runtrol-security",
  "runtrol-store",
+ "runtrol-terminal-protocol",
  "serde",
  "serde_json",
  "thiserror 2.0.19",
@@ -1828,6 +1832,13 @@ dependencies = [
  "redb",
  "runtrol-provider",
  "thiserror 2.0.19",
+]
+
+[[package]]
+name = "runtrol-terminal-protocol"
+version = "0.1.1"
+dependencies = [
+ "serde_json",
 ]
 
 [[package]]

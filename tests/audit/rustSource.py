@@ -171,6 +171,16 @@ def testRegions(lines: list[str]) -> list[tuple[int, int]]:
     one item is the region.
     """
     cleanedLines = withoutNoiseAcross(lines)
+    # An inner attribute at the file boundary excludes the whole module from production. Do not infer
+    # this from a filename, a comment, a string, or an inner attribute inside a later nested module.
+    for line in cleanedLines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if re.fullmatch(r"#!\s*\[\s*cfg\s*\(\s*test\s*\)\s*\]", stripped):
+            return [(0, len(lines) - 1)]
+        if not stripped.startswith("#!["):
+            break
     regions: list[tuple[int, int]] = []
     i = 0
     while i < len(lines):
@@ -205,6 +215,16 @@ def selftest() -> int:
     the next person to read a report that was quietly wrong.
     """
     problems: list[str] = []
+
+    for source, expected in (
+        ("//! Test support\n#![cfg(test)]\nfn fixture() {}\n", True),
+        ("// #![cfg(test)]\nfn production() {}\n", False),
+        ('const TEXT: &str = "#![cfg(test)]";\nfn production() {}\n', False),
+        ("mod nested {\n#![cfg(test)]\nfn fixture() {}\n}\nfn production() {}\n", False),
+    ):
+        lines = source.splitlines()
+        if inRegions(len(lines) - 1, testRegions(lines)) != expected:
+            problems.append("a whole-module test attribute was confused with unrelated source text")
 
     # The defect this file exists for. The brace inside the raw string must not be counted.
     source = (

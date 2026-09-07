@@ -224,7 +224,7 @@ pub(super) async fn forget_session(
         return runtime_owner_stopped(id);
     }
     match hearing.await {
-        Ok(reply) => runtime_control_answer(id, reply, returning).await,
+        Ok(reply) => runtime_control_answer(composed, id, reply, returning).await,
         Err(_) => runtime_owner_stopped(id),
     }
 }

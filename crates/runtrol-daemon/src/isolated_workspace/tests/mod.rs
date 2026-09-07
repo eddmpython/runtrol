@@ -1,6 +1,10 @@
 use super::*;
 #[cfg(windows)]
 mod cancellation;
+#[cfg(windows)]
+mod completion;
+#[cfg(windows)]
+pub(crate) mod concurrency;
 pub(crate) mod process;
 mod registry;
 mod resume;
@@ -9,6 +13,10 @@ mod terminal;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static NEXT_SCRATCH: AtomicU64 = AtomicU64::new(0);
+
+pub(crate) fn hold_operation(path: &AbsPath, workspace_id: &str) -> std::sync::Arc<std::fs::File> {
+    super::registry::operation(path, workspace_id).unwrap()
+}
 
 pub(crate) struct Scratch {
     pub(crate) root: std::path::PathBuf,
@@ -111,12 +119,14 @@ fn durable_registry_rejects_targets_outside_the_owned_root() {
         .expect("canonical temporary directory");
     let project = root.join("project").expect("project path");
     let record = Record {
+        lifetime: None,
         workspace_id: "01234567-89ab-cdef-0123-456789abcdef".into(),
         request_id: "01234567-89ab-cdef-0123-456789abcdef".into(),
         project,
         workspace: root.join("somewhere-else").expect("outside path"),
         base_commit: "0123456789abcdef0123456789abcdef01234567".into(),
         session_id: None,
+        session_completed: false,
         state: State::Ready,
         revision: 1,
         terminal: None,
@@ -141,7 +151,7 @@ async fn restart_preserves_session_binding_and_removes_the_exact_clean_worktree(
     let scratch = Scratch::make();
     let containment = Containment::without_any();
     let first_id = "01234567-89ab-cdef-0123-456789abcdef";
-    let mut controller =
+    let controller =
         IsolatedWorkspaceController::open(scratch.registry.clone()).expect("open registry");
     let Response::IsolatedWorkspace(first) = controller
         .prepare(&containment, first_id, scratch.project.as_str())
@@ -154,7 +164,7 @@ async fn restart_preserves_session_binding_and_removes_the_exact_clean_worktree(
     let first_path = first.workspace.to_string();
     drop(controller);
 
-    let mut restored =
+    let restored =
         IsolatedWorkspaceController::open(scratch.registry.clone()).expect("restore registry");
     let Response::IsolatedWorkspaces(listed) = restored.list() else {
         panic!("listed response");
@@ -164,6 +174,8 @@ async fn restart_preserves_session_binding_and_removes_the_exact_clean_worktree(
     restored
         .bind(first_id, &session, &first_path)
         .expect("bind restored worktree");
+    let ended = EndedSession::after_close_completed(session.parse().unwrap()).unwrap();
+    restored.complete_session(&ended).unwrap();
     let Response::IsolatedWorkspaceReleased(released) = restored
         .release(&containment, None, Some(&session), &first_path)
         .await
@@ -180,7 +192,7 @@ async fn cleanup_preserves_changes_across_restart() {
     let scratch = Scratch::make();
     let containment = Containment::without_any();
     let second_id = "11234567-89ab-cdef-0123-456789abcdef";
-    let mut restored =
+    let restored =
         IsolatedWorkspaceController::open(scratch.registry.clone()).expect("open registry");
     let Response::IsolatedWorkspace(second) = restored
         .prepare(&containment, second_id, scratch.project.as_str())
@@ -207,7 +219,7 @@ async fn cleanup_preserves_changes_across_restart() {
     assert!(dirty.exists());
     drop(restored);
 
-    let mut after_restart =
+    let after_restart =
         IsolatedWorkspaceController::open(scratch.registry.clone()).expect("restore dirty record");
     let Response::IsolatedWorkspaces(listed) = after_restart.list() else {
         panic!("listed response");

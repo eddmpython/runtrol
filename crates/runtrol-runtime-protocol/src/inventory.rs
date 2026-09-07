@@ -162,6 +162,8 @@ pub enum ProviderAccountStatus {
     SignedOut,
     /// The service publishes no way to ask.
     Unpublished,
+    /// The latest account read failed; no new sign-in or usage fact was obtained.
+    Unread,
 }
 
 /// One service's account report, structured fields only.
@@ -171,7 +173,7 @@ pub enum ProviderAccountStatus {
 #[derive(Clone, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProviderAccount {
-    /// Signed in, signed out, or nothing to ask.
+    /// The provider's account verdict, or an explicitly failed read.
     pub status: ProviderAccountStatus,
     /// The plan token exactly as the service wrote it, when it names one.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -179,7 +181,7 @@ pub struct ProviderAccount {
     /// How the operator is signed in, as the service names it, when it says.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub method: Option<String>,
-    /// Why nothing can be asked, in the service's own terms, for an unpublished status.
+    /// Why the surface is unpublished or the latest account read failed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub why: Option<String>,
     /// Why this signed-in account has no limit numbers, when it has none.
@@ -189,7 +191,7 @@ pub struct ProviderAccount {
     /// want different words on the row, and only the second is anybody's to retry.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limits_absent: Option<ProviderLimitsAbsent>,
-    /// When the service answered, in unix milliseconds, which is how a surface says how stale it is.
+    /// When the answer or failed read completed, in unix milliseconds. A retained gauge keeps its own time.
     pub checked_at_ms: u64,
 }
 

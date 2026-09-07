@@ -91,7 +91,8 @@ The [worktree controller](../crates/runtrol-daemon/src/isolated_workspace/mod.rs
 reservation, process and filesystem identities. Its short transactions preserve other Runtime generations' rows.
 Git operations retain their resource lock until their command and descendants have stopped. Clean, unchanged
 worktrees are removed only after exact terminal exit; dirty or committed work is preserved. A finite restart sweep
-also requires the recorded Runtime incarnation to have ended. Unknown or replaced ownership is retained and reported.
+also requires positive completion of the recorded Runtime incarnation. A missing process alone is insufficient.
+Unknown or replaced ownership is retained and reported.
 
 Selecting a preserved worker conversation resumes its native session in that exact worktree under the original
 project's current `session.resume` grant. The worktree controller verifies the recorded project and filesystem
@@ -109,10 +110,11 @@ The registry upgrades its ownership schema under the shared writer lock before i
 Older writers reject that schema, so rolling back the executable must preserve the upgraded registry and its
 worktrees. Rows whose original ownership cannot be verified remain preserved without resume authority.
 
-Windows command cleanup validates the bounded PID list returned by a successful Job query, retaining exact process
-handles and checking their membership and termination before releasing the operation. A finished process may remain
-briefly in the assigned count after leaving that list; count inequality alone is not a failed completion proof.
-Query errors, capacity overflow, invalid counts, and an unproven final Job state still preserve the resource lock.
+Windows command and terminal cleanup use the [exact lifetime contract](terminalSurface.md#exact-windows-lifetime).
+The independent keeper retains the same process scopes across Runtime exit. Its completion callback updates only
+records matching the original Runtime and keeper identities; it never removes Git data. A live Runtime releases a
+structured session's worktree only after its exact close completes, and invalidates that proof before reopening the
+session. Failed or unproved completion keeps the reservation and worktree intact.
 
 On Windows, migration publishes the existing registry inside a nonempty directory at its original path. Publication
 excludes the legacy commit source before reading the latest record, so an old process with cached metadata cannot

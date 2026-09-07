@@ -51,8 +51,6 @@ pub(super) async fn serve(
         && let Some(ended) = composed.courier_gate.cancel_spawn(&ticket).await
         && let Err(error) = composed
             .isolated_workspaces
-            .lock()
-            .await
             .release_terminal_if_present(&composed.containment, &ended)
             .await
     {
@@ -100,7 +98,7 @@ async fn execute(
         let hosted = terminals.hosted(lead).ok_or("the lead terminal ended")?;
         let (ticket, initial) = composed
             .courier_gate
-            .reserve_spawn(admitted, runtime, terminals.len(), task, timeout_ms)
+            .reserve_spawn(admitted, runtime, terminals.occupied(), task, timeout_ms)
             .await?;
         (hosted, ticket, initial)
     };
@@ -121,8 +119,6 @@ async fn execute(
         container_identity,
     } = composed
         .isolated_workspaces
-        .lock()
-        .await
         .prepare_terminal(&composed.containment, &ticket, &project)
         .await?;
     let owned = Arc::new(SpawnedTerminal {

@@ -1135,7 +1135,7 @@ async fn read_stretch(
                 stretch.lost_chunks += lost_chunks;
                 *expected_sequence = next_sequence;
             }
-            runtrol_runtime_client::TerminalNotification::Exited { exit_code } => {
+            runtrol_runtime_client::TerminalNotification::Exited { exit_code, .. } => {
                 if stretch.first.is_none() {
                     stretch.first = Some("exited".to_owned());
                 }
@@ -1264,6 +1264,7 @@ fn capture_direct(
         rows: GEOMETRY.rows,
     };
     let child = runtrol_childproc::pty::PtyChild::spawn(runtrol_childproc::pty::PtySpawn {
+        containment: runtrol_childproc::PtyContainment::Local,
         program,
         arguments,
         cwd: &cwd,

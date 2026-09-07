@@ -2,9 +2,9 @@
 //!
 //! # This crate cannot open the database, and that is enforced rather than promised
 //!
-//! Its dependency list is the vocabulary and the wire, and nothing else. It cannot see storage, the kernel, or a
-//! driver, so "the command surface asks the daemon" is a fact the compiler holds. If this lived inside the binary it
-//! would see all of those through the binary's own dependency list, and the rule would be a comment.
+//! The command surface depends on the vocabulary, wire, and process primitives for terminal bridging and exact
+//! shutdown confirmation. It cannot see storage, Core, or a driver. Runtime operations therefore go through the
+//! daemon's public boundary rather than opening its database from the command process.
 //!
 //! It is also true for a second reason that has nothing to do with discipline: the database takes an exclusive lock, so
 //! a second opener is refused. Two ways of being right about the same thing.
@@ -25,13 +25,15 @@
 pub mod administration;
 pub mod ask;
 pub mod bridge;
+#[cfg(windows)]
+mod completion;
 pub mod courier;
 pub mod lines;
 pub mod link;
 pub mod words;
 
 pub use administration::{AdministrationFailure, administer, is_administration};
-pub use ask::{Failed, Outcome, ask, request, request_running};
+pub use ask::{Failed, Outcome, ask, request, request_running, stop_running};
 pub use bridge::{BridgeFailure, BridgeProvider, bridge, bridge_providers};
 pub use courier::{Admission, CourierFailure, courier};
 pub use lines::{NOT_NAMED_YET, render};

@@ -46,6 +46,8 @@ pub mod handoff;
 pub mod held;
 pub mod local_terminal;
 pub mod os_window;
+#[cfg(windows)]
+mod process_attributes;
 pub mod process_tree;
 pub mod pty;
 pub mod resolve;
@@ -57,17 +59,26 @@ pub mod watch;
 pub use alive::{alive, matches_process_start};
 pub use argv::{MAX_ARGUMENT_LEN, check_all, check_one};
 pub use console_window::hide_console_window;
+#[cfg(windows)]
+pub use contain::ProcessScope;
 #[cfg(unix)]
 pub use contain::bootstrap_if_requested;
 pub use contain::sweep_stale_guard_directories;
 pub use contain::{ChildGuard, Containment, Strength, TrackedCommand};
+#[cfg(windows)]
+pub use contain::{
+    KeeperCompletion, KeeperIdentity, KeeperLimits, KeeperTarget, KeeperWait,
+    keeper_bootstrap_if_requested,
+};
 pub use error::SpawnError;
 pub use footprint::resident_bytes;
 pub use handoff::keep_handles_to_ourselves;
 pub use held::{holder_of, holder_of_here, write_locked};
 pub use local_terminal::{LocalTerminal, LocalTerminalSize};
 pub use process_tree::{ProcessTree, ProcessTreeError, process_identity};
-pub use pty::{PtyChild, PtySize, PtySpawn};
+#[cfg(windows)]
+pub use pty::PtyResume;
+pub use pty::{PtyChild, PtyContainment, PtySize, PtySpawn};
 pub use resolve::{LauncherKept, Program, ProgramKind, resolve};
 #[cfg(windows)]
 pub use run::capture_retaining;

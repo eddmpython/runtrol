@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Add synchronous and asynchronous observed-terminal text input and typed owner window registration and duplex APIs.
+- Keep owner operations serial and bounded, close cancelled receivers, and never replay an unknown input outcome.
+
 - Add `setDialogue` to terminal views and the generated dialogue control parameters and descriptor state.
 
 ## 0.1.1

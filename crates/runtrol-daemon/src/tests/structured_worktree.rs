@@ -28,7 +28,7 @@ impl Fixture {
         .unwrap();
         let project = VerifiedProject::discover(&scratch.project).unwrap();
         let (owned, structured) = {
-            let mut controller = composed.isolated_workspaces.lock().await;
+            let controller = &composed.isolated_workspaces;
             let prepared = controller
                 .prepare_terminal(&composed.containment, &ticket, &project)
                 .await

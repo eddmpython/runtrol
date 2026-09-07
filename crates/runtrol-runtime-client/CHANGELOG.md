@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Add typed observed-terminal text receipts and a bounded owner input duplex with cancellation-safe teardown.
+- Preserve unknown input outcomes without replay and reject mismatched receipts or queue overflow.
+
 ## 0.1.1
 
 - Added the initial typed client for finalized Runtime revision `2026-08-13`.

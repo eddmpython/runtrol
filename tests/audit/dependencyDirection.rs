@@ -47,10 +47,13 @@ const ALLOWED_EDGES: &[(&str, &[&str])] = &[
     // L1. The dialogue plane's mechanical core: identifiers, envelopes, receipts, ceilings, and accounting between
     // managed sessions. No transport, no clock, no provider; the daemon wires it to the local pipe later.
     ("runtrol-courier", &[]),
+    // L1. Mechanical VT query grammar shared by the host and presentation adapters. No platform or provider.
+    ("runtrol-terminal-protocol", &[]),
     // L2. The kernel. **It cannot see the drivers** (see FORBIDDEN_TRANSITIVE below).
     (
         "runtrol-core",
         &[
+            "runtrol-terminal-protocol",
             "runtrol-provider",
             "runtrol-security",
             "runtrol-childproc",
@@ -86,6 +89,7 @@ const ALLOWED_EDGES: &[(&str, &[&str])] = &[
     (
         "runtrol-cli",
         &[
+            "runtrol-terminal-protocol",
             "runtrol-provider",
             "runtrol-ipc",
             "runtrol-childproc",

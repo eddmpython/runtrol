@@ -11,8 +11,8 @@ use runtrol_runtime_protocol::{
     TerminalControlParams, TerminalDetachParams, TerminalExitedNotification,
     TerminalIndexChangedNotification, TerminalIndexEndReason, TerminalIndexEndedNotification,
     TerminalLaggedNotification, TerminalOpenParams, TerminalOutputNotification,
-    TerminalResizeParams, TerminalSetDialogueParams, TerminalStopParams, TerminalWriteParams,
-    WatchTerminalIndexParams, WatchTerminalIndexResult,
+    TerminalResizeParams, TerminalSendTextParams, TerminalSetDialogueParams, TerminalStopParams,
+    TerminalWriteParams, WatchTerminalIndexParams, WatchTerminalIndexResult,
 };
 use tokio::sync::watch;
 
@@ -243,6 +243,28 @@ pub(super) async fn terminal_operation(
                 Err(failure) => terminal_failure(id, failure),
             }
         }
+        RuntimeMethod::TerminalsSendText => {
+            let Ok(params) = serde_json::from_value::<TerminalSendTextParams>(params) else {
+                return Answer::plain(
+                    id,
+                    RuntimeErrorKind::InvalidRequest,
+                    "owner input parameters are invalid",
+                );
+            };
+            let authority = match authorized_scopes(state, composed, &[AppScope::SessionInputWrite])
+            {
+                Ok(authority) => authority.clone(),
+                Err(failure) => return Answer::failure(id, failure),
+            };
+            match composed
+                .runtime_terminals
+                .send_text(composed, &authority, params, None)
+                .await
+            {
+                Ok(receipt) => Answer::success(id, &receipt),
+                Err(failure) => terminal_failure(id, failure),
+            }
+        }
         RuntimeMethod::TerminalsWrite => {
             let Ok(params) = serde_json::from_value::<TerminalWriteParams>(params) else {
                 return Answer::plain(
@@ -373,33 +395,43 @@ pub(super) async fn relay_terminal(
     }
     let mut root_updates = view.root_proof().subscribe();
     let first_check = tokio::time::Instant::now() + ROOT_REFRESH_AFTER;
-    let mut root_tick = tokio::time::interval_at(first_check, ROOT_REFRESH_AFTER);
-    root_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     // Only a draining generation needs a clock: it must fail closed when successor relay updates stop.
     // Primary generations wake on the commit-coupled notification above and perform no periodic store read.
     let mut authority_tick = tokio::time::interval_at(first_check, Duration::from_millis(500));
     authority_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    let already_exited = *view.attachment.exited.borrow();
-    if let Some(exit_code) = already_exited {
-        drop(
-            send_notification(
-                connection,
-                RuntimeMethod::TerminalsExited,
-                &TerminalExitedNotification {
-                    view_id: view.opened.view_id,
-                    exit_code,
-                },
-            )
-            .await,
-        );
-        return RelayOutcome::CloseConnection;
-    }
     loop {
+        let completion = *view.attachment.exited.borrow();
+        if let Some(exit_code) = completion.exit_code {
+            if drain_terminal_output(connection, composed, &mut view, &mut sequence)
+                .await
+                .is_ok()
+                && view.root_proof().fresh().is_ok()
+            {
+                // ok: completion closes this view even when its peer cannot receive the last notification.
+                let _sent = send_to_view(
+                    connection,
+                    RuntimeMethod::TerminalsExited,
+                    &TerminalExitedNotification {
+                        view_id: view.opened.view_id,
+                        exit_code,
+                        failure: completion
+                            .failure
+                            .map(crate::runtime_terminal::terminal_failure),
+                    },
+                )
+                .await;
+            }
+            return RelayOutcome::CloseConnection;
+        }
         if let Err(failure) = view.root_proof().fresh() {
             report_root_check_end(&view, failure);
             return RelayOutcome::CloseConnection;
         }
         let root_expiry = tokio::time::Instant::from_std(view.root_proof().expires_at());
+        let root_refresh = view
+            .root_proof()
+            .refresh_at()
+            .map(tokio::time::Instant::from_std);
         tokio::select! {
             biased;
             changed = primary_authority_updates.changed() => {
@@ -418,8 +450,7 @@ pub(super) async fn relay_terminal(
                 if changed.is_err() {
                     return RelayOutcome::CloseConnection;
                 }
-                // A completed check is already visible to every view. A timeout cannot renew its prior proof.
-                root_tick.reset_immediately();
+                // Recompute absolute deadlines from shared state. A timeout cannot renew its prior proof.
             }
             () = tokio::time::sleep_until(root_expiry) => {
                 // The loop reads the current shared completion again before any input or output is admitted.
@@ -430,7 +461,7 @@ pub(super) async fn relay_terminal(
                 }
                 root_updates = view.root_proof().subscribe();
             }
-            _ = root_tick.tick() => {
+            () = tokio::time::sleep_until(root_refresh.unwrap_or(root_expiry)), if root_refresh.is_some() => {
                 if let Err(failure) = view.root_proof().refresh() {
                     report_root_check_end(&view, failure);
                     return RelayOutcome::CloseConnection;
@@ -440,38 +471,6 @@ pub(super) async fn relay_terminal(
                 if changed.is_err() {
                     return RelayOutcome::CloseConnection;
                 }
-                let Some(exit_code) = *view.attachment.exited.borrow() else {
-                    continue;
-                };
-                while let Ok(chunk) = view.attachment.live.try_recv() {
-                    if chunk.bytes.len() > runtrol_runtime_protocol::MAX_TERMINAL_OUTPUT_BYTES {
-                        return RelayOutcome::CloseConnection;
-                    }
-                    let notification = TerminalOutputNotification {
-                        view_id: view.opened.view_id.clone(),
-                        sequence,
-                        bytes_base64: base64ct::Base64::encode_string(&chunk.bytes),
-                    };
-                    sequence = sequence.saturating_add(1);
-                    if send_root_output(connection, &view, RuntimeMethod::TerminalsOutput, &notification)
-                        .await
-                        .is_err()
-                    {
-                        return RelayOutcome::CloseConnection;
-                    }
-                }
-                drop(
-                    send_notification(
-                        connection,
-                        RuntimeMethod::TerminalsExited,
-                        &TerminalExitedNotification {
-                            view_id: view.opened.view_id,
-                            exit_code,
-                        },
-                    )
-                    .await,
-                );
-                return RelayOutcome::CloseConnection;
             }
             inbound = connection.recv() => {
                 let Ok(Some(payload)) = inbound else {
@@ -492,44 +491,12 @@ pub(super) async fn relay_terminal(
             output = view.attachment.live.recv() => {
                 match output {
                     Ok(chunk) => {
-                        if chunk.bytes.len() > runtrol_runtime_protocol::MAX_TERMINAL_OUTPUT_BYTES {
-                            return RelayOutcome::CloseConnection;
-                        }
-                        let notification = TerminalOutputNotification {
-                            view_id: view.opened.view_id.clone(),
-                            sequence,
-                            bytes_base64: base64ct::Base64::encode_string(&chunk.bytes),
-                        };
-                        sequence = sequence.saturating_add(1);
-                        if send_root_output(connection, &view, RuntimeMethod::TerminalsOutput, &notification)
-                        .await
-                        .is_err()
-                        {
+                        if send_terminal_chunk(connection, &view, &mut sequence, chunk).await.is_err() {
                             return RelayOutcome::CloseConnection;
                         }
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(lost)) => {
-                        let fresh = view
-                            .hosted
-                            .terminal
-                            .attach()
-                            .await;
-                        if fresh.snapshot.len() > runtrol_runtime_protocol::MAX_TERMINAL_SCREEN_BYTES {
-                            return RelayOutcome::CloseConnection;
-                        }
-                        view.attachment.live = fresh.live;
-                        view.attachment.exited = fresh.exited;
-                        let notification = TerminalLaggedNotification {
-                            view_id: view.opened.view_id.clone(),
-                            lost_chunks: lost,
-                            screen_base64: base64ct::Base64::encode_string(&fresh.snapshot),
-                            checkpoint_available: fresh.checkpoint_available,
-                            next_sequence: sequence,
-                        };
-                        if send_root_output(connection, &view, RuntimeMethod::TerminalsLagged, &notification)
-                        .await
-                        .is_err()
-                        {
+                        if send_terminal_replacement(connection, &mut view, sequence, lost).await.is_err() {
                             return RelayOutcome::CloseConnection;
                         }
                     }
@@ -540,6 +507,81 @@ pub(super) async fn relay_terminal(
             }
         }
     }
+}
+
+/// Completion makes this a finite drain of the existing ring. Lag remains an explicit replacement boundary.
+async fn drain_terminal_output(
+    connection: &mut Connection,
+    composed: &Composed,
+    view: &mut TerminalView,
+    sequence: &mut u64,
+) -> Result<(), ()> {
+    loop {
+        // Final output no longer returns to the biased authority select. Revalidate every drain boundary.
+        refresh_terminal_authority(composed, view).await?;
+        match view.attachment.live.try_recv() {
+            Ok(chunk) => send_terminal_chunk(connection, view, sequence, chunk).await?,
+            Err(tokio::sync::broadcast::error::TryRecvError::Lagged(lost)) => {
+                send_terminal_replacement(connection, view, *sequence, lost).await?;
+            }
+            Err(
+                tokio::sync::broadcast::error::TryRecvError::Empty
+                | tokio::sync::broadcast::error::TryRecvError::Closed,
+            ) => return Ok(()),
+        }
+    }
+}
+
+async fn send_terminal_chunk(
+    connection: &mut Connection,
+    view: &TerminalView,
+    sequence: &mut u64,
+    chunk: runtrol_core::terminal::OutputChunk,
+) -> Result<(), ()> {
+    if chunk.bytes.len() > runtrol_runtime_protocol::MAX_TERMINAL_OUTPUT_BYTES {
+        return Err(());
+    }
+    let notification = TerminalOutputNotification {
+        view_id: view.opened.view_id.clone(),
+        sequence: *sequence,
+        bytes_base64: base64ct::Base64::encode_string(&chunk.bytes),
+    };
+    *sequence = sequence.saturating_add(1);
+    send_root_output(
+        connection,
+        view,
+        RuntimeMethod::TerminalsOutput,
+        &notification,
+    )
+    .await
+}
+
+async fn send_terminal_replacement(
+    connection: &mut Connection,
+    view: &mut TerminalView,
+    sequence: u64,
+    lost: u64,
+) -> Result<(), ()> {
+    let fresh = view.hosted.terminal.attach().await;
+    if fresh.snapshot.len() > runtrol_runtime_protocol::MAX_TERMINAL_SCREEN_BYTES {
+        return Err(());
+    }
+    view.attachment.live = fresh.live;
+    view.attachment.exited = fresh.exited;
+    let notification = TerminalLaggedNotification {
+        view_id: view.opened.view_id.clone(),
+        lost_chunks: lost,
+        screen_base64: base64ct::Base64::encode_string(&fresh.snapshot),
+        checkpoint_available: fresh.checkpoint_available,
+        next_sequence: sequence,
+    };
+    send_root_output(
+        connection,
+        view,
+        RuntimeMethod::TerminalsLagged,
+        &notification,
+    )
+    .await
 }
 
 #[expect(
@@ -597,6 +639,7 @@ async fn terminal_view_request(
         RuntimeMethod::TerminalsAcquireControl
         | RuntimeMethod::TerminalsRenewControl
         | RuntimeMethod::TerminalsReleaseControl
+        | RuntimeMethod::TerminalsSendText
         | RuntimeMethod::TerminalsWrite
         | RuntimeMethod::TerminalsResize
         | RuntimeMethod::TerminalsSetDialogue => &[AppScope::SessionInputWrite],
@@ -699,6 +742,24 @@ async fn terminal_view_request(
                 .await
             {
                 Ok(()) => success(id, &EmptyResult {}),
+                Err(failure) => failure_response(id, failure.kind, failure.message),
+            }
+        }
+        RuntimeMethod::TerminalsSendText => {
+            let Ok(params) = serde_json::from_value::<TerminalSendTextParams>(request.params)
+            else {
+                return TerminalViewResponse::continuing(failure_response(
+                    id,
+                    RuntimeErrorKind::InvalidRequest,
+                    "owner input parameters are invalid",
+                ));
+            };
+            match composed
+                .runtime_terminals
+                .send_text(composed, &view.authority, params, Some(view))
+                .await
+            {
+                Ok(receipt) => success(id, &receipt),
                 Err(failure) => failure_response(id, failure.kind, failure.message),
             }
         }
@@ -857,7 +918,7 @@ pub(super) async fn relay_terminal_index(
         }
         let Ok(snapshot) = composed
             .runtime_terminals
-            .list_validated(composed, &roots)
+            .list_validated(composed, &roots, &authority)
             .await
         else {
             send_terminal_index_end(
@@ -913,7 +974,7 @@ async fn send_terminal_index_end(
 /// this relay forever. The healthy viewers never wait on it either way, since each view drains its own receiver
 /// from the shared ring; this bound only turns a permanently stalled view into an explicit close instead of a
 /// silent hang (`terminalTransportIntegrity`, lag replacement and disconnect).
-const VIEW_WRITE_DEADLINE: Duration = Duration::from_secs(10);
+pub(crate) const VIEW_WRITE_DEADLINE: Duration = Duration::from_secs(10);
 
 /// Authorize each output frame at its send boundary, including exit drain and lag replacement frames.
 async fn send_root_output<T: serde::Serialize>(

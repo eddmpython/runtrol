@@ -6,6 +6,7 @@
 //! --json`, Codex `account/read`) or says it has none, and the projections repeat exactly that.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -19,9 +20,8 @@ use crate::Composed;
 /// Generous, because what one service does to answer is not what another does. Measured 2026-08-26 on this
 /// machine: two answer in about three seconds each over a protocol they already speak, and the third takes
 /// about fourteen because it opens its own headless channel, asks its vendor where the account stands, and
-/// shuts down again. A bound near that fourteen turns a slow network into "this service publishes nothing",
-/// which takes the sign-in state off the row along with the limits. Nothing waits behind it: the services
-/// are asked at the same time.
+/// shuts down again. A tighter bound would turn ordinary slow reads into failures. Failed reads remain
+/// distinct from an unsupported account surface, and a slow provider never delays another provider.
 const ACCOUNT_PROBE_DEADLINE: Duration = Duration::from_mins(1);
 /// How often every service is asked with nothing else prompting it: the backstop, not the driver.
 ///
@@ -31,10 +31,8 @@ const ACCOUNT_PROBE_DEADLINE: Duration = Duration::from_mins(1);
 const ROUND_INTERVAL: Duration = Duration::from_mins(10);
 /// How long a service's terminal has to be quiet before its answer is worth asking for again.
 ///
-/// A conversation held as its CLI's own terminal has no turn boundary anybody can subscribe to. What it has
-/// is a CLI that writes continuously while it works and then stops, so quiet is the boundary. Long enough
-/// that a pause between two frames is not read as an ending, short enough that the strip moves while the
-/// person is still looking at it.
+/// Output becoming quiet is only a cue to ask the provider for current account data. It never proves a
+/// model turn ended or authorizes stopping the process. Coalescing avoids querying between adjacent TUI frames.
 const TURN_QUIET: Duration = Duration::from_secs(1);
 /// The least time between two questions to one service.
 ///
@@ -128,20 +126,152 @@ pub(crate) struct Reported {
     pub(crate) at: WallMs,
 }
 
+impl Reported {
+    fn gauge(&self, provider: ProviderId) -> Option<runtrol_core::ProviderGauge> {
+        let limit = self.report.as_rate_limit()?;
+        Some(runtrol_core::ProviderGauge {
+            provider,
+            reached: limit.reached,
+            windows: limit.windows,
+            cost: None,
+            tokens_today: self.report.tokens_today,
+            at: self.at,
+        })
+    }
+}
+
+type ProbeAnswer = (ProviderId, Result<AccountReport, String>, WallMs);
+
+#[derive(Default)]
+struct AccountProbes {
+    tasks: tokio::task::JoinSet<ProbeAnswer>,
+    owners: BTreeMap<tokio::task::Id, ProviderId>,
+}
+
+impl AccountProbes {
+    fn spawn(
+        &mut self,
+        provider: ProviderId,
+        read: impl Future<Output = Result<AccountReport, String>> + Send + 'static,
+    ) -> bool {
+        if self.contains(provider) {
+            return false;
+        }
+        let task = self
+            .tasks
+            .spawn(async move { (provider, read.await, WallMs::now()) });
+        self.owners.insert(task.id(), provider);
+        true
+    }
+
+    fn contains(&self, provider: ProviderId) -> bool {
+        self.owners.values().any(|owner| *owner == provider)
+    }
+
+    fn is_empty(&self) -> bool {
+        self.tasks.is_empty()
+    }
+
+    #[expect(
+        clippy::print_stderr,
+        reason = "a lost task-owner invariant has no provider or request to answer; stderr is the daemon's operational failure channel"
+    )]
+    async fn next(&mut self) -> Option<ProbeAnswer> {
+        loop {
+            match self.tasks.join_next_with_id().await? {
+                Ok((task, answer)) => {
+                    self.owners.remove(&task);
+                    return Some(answer);
+                }
+                Err(error) => {
+                    let Some(provider) = self.owners.remove(&error.id()) else {
+                        // A broken task-owner invariant cannot be attributed to an arbitrary provider.
+                        // Report it and keep draining independent answers rather than stopping the supervisor.
+                        eprintln!("account task lost its registered owner: {error}");
+                        continue;
+                    };
+                    return Some((
+                        provider,
+                        Err(format!("the account read task did not complete: {error}")),
+                        WallMs::now(),
+                    ));
+                }
+            }
+        }
+    }
+}
+
 /// Every service's latest report.
 #[derive(Debug, Default)]
 pub(crate) struct AccountReports {
     latest: BTreeMap<ProviderId, Reported>,
+    failed: BTreeMap<ProviderId, FailedRead>,
+    // Only a partial read needs this: its new identity fact must not relabel older usage as freshly read.
+    retained_gauges: BTreeMap<ProviderId, runtrol_core::ProviderGauge>,
+}
+
+#[derive(Debug)]
+struct FailedRead {
+    why: String,
+    at: WallMs,
 }
 
 impl AccountReports {
     /// Remember one answer. The newest always wins: the report answers "now".
     pub(crate) fn record(&mut self, provider: ProviderId, report: AccountReport, at: WallMs) {
+        if report.limits.is_none()
+            && matches!(report.status, AccountStatus::SignedIn)
+            && report
+                .limits_absent
+                .as_ref()
+                .is_some_and(runtrol_provider::LimitsAbsent::is_worth_retrying)
+        {
+            if let Some(gauge) = self
+                .latest
+                .get(&provider)
+                .and_then(|previous| previous.gauge(provider))
+            {
+                self.retained_gauges.insert(provider, gauge);
+            }
+        } else {
+            self.retained_gauges.remove(&provider);
+        }
         self.latest.insert(provider, Reported { report, at });
+        self.failed.remove(&provider);
+    }
+
+    fn record_failure(&mut self, provider: ProviderId, why: String, at: WallMs) {
+        self.failed.insert(provider, FailedRead { why, at });
+    }
+
+    /// Store the actual completion time, including an unchanged successful answer.
+    fn record_answer(&mut self, answer: ProbeAnswer) -> bool {
+        let (provider, result, at) = answer;
+        match result {
+            Ok(report) => {
+                let retry = report
+                    .limits_absent
+                    .as_ref()
+                    .is_some_and(runtrol_provider::LimitsAbsent::is_worth_retrying);
+                self.record(provider, report, at);
+                retry
+            }
+            Err(why) => {
+                self.record_failure(provider, why, at);
+                true
+            }
+        }
     }
 
     pub(crate) fn get(&self, provider: ProviderId) -> Option<&Reported> {
         self.latest.get(&provider)
+    }
+
+    /// A confirmed sign-out retires older gauges, including a probe previously merged into a watch value.
+    pub(crate) fn signed_out(&self) -> impl Iterator<Item = (ProviderId, WallMs)> + '_ {
+        self.latest.iter().filter_map(|(id, report)| {
+            matches!(report.report.status, AccountStatus::SignedOut).then_some((*id, report.at))
+        })
     }
 
     /// The public shape of one report, for the provider descriptor.
@@ -149,6 +279,16 @@ impl AccountReports {
         &self,
         provider: ProviderId,
     ) -> Option<runtrol_runtime_protocol::ProviderAccount> {
+        if let Some(failed) = self.failed.get(&provider) {
+            return Some(runtrol_runtime_protocol::ProviderAccount {
+                status: runtrol_runtime_protocol::ProviderAccountStatus::Unread,
+                plan: None,
+                method: None,
+                why: Some(failed.why.clone()),
+                limits_absent: None,
+                checked_at_ms: failed.at.as_millis(),
+            });
+        }
         let reported = self.get(provider)?;
         let (status, why) = match &reported.report.status {
             AccountStatus::SignedIn => (
@@ -196,15 +336,9 @@ impl AccountReports {
         self.latest
             .iter()
             .filter_map(|(provider, reported)| {
-                let limit = reported.report.as_rate_limit()?;
-                Some(runtrol_core::ProviderGauge {
-                    provider: *provider,
-                    reached: limit.reached,
-                    windows: limit.windows,
-                    cost: None,
-                    tokens_today: reported.report.tokens_today,
-                    at: reported.at,
-                })
+                reported
+                    .gauge(*provider)
+                    .or_else(|| self.retained_gauges.get(provider).cloned())
             })
             .collect()
     }
@@ -236,107 +370,151 @@ pub(crate) async fn supervise(
     providers: watch::Sender<Arc<runtrol_runtime_protocol::ProviderList>>,
     usage: watch::Sender<Arc<runtrol_runtime_protocol::ProviderUsageList>>,
 ) {
-    let mut asked: BTreeMap<ProviderId, WallMs> = BTreeMap::new();
-    let mut unread: BTreeSet<ProviderId> = BTreeSet::new();
-    let mut pending: BTreeSet<ProviderId> = BTreeSet::new();
     let first = composed.account_probe_wake.wait().await;
     let mut first = settled_request(&composed.account_probe_wake, first).await;
-    // A request which raced the first-round clock belongs to the same round.
     first.merge(composed.account_probe_wake.take().await);
-    let now = WallMs::now();
-    pending.extend(requested(&composed, &first));
-    let first_ids = take_requested_due(&composed, &mut pending, &asked, now);
-    for id in &first_ids {
-        // ok: this is the first instant for this service.
-        asked.insert(*id, now);
-    }
-    let first_unread = ask_all(&composed, &providers, &usage, first_ids.clone()).await;
-    update_unread(&mut unread, &first_ids, &first_unread);
-    // The slow sweep is a maintenance promise made only after somebody first asks for account state. A daemon
-    // with no consumer stays process-free here however long it runs.
-    let mut swept_at = now;
-
+    let mut schedule = ProbeSchedule {
+        asked: BTreeMap::new(),
+        unread: BTreeMap::new(),
+        pending: requested(&composed, &first).into_iter().collect(),
+        swept_at: WallMs::now(),
+        wake_ready: None,
+    };
+    let mut probes = AccountProbes::default();
     loop {
-        let wait = next_check(
-            &composed,
-            &asked,
-            &unread,
-            &pending,
-            swept_at,
+        schedule.start_due(&composed, &mut probes).await;
+        let wait = schedule.next_check(
+            composed
+                .open_terminals
+                .load(std::sync::atomic::Ordering::Acquire)
+                > 0,
+            &probes,
             WallMs::now(),
+            |provider| service_floor(&composed, provider),
         );
         tokio::select! {
-            () = tokio::time::sleep(wait) => {}
-            request = composed.account_probe_wake.wait() => {
-                let request = settled_request(&composed.account_probe_wake, request).await;
-                let now = WallMs::now();
-                pending.extend(requested(&composed, &request));
-                let ids = take_requested_due(&composed, &mut pending, &asked, now);
-                for id in &ids {
-                    // ok: the previous instant for this service is exactly what is being replaced.
-                    asked.insert(*id, now);
+            answer = probes.next(), if !probes.is_empty() => {
+                if let Some(answer) = answer {
+                    let (id, _, at) = &answer;
+                    let (id, at) = (*id, *at);
+                    let refresh_inventory = probes.is_empty() || providers.borrow().providers.is_empty();
+                    let retry = publish_answer(&composed, &providers, &usage, answer, refresh_inventory).await;
+                    schedule.completed(id, retry, at);
+                    // Evicting hot pages taxes input. Trim only after all reads and terminals are idle.
+                    if probes.is_empty() && composed.open_terminals.load(std::sync::atomic::Ordering::Acquire) == 0 {
+                        runtrol_childproc::footprint::release_unused_memory();
+                    }
                 }
-                let answer = ask_all(&composed, &providers, &usage, ids.clone()).await;
-                update_unread(&mut unread, &ids, &answer);
-                if ids.len() == usable(&composed).len() {
-                    swept_at = now;
-                }
-                continue;
             }
+            request = composed.account_probe_wake.wait() => {
+                schedule.pending.extend(requested(&composed, &request));
+                schedule.wake_ready.get_or_insert(tokio::time::Instant::now() + WAKE_SETTLE);
+            }
+            () = tokio::time::sleep(wait) => {}
+        }
+    }
+}
+
+struct ProbeSchedule {
+    asked: BTreeMap<ProviderId, WallMs>,
+    // Retry is measured from the failed completion, not the start of a potentially minute-long read.
+    unread: BTreeMap<ProviderId, WallMs>,
+    pending: BTreeSet<ProviderId>,
+    swept_at: WallMs,
+    wake_ready: Option<tokio::time::Instant>,
+}
+
+impl ProbeSchedule {
+    async fn start_due(&mut self, composed: &Arc<Composed>, probes: &mut AccountProbes) {
+        if self
+            .wake_ready
+            .is_some_and(|at| at <= tokio::time::Instant::now())
+        {
+            self.wake_ready = None;
         }
         let now = WallMs::now();
-        let mut due = due_now(&composed, &asked, swept_at, now).await;
-        due.extend(take_requested_due(&composed, &mut pending, &asked, now));
-        due.sort_unstable();
-        due.dedup();
-        // A question that did not come back is the one absence that is runtrol's own, so it is not left to
-        // the slow sweep. Which services those are is what the last round answered, kept here rather than
-        // read back out of the report table: this runs every couple of seconds, and the projection that
-        // builds provider descriptors takes that same table without waiting. Contending with it on a short
-        // clock made it publish descriptors with no account at all, and cache them.
-        for id in &unread {
-            if !due.contains(id)
-                && asked
-                    .get(id)
-                    .is_none_or(|at| at.millis_until(now).unwrap_or(0) >= millis(RETRY_AFTER))
-            {
-                due.push(*id);
+        let due = due_now(composed, &self.asked, self.swept_at, now).await;
+        if self.swept_at.millis_until(now).unwrap_or(0) >= millis(ROUND_INTERVAL) {
+            // An in-flight service already owns this sweep. It must not leave a zero-duration idle loop.
+            self.swept_at = now;
+        }
+        // A read already in flight owns a sweep/retry request. An explicit wake remains pending instead.
+        self.pending
+            .extend(due.into_iter().filter(|id| !probes.contains(*id)));
+        self.pending
+            .extend(self.unread.iter().filter_map(|(id, at)| {
+                (!probes.contains(*id) && at.millis_until(now).unwrap_or(0) >= millis(RETRY_AFTER))
+                    .then_some(*id)
+            }));
+        if self.wake_ready.is_some() {
+            return;
+        }
+        // Every trigger shares the same cost floor, including a sweep just after a real activity signal.
+        let due = take_due(
+            &mut self.pending,
+            &self.asked,
+            now,
+            |provider| service_floor(composed, provider),
+            |provider| !probes.contains(provider),
+        );
+        for id in due {
+            let reading = Arc::clone(composed);
+            if probes.spawn(id, async move { ask(&reading, id).await }) {
+                self.asked.insert(id, now);
             }
         }
-        if due.is_empty() {
-            continue;
-        }
-        if due.len() == usable(&composed).len() {
-            swept_at = now;
-        }
-        for id in &due {
-            // ok: the previous instant for this service is exactly what is being replaced.
-            asked.insert(*id, now);
-        }
-        let answered = ask_all(&composed, &providers, &usage, due.clone()).await;
-        update_unread(&mut unread, &due, &answered);
     }
+
+    fn completed(&mut self, id: ProviderId, retry: bool, at: WallMs) {
+        if retry {
+            self.unread.insert(id, at);
+        } else {
+            self.unread.remove(&id);
+        }
+    }
+
+    /// With no terminal or due request, sleep directly to a retry or the slow maintenance sweep.
+    fn next_check(
+        &self,
+        hot: bool,
+        probes: &AccountProbes,
+        now: WallMs,
+        floor: impl Fn(ProviderId) -> Duration,
+    ) -> Duration {
+        let mut next = remaining(self.swept_at, ROUND_INTERVAL, now);
+        if hot {
+            next = next.min(WATCH_TICK);
+        }
+        for (provider, at) in &self.unread {
+            if !probes.contains(*provider) {
+                next = next.min(remaining(*at, RETRY_AFTER, now));
+            }
+        }
+        if let Some(at) = self.wake_ready {
+            next = next.min(at.saturating_duration_since(tokio::time::Instant::now()));
+        } else {
+            for provider in &self.pending {
+                if !probes.contains(*provider) {
+                    next = next.min(
+                        self.asked
+                            .get(provider)
+                            .map_or(Duration::ZERO, |at| remaining(*at, floor(*provider), now)),
+                    );
+                }
+            }
+        }
+        next
+    }
+}
+
+fn remaining(since: WallMs, interval: Duration, now: WallMs) -> Duration {
+    interval.saturating_sub(Duration::from_millis(since.millis_until(now).unwrap_or(0)))
 }
 
 async fn settled_request(wake: &AccountProbeWake, mut request: ProbeRequest) -> ProbeRequest {
     tokio::time::sleep(WAKE_SETTLE).await;
     request.merge(wake.take().await);
     request
-}
-
-fn update_unread(
-    unread: &mut BTreeSet<ProviderId>,
-    asked: &[ProviderId],
-    answered_unread: &BTreeSet<ProviderId>,
-) {
-    for id in asked {
-        if answered_unread.contains(id) {
-            // ok: the set is the answer, and whether this id was already in it says nothing.
-            unread.insert(*id);
-        } else {
-            unread.remove(id);
-        }
-    }
 }
 
 /// Every service this build can actually ask.
@@ -371,26 +549,17 @@ fn requested(composed: &Composed, request: &ProbeRequest) -> Vec<ProviderId> {
 ///
 /// A request inside its floor remains in the bounded set. Dropping it made a second external turn disappear
 /// until the ten-minute sweep because no hosted terminal clock existed to rediscover that quiet edge.
-fn take_requested_due(
-    composed: &Composed,
-    pending: &mut BTreeSet<ProviderId>,
-    asked: &BTreeMap<ProviderId, WallMs>,
-    now: WallMs,
-) -> Vec<ProviderId> {
-    take_due(pending, asked, now, |provider| {
-        service_floor(composed, provider)
-    })
-}
-
 fn take_due(
     pending: &mut BTreeSet<ProviderId>,
     asked: &BTreeMap<ProviderId, WallMs>,
     now: WallMs,
     floor: impl Fn(ProviderId) -> Duration,
+    available: impl Fn(ProviderId) -> bool,
 ) -> Vec<ProviderId> {
     let due: Vec<ProviderId> = pending
         .iter()
         .copied()
+        .filter(|id| available(*id))
         .filter(|id| {
             asked
                 .get(id)
@@ -415,43 +584,6 @@ fn service_floor(composed: &Composed, provider: ProviderId) -> Duration {
     } else {
         PROCESS_SERVICE_FLOOR
     }
-}
-
-/// Sleep only until a fact could next be due.
-///
-/// An open terminal gets the cheap half-second clock that notices quiet. With no terminal and no unread
-/// answer, the task sleeps straight to the ten-minute sweep; an idle daemon does not wake twice a second just
-/// to discover that it is still idle.
-fn next_check(
-    composed: &Composed,
-    asked: &BTreeMap<ProviderId, WallMs>,
-    unread: &BTreeSet<ProviderId>,
-    pending: &BTreeSet<ProviderId>,
-    swept_at: WallMs,
-    now: WallMs,
-) -> Duration {
-    let remaining = |since: WallMs, interval: Duration| {
-        interval.saturating_sub(Duration::from_millis(since.millis_until(now).unwrap_or(0)))
-    };
-    let mut next = remaining(swept_at, ROUND_INTERVAL);
-    if composed
-        .open_terminals
-        .load(std::sync::atomic::Ordering::Acquire)
-        > 0
-    {
-        next = next.min(WATCH_TICK);
-    }
-    for provider in unread {
-        if let Some(at) = asked.get(provider) {
-            next = next.min(remaining(*at, RETRY_AFTER));
-        }
-    }
-    for provider in pending {
-        next = next.min(asked.get(provider).map_or(Duration::ZERO, |at| {
-            remaining(*at, service_floor(composed, *provider))
-        }));
-    }
-    next
 }
 
 /// One duration as whole milliseconds a wall-clock difference can be compared against.
@@ -531,74 +663,37 @@ async fn due_now(
         .collect()
 }
 
-/// Ask exactly these services and republish what changed.
+/// Publish one completed provider read without waiting for unrelated providers.
 #[expect(
     clippy::print_stderr,
     reason = "a detached provider inventory rebuild has no request to answer; stderr is the daemon's operational failure channel"
 )]
-async fn ask_all(
+async fn publish_answer(
     composed: &Arc<Composed>,
     providers: &watch::Sender<Arc<runtrol_runtime_protocol::ProviderList>>,
     usage: &watch::Sender<Arc<runtrol_runtime_protocol::ProviderUsageList>>,
-    ids: Vec<ProviderId>,
-) -> BTreeSet<ProviderId> {
-    if ids.is_empty() {
-        return BTreeSet::new();
-    }
-
-    // All at once, because the services have nothing to do with each other. Asked one after another a round
-    // took as long as the answers added up, and every service behind the slow one had a standing bar for
-    // those seconds; asked together it takes as long as the slowest, and one service being slow costs only
-    // that service. It is also what lets the deadline above be generous without anything else paying for it.
-    let mut asking = tokio::task::JoinSet::new();
-    for id in ids {
-        let composed = Arc::clone(composed);
-        drop(asking.spawn(async move { (id, ask(&composed, id).await) }));
-    }
-    let mut answers = Vec::new();
-    while let Some(joined) = asking.join_next().await {
-        // Two ways to come back with nothing, and neither writes a report. A service that could not be
-        // prepared is an installation problem the inventory already names, and a task that did not finish
-        // is a reading nobody took. In both the row keeps its last answer and the next round asks again.
-        if let Ok((id, Some(report))) = joined {
-            answers.push((id, report));
-        }
-    }
-
-    let now = WallMs::now();
-    let mut changed = false;
-    let mut unread = BTreeSet::new();
-    {
+    answer: ProbeAnswer,
+    refresh_inventory: bool,
+) -> bool {
+    let provider = answer.0;
+    let (retry, account) = {
         let mut reports = composed.account_reports.lock().await;
-        for (id, report) in answers {
-            if report
-                .limits_absent
-                .as_ref()
-                .is_some_and(runtrol_provider::LimitsAbsent::is_worth_retrying)
-            {
-                // ok: the set is the answer, and whether this id was already in it says nothing.
-                unread.insert(id);
-            }
-            let same = reports.get(id).is_some_and(|known| known.report == report);
-            reports.record(id, report, now);
-            changed |= !same;
-        }
-    }
-    // EmptyWorkingSet evicts the whole daemon, including the PTY hot path. It is useful only while idle;
-    // active terminals keep their resident pages so a background account round cannot tax keystrokes.
-    if composed
-        .open_terminals
-        .load(std::sync::atomic::Ordering::Acquire)
-        == 0
-    {
-        runtrol_childproc::footprint::release_unused_memory();
-    }
-    if !changed {
-        return unread;
-    }
-    // The provider descriptors carry the status and the usage list carries the probed windows; both
-    // projections read the reports on their own, so publishing is asking each to look again.
+        let retry = reports.record_answer(answer);
+        (retry, reports.descriptor(provider))
+    };
+    publish_account(providers, provider, account);
+    usage.send_modify(|current| {
+        *current = Arc::new(crate::runtime_inventory::merge_probed_usage(
+            current.as_ref(),
+            composed,
+        ));
+    });
+    // Account state is already visible. Installation metadata can wait for the end of this group of reads;
+    // asking the filesystem once per completion would turn independent results into repeated PATH scans.
     crate::runtime_inventory::invalidate_provider_inventory(composed).await;
+    if !refresh_inventory {
+        return retry;
+    }
     match crate::runtime_inventory::providers_in_background(Arc::clone(composed)).await {
         Ok(Some(next)) => {
             let next = Arc::new(next);
@@ -613,33 +708,395 @@ async fn ask_all(
         Ok(None) => {}
         Err(error) => eprintln!("{error}"),
     }
-    usage.send_modify(|current| {
-        let merged = crate::runtime_inventory::merge_probed_usage(current.as_ref(), composed);
-        *current = Arc::new(merged);
-    });
-    unread
+    retry
 }
 
-/// One service's answer, or nothing when it could not even be prepared, which is an installation
-/// problem the inventory already names.
-async fn ask(composed: &Arc<Composed>, id: ProviderId) -> Option<AccountReport> {
-    let Ok(driver) = crate::provider_prepare::driver(composed, id).await else {
-        return None;
-    };
-    match tokio::time::timeout(ACCOUNT_PROBE_DEADLINE, driver.account()).await {
-        Ok(Ok(report)) => Some(report),
-        Ok(Err(error)) => Some(AccountReport::unpublished(&format!(
+fn publish_account(
+    providers: &watch::Sender<Arc<runtrol_runtime_protocol::ProviderList>>,
+    provider: ProviderId,
+    account: Option<runtrol_runtime_protocol::ProviderAccount>,
+) {
+    providers.send_if_modified(|current| {
+        let Some(entry) = current
+            .providers
+            .iter()
+            .find(|entry| entry.provider_id.as_str() == provider.as_str())
+        else {
+            // A usage-only subscriber may precede the first inventory. The initial rebuild fills that list.
+            return false;
+        };
+        if entry.account == account {
+            return false;
+        }
+        if let Some(entry) = Arc::make_mut(current)
+            .providers
+            .iter_mut()
+            .find(|entry| entry.provider_id.as_str() == provider.as_str())
+        {
+            entry.account = account;
+            true
+        } else {
+            false
+        }
+    });
+}
+
+/// One service's answer, or an explicit failed read including driver preparation failure.
+async fn ask(composed: &Arc<Composed>, id: ProviderId) -> Result<AccountReport, String> {
+    let driver = crate::provider_prepare::driver(composed, id)
+        .await
+        .map_err(|error| error.message().to_owned())?;
+    read_account(driver.account()).await
+}
+
+async fn read_account(
+    read: impl Future<Output = Result<AccountReport, runtrol_provider::ProviderError>>,
+) -> Result<AccountReport, String> {
+    read_account_within(read, ACCOUNT_PROBE_DEADLINE).await
+}
+
+async fn read_account_within(
+    read: impl Future<Output = Result<AccountReport, runtrol_provider::ProviderError>>,
+    deadline: Duration,
+) -> Result<AccountReport, String> {
+    match tokio::time::timeout(deadline, read).await {
+        Ok(Ok(report)) => Ok(report),
+        Ok(Err(error)) => Err(format!(
             "the service did not answer its status surface: {error}"
-        ))),
-        Err(_) => Some(AccountReport::unpublished(
-            "the service did not answer its status surface within the deadline",
         )),
+        Err(_) => {
+            Err("the service did not answer its status surface within the deadline".to_owned())
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn partial_limit_failures_keep_only_the_previous_gauge_and_its_original_time() {
+        let id = ProviderId::parse("partial").expect("provider");
+        let mut reports = AccountReports::default();
+        let mut report = AccountReport::unpublished("fixture");
+        report.status = AccountStatus::SignedIn;
+        report.limits = Some(runtrol_provider::AccountLimits::new(Vec::new(), false));
+        report.tokens_today = Some(42);
+        reports.record(id, report.clone(), WallMs::from_millis(10));
+        report.limits = None;
+        report.tokens_today = None;
+        report.limits_absent = Some(runtrol_provider::LimitsAbsent::Unread {
+            why: "limit timeout".into(),
+        });
+        for at in [20, 30] {
+            assert!(reports.record_answer((id, Ok(report.clone()), WallMs::from_millis(at))));
+            let gauges = reports.probed_gauges();
+            assert_eq!(gauges.len(), 1);
+            let gauge = gauges.first().expect("one retained gauge");
+            assert_eq!(gauge.tokens_today, Some(42));
+            assert_eq!(gauge.at, WallMs::from_millis(10));
+            assert_eq!(
+                reports
+                    .descriptor(id)
+                    .expect("fresh identity")
+                    .checked_at_ms,
+                at
+            );
+        }
+        report.limits_absent = Some(runtrol_provider::LimitsAbsent::Unmetered {
+            why: "account changed to team metering".into(),
+        });
+        assert!(!reports.record_answer((id, Ok(report), WallMs::from_millis(40))));
+        assert!(
+            reports.probed_gauges().is_empty(),
+            "a real replacement verdict clears the retained gauge"
+        );
+        assert!(reports.retained_gauges.is_empty());
+    }
+
+    #[test]
+    fn a_completed_account_is_pushed_without_an_installation_scan() {
+        let id = ProviderId::parse("visible").expect("provider");
+        let initial = serde_json::from_value(serde_json::json!({
+            "providers": [{"providerId": "visible", "displayName": "Visible", "installation": {"state": "usable"}}]
+        })).expect("minimal provider inventory");
+        let (sender, mut updates) = watch::channel(Arc::new(initial));
+        let mut reports = AccountReports::default();
+        reports.record_failure(id, "account timeout".to_owned(), WallMs::from_millis(20));
+        publish_account(&sender, id, reports.descriptor(id));
+        assert!(updates.has_changed().expect("watch is open"));
+        assert_eq!(
+            updates
+                .borrow_and_update()
+                .providers
+                .first()
+                .expect("one provider")
+                .account
+                .as_ref()
+                .expect("unread visible")
+                .status,
+            runtrol_runtime_protocol::ProviderAccountStatus::Unread
+        );
+        reports.record(
+            id,
+            AccountReport::unpublished("no declared surface"),
+            WallMs::from_millis(30),
+        );
+        publish_account(&sender, id, reports.descriptor(id));
+        assert_eq!(
+            updates
+                .borrow_and_update()
+                .providers
+                .first()
+                .expect("one provider")
+                .account
+                .as_ref()
+                .expect("recovery visible")
+                .checked_at_ms,
+            30
+        );
+    }
+
+    #[tokio::test]
+    async fn completed_account_is_delivered_while_another_provider_is_still_waiting() {
+        let fast = ProviderId::parse("fast").expect("provider");
+        let slow = ProviderId::parse("slow").expect("provider");
+        let (ready, completed) = tokio::sync::oneshot::channel();
+        let (_release, blocked) = tokio::sync::oneshot::channel::<()>();
+        let mut probes = AccountProbes::default();
+        probes.spawn(slow, async move {
+            blocked.await.expect("test retains the release owner");
+            Ok(AccountReport::unpublished("no account surface"))
+        });
+        probes.spawn(fast, async move {
+            ready.send(()).expect("test is waiting");
+            Ok(AccountReport::unpublished("no account surface"))
+        });
+        // The current-thread task finishes without yielding after this signal. No elapsed-time assertion.
+        completed.await.expect("fast provider completed");
+        {
+            let mut next = std::pin::pin!(probes.next());
+            let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+            assert!(
+                matches!(next.as_mut().poll(&mut context), std::task::Poll::Ready(Some((id, Ok(_), _))) if id == fast)
+            );
+        }
+        assert!(probes.contains(slow));
+        assert!(
+            !probes.spawn(slow, std::future::pending()),
+            "one provider owns only one read"
+        );
+        assert!(probes.spawn(fast, async {
+            Ok(AccountReport::unpublished("second independent read"))
+        }));
+        assert_eq!(
+            probes
+                .next()
+                .await
+                .expect("fast provider completes again")
+                .0,
+            fast
+        );
+        assert!(
+            probes.contains(slow),
+            "the first slow read has still not been released"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_task_remains_an_owned_unread_result_and_can_be_asked_again() {
+        let id = ProviderId::parse("panicking").expect("provider");
+        let mut probes = AccountProbes::default();
+        assert!(probes.spawn(id, async { panic!("injected account task failure") }));
+        let answer = probes
+            .next()
+            .await
+            .expect("the failure keeps its provider identity");
+        assert_eq!(answer.0, id);
+        assert!(answer.1.is_err());
+        assert!(probes.is_empty());
+        assert!(!probes.contains(id));
+        let mut reports = AccountReports::default();
+        assert!(reports.record_answer(answer));
+        assert_eq!(
+            reports.descriptor(id).expect("failed read").status,
+            runtrol_runtime_protocol::ProviderAccountStatus::Unread
+        );
+        assert!(probes.spawn(id, async { Ok(AccountReport::unpublished("recovered")) }));
+        assert!(!reports.record_answer(probes.next().await.expect("recovered")));
+    }
+
+    #[tokio::test]
+    async fn retries_wait_from_completion_but_a_real_signal_uses_only_its_service_floor() {
+        let id = ProviderId::parse("retry").expect("provider");
+        let started = WallMs::from_millis(10_000);
+        let finished = WallMs::from_millis(70_000);
+        let mut schedule = ProbeSchedule {
+            asked: BTreeMap::from([(id, started)]),
+            unread: BTreeMap::new(),
+            pending: BTreeSet::new(),
+            swept_at: started,
+            wake_ready: None,
+        };
+        schedule.completed(id, true, finished);
+        let mut probes = AccountProbes::default();
+        assert_eq!(
+            schedule.next_check(false, &probes, finished, |_| PROCESS_SERVICE_FLOOR),
+            RETRY_AFTER
+        );
+        assert_eq!(
+            schedule.next_check(false, &probes, WallMs::from_millis(130_000), |_| {
+                PROCESS_SERVICE_FLOOR
+            }),
+            Duration::ZERO
+        );
+        schedule.pending.insert(id);
+        assert_eq!(
+            schedule.next_check(false, &probes, finished, |_| PROCESS_SERVICE_FLOOR),
+            Duration::ZERO
+        );
+        assert!(probes.spawn(id, std::future::pending()));
+        assert!(
+            take_due(
+                &mut schedule.pending,
+                &schedule.asked,
+                finished,
+                |_| PROCESS_SERVICE_FLOOR,
+                |provider| !probes.contains(provider)
+            )
+            .is_empty()
+        );
+        assert!(
+            schedule.pending.contains(&id),
+            "a wake during a read survives until that read finishes"
+        );
+        assert_eq!(
+            schedule.next_check(false, &probes, finished, |_| PROCESS_SERVICE_FLOOR),
+            Duration::from_mins(9),
+            "an in-flight retry or wake cannot busy-spin"
+        );
+        schedule.completed(id, false, finished);
+        assert!(
+            schedule.unread.is_empty(),
+            "a real answer clears automatic retry"
+        );
+    }
+
+    #[test]
+    fn an_unchanged_success_keeps_its_actual_completion_time_and_clears_failure() {
+        let id = ProviderId::parse("same").expect("provider");
+        let report = AccountReport::unpublished("declared unsupported surface");
+        let mut reports = AccountReports::default();
+        assert!(!reports.record_answer((id, Ok(report.clone()), WallMs::from_millis(10))));
+        assert!(reports.record_answer((
+            id,
+            Err("temporary read failure".to_owned()),
+            WallMs::from_millis(20)
+        )));
+        assert!(!reports.record_answer((id, Ok(report), WallMs::from_millis(30))));
+        let descriptor = reports.descriptor(id).expect("latest completed answer");
+        assert_eq!(descriptor.checked_at_ms, 30);
+        assert_eq!(
+            descriptor.status,
+            runtrol_runtime_protocol::ProviderAccountStatus::Unpublished
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_account_read_is_not_an_unsupported_surface() {
+        let provider = ProviderId::parse("broken").expect("provider");
+        let answer = read_account(async move {
+            Err(runtrol_provider::ProviderError::Protocol {
+                provider,
+                doing: "reading account",
+                detail: "incomplete structured response".to_owned(),
+            })
+        })
+        .await;
+        assert!(
+            answer.is_err(),
+            "a failed read is not the provider reporting no surface"
+        );
+    }
+
+    #[tokio::test]
+    async fn expired_account_read_is_not_an_unsupported_surface() {
+        let answer = read_account_within(std::future::pending(), Duration::ZERO).await;
+        assert!(
+            answer.is_err(),
+            "a deadline provides no provider account verdict"
+        );
+    }
+
+    #[test]
+    fn failed_reads_preserve_the_last_provider_gauge_and_original_time() {
+        let provider = ProviderId::parse("metered").expect("provider");
+        let at = WallMs::from_millis(10_000);
+        let failed_at = WallMs::from_millis(20_000);
+        let mut report = AccountReport::unpublished("fixture");
+        report.status = AccountStatus::SignedIn;
+        report.limits = Some(runtrol_provider::AccountLimits::new(Vec::new(), false));
+        report.tokens_today = Some(42);
+        let mut reports = AccountReports::default();
+        reports.record(provider, report, at);
+        reports.record_failure(provider, "status timeout".to_owned(), failed_at);
+        let descriptor = reports.descriptor(provider).expect("failure is visible");
+        assert_eq!(
+            descriptor.status,
+            runtrol_runtime_protocol::ProviderAccountStatus::Unread
+        );
+        assert_eq!(descriptor.checked_at_ms, failed_at.as_millis());
+        assert_eq!(reports.get(provider).expect("last success survives").at, at);
+        let gauges = reports.probed_gauges();
+        assert_eq!(gauges.len(), 1);
+        let gauge = gauges.first().expect("one retained gauge");
+        assert_eq!(gauge.at, at);
+        assert_eq!(gauge.tokens_today, Some(42));
+        let mut signed_out = AccountReport::unpublished("fixture");
+        signed_out.status = AccountStatus::SignedOut;
+        reports.record(provider, signed_out, WallMs::from_millis(30_000));
+        assert_eq!(
+            reports.descriptor(provider).expect("recovered").status,
+            runtrol_runtime_protocol::ProviderAccountStatus::SignedOut
+        );
+        assert!(
+            reports.probed_gauges().is_empty(),
+            "a provider's new signed-out answer replaces its old probe gauge"
+        );
+    }
+
+    #[test]
+    fn a_first_failed_read_has_no_invented_account_or_usage() {
+        let provider = ProviderId::parse("unknown").expect("provider");
+        let mut reports = AccountReports::default();
+        reports.record_failure(
+            provider,
+            "unread response".to_owned(),
+            WallMs::from_millis(20),
+        );
+        let descriptor = reports
+            .descriptor(provider)
+            .expect("failed read is visible");
+        assert_eq!(
+            descriptor.status,
+            runtrol_runtime_protocol::ProviderAccountStatus::Unread
+        );
+        assert!(descriptor.plan.is_none());
+        assert!(reports.get(provider).is_none());
+        assert!(reports.probed_gauges().is_empty());
+        reports.record(
+            provider,
+            AccountReport::unpublished("no declared account surface"),
+            WallMs::from_millis(30),
+        );
+        assert_eq!(
+            reports
+                .descriptor(provider)
+                .expect("provider answer")
+                .status,
+            runtrol_runtime_protocol::ProviderAccountStatus::Unpublished
+        );
+    }
 
     /// An instant `seconds` before `now`, for a table written the way a person reads it.
     fn ago(now: WallMs, seconds: u64) -> WallMs {
@@ -753,6 +1210,7 @@ mod tests {
             &asked,
             WallMs::from_millis(asked_at.as_millis() + 10_000),
             |_| PROCESS_SERVICE_FLOOR,
+            |_| true,
         );
         assert!(early.is_empty());
         assert_eq!(pending, BTreeSet::from([provider]));
@@ -762,6 +1220,7 @@ mod tests {
             &asked,
             WallMs::from_millis(asked_at.as_millis() + 30_000),
             |_| PROCESS_SERVICE_FLOOR,
+            |_| true,
         );
         assert_eq!(ready, vec![provider]);
         assert!(pending.is_empty());

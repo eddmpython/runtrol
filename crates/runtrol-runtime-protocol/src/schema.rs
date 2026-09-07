@@ -45,6 +45,16 @@ pub const PUBLIC_SCHEMA_NAME: &str = "runtime.schema.json";
 )]
 struct PublicProtocolSchema {
     method: RuntimeMethod,
+    owner_input_0: crate::TerminalSendTextParams,
+    owner_input_1: crate::TerminalTextReceipt,
+    owner_input_2: crate::WatchWindowInputParams,
+    owner_input_3: crate::WatchWindowInputResult,
+    owner_input_4: crate::WindowClaimInputParams,
+    owner_input_5: crate::WindowInputClaim,
+    owner_input_6: crate::WindowInputOfferedNotification,
+    owner_input_7: crate::WindowInputReceiptParams,
+    owner_input_8: crate::WindowInputEndedNotification,
+
     request: JsonRpcRequest,
     notification: JsonRpcNotification,
     response: JsonRpcResponse,

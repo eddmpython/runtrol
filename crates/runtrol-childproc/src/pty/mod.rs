@@ -42,6 +42,8 @@ pub struct PtySize {
 /// Everything a child on a terminal is started with.
 #[derive(Debug, Clone, Copy)]
 pub struct PtySpawn<'a> {
+    /// The explicit owner and resource class. Standalone callers choose local lifetime deliberately.
+    pub containment: PtyContainment<'a>,
     /// The program, already resolved past any launcher.
     pub program: &'a Program,
     /// The caller's arguments. The program's own leading arguments go first.
@@ -59,22 +61,106 @@ pub struct PtySpawn<'a> {
     pub size: PtySize,
 }
 
+/// Explicit lifetime and capacity ownership for terminal and short-command pseudo consoles.
+#[derive(Debug, Clone, Copy)]
+pub enum PtyContainment<'a> {
+    /// A caller-owned local Job, without crash-completion publication to another process.
+    Local,
+    /// A managed terminal charged to the Runtime's terminal reservation class.
+    Terminal(&'a crate::Containment),
+    /// A short helper charged to the Runtime's command reservation class.
+    Command(&'a crate::Containment),
+}
+
+#[cfg(windows)]
+impl PtyContainment<'_> {
+    fn job(self) -> Result<crate::contain::job::Job, SpawnError> {
+        match self {
+            Self::Local => crate::contain::job::Job::new(crate::contain::TERMINATED_BY_RUNTROL),
+            Self::Terminal(owner) => owner.scope(crate::contain::ScopeKind::Terminal),
+            Self::Command(owner) => owner.scope(crate::contain::ScopeKind::Command),
+        }
+    }
+
+    fn kept(self) -> bool {
+        match self {
+            Self::Local => false,
+            Self::Terminal(owner) | Self::Command(owner) => owner.keeper_identity().is_some(),
+        }
+    }
+}
+
 /// A running child attached to a pseudo terminal.
 ///
 /// Dropping it closes the terminal, which ends the child the way closing a terminal window does.
+/// On Windows its private Job also terminates every contained descendant.
 #[derive(Debug)]
 pub struct PtyChild {
     inner: platform::Child,
 }
 
+/// One execution permission for a Windows child created suspended.
+///
+/// The caller separately owns the child and must stop it if this permission is discarded.
+#[cfg(windows)]
+#[derive(Debug)]
+pub struct PtyResume {
+    thread: std::os::windows::io::OwnedHandle,
+    job: std::sync::Arc<crate::contain::job::Job>,
+}
+
+#[cfg(windows)]
+impl PtyResume {
+    /// Resume the exact primary thread once, closing its handle after the attempt.
+    ///
+    /// # Errors
+    ///
+    /// [`SpawnError::Containment`] when the thread is not suspended exactly once. The child remains
+    /// caller-owned and must be stopped on failure.
+    pub fn resume(self) -> Result<(), SpawnError> {
+        self.job.ready()?;
+        crate::contain::resume_suspended_thread(&self.thread, "resuming the prepared terminal")
+    }
+}
+
 impl PtyChild {
+    /// Create a Windows child without executing its first instruction.
+    ///
+    /// # Errors
+    ///
+    /// [`SpawnError::ArgvUnsafe`] for unsafe arguments, [`SpawnError::Pty`] for console creation,
+    /// or [`SpawnError::Containment`] when the private session Job cannot be established.
+    #[cfg(windows)]
+    pub fn prepare(spawn: PtySpawn<'_>) -> Result<(Self, PtyResume), SpawnError> {
+        crate::argv::check_all(spawn.arguments)?;
+        let (inner, thread) = platform::Child::prepare(spawn)?;
+        let job = inner.job();
+        Ok((Self { inner }, PtyResume { thread, job }))
+    }
+
+    /// Admit the already-owned suspended root to its independent keeper, on a blocking spawn lane.
+    ///
+    /// # Errors
+    /// Failure retains the child with the caller. It must be stopped and observed before admission is released.
+    #[cfg(windows)]
+    pub fn admit(&self) -> Result<(), SpawnError> {
+        self.inner.admit()
+    }
     /// Start the program on a fresh pseudo terminal.
     ///
     /// # Errors
     ///
     /// [`SpawnError::ArgvUnsafe`] for an argument that must not reach a command line, and
-    /// [`SpawnError::Pty`] when the platform refuses any step of making the terminal or the child.
+    /// [`SpawnError::Pty`] when the platform refuses terminal or process creation, and
+    /// [`SpawnError::Containment`] when the Windows session Job cannot be established.
     pub fn spawn(spawn: PtySpawn<'_>) -> Result<Self, SpawnError> {
+        #[cfg(windows)]
+        if spawn.containment.kept() {
+            return Err(crate::contain::job::failure(
+                "starting a kept terminal",
+                "use suspended preparation and retain the child through admission",
+            ));
+        }
         crate::argv::check_all(spawn.arguments)?;
         Ok(Self {
             inner: platform::Child::spawn(spawn)?,
@@ -114,20 +200,44 @@ impl PtyChild {
         self.inner.resize(size)
     }
 
-    /// The exit code, once the child has ended; `None` while it runs.
+    /// The exit code after completion; `None` while it remains owned.
+    ///
+    /// On Windows completion includes the exact root and every retained session Job member.
     ///
     /// # Errors
     ///
-    /// [`SpawnError::Pty`] when the platform cannot say.
+    /// [`SpawnError::Pty`] or [`SpawnError::Containment`] when the platform cannot prove completion.
     pub fn try_wait(&self) -> Result<Option<i32>, SpawnError> {
         self.inner.try_wait()
     }
 
-    /// End the child now.
+    /// Wait for the exact Windows root and every sealed Job member to end.
+    ///
+    /// Cancelling this future leaves process and Job ownership with this child. An error is never
+    /// completion evidence; the owner must retain its lifetime until a later successful proof.
     ///
     /// # Errors
     ///
-    /// [`SpawnError::Pty`] when the platform refuses.
+    /// [`SpawnError::Containment`] or [`SpawnError::Pty`] when kernel completion cannot be proven.
+    #[cfg(windows)]
+    pub async fn wait(&self) -> Result<i32, SpawnError> {
+        self.inner.wait().await
+    }
+
+    /// Read-only membership in this terminal's exact nested Job.
+    #[cfg(windows)]
+    #[must_use]
+    pub fn process_scope(&self) -> crate::contain::ProcessScope {
+        self.inner.process_scope()
+    }
+
+    /// Request termination of the child and, on Windows, its entire session Job.
+    ///
+    /// A successful request is not exit evidence. Retain ownership until completion is confirmed.
+    ///
+    /// # Errors
+    ///
+    /// [`SpawnError::Pty`] or [`SpawnError::Containment`] when the platform refuses.
     pub fn kill(&self) -> Result<(), SpawnError> {
         self.inner.kill()
     }
@@ -140,11 +250,10 @@ impl PtyChild {
         self.inner.abandon_output();
     }
 
-    /// Release the terminal once the child has ended and its output has settled.
+    /// Release the console after process completion, allowing its output reader to reach EOF.
     ///
-    /// After this the reader reports end of stream. Called by the host after the exit was observed and
-    /// output has been quiet for a moment: on Windows the console host flushes its last frame slightly
-    /// after the client exits, and releasing on the exit itself loses that frame (measured).
+    /// The host must keep reading and publishing output until EOF. Console closure can complete
+    /// asynchronously on Windows, so this call alone never proves the final frame was drained.
     pub fn finish(&self) {
         self.inner.finish();
     }
@@ -233,6 +342,7 @@ mod tests {
         let cwd = AbsPath::canonicalize(std::env::temp_dir().to_str().expect("utf-8 temp dir"))
             .expect("the temp dir is absolute");
         let child = PtyChild::spawn(PtySpawn {
+            containment: crate::PtyContainment::Local,
             program: &program,
             arguments: &arguments,
             cwd: &cwd,

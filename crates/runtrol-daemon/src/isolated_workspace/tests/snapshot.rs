@@ -102,7 +102,7 @@ async fn ordinary_snapshot_preserves_dirty_source_and_retries_the_original_commi
     let containment = Containment::without_any();
     let request = "31234567-89ab-cdef-0123-456789abcdef";
     let source = SourceSnapshot::dirty(scratch.project.as_std_path());
-    let mut controller = IsolatedWorkspaceController::open(scratch.registry.clone()).unwrap();
+    let controller = IsolatedWorkspaceController::open(scratch.registry.clone()).unwrap();
     let Response::IsolatedWorkspace(first) = controller
         .prepare(&containment, request, scratch.project.as_str())
         .await
@@ -122,7 +122,7 @@ async fn ordinary_snapshot_preserves_dirty_source_and_retries_the_original_commi
     let advanced = SourceSnapshot::capture(scratch.project.as_std_path());
     assert_ne!(advanced.commit, source.commit);
     drop(controller);
-    let mut reopened = IsolatedWorkspaceController::open(scratch.registry.clone()).unwrap();
+    let reopened = IsolatedWorkspaceController::open(scratch.registry.clone()).unwrap();
     let Response::IsolatedWorkspace(retried) = reopened
         .prepare(&containment, request, scratch.project.as_str())
         .await
@@ -151,7 +151,7 @@ async fn terminal_snapshot_keeps_its_base_and_live_owner_while_the_dirty_source_
     let project = VerifiedProject::discover(&scratch.project).unwrap();
     let ticket =
         SpawnTicket::new(current_process(), TerminalId::now(), TerminalId::now(), 1).unwrap();
-    let mut controller = IsolatedWorkspaceController::open(scratch.registry.clone()).unwrap();
+    let controller = IsolatedWorkspaceController::open(scratch.registry.clone()).unwrap();
     let first = controller
         .prepare_terminal(&containment, &ticket, &project)
         .await
@@ -167,7 +167,7 @@ async fn terminal_snapshot_keeps_its_base_and_live_owner_while_the_dirty_source_
     let advanced = SourceSnapshot::capture(scratch.project.as_std_path());
     assert_ne!(advanced.commit, source.commit);
     drop(controller);
-    let mut reopened = IsolatedWorkspaceController::open(scratch.registry.clone()).unwrap();
+    let reopened = IsolatedWorkspaceController::open(scratch.registry.clone()).unwrap();
     let retried = reopened
         .prepare_terminal(&containment, &ticket, &project)
         .await

@@ -214,6 +214,9 @@ pub struct TerminalDescriptor {
     /// Whether some view holds a live control lease right now.
     #[serde(default)]
     pub control_held: bool,
+    /// Whether the exact observing window currently accepts authorized text input.
+    #[serde(default)]
+    pub owner_input_available: bool,
     /// Whether local terminal control enabled courier commands for this live process incarnation.
     #[serde(default)]
     pub dialogue_enabled: bool,
@@ -521,11 +524,76 @@ pub struct TerminalExitedNotification {
     pub view_id: RuntimeTerminalViewId,
     /// Provider process exit code as reported by the terminal host.
     pub exit_code: i32,
+    /// Bounded host failure independent of the process code. Absent on an ordinary process exit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure: Option<TerminalFailure>,
+}
+
+/// Mechanical terminal-host failure. No provider content or operating-system error text is carried.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TerminalFailure {
+    /// A born terminal could not initialize its host lanes.
+    HostInitializationFailed,
+    /// Reading terminal output failed before normal end of stream.
+    OutputReadFailed,
+    /// The authoritative terminal control state was lost.
+    ControlStateLost,
+    /// Delivery of an input frame could not be confirmed in full.
+    InputDeliveryUnknown,
+}
+
+impl TerminalFailure {
+    /// Canonical wire name for clients that project typed events into another language.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::HostInitializationFailed => "hostInitializationFailed",
+            Self::OutputReadFailed => "outputReadFailed",
+            Self::ControlStateLost => "controlStateLost",
+            Self::InputDeliveryUnknown => "inputDeliveryUnknown",
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn terminal_completion_preserves_old_codes_and_closed_failure_names() {
+        let view_id = RuntimeTerminalViewId::now();
+        let old = serde_json::json!({"viewId":view_id,"exitCode":0});
+        let decoded: TerminalExitedNotification = serde_json::from_value(old.clone()).unwrap();
+        assert_eq!(decoded.failure, None);
+        assert_eq!(serde_json::to_value(decoded).unwrap(), old);
+        for failure in [
+            TerminalFailure::HostInitializationFailed,
+            TerminalFailure::OutputReadFailed,
+            TerminalFailure::ControlStateLost,
+            TerminalFailure::InputDeliveryUnknown,
+        ] {
+            assert_eq!(serde_json::to_value(failure).unwrap(), failure.as_str());
+            let frame = TerminalExitedNotification {
+                view_id: view_id.clone(),
+                exit_code: 0,
+                failure: Some(failure),
+            };
+            assert_eq!(
+                serde_json::from_value::<TerminalExitedNotification>(
+                    serde_json::to_value(&frame).unwrap()
+                )
+                .unwrap(),
+                frame
+            );
+        }
+        assert!(
+            serde_json::from_value::<TerminalExitedNotification>(serde_json::json!({
+                "viewId":view_id,"exitCode":0,"failure":"arbitrary provider text"
+            }))
+            .is_err()
+        );
+    }
 
     #[test]
     fn terminal_ids_are_canonical_uuid_v7_values() {
@@ -560,6 +628,7 @@ mod tests {
             },
             control_generation: 1,
             control_held: true,
+            owner_input_available: false,
             dialogue_enabled: false,
             viewer_count: 1,
             origin: TerminalOrigin::Owned,
@@ -575,4 +644,42 @@ mod tests {
             );
         }
     }
+}
+
+/// Caller-owned text delivered once through the observing extension's public input API.
+#[derive(Clone, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TerminalSendTextParams {
+    /// Idempotency identity for this delivery attempt.
+    pub request_id: crate::MutationRequestId,
+    /// Exact observed mirror.
+    pub terminal_id: RuntimeTerminalId,
+    /// Current control lease identity.
+    pub lease_id: String,
+    /// Exact control generation.
+    pub lease_generation: u64,
+    /// Transient caller-owned text; never part of the structural receipt.
+    pub text: String,
+}
+
+/// What the observing extension confirmed, without claiming shell processing or exact PTY bytes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TerminalTextOutcome {
+    /// The owner called its public terminal input API exactly once.
+    OwnerExtensionAccepted,
+}
+
+/// Structural result of one acknowledged owner input call.
+#[derive(Clone, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TerminalTextReceipt {
+    /// Original idempotency identity.
+    pub request_id: crate::MutationRequestId,
+    /// Runtime-local sequence of the delivery.
+    pub delivery_sequence: u64,
+    /// The exact owner registration that accepted the text.
+    pub owner_registration_generation: u64,
+    /// The bounded meaning of this acknowledgement.
+    pub outcome: TerminalTextOutcome,
 }

@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use super::{IsolatedWorkspaceController, State, registry};
+use super::{Records, State, registry};
 use crate::Composed;
 
 pub(crate) fn recover_after_restart(composed: &Arc<Composed>) -> impl Future<Output = ()> + use<> {
@@ -13,14 +13,11 @@ pub(crate) fn recover_after_restart(composed: &Arc<Composed>) -> impl Future<Out
     async move {
         let result = tokio::task::spawn_blocking(move || {
             let _operation = operation;
-            runtime.block_on(async {
+            runtime.block_on(
                 composed
                     .isolated_workspaces
-                    .lock()
-                    .await
-                    .recover_ended(&composed.containment)
-                    .await
-            })
+                    .recover_ended(&composed.containment),
+            )
         })
         .await;
         match result {
@@ -31,7 +28,7 @@ pub(crate) fn recover_after_restart(composed: &Arc<Composed>) -> impl Future<Out
     }
 }
 
-impl IsolatedWorkspaceController {
+impl Records {
     pub(super) async fn recover_ended(
         &mut self,
         containment: &runtrol_childproc::Containment,

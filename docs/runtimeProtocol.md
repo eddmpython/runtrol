@@ -89,12 +89,15 @@ optional GUI. A public connection cannot approve itself.
 | `terminals/list`, `terminals/watchIndex`, `terminals/attach` | `session.output.read` and authorized terminal visibility |
 | `terminals/open` | `session.start` for a fresh target or `session.resume` for a native target, plus an approved root |
 | `terminals/acquireControl`, `terminals/write`, `terminals/resize` | `session.input.write` and the current terminal lease where applicable |
+| `terminals/sendText` | `session.input.write`, the current terminal lease and approved root, plus an exact live observed owner with its own current input grant |
 | `terminals/setDialogue` | `session.input.write`, the current terminal lease and current approved root; enables or retires the exact managed process's mailbox lifetime |
 | `terminals/stop` | `session.stop` and the current terminal lease |
 | `windows/register`, `windows/update`, `windows/list`, `windows/watchIndex` | `session.list`; a registration is bound to the connection that made it and leaves with it |
 | `windows/mirrorOpen`, `windows/mirrorOutput`, `windows/mirrorEnd` | `session.list` and a registered window named by the open; a mirror is fed only by the connection that opened it and ends with it. `windows/mirrorOutput` is the one method that carries bytes rather than an authority decision and is not journaled (`docs/runtimeSecurity.md`) |
 | `windows/reveal` | `session.list` and a caller that registered a window on this machine; a reveal moves a window on the operator's desktop, so a paired device holding the same scope is refused with `presenceRequired` |
 | `windows/watchReveals` | `session.list`; the watch names a registered window and receives only its terminal keys, which `windows/list` already exposes |
+| `windows/watchInput` | `session.input.write` and the private proof returned to the exact window registration; the dedicated connection belongs to that integration and registration generation |
+| `windows/claimInput`, `windows/inputReceipt` | Only the dedicated owner input connection; a claim rechecks both integrations, roots, control lease, registration and exact shell execution before releasing text once |
 | `providers/focusNative` | `session.native.discover` and a caller that registered a window on this machine (the same presence rule as `windows/reveal`). The caller names a live conversation; the Runtime alone knows which registered window's terminal it runs in and asks that window to show it |
 | `terminals/renewControl`, `terminals/releaseControl`, `terminals/detach` | The current terminal view or lease generation |
 | `approvals/respond` | `approval.respond.low` or `approval.respond.high`, plus the current lease |
@@ -106,6 +109,7 @@ Notifications are `providers/changed`, `providers/usageChanged` (the account usa
 provider subscription starts and again on every change), `providers/watchEnded`, `sessions/indexChanged`,
 `sessions/indexEnded`, `sessions/event`, `sessions/lagged`, `terminals/indexChanged`, `terminals/indexEnded`,
 `windows/indexChanged`, `windows/indexEnded`, `windows/revealRequested`, `windows/revealsEnded`,
+`windows/inputOffered`, `windows/inputEnded`,
 `terminals/output`, `terminals/lagged`, and `terminals/exited`. Notification names cannot be invoked as requests.
 
 Managed worker lineage and its project binding are optional structural fields on the
@@ -194,6 +198,12 @@ generation; an unavailable owner returns `terminalGenerationUnavailable` and is 
 Terminal control follows the single-holder lease contract in
 [terminalSurface.md](terminalSurface.md#public-runtime-contract). Transfers and renewals advance its generation;
 stale holders cannot write through the shared PTY.
+
+An observed mirror has a separate text-input contract in
+[terminalSurface.md](terminalSurface.md#observed-owner-input). Its receipt confirms one owner extension API call.
+It does not claim exact PTY bytes, shell execution or a provider turn. Exact-byte `terminals/write` is refused for
+mirrors before recording a mutation. Clients discover text-input availability from the Runtime descriptor and
+never infer it from a window or process identifier.
 
 ## Streams
 

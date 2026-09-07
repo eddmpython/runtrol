@@ -7,7 +7,7 @@
 //!
 //! # What is measured, and against what
 //!
-//! An idle daemon: started, listening, serving nothing. That is the state it is in for almost all of its life, so
+//! An idle Runtime and its completion keeper: started, listening, serving nothing. That is the state it is in for almost all of its life, so
 //! it is the state the number is about. Measured from outside by asking the operating system, because a process
 //! reporting on itself is a process reporting what its allocator believes rather than what it holds.
 //!
@@ -42,6 +42,9 @@
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
+
+#[path = "runtimeFootprint/mod.rs"]
+mod runtime_footprint;
 
 /// What an idle daemon may hold in a release build, in bytes.
 ///
@@ -81,19 +84,55 @@ const START_WITHIN: Duration = Duration::from_secs(20);
 struct Idle {
     child: Child,
     home: PathBuf,
+    observed: Option<runtime_footprint::Observed>,
+    runtime: tokio::runtime::Runtime,
 }
 
 impl Drop for Idle {
     fn drop(&mut self) {
-        // Killed rather than asked politely: this is a measurement, not a session, and leaving a daemon behind
-        // would have the next run measure the wrong process.
-        let stopped = self.child.kill();
-        drop(stopped);
-        let waited = self.child.wait();
-        drop(waited);
-        let removed = std::fs::remove_dir_all(&self.home);
-        drop(removed);
+        let Some(observed) = self.observed.take() else {
+            // Without the keeper witness, root exit is not completion. Retain the home for diagnosis.
+            if let Err(error) = self.child.kill() {
+                eprintln!("could not stop gate-owned Runtime: {error}");
+            }
+            if let Err(error) = wait_root(&mut self.child) {
+                eprintln!("{error}");
+            }
+            eprintln!(
+                "Runtime completion was not captured; retaining {}",
+                self.home.display()
+            );
+            return;
+        };
+        if let Err(error) = self.runtime.block_on(observed.stop()) {
+            eprintln!("{error}; retaining {}", self.home.display());
+            if let Err(error) = self.child.kill() {
+                eprintln!("could not stop gate-owned Runtime after observer failure: {error}");
+            }
+            if let Err(error) = wait_root(&mut self.child) {
+                eprintln!("{error}");
+            }
+            if !std::thread::panicking() {
+                panic!("the idle gate did not confirm process cleanup");
+            }
+            return;
+        }
+        wait_root(&mut self.child).expect("the positively completed Runtime must be reapable");
+        std::fs::remove_dir_all(&self.home).expect("the completed fixture home must be removable");
     }
+}
+
+fn wait_root(child: &mut Child) -> Result<(), runtime_footprint::Error> {
+    let deadline = Instant::now() + runtime_footprint::STOP_WITHIN;
+    while child.try_wait()?.is_none() {
+        if Instant::now() >= deadline {
+            return Err(
+                "the exact Runtime child did not complete within the cleanup deadline".into(),
+            );
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    Ok(())
 }
 
 /// The runtrol binary next to this test, and whether it was built for release.
@@ -123,6 +162,10 @@ fn the_binary() -> Option<(PathBuf, bool)> {
 
 /// Start an idle daemon in a home of its own.
 fn start(binary: &Path, home: &Path) -> Option<Idle> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("the cleanup observer needs an event loop");
     let mut command = Command::new(binary);
     command
         .arg("daemon")
@@ -139,6 +182,8 @@ fn start(binary: &Path, home: &Path) -> Option<Idle> {
     let idle = Idle {
         child,
         home: home.to_path_buf(),
+        observed: None,
+        runtime,
     };
 
     // Wait for it to have opened its home, which is the first thing it does and the first thing that can fail.
@@ -161,7 +206,21 @@ fn start(binary: &Path, home: &Path) -> Option<Idle> {
     std::thread::sleep(SETTLE);
     let mut idle = idle;
     match idle.child.try_wait() {
-        Ok(None) => Some(idle),
+        Ok(None) => {
+            let observed = idle
+                .runtime
+                .block_on(async {
+                    tokio::time::timeout(
+                        START_WITHIN,
+                        runtime_footprint::Observed::open(home, idle.child.id()),
+                    )
+                    .await
+                })
+                .expect("the private greeting must finish within startup");
+            idle.observed =
+                Some(observed.expect("the idle Runtime must publish its exact completion owner"));
+            Some(idle)
+        }
         // It exited, or it cannot be asked. Either way there is nothing running to measure, and reporting a
         // number for it would be reporting one for a process that is not there.
         Ok(Some(_)) | Err(_) => None,
@@ -179,9 +238,12 @@ fn an_idle_daemon_stays_inside_its_budget() {
         );
     };
 
-    let home = std::env::temp_dir().join(format!("runtrol-budget-{}", std::process::id()));
-    let removed = std::fs::remove_dir_all(&home);
-    drop(removed);
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("the fixture requires the current system time")
+        .as_nanos();
+    let home = std::env::temp_dir().join(format!("runtrol-budget-{}-{unique}", std::process::id()));
+    std::fs::create_dir(&home).expect("a new fixture must not reuse an earlier unconfirmed home");
 
     let Some(idle) = start(&binary, &home) else {
         panic!(
@@ -190,14 +252,26 @@ fn an_idle_daemon_stays_inside_its_budget() {
         );
     };
 
-    let held = runtrol_childproc::resident_bytes(idle.child.id())
-        .expect("a daemon that is running can be asked what it holds");
+    let held = idle
+        .observed
+        .as_ref()
+        .expect("start retains the exact Runtime membership")
+        .resident()
+        .expect("every Runtime-owned process must have an exact RSS sample");
 
     let (budget, which) = if release {
         (RELEASE_BUDGET, "release")
     } else {
         (DEBUG_BUDGET, "debug")
     };
+
+    println!(
+        "Runtime cohort {:?}: RSS {held} bytes, {which} budget {budget}",
+        idle.observed
+            .as_ref()
+            .expect("start retained membership")
+            .members
+    );
 
     assert!(
         held <= budget,

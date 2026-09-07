@@ -41,7 +41,7 @@ async fn cancelled_git_cannot_release_beneath_a_live_checkout_hook() {
     let project = VerifiedProject::discover(&scratch.project).unwrap();
     let ticket =
         SpawnTicket::new(current_process(), TerminalId::now(), TerminalId::now(), 1).unwrap();
-    let mut controller = IsolatedWorkspaceController::open(scratch.registry.clone()).unwrap();
+    let controller = IsolatedWorkspaceController::open(scratch.registry.clone()).unwrap();
     let ready = scratch.root.join("hook-ready");
     let wait_ready = async {
         let deadline = Instant::now() + Duration::from_secs(15);

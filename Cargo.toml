@@ -16,6 +16,7 @@ members = [
     "crates/runtrol-vault",
     "crates/runtrol-update",
     "crates/runtrol-courier",
+    "crates/runtrol-terminal-protocol",
     "crates/runtrol-runtime-protocol",
     "crates/runtrol-runtime-client",
     "crates/runtrol-core",
@@ -135,6 +136,7 @@ runtrol-transport = { path = "crates/runtrol-transport" }
 runtrol-vault = { path = "crates/runtrol-vault" }
 runtrol-update = { path = "crates/runtrol-update" }
 runtrol-courier = { path = "crates/runtrol-courier" }
+runtrol-terminal-protocol = { path = "crates/runtrol-terminal-protocol" }
 runtrol-runtime-protocol = { path = "crates/runtrol-runtime-protocol", version = "0.1.1" }
 runtrol-runtime-client = { path = "crates/runtrol-runtime-client" }
 runtrol-core = { path = "crates/runtrol-core" }

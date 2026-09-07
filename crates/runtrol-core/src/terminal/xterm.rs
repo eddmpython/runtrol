@@ -14,10 +14,10 @@
 //! This is terminal protocol, not conversation: a query is a fixed byte sequence and its answer is a fixed
 //! byte sequence. Nothing here reads what the CLI drew.
 
-/// The longest unfinished question carried to the next read. A terminfo request (`ESC P + q <names> ESC \`)
-/// is the one query without a fixed length; nothing a CLI asks runs past this, and a control string that does
-/// is drawing, not a question.
-const CARRY_LIMIT: usize = 128;
+use runtrol_terminal_protocol::{Query, QuerySpan as Next, scan_next as next_query};
+
+#[cfg(test)]
+use runtrol_terminal_protocol::CARRY_LIMIT;
 
 /// The scan state between reads: the unfinished question the previous read ended inside, if any.
 #[derive(Debug, Default)]
@@ -45,7 +45,7 @@ impl QueryCarry {
         let mut at = 0usize;
         loop {
             match next_query(&window, at) {
-                Next::Complete { query, end } => {
+                Next::Complete { query, end, .. } => {
                     // A question finished by this read ends inside `chunk`; the carried bytes were applied last time.
                     let upto = end.saturating_sub(carried);
                     let cursor = apply(chunk.get(applied..upto).unwrap_or(&[]));
@@ -64,157 +64,6 @@ impl QueryCarry {
             apply(chunk.get(applied..).unwrap_or(&[]));
         }
         answers
-    }
-}
-
-/// What a CLI can ask.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Query {
-    /// `ESC [ > 0 q` or `ESC [ > q`: which terminal is this.
-    Version,
-    /// `ESC [ ? <mode> $ p`: is this private mode set.
-    ModeReport(u32),
-    /// `ESC [ 6 n`: where is the cursor.
-    CursorPosition,
-    /// `ESC [ 5 n`: are you ok.
-    Status,
-    /// `ESC [ c` / `ESC [ 0 c`: primary device attributes.
-    PrimaryAttributes,
-    /// `ESC [ > c` / `ESC [ > 0 c`: secondary device attributes.
-    SecondaryAttributes,
-    /// `ESC ] 10 ; ? BEL|ST` and `ESC ] 11 ; ? BEL|ST`: foreground and background colours.
-    Colour(u8),
-    /// `ESC P + q ... ESC \`: a terminfo capability.
-    Capability,
-    /// `ESC [ ? u`: the kitty keyboard protocol flags.
-    KeyboardFlags,
-}
-
-/// The questions with one fixed spelling.
-const LITERALS: [(&[u8], Query); 9] = [
-    (b"[>0q", Query::Version),
-    (b"[>q", Query::Version),
-    (b"[6n", Query::CursorPosition),
-    (b"[5n", Query::Status),
-    (b"[0c", Query::PrimaryAttributes),
-    (b"[c", Query::PrimaryAttributes),
-    (b"[>0c", Query::SecondaryAttributes),
-    (b"[>c", Query::SecondaryAttributes),
-    (b"[?u", Query::KeyboardFlags),
-];
-
-/// A private mode number has at most this many digits; a longer run of digits is not a mode report.
-const MODE_DIGITS: usize = 5;
-
-/// What the next escape at or after `from` turns out to be.
-enum Next {
-    Complete {
-        query: Query,
-        end: usize,
-    },
-    /// The window ends inside a question that began at `start`.
-    Unfinished {
-        start: usize,
-    },
-    None,
-}
-
-fn next_query(window: &[u8], from: usize) -> Next {
-    let mut at = from;
-    while at < window.len() {
-        if window.get(at) != Some(&0x1b) {
-            at += 1;
-            continue;
-        }
-        match query_at(window, at) {
-            Scan::Complete(query, end) => return Next::Complete { query, end },
-            Scan::Unfinished if window.len() - at <= CARRY_LIMIT => {
-                return Next::Unfinished { start: at };
-            }
-            Scan::Unfinished | Scan::Other => at += 1,
-        }
-    }
-    Next::None
-}
-
-/// What begins at `start` (an ESC).
-enum Scan {
-    /// A whole question, and where it ends.
-    Complete(Query, usize),
-    /// The window ends before the sequence could be told apart from a question.
-    Unfinished,
-    /// Not a question.
-    Other,
-}
-
-fn query_at(window: &[u8], start: usize) -> Scan {
-    let rest = window.get(start + 1..).unwrap_or(&[]);
-    if rest.is_empty() {
-        return Scan::Unfinished;
-    }
-    let end = |len: usize| start + 1 + len;
-    let mut unfinished = false;
-    for (literal, query) in LITERALS {
-        if rest.starts_with(literal) {
-            return Scan::Complete(query, end(literal.len()));
-        }
-        unfinished |= literal.starts_with(rest);
-    }
-    if let Some(after) = rest.strip_prefix(b"[?") {
-        return mode_report(after, unfinished).map_or(Scan::Other, |scan| match scan {
-            Scan::Complete(query, len) => Scan::Complete(query, end(2 + len)),
-            other => other,
-        });
-    }
-    for (prefix, index) in [(&b"]10;?"[..], 10u8), (&b"]11;?"[..], 11u8)] {
-        if let Some(after) = rest.strip_prefix(prefix) {
-            return match after {
-                [] | [0x1b] => Scan::Unfinished,
-                [0x07, ..] => Scan::Complete(Query::Colour(index), end(prefix.len() + 1)),
-                [0x1b, b'\\', ..] => Scan::Complete(Query::Colour(index), end(prefix.len() + 2)),
-                _ => Scan::Other,
-            };
-        }
-        unfinished |= prefix.starts_with(rest);
-    }
-    if let Some(after) = rest.strip_prefix(b"P+q") {
-        return match after.windows(2).position(|pair| pair == b"\x1b\\") {
-            Some(terminator) => Scan::Complete(Query::Capability, end(3 + terminator + 2)),
-            None => Scan::Unfinished,
-        };
-    }
-    unfinished |= b"P+q".starts_with(rest);
-    if unfinished {
-        Scan::Unfinished
-    } else {
-        Scan::Other
-    }
-}
-
-/// `ESC [ ?` was read; `after` is what follows. A mode report's length here counts from after the `?`.
-fn mode_report(after: &[u8], literal_unfinished: bool) -> Option<Scan> {
-    let digits = after
-        .iter()
-        .take_while(|byte| byte.is_ascii_digit())
-        .count();
-    if digits > MODE_DIGITS {
-        return None;
-    }
-    if digits == 0 {
-        // `ESC [ ?` alone may still become `ESC [ ? u` or a mode report on the next read.
-        return (after.is_empty() && literal_unfinished).then_some(Scan::Unfinished);
-    }
-    match after.get(digits..) {
-        Some([] | [b'$']) => Some(Scan::Unfinished),
-        Some([b'$', b'p', ..]) => {
-            let mode = after.get(..digits)?.iter().try_fold(0u32, |value, byte| {
-                value
-                    .checked_mul(10)?
-                    .checked_add(u32::from(byte.wrapping_sub(b'0')))
-            })?;
-            Some(Scan::Complete(Query::ModeReport(mode), digits + 2))
-        }
-        _ => None,
     }
 }
 

@@ -314,38 +314,44 @@ fn within_identity(
 #[cfg(windows)]
 #[expect(
     unsafe_code,
-    reason = "Windows exposes process creation identity through an opened process handle"
+    reason = "Windows process identity is read from one retained kernel handle"
 )]
 fn windows_process_start(pid: u32) -> Option<u64> {
-    use windows_sys::Win32::Foundation::{CloseHandle, FILETIME};
-    use windows_sys::Win32::System::Threading::{
-        GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
-    };
-
-    struct Process(windows_sys::Win32::Foundation::HANDLE);
-    impl Drop for Process {
-        fn drop(&mut self) {
-            // SAFETY: this guard owns the successful process handle and closes it exactly once.
-            unsafe {
-                _ = CloseHandle(self.0);
-            }
-        }
-    }
-
-    // SAFETY: arguments are plain values and the returned handle is checked before use.
+    use std::os::windows::io::{AsHandle as _, FromRawHandle as _, OwnedHandle};
+    use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+    // SAFETY: the returned handle is checked and owned exactly once; query rights do not mutate it.
     let raw = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
     if raw.is_null() {
         return None;
     }
-    let process = Process(raw);
+    // SAFETY: successful OpenProcess transfers this handle once into the safe owner.
+    let process = unsafe { OwnedHandle::from_raw_handle(raw) };
+    // This optional inventory cannot grant an identity when the kernel refuses its birth stamp.
+    let Ok(started) = windows_start_from_handle(process.as_handle()) else {
+        return None;
+    };
+    Some(started)
+}
+
+#[cfg(windows)]
+#[expect(
+    unsafe_code,
+    reason = "the process birth stamp must come from the same retained handle as membership"
+)]
+pub(crate) fn windows_start_from_handle(
+    process: std::os::windows::io::BorrowedHandle<'_>,
+) -> std::io::Result<u64> {
+    use std::os::windows::io::AsRawHandle as _;
+    use windows_sys::Win32::Foundation::FILETIME;
+    use windows_sys::Win32::System::Threading::GetProcessTimes;
     let mut creation = FILETIME::default();
     let mut exit = FILETIME::default();
     let mut kernel = FILETIME::default();
     let mut user = FILETIME::default();
-    // SAFETY: each pointer names a writable FILETIME and the checked handle has query rights.
+    // SAFETY: each output is writable and the caller retains this handle with query rights.
     if unsafe {
         GetProcessTimes(
-            process.0,
+            process.as_raw_handle(),
             &raw mut creation,
             &raw mut exit,
             &raw mut kernel,
@@ -353,9 +359,9 @@ fn windows_process_start(pid: u32) -> Option<u64> {
         )
     } == 0
     {
-        return None;
+        return Err(std::io::Error::last_os_error());
     }
-    Some((u64::from(creation.dwHighDateTime) << 32) | u64::from(creation.dwLowDateTime))
+    Ok((u64::from(creation.dwHighDateTime) << 32) | u64::from(creation.dwLowDateTime))
 }
 
 #[cfg(windows)]

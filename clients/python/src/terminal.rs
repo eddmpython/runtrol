@@ -7,8 +7,8 @@ use pyo3::types::PyBytes;
 use runtrol_runtime_client::{ClientError, TerminalNotification};
 use runtrol_runtime_protocol::{
     TerminalAcquireControlParams, TerminalAttachParams, TerminalControlParams,
-    TerminalDetachParams, TerminalOpenParams, TerminalResizeParams, TerminalSetDialogueParams,
-    TerminalStopParams, TerminalWriteParams,
+    TerminalDetachParams, TerminalOpenParams, TerminalResizeParams, TerminalSendTextParams,
+    TerminalSetDialogueParams, TerminalStopParams, TerminalWriteParams,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -38,6 +38,7 @@ struct TerminalEventPayload {
     lost_chunks: Option<u64>,
     next_sequence: Option<u64>,
     exit_code: Option<i32>,
+    failure: Option<runtrol_runtime_protocol::TerminalFailure>,
 }
 
 impl From<TerminalNotification> for TerminalEventPayload {
@@ -50,6 +51,7 @@ impl From<TerminalNotification> for TerminalEventPayload {
                 lost_chunks: None,
                 next_sequence: None,
                 exit_code: None,
+                failure: None,
             },
             TerminalNotification::Lagged {
                 lost_chunks,
@@ -62,14 +64,16 @@ impl From<TerminalNotification> for TerminalEventPayload {
                 lost_chunks: Some(lost_chunks),
                 next_sequence: Some(next_sequence),
                 exit_code: None,
+                failure: None,
             },
-            TerminalNotification::Exited { exit_code } => Self {
+            TerminalNotification::Exited { exit_code, failure } => Self {
                 kind: "exited",
                 sequence: None,
                 bytes: Vec::new(),
                 lost_chunks: None,
                 next_sequence: None,
                 exit_code: Some(exit_code),
+                failure,
             },
         }
     }
@@ -116,6 +120,14 @@ impl PyTerminalEvent {
     #[getter]
     const fn exit_code(&self) -> Option<i32> {
         self.payload.exit_code
+    }
+
+    /// Bounded structural host failure independent of the provider process code.
+    #[getter]
+    fn failure(&self) -> Option<&'static str> {
+        self.payload
+            .failure
+            .map(runtrol_runtime_protocol::TerminalFailure::as_str)
     }
 }
 
@@ -349,6 +361,10 @@ async fn terminal_call(
             view.write(&params).await?;
             Ok("{}".to_owned())
         }
+        "sendText" => {
+            let params = decode::<TerminalSendTextParams>(params_json)?;
+            encode(&view.send_text(&params).await?)
+        }
         "resize" => {
             let params = decode::<TerminalResizeParams>(params_json)?;
             view.resize(&params).await?;
@@ -393,4 +409,32 @@ fn terminal_error(code: &str, message: &str) -> String {
         "correlationId": "python-terminal",
     })
     .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn terminal_completion_retains_failure_in_the_native_python_event() {
+        for failure in [
+            None,
+            Some(runtrol_runtime_protocol::TerminalFailure::OutputReadFailed),
+        ] {
+            let event = PyTerminalEvent {
+                payload: TerminalNotification::Exited {
+                    exit_code: 0,
+                    failure,
+                }
+                .into(),
+            };
+            assert_eq!(event.kind(), "exited");
+            assert_eq!(event.exit_code(), Some(0));
+            assert_eq!(
+                event.failure(),
+                failure.map(runtrol_runtime_protocol::TerminalFailure::as_str)
+            );
+            assert!(event.payload.bytes.is_empty());
+        }
+    }
 }

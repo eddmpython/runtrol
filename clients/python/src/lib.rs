@@ -2,6 +2,7 @@
 
 mod client;
 mod terminal;
+mod window_input;
 
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
@@ -153,6 +154,7 @@ fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PySubscription>()?;
     module.add_class::<PyTerminalView>()?;
     module.add_class::<PyTerminalEvent>()?;
+    module.add_class::<window_input::PyWindowInput>()?;
     module.add_function(wrap_pyfunction!(connect, module)?)?;
     module.add_function(wrap_pyfunction!(new_mutation_request_id, module)?)?;
     Ok(())

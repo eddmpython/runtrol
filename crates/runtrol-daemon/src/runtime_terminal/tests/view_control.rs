@@ -78,6 +78,8 @@ impl Fixture {
             feeder,
             "fixture-window".into(),
             WindowMirrorOpenParams {
+                registration_generation: 0,
+                owner_token: String::new(),
                 window_session_id: "fixture-window".into(),
                 terminal_key: "fixture-terminal".into(),
                 execution_id: "fixture-execution".into(),
@@ -146,6 +148,8 @@ impl Fixture {
             self.feeder,
             "fixture-window".into(),
             WindowMirrorOpenParams {
+                registration_generation: 0,
+                owner_token: String::new(),
                 window_session_id: "fixture-window".into(),
                 terminal_key: format!("terminal-{index}"),
                 execution_id: format!("execution-{index}"),
@@ -225,6 +229,195 @@ fn renewal(lease: &TerminalControlLease) -> TerminalControlParams {
         lease_id: lease.lease_id.clone(),
         lease_generation: lease.lease_generation,
     }
+}
+
+fn input_params(lease: &TerminalControlLease) -> TerminalWriteParams {
+    TerminalWriteParams {
+        request_id: MutationRequestId::now(),
+        terminal_id: lease.terminal_id.clone(),
+        lease_id: lease.lease_id.clone(),
+        lease_generation: lease.lease_generation,
+        bytes_base64: Base64::encode_string(b"\x1b[1;2R"),
+    }
+}
+
+#[tokio::test]
+async fn an_observed_mirror_refuses_exact_byte_input_without_a_delivery_owner() {
+    for dedicated in [false, true] {
+        let fixture = Fixture::new().await;
+        let lease = fixture
+            .acquire(&fixture.acquire_params())
+            .await
+            .expect("the exact mirror has a current control lease");
+        let params = input_params(&lease);
+        let result = if dedicated {
+            fixture
+                .composed
+                .runtime_terminals
+                .write_view(&fixture.composed, &fixture.view, &params)
+                .await
+        } else {
+            fixture
+                .composed
+                .runtime_terminals
+                .write(&fixture.composed, &fixture.view.authority, &params)
+                .await
+        };
+        let key = mutation_key(fixture.view.authority.key, &params.request_id)
+            .expect("the rejected input has an exact mutation identity");
+        let untouched = !fixture
+            .composed
+            .runtime_terminals
+            .state
+            .lock()
+            .await
+            .mutations
+            .contains_key(&key);
+        fixture.close().await;
+        assert_eq!(
+            result
+                .expect_err("a mirror cannot acknowledge bytes that no owner received")
+                .kind,
+            RuntimeErrorKind::InvalidRequest
+        );
+        assert!(untouched, "refused bytes never enter the mutation ledger");
+    }
+}
+
+#[tokio::test]
+async fn queued_input_rechecks_revocation_and_root_proof_before_recording_any_write() {
+    for (dedicated, revoke) in [(true, false), (true, true), (false, true)] {
+        let fixture = Fixture::new().await;
+        let lease = fixture
+            .acquire(&fixture.acquire_params())
+            .await
+            .expect("input lease");
+        let params = input_params(&lease);
+        let ordered = fixture
+            .view
+            .hosted
+            .terminal
+            .operation()
+            .await
+            .expect("hold the PTY lane");
+        let mut writing = Box::pin(async {
+            if dedicated {
+                fixture
+                    .composed
+                    .runtime_terminals
+                    .write_view(&fixture.composed, &fixture.view, &params)
+                    .await
+            } else {
+                fixture
+                    .composed
+                    .runtime_terminals
+                    .write(&fixture.composed, &fixture.view.authority, &params)
+                    .await
+            }
+        });
+        poll_fn(|cx| {
+            assert!(
+                writing.as_mut().poll(cx).is_pending(),
+                "input waits at the exact PTY lane"
+            );
+            Poll::Ready(())
+        })
+        .await;
+        if revoke {
+            let mut row = fixture.row.clone();
+            row.grant_generation += 1;
+            row.scopes.clear();
+            fixture
+                .composed
+                .integration_authority
+                .publish_committed(fixture.view.authority.key, row)
+                .expect("withdraw input authority during the queue wait");
+        } else {
+            fixture.view.root_proof().set_test_completion(
+                Instant::now()
+                    .checked_sub(Duration::from_secs(2))
+                    .expect("fixture clock has two elapsed seconds"),
+            );
+        }
+        drop(ordered);
+        let result = writing.await;
+        let key = mutation_key(fixture.view.authority.key, &params.request_id)
+            .expect("exact mutation key");
+        let untouched = !fixture
+            .composed
+            .runtime_terminals
+            .state
+            .lock()
+            .await
+            .mutations
+            .contains_key(&key);
+        fixture.close().await;
+        assert_eq!(
+            result.expect_err("queued input lost authority").kind,
+            if revoke {
+                RuntimeErrorKind::Unauthenticated
+            } else {
+                RuntimeErrorKind::RootDenied
+            }
+        );
+        assert!(
+            untouched,
+            "denied input never reserves a mutation or reaches the writer"
+        );
+    }
+}
+
+#[tokio::test]
+async fn queued_input_checks_lease_expiry_after_the_final_state_lock() {
+    let fixture = Fixture::new().await;
+    let lease = fixture
+        .acquire(&fixture.acquire_params())
+        .await
+        .expect("input lease");
+    let params = input_params(&lease);
+    let ordered = fixture
+        .view
+        .hosted
+        .terminal
+        .operation()
+        .await
+        .expect("hold the PTY lane");
+    let mut writing = Box::pin(fixture.composed.runtime_terminals.write_view(
+        &fixture.composed,
+        &fixture.view,
+        &params,
+    ));
+    poll_fn(|cx| {
+        assert!(
+            writing.as_mut().poll(cx).is_pending(),
+            "first wait is at the PTY lane"
+        );
+        Poll::Ready(())
+    })
+    .await;
+    let mut state = fixture.composed.runtime_terminals.state.lock().await;
+    drop(ordered);
+    poll_fn(|cx| {
+        assert!(
+            writing.as_mut().poll(cx).is_pending(),
+            "the admitted operation now waits for final authority"
+        );
+        Poll::Ready(())
+    })
+    .await;
+    state
+        .leases
+        .get_mut(&fixture.view.hosted.id)
+        .expect("held lease")
+        .expires_at_ms = WallMs::now().as_millis() + 30;
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    drop(state);
+    let result = writing.await;
+    fixture.close().await;
+    assert_eq!(
+        result.expect_err("the lease expired inside the queue").kind,
+        RuntimeErrorKind::LeaseExpired
+    );
 }
 
 #[cfg(windows)]

@@ -71,8 +71,20 @@ const UPDATE_RENAME_COPY_ENV: &str = "RUNTROL_CONTAINMENT_UPDATE_RENAME_COPY";
 /// Long enough that the test finishes first, short enough that a stray copy cannot linger.
 const SLEEP: Duration = Duration::from_mins(1);
 
+#[cfg(windows)]
+#[path = "../../tests/fixtures/keeper.rs"]
+mod keeper;
+
 fn main() {
     let words: Vec<String> = std::env::args().skip(1).collect();
+    #[cfg(windows)]
+    if let Some(result) = keeper::run(&words) {
+        if let Err(error) = result {
+            eprintln!("keeper fixture failed: {error}");
+            std::process::exit(30);
+        }
+        return;
+    }
     #[cfg(unix)]
     if let Some(result) = runtrol_childproc::bootstrap_if_requested(&words) {
         if let Err(error) = result {

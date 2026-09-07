@@ -198,6 +198,10 @@ pub(super) fn required_scope(method: RuntimeMethod) -> Option<AppScope> {
         | RuntimeMethod::TerminalsAcquireControl
         | RuntimeMethod::TerminalsRenewControl
         | RuntimeMethod::TerminalsReleaseControl
+        | RuntimeMethod::TerminalsSendText
+        | RuntimeMethod::WindowsWatchInput
+        | RuntimeMethod::WindowsClaimInput
+        | RuntimeMethod::WindowsInputReceipt
         | RuntimeMethod::TerminalsWrite
         | RuntimeMethod::TerminalsResize
         | RuntimeMethod::TerminalsSetDialogue
@@ -238,6 +242,8 @@ pub(super) fn required_scope(method: RuntimeMethod) -> Option<AppScope> {
         | RuntimeMethod::WindowsIndexChanged
         | RuntimeMethod::WindowsIndexEnded
         | RuntimeMethod::WindowsRevealRequested
+        | RuntimeMethod::WindowsInputOffered
+        | RuntimeMethod::WindowsInputEnded
         | RuntimeMethod::WindowsRevealsEnded
         | RuntimeMethod::PanicStop => None,
     }

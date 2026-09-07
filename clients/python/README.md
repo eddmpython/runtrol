@@ -33,6 +33,17 @@ Dedicated provider, session, event, and terminal-index subscriptions use `subscr
 `open_terminal()` and `attach_terminal()`, and both terminal views expose the same control methods. Terminal output
 remains bytes and is never converted into chat messages.
 
+Both terminal views provide `sendText(params)` for input-enabled observed terminals after acquiring their control
+lease. The receipt acknowledges the owner extension's text API invocation, not exact bytes or shell execution.
+Never replay an unknown input outcome. The
+[terminal surface contract](../../docs/terminalSurface.md#observed-owner-input) owns the receipt semantics.
+
+Owners use `registerWindow`, `updateWindow`, `mirrorOpen`, `mirrorOutput` and `mirrorEnd` with generated parameter
+types. `watchInput(params)` opens a dedicated `WindowInputSubscription` or `AsyncWindowInputSubscription`. Process
+its `next()`, `claimInput(sequence)` and `inputReceipt(params)` calls serially, and close it when the owner ends.
+The negotiated offer bound is enforced by the native client; concurrent calls are refused. Cancelling a pending
+call closes the exact receiver. A typed claim refusal needs no second receipt and never authorizes replay.
+
 `terminal_generations()` returns an explicit result for every current and draining Runtime generation. Reattach a
 recorded terminal with `attach_terminal(params, runtime_generation=descriptor["runtimeGeneration"])`. The client
 re-reads the owner-only locator and connects only to that exact generation. If it has vanished, the call raises

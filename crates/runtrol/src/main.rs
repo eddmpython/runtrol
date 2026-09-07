@@ -33,6 +33,8 @@ enum Personality {
     RuntimeLocator(Option<String>),
     /// Print every daemon generation of this home and whether each still answers.
     Status { json: bool },
+    /// Stop one exact published generation using this build's process completion checks.
+    StopGeneration(String),
     /// Carry one exact provider invocation through the daemon-owned terminal.
     TerminalBridge {
         /// Runtime-discovered provider identity.
@@ -83,6 +85,19 @@ const MAX_BLOCKING_THREADS: usize = ADMITTED_PROVIDER_PIPE_OPERATIONS + 6;
 
 fn main() -> ExitCode {
     let words: Vec<String> = std::env::args().skip(1).collect();
+    #[cfg(windows)]
+    if let Some(completed) = runtrol_childproc::keeper_bootstrap_if_requested(
+        &words,
+        runtrol_daemon::complete_keeper_generation,
+    ) {
+        return match completed {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                report(&format!("runtrol process completion failed: {error}"));
+                ExitCode::FAILURE
+            }
+        };
+    }
     #[cfg(unix)]
     if let Some(bootstrapped) = runtrol_childproc::bootstrap_if_requested(&words) {
         return match bootstrapped {
@@ -117,6 +132,7 @@ fn main() -> ExitCode {
         Personality::Endpoint => run(endpointing()),
         Personality::RuntimeLocator(prefer) => runtime_locating(prefer.as_deref()),
         Personality::Status { json } => run(status_reporting(json)),
+        Personality::StopGeneration(digest) => run(stopping_generation(&digest)),
         Personality::TerminalBridge {
             provider,
             arguments,
@@ -160,6 +176,14 @@ fn choose(words: &[String]) -> Personality {
         ),
         Some(word) if word == STATUS_ARGUMENT => Personality::Status {
             json: words.get(1).is_some_and(|flag| flag == "--json"),
+        },
+        Some("panic") if words.len() > 1 => match words.get(1..) {
+            Some([flag, digest]) if flag == "--generation" && digest.len() == 64
+                && digest.bytes().all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase()) =>
+            {
+                Personality::StopGeneration(digest.clone())
+            }
+            _ => Personality::Usage("runtrol panic [--generation <full-lowercase-build-digest>]".to_owned()),
         },
         Some(word) if word == TERMINAL_BRIDGE_ARGUMENT => match words.get(1) {
             Some(provider) => Personality::TerminalBridge {
@@ -587,6 +611,39 @@ fn status_reporting(json: bool) -> impl FnOnce(&tokio::runtime::Runtime) -> Exit
     }
 }
 
+/// Stop only the exact generation named by a validated owner-local locator. Never start a replacement.
+fn stopping_generation(digest: &str) -> impl FnOnce(&tokio::runtime::Runtime) -> ExitCode {
+    move |runtime| {
+        let generations = match runtime.block_on(runtrol_daemon::status(None)) {
+            Ok(generations) => generations,
+            Err(error) => {
+                report(&format!("cannot inspect the generation to stop: {error}"));
+                return ExitCode::FAILURE;
+            }
+        };
+        let Some(generation) = generations
+            .into_iter()
+            .find(|entry| entry.generation.digest == digest)
+        else {
+            report(
+                "the requested generation is no longer published; process completion is unconfirmed",
+            );
+            return ExitCode::FAILURE;
+        };
+        match runtime.block_on(runtrol_cli::stop_running(
+            &generation.generation.control_endpoint,
+            say,
+        )) {
+            Ok(runtrol_cli::Outcome::Carried) => ExitCode::SUCCESS,
+            Ok(runtrol_cli::Outcome::Refused) => ExitCode::FAILURE,
+            Err(error) => {
+                report(&error.to_string());
+                ExitCode::FAILURE
+            }
+        }
+    }
+}
+
 /// Be a command.
 fn commanding(words: &[String]) -> impl FnOnce(&tokio::runtime::Runtime) -> ExitCode {
     move |runtime| {
@@ -761,6 +818,23 @@ mod tests {
                 choose(&typed(line)),
                 Personality::Administration(_)
             ));
+        }
+    }
+
+    #[test]
+    fn generation_shutdown_requires_an_exact_build_instead_of_an_arbitrary_endpoint() {
+        let digest = "a1".repeat(32);
+        assert!(
+            matches!(choose(&typed(&format!("panic --generation {digest}"))),
+            Personality::StopGeneration(value) if value == digest)
+        );
+        for words in [
+            "panic extra",
+            "panic --generation",
+            "panic --generation short",
+            "panic --endpoint pipe",
+        ] {
+            assert!(matches!(choose(&typed(words)), Personality::Usage(_)));
         }
     }
 

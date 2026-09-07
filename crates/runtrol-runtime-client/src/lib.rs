@@ -25,7 +25,10 @@ pub use terminal::{
     TerminalClient, TerminalFleetEntry, TerminalFleetOutcome, TerminalIndexNotification,
     TerminalIndexSubscription, TerminalNotification, TerminalView,
 };
-pub use windows::{WindowClient, WindowIndexNotification, WindowIndexSubscription};
+pub use windows::{
+    WindowClient, WindowIndexNotification, WindowIndexSubscription, WindowInputNotification,
+    WindowInputSubscription,
+};
 
 /// A public client operation failed.
 #[derive(Debug, thiserror::Error)]

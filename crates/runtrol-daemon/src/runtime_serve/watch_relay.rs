@@ -112,6 +112,10 @@ pub(super) async fn relay_watch(
             .await;
             RelayOutcome::CloseConnection
         }
+        Watching::WindowInput(receiver) => {
+            super::window_input::relay_input(connection, composed, receiver).await;
+            RelayOutcome::CloseConnection
+        }
         Watching::WindowReveals {
             subscription_id,
             requests,

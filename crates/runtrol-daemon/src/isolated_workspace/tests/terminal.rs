@@ -12,7 +12,7 @@ fn ticket(runtime: ProcessIdentity) -> SpawnTicket {
 
 async fn prepare(
     scratch: &Scratch,
-    controller: &mut IsolatedWorkspaceController,
+    controller: &IsolatedWorkspaceController,
     owner: &SpawnTicket,
 ) -> PreparedWorkspace {
     let project = VerifiedProject::discover(&scratch.project).unwrap();
@@ -34,7 +34,7 @@ async fn terminal_pending_and_live_rows_refuse_legacy_mutation_and_preserve_lead
     let scratch = Scratch::make();
     let containment = Containment::without_any();
     let owner = ticket(current_process());
-    let mut controller = IsolatedWorkspaceController::open(scratch.registry.clone()).unwrap();
+    let controller = IsolatedWorkspaceController::open(scratch.registry.clone()).unwrap();
     assert!(
         controller
             .release_terminal_if_present(&containment, &EndedSpawn::after_gate_retired(owner))
@@ -42,7 +42,7 @@ async fn terminal_pending_and_live_rows_refuse_legacy_mutation_and_preserve_lead
             .unwrap()
             .is_none()
     );
-    let prepared = prepare(&scratch, &mut controller, &owner).await;
+    let prepared = prepare(&scratch, &controller, &owner).await;
     assert!(matches!(prepared.base_commit.len(), 40 | 64));
     assert_eq!(
         prepared.workspace_identity,
@@ -63,7 +63,7 @@ async fn terminal_pending_and_live_rows_refuse_legacy_mutation_and_preserve_lead
                 &containment,
                 Some(&owner.reservation_id()),
                 None,
-                prepared.workspace.as_str()
+                prepared.workspace.as_str(),
             )
             .await
             .is_err()
@@ -129,19 +129,19 @@ async fn terminal_pending_and_live_rows_refuse_legacy_mutation_and_preserve_lead
 }
 
 #[tokio::test]
-async fn exact_old_runtime_and_worker_exit_enable_recovery_across_reopen() {
+async fn old_runtime_and_worker_exit_preserve_unproven_completion_across_reopen() {
     let scratch = Scratch::make();
     let containment = Containment::without_any();
     let mut runtime = ProcessScratch::start(&scratch);
     let mut worker = ProcessScratch::start(&scratch);
     let owner = ticket(runtime.identity);
-    let mut controller = IsolatedWorkspaceController::open(scratch.registry.clone()).unwrap();
-    let prepared = prepare(&scratch, &mut controller, &owner).await;
+    let controller = IsolatedWorkspaceController::open(scratch.registry.clone()).unwrap();
+    let prepared = prepare(&scratch, &controller, &owner).await;
     controller
         .bind_terminal(&owner, worker.identity, &prepared.workspace)
         .unwrap();
     drop(controller);
-    let mut reopened = IsolatedWorkspaceController::open(scratch.registry.clone()).unwrap();
+    let reopened = IsolatedWorkspaceController::open(scratch.registry.clone()).unwrap();
     reopened.recover_ended(&containment).await.unwrap();
     assert!(prepared.workspace.as_std_path().exists());
     assert!(
@@ -169,17 +169,32 @@ async fn exact_old_runtime_and_worker_exit_enable_recovery_across_reopen() {
     );
     worker.stop();
     reopened.recover_ended(&containment).await.unwrap();
-    assert_eq!(
-        outcome(
+    #[cfg(windows)]
+    {
+        assert!(prepared.workspace.as_std_path().exists());
+        assert!(
             reopened
                 .recover_terminal(&containment, &owner)
                 .await
-                .unwrap()
-        )
-        .as_ref(),
-        "alreadyRemoved"
-    );
-    assert!(!prepared.workspace.as_std_path().exists());
+                .is_err(),
+            "root process exit does not prove the old Job's descendants completed"
+        );
+        return;
+    }
+    #[cfg(not(windows))]
+    {
+        assert_eq!(
+            outcome(
+                reopened
+                    .recover_terminal(&containment, &owner)
+                    .await
+                    .unwrap()
+            )
+            .as_ref(),
+            "alreadyRemoved"
+        );
+        assert!(!prepared.workspace.as_std_path().exists());
+    }
 }
 
 #[tokio::test]
@@ -189,8 +204,8 @@ async fn dirty_and_committed_worker_work_survive_cleanup_and_restart() {
     let source = super::snapshot::SourceSnapshot::dirty(scratch.project.as_std_path());
     for commit in [false, true] {
         let owner = ticket(current_process());
-        let mut controller = IsolatedWorkspaceController::open(scratch.registry.clone()).unwrap();
-        let prepared = prepare(&scratch, &mut controller, &owner).await;
+        let controller = IsolatedWorkspaceController::open(scratch.registry.clone()).unwrap();
+        let prepared = prepare(&scratch, &controller, &owner).await;
         let change = prepared.workspace.as_std_path().join("worker.txt");
         std::fs::write(&change, "작업 보존\n").unwrap();
         if commit {
@@ -200,7 +215,7 @@ async fn dirty_and_committed_worker_work_survive_cleanup_and_restart() {
                 &["commit", "-m", "worker"],
             );
         }
-        let mut reopened = IsolatedWorkspaceController::open(scratch.registry.clone()).unwrap();
+        let reopened = IsolatedWorkspaceController::open(scratch.registry.clone()).unwrap();
         assert_eq!(
             outcome(
                 reopened
@@ -231,7 +246,7 @@ async fn creation_failure_and_late_cancel_remove_only_exact_reserved_worktree() 
         use std::os::unix::fs::PermissionsExt as _;
         std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o700)).unwrap();
     }
-    let mut controller = IsolatedWorkspaceController::open(scratch.registry.clone()).unwrap();
+    let controller = IsolatedWorkspaceController::open(scratch.registry.clone()).unwrap();
     let project = VerifiedProject::discover(&scratch.project).unwrap();
     assert!(
         controller
@@ -246,7 +261,7 @@ async fn creation_failure_and_late_cancel_remove_only_exact_reserved_worktree() 
     assert!(owned_path.join(".git").is_file());
     std::fs::remove_file(hook).unwrap();
     let fresh = ticket(current_process());
-    let fresh_workspace = prepare(&scratch, &mut controller, &fresh).await;
+    let fresh_workspace = prepare(&scratch, &controller, &fresh).await;
     assert_eq!(
         outcome(
             controller
@@ -276,8 +291,8 @@ async fn replaced_root_and_worktree_objects_are_refused_without_touching_replace
     let scratch = Scratch::make();
     let containment = Containment::without_any();
     let owner = ticket(current_process());
-    let mut controller = IsolatedWorkspaceController::open(scratch.registry.clone()).unwrap();
-    let prepared = prepare(&scratch, &mut controller, &owner).await;
+    let controller = IsolatedWorkspaceController::open(scratch.registry.clone()).unwrap();
+    let prepared = prepare(&scratch, &controller, &owner).await;
     let moved = scratch.root.join("original-project");
     std::fs::rename(scratch.project.as_std_path(), &moved).unwrap();
     std::fs::create_dir(scratch.project.as_std_path()).unwrap();

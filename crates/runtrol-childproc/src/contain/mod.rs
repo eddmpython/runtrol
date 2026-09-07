@@ -46,6 +46,8 @@
 mod windows;
 #[cfg(windows)]
 use windows as platform;
+#[cfg(windows)]
+pub(crate) use windows::TERMINATED_BY_RUNTROL;
 
 #[cfg(unix)]
 mod unix;
@@ -72,6 +74,20 @@ pub use tracked::{ChildGuard, TrackedChild, TrackedCommand};
 
 #[cfg(windows)]
 mod command_job;
+#[cfg(windows)]
+pub(crate) mod job;
+#[cfg(windows)]
+mod keeper;
+#[cfg(windows)]
+pub(crate) use command_job::resume_suspended_thread;
+#[cfg(windows)]
+pub use job::ProcessScope;
+#[cfg(windows)]
+pub(crate) use keeper::Kind as ScopeKind;
+#[cfg(windows)]
+pub use keeper::bootstrap_if_requested as keeper_bootstrap_if_requested;
+#[cfg(windows)]
+pub use keeper::{KeeperCompletion, KeeperIdentity, KeeperLimits, KeeperTarget, KeeperWait};
 
 /// What containment this platform can actually enforce.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -106,6 +122,8 @@ impl Strength {
 pub struct Containment {
     /// The platform's own mechanism, or nothing.
     inner: Inner,
+    #[cfg(windows)]
+    keeper: Option<std::sync::Arc<keeper::Client>>,
     /// Durable process-group recovery, when production supplied its bounded guard directory.
     #[cfg(unix)]
     recovery: Option<registry::Registry>,
@@ -161,6 +179,8 @@ impl Containment {
     pub const fn without_any() -> Self {
         Self {
             inner: Inner::Nothing,
+            #[cfg(windows)]
+            keeper: None,
             #[cfg(unix)]
             recovery: None,
             #[cfg(unix)]
@@ -182,11 +202,75 @@ impl Containment {
     pub fn establish() -> Result<Self, SpawnError> {
         Ok(Self {
             inner: Inner::Platform(platform::Containment::establish()?),
+            #[cfg(windows)]
+            keeper: None,
             #[cfg(unix)]
             recovery: None,
             #[cfg(unix)]
             ambiguous_guards: 0,
         })
+    }
+
+    /// Establish Windows containment with one independent same-image Job proof owner.
+    ///
+    /// # Errors
+    /// Refuses startup when private handle admission or exact outer Job assignment fails.
+    #[cfg(windows)]
+    pub fn establish_kept(target: &KeeperTarget, limits: KeeperLimits) -> Result<Self, SpawnError> {
+        let (keeper, outer) = keeper::Client::start(target, limits)?;
+        let inner = platform::Containment::from_kept(outer)?;
+        keeper.register()?;
+        Ok(Self {
+            inner: Inner::Platform(inner),
+            keeper: Some(keeper),
+        })
+    }
+
+    /// The exact independent proof owner, absent on an explicitly local containment.
+    #[cfg(windows)]
+    #[must_use]
+    pub fn keeper_identity(&self) -> Option<KeeperIdentity> {
+        self.keeper.as_ref().map(|keeper| keeper.identity())
+    }
+
+    /// Close new admission and await completion of nested scopes before the Runtime exits.
+    /// The external launcher waits for final keeper exit after the Runtime has ended.
+    ///
+    /// # Errors
+    /// Returns an error rather than claiming completion if private supervision or its ACK fails.
+    #[cfg(windows)]
+    pub async fn shutdown_scopes(&self) -> Result<(), SpawnError> {
+        let Some(keeper) = self.keeper.as_ref().map(std::sync::Arc::clone) else {
+            return Ok(());
+        };
+        tokio::task::spawn_blocking(move || keeper.shutdown())
+            .await
+            .map_err(|error| job::failure("waiting for keeper shutdown", error.to_string()))?
+    }
+
+    /// Wait for supervision loss. The Runtime must end its failed generation on this error.
+    ///
+    /// # Errors
+    /// Always reports keeper exit as a failed lifetime, never successful child completion.
+    #[cfg(windows)]
+    pub async fn keeper_failed(&self) -> Result<(), SpawnError> {
+        let Some(keeper) = &self.keeper else {
+            return std::future::pending().await;
+        };
+        keeper.failed().await
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn kept_client(&self) -> Option<std::sync::Arc<keeper::Client>> {
+        self.keeper.as_ref().map(std::sync::Arc::clone)
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn scope(&self, kind: keeper::Kind) -> Result<job::Job, SpawnError> {
+        match &self.keeper {
+            Some(client) => job::Job::kept(client, kind),
+            None => job::Job::new(TERMINATED_BY_RUNTROL),
+        }
     }
 
     /// Establish containment with durable Unix process-group recovery.
@@ -318,6 +402,10 @@ impl Containment {
     /// [`SpawnError::Containment`] when the platform's own call fails. Reported rather than swallowed: an
     /// operator who pressed the panic button has to know whether it worked.
     pub fn terminate_all(&self) -> Result<(), SpawnError> {
+        #[cfg(windows)]
+        if let Some(keeper) = &self.keeper {
+            return keeper.terminate_all();
+        }
         #[cfg(unix)]
         if let Some(recovery) = &self.recovery {
             return recovery.terminate_all();

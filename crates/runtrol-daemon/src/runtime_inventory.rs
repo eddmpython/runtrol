@@ -213,13 +213,24 @@ pub(crate) fn merge_probed_usage(
     current: &runtrol_runtime_protocol::ProviderUsageList,
     composed: &Composed,
 ) -> runtrol_runtime_protocol::ProviderUsageList {
-    let probed = match composed.account_reports.try_lock() {
-        Ok(reports) => reports.probed_gauges(),
+    match composed.account_reports.try_lock() {
+        Ok(reports) => merge_account_usage(current, &reports),
         // The probe is writing a report this instant; the publish it triggers next reads them all.
-        Err(_) => Vec::new(),
-    };
-    let probed = provider_usage(&probed);
+        Err(_) => current.clone(),
+    }
+}
+
+fn merge_account_usage(
+    current: &runtrol_runtime_protocol::ProviderUsageList,
+    reports: &crate::account_probe::AccountReports,
+) -> runtrol_runtime_protocol::ProviderUsageList {
+    let probed = provider_usage(&reports.probed_gauges());
     let mut merged = current.clone();
+    for (provider, at) in reports.signed_out() {
+        merged.providers.retain(|gauge| {
+            gauge.provider_id.as_str() != provider.as_str() || gauge.at_ms > at.as_millis()
+        });
+    }
     for gauge in probed.providers {
         match merged
             .providers
@@ -1076,6 +1087,48 @@ mod tests {
     use runtrol_store::{IntegrationKey, IntegrationRootRow};
 
     use super::*;
+
+    #[test]
+    fn a_confirmed_sign_out_retires_the_probe_copy_already_merged_into_usage() {
+        let id = runtrol_provider::ProviderId::parse("account-fixture").expect("provider");
+        let mut report = runtrol_provider::AccountReport::unpublished("fixture");
+        report.status = runtrol_provider::AccountStatus::SignedIn;
+        report.limits = Some(runtrol_provider::AccountLimits::new(Vec::new(), false));
+        report.tokens_today = Some(42);
+        let mut reports = crate::account_probe::AccountReports::default();
+        reports.record(id, report, runtrol_provider::WallMs::from_millis(10));
+        let current = merge_account_usage(
+            &runtrol_runtime_protocol::ProviderUsageList {
+                providers: Vec::new(),
+            },
+            &reports,
+        );
+        assert_eq!(current.providers.len(), 1);
+        assert_eq!(
+            current
+                .providers
+                .first()
+                .expect("one provider")
+                .tokens_today,
+            Some(42)
+        );
+
+        let mut signed_out = runtrol_provider::AccountReport::unpublished("fixture");
+        signed_out.status = runtrol_provider::AccountStatus::SignedOut;
+        reports.record(id, signed_out, runtrol_provider::WallMs::from_millis(20));
+        assert!(
+            merge_account_usage(&current, &reports).providers.is_empty(),
+            "an old merged probe must not feed itself back after sign-out"
+        );
+
+        let mut newer = current;
+        newer.providers.first_mut().expect("one provider").at_ms = 30;
+        assert_eq!(
+            merge_account_usage(&newer, &reports),
+            newer,
+            "a later provider turn is new usage evidence"
+        );
+    }
 
     #[test]
     fn a_background_provider_scan_cannot_overwrite_a_direct_invalidation() {

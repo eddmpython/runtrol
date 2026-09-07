@@ -79,6 +79,14 @@ import type {
   TerminalSetDialogueParams,
   TerminalViewOpened,
   TerminalWriteParams,
+  TerminalSendTextParams,
+  TerminalTextReceipt,
+  WatchWindowInputParams,
+  WatchWindowInputResult,
+  WindowInputOfferedNotification,
+  WindowInputEndedNotification,
+  WindowInputClaim,
+  WindowInputReceiptParams,
   WatchEventsParams,
   WatchEventsResult,
   WatchProvidersResult,
@@ -767,6 +775,18 @@ export class WindowClient {
     return callRuntime(this.runtime, "windows/reveal", params, "WindowRevealResult");
   }
 
+  public async watchInput(params: WatchWindowInputParams): Promise<WindowInputSubscription> {
+    const started = await callRuntime<WatchWindowInputResult>(
+      this.runtime, "windows/watchInput", params, "WatchWindowInputResult",
+    );
+    if (!Number.isSafeInteger(started.maxPendingOffers) || started.maxPendingOffers < 1
+      || started.maxPendingOffers > PUBLIC_LIMITS.maxTerminalViewQueueChunks) {
+      this.runtime.close();
+      throw new RuntimeProtocolError("owner input queue bound is invalid");
+    }
+    return new WindowInputSubscription(this.runtime, beginStream(this.runtime), started);
+  }
+
   public async watchReveals(params: WatchWindowRevealsParams): Promise<WindowRevealSubscription> {
     const started = await callRuntime<WatchWindowRevealsResult>(
       this.runtime,
@@ -789,6 +809,110 @@ export class WindowClient {
       "WatchWindowIndexResult",
     );
     return new WindowIndexSubscription(beginStream(this.runtime), started);
+  }
+}
+
+export type WindowInputNotification =
+  | { readonly kind: "offered"; readonly offered: WindowInputOfferedNotification }
+  | { readonly kind: "ended"; readonly ended: WindowInputEndedNotification };
+
+/** A single consumer calls next, claimInput and inputReceipt in order on this owner-only connection. */
+export class WindowInputSubscription {
+  readonly #offers: WindowInputNotification[] = [];
+  #busy = false;
+  #closed = false;
+
+  public constructor(
+    private readonly runtime: RuntimeClient,
+    private readonly transport: RuntimeTransport,
+    public readonly started: WatchWindowInputResult,
+  ) {}
+
+  public next(): Promise<WindowInputNotification> {
+    return this.#serial(async () => {
+      const queued = this.#offers.shift();
+      if (queued) return queued;
+      return this.#notification(decodeJson(await this.transport.receive()));
+    });
+  }
+
+  public claimInput(sequence: number): Promise<WindowInputClaim> {
+    return this.#exchange("windows/claimInput", { subscriptionId: this.started.subscriptionId, sequence }, "WindowInputClaim");
+  }
+
+  public async inputReceipt(receipt: Omit<WindowInputReceiptParams, "subscriptionId">): Promise<void> {
+    await this.#exchange("windows/inputReceipt", { ...receipt, subscriptionId: this.started.subscriptionId });
+  }
+
+  public close(): void {
+    this.#closed = true;
+    this.#offers.length = 0;
+    abortTransport(this.transport);
+  }
+
+  async #serial<T>(run: () => Promise<T>): Promise<T> {
+    if (this.#closed) throw new RuntimeTransportError("owner input connection is closed");
+    if (this.#busy) throw new RuntimeProtocolError("owner input connection already has an active operation");
+    this.#busy = true;
+    try {
+      return await run();
+    } catch (error) {
+      // A typed refusal completes this operation. Every other failure invalidates framing or delivery knowledge.
+      if (!(error instanceof RuntimeRequestError)) this.close();
+      throw error;
+    } finally {
+      this.#busy = false;
+    }
+  }
+
+  #exchange<T>(method: RuntimeMethod, params: unknown, schema?: string): Promise<T> {
+    return this.#serial(async () => {
+      const state = runtimeState(this.runtime);
+      if (!Number.isSafeInteger(state.nextId)) throw new RuntimeProtocolError("connection exhausted its safe request identifiers");
+      const id = state.nextId++;
+      await this.transport.send(encoder.encode(JSON.stringify({ jsonrpc: "2.0", id, method, params })));
+      for (;;) {
+        const decoded = decodeJson(await this.transport.receive());
+        if (isObject(decoded) && "id" in decoded) {
+          const response = validatePublic<JsonRpcResponse>("JsonRpcResponse", decoded);
+          if (response.jsonrpc !== "2.0" || response.id !== id) {
+            throw new RuntimeProtocolError("owner input response does not match its active request");
+          }
+          if ("error" in response) throw new RuntimeRequestError(response.error);
+          if (!schema) requireEmpty(response.result);
+          return (schema ? validatePublic<T>(schema, response.result) : response.result) as T;
+        }
+        const notification = this.#notification(decoded);
+        if (notification.kind === "ended") throw new RuntimeTransportError("owner input registration ended");
+        if (this.#offers.length >= this.started.maxPendingOffers) {
+          throw new RuntimeProtocolError("owner input offer queue exceeded its negotiated bound");
+        }
+        this.#offers.push(notification);
+      }
+    });
+  }
+
+  #notification(decoded: unknown): WindowInputNotification {
+    const notification = validatePublic<JsonRpcNotification>("JsonRpcNotification", decoded);
+    if (notification.jsonrpc !== "2.0") throw new RuntimeProtocolError("owner input JSON-RPC version is invalid");
+    if (notification.method === "windows/inputOffered") {
+      const offered = validatePublic<WindowInputOfferedNotification>("WindowInputOfferedNotification", notification.params);
+      this.#requireTarget(offered.subscriptionId);
+      return { kind: "offered", offered };
+    }
+    if (notification.method === "windows/inputEnded") {
+      const ended = validatePublic<WindowInputEndedNotification>("WindowInputEndedNotification", notification.params);
+      this.#requireTarget(ended.subscriptionId);
+      this.close();
+      return { kind: "ended", ended };
+    }
+    throw new RuntimeProtocolError("dedicated owner input stream received a different method");
+  }
+
+  #requireTarget(subscriptionId: string): void {
+    if (subscriptionId !== this.started.subscriptionId) {
+      throw new RuntimeProtocolError("owner input notification targets a different subscription");
+    }
   }
 }
 
@@ -925,7 +1049,7 @@ export type TerminalNotification =
     readonly screen: Uint8Array;
     readonly nextSequence: number;
   }
-  | { readonly kind: "exited"; readonly exitCode: number };
+  | { readonly kind: "exited"; readonly exitCode: number; readonly failure?: TerminalExitedNotification["failure"] };
 
 interface TerminalResponseWaiter {
   readonly requestId?: MutationRequestId;
@@ -993,6 +1117,16 @@ export class TerminalView {
 
   public async write(params: TerminalWriteParams): Promise<void> {
     requireEmpty(await this.#command("terminals/write", params, undefined, params.requestId));
+  }
+
+  public async sendText(params: TerminalSendTextParams): Promise<TerminalTextReceipt> {
+    const receipt = await this.#command<TerminalTextReceipt>("terminals/sendText", params, "TerminalTextReceipt", params.requestId);
+    if (receipt.requestId !== params.requestId
+      || !Number.isSafeInteger(receipt.deliverySequence) || receipt.deliverySequence < 1
+      || !Number.isSafeInteger(receipt.ownerRegistrationGeneration) || receipt.ownerRegistrationGeneration < 1) {
+      throw new RuntimeProtocolError("owner text receipt does not match its admitted input");
+    }
+    return receipt;
   }
 
   public async resize(params: TerminalResizeParams): Promise<void> {
@@ -1177,7 +1311,7 @@ export class TerminalView {
         notification.params,
       );
       this.#requireView(exited.viewId);
-      return { kind: "exited", exitCode: exited.exitCode };
+      return { kind: "exited", exitCode: exited.exitCode, ...(exited.failure ? { failure: exited.failure } : {}) };
     }
     throw new RuntimeProtocolError("dedicated terminal view received a different method");
   }

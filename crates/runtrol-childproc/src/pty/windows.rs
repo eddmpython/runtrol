@@ -12,30 +12,24 @@ use std::ffi::OsStr;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::os::windows::ffi::OsStrExt;
-use std::os::windows::io::{AsRawHandle, FromRawHandle};
+use std::os::windows::io::{AsHandle as _, AsRawHandle, FromRawHandle, OwnedHandle};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicIsize, Ordering};
 
-use windows_sys::Win32::Foundation::{
-    CloseHandle, GetLastError, HANDLE, INVALID_HANDLE_VALUE, WAIT_OBJECT_0,
-};
+use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, HANDLE, INVALID_HANDLE_VALUE};
 use windows_sys::Win32::System::Console::{
     COORD, ClosePseudoConsole, CreatePseudoConsole, HPCON, ResizePseudoConsole,
 };
 use windows_sys::Win32::System::Pipes::{CreatePipe, PeekNamedPipe};
 use windows_sys::Win32::System::Threading::{
-    CREATE_UNICODE_ENVIRONMENT, CreateProcessW, DeleteProcThreadAttributeList,
-    EXTENDED_STARTUPINFO_PRESENT, GetExitCodeProcess, InitializeProcThreadAttributeList,
-    LPPROC_THREAD_ATTRIBUTE_LIST, PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, PROCESS_INFORMATION,
-    STARTF_USESTDHANDLES, STARTUPINFOEXW, STARTUPINFOW, TerminateProcess,
-    UpdateProcThreadAttribute, WaitForSingleObject,
+    CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, CreateProcessW, EXTENDED_STARTUPINFO_PRESENT,
+    GetExitCodeProcess, PROCESS_INFORMATION, STARTF_USESTDHANDLES, STARTUPINFOEXW, STARTUPINFOW,
 };
 
 use super::{PtySize, PtySpawn, child_environment, full_arguments};
+use crate::contain::job::{Job, ProcessScope, wait};
 use crate::error::SpawnError;
-
-/// Exit code reported for a child this host terminated. The same value the job object reports, so a reader
-/// of exit codes has one word for "runtrol stopped this".
-const TERMINATED_BY_RUNTROL: u32 = 0x_C000_0409;
+use crate::process_attributes::ProcessAttributes;
 
 /// The Windows half of [`super::PtyChild`].
 #[derive(Debug)]
@@ -43,7 +37,8 @@ pub(super) struct Child {
     /// The pseudo console, or 0 once closed. Closed once the process is known to have ended.
     console: AtomicIsize,
     /// The process handle.
-    process: HANDLE,
+    process: OwnedHandle,
+    job: Arc<Job>,
     /// The process id, for the caller's own bookkeeping.
     pid: u32,
     /// Our end of the child's output.
@@ -247,85 +242,14 @@ impl Drop for ConsoleHandles {
     }
 }
 
-/// The process attribute list carrying the pseudo console, deleted on drop.
-struct AttributeList {
-    buffer: Vec<u8>,
-}
-
-impl AttributeList {
-    #[expect(
-        unsafe_code,
-        reason = "process attribute lists are kernel calls with no safe wrapper"
-    )]
-    fn for_console(console: HPCON) -> Result<Self, SpawnError> {
-        // The list is sized by the platform, so the buffer is asked for first with a null list.
-        let mut size: usize = 0;
-        // SAFETY: a null list with a count of one is the documented way to ask for the required size; the
-        // out-pointer is a live local. The call reports failure for this query by design, so its result is
-        // not checked here, only the size it wrote.
-        unsafe {
-            InitializeProcThreadAttributeList(core::ptr::null_mut(), 1, 0, &raw mut size);
-        }
-        let mut list = Self {
-            buffer: vec![0; size.max(1)],
-        };
-        let initialized =
-            // SAFETY: the buffer is at least the size the platform asked for and lives as long as `list`;
-            // count and flags are as in the query.
-            unsafe { InitializeProcThreadAttributeList(list.as_ptr(), 1, 0, &raw mut size) };
-        if initialized == 0 {
-            // Not initialized, so there is nothing for `Drop` to delete.
-            list.buffer.clear();
-            return Err(refused("initializing the process attribute list"));
-        }
-        // SAFETY: the list was initialized above; the attribute is the pseudo console one; the value is the
-        // console handle itself spelled as the pointer argument with the handle's size, exactly as the
-        // platform documents this attribute; the last two arguments are optional and null.
-        let updated = unsafe {
-            UpdateProcThreadAttribute(
-                list.as_ptr(),
-                0,
-                PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE as usize,
-                core::ptr::with_exposed_provenance::<core::ffi::c_void>(console.cast_unsigned()),
-                size_of::<HPCON>(),
-                core::ptr::null_mut(),
-                core::ptr::null_mut(),
-            )
-        };
-        if updated == 0 {
-            return Err(refused(
-                "attaching the pseudo console to the process attributes",
-            ));
-        }
-        Ok(list)
-    }
-
-    fn as_ptr(&mut self) -> LPPROC_THREAD_ATTRIBUTE_LIST {
-        self.buffer.as_mut_ptr().cast()
-    }
-}
-
-impl Drop for AttributeList {
-    #[expect(
-        unsafe_code,
-        reason = "deleting a process attribute list is a kernel call with no safe wrapper"
-    )]
-    fn drop(&mut self) {
-        if self.buffer.is_empty() {
-            return;
-        }
-        // SAFETY: the list was initialized in `for_console` and is deleted exactly once, here.
-        unsafe { DeleteProcThreadAttributeList(self.as_ptr()) };
-    }
-}
-
 #[expect(
     unsafe_code,
     reason = "creating a process is a kernel call with no safe wrapper"
 )]
 fn start_process(
     spawn: &PtySpawn<'_>,
-    attributes: &mut AttributeList,
+    attributes: &mut ProcessAttributes<'_>,
+    suspended: bool,
 ) -> Result<PROCESS_INFORMATION, SpawnError> {
     // The standard handles are named and set invalid on purpose (measured 2026-08-25): without this a
     // console-process parent passes its own standard handle values to the child even with inheritance
@@ -357,7 +281,9 @@ fn start_process(
             core::ptr::null(),
             core::ptr::null(),
             0,
-            EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT,
+            EXTENDED_STARTUPINFO_PRESENT
+                | CREATE_UNICODE_ENVIRONMENT
+                | if suspended { CREATE_SUSPENDED } else { 0 },
             environment.as_mut_ptr().cast(),
             cwd.as_ptr(),
             &raw mut startup.StartupInfo,
@@ -371,16 +297,32 @@ fn start_process(
 }
 
 impl Child {
+    pub(super) fn spawn(spawn: PtySpawn<'_>) -> Result<Self, SpawnError> {
+        Self::create(spawn, false).map(|(child, thread)| {
+            drop(thread);
+            child
+        })
+    }
+
+    pub(super) fn prepare(spawn: PtySpawn<'_>) -> Result<(Self, OwnedHandle), SpawnError> {
+        Self::create(spawn, true)
+    }
+
     #[expect(
         unsafe_code,
-        reason = "taking ownership of the pipe ends as files has no safe wrapper"
+        reason = "the successful process call transfers exact thread and pipe ownership"
     )]
-    pub(super) fn spawn(spawn: PtySpawn<'_>) -> Result<Self, SpawnError> {
+    fn create(spawn: PtySpawn<'_>, suspended: bool) -> Result<(Self, OwnedHandle), SpawnError> {
         let mut handles = ConsoleHandles::create(spawn.size)?;
-        let mut attributes = AttributeList::for_console(handles.console)?;
-        let process = start_process(&spawn, &mut attributes)?;
+        let job = Arc::new(spawn.containment.job()?);
+        let job_handle = job.handle.as_raw_handle();
+        let mut attributes = ProcessAttributes::for_console(handles.console, &job_handle)?;
+        let process = start_process(&spawn, &mut attributes, suspended)?;
         drop(attributes);
-        close(process.hThread);
+        // SAFETY: successful CreateProcessW returned this valid handle and nothing else owns it.
+        let thread = unsafe { OwnedHandle::from_raw_handle(process.hThread) };
+        // SAFETY: the same successful call transfers its process handle to this single owner.
+        let process_handle = unsafe { OwnedHandle::from_raw_handle(process.hProcess) };
         // Ownership moves into the `Child`: the console handle out of the guard, the pipe ends into files.
         let console = std::mem::replace(&mut handles.console, 0);
         let output_read = std::mem::replace(&mut handles.output_read, INVALID_HANDLE_VALUE);
@@ -394,17 +336,29 @@ impl Child {
                 File::from_raw_handle(input_write.cast()),
             )
         };
-        Ok(Self {
-            console: AtomicIsize::new(console),
-            process: process.hProcess,
-            pid: process.dwProcessId,
-            output: Some(output),
-            input,
-        })
+        Ok((
+            Self {
+                console: AtomicIsize::new(console),
+                process: process_handle,
+                job,
+                pid: process.dwProcessId,
+                output: Some(output),
+                input,
+            },
+            thread,
+        ))
     }
 
     pub(super) fn pid(&self) -> u32 {
         self.pid
+    }
+
+    pub(super) fn job(&self) -> Arc<Job> {
+        Arc::clone(&self.job)
+    }
+
+    pub(super) fn admit(&self) -> Result<(), SpawnError> {
+        self.job.admit(self.process.as_handle())
     }
 
     pub(super) fn reader(&self) -> Result<Box<dyn super::TerminalRead>, SpawnError> {
@@ -450,38 +404,42 @@ impl Child {
         Ok(())
     }
 
-    #[expect(
-        unsafe_code,
-        reason = "waiting on and reading a process exit code are kernel calls with no safe wrapper"
-    )]
     pub(super) fn try_wait(&self) -> Result<Option<i32>, SpawnError> {
-        // SAFETY: the process handle came from `CreateProcessW` and is closed only in `Drop`; a zero
-        // timeout makes this a poll.
-        let waited = unsafe { WaitForSingleObject(self.process, 0) };
-        if waited != WAIT_OBJECT_0 {
+        if !wait::is_signaled(self.process.as_handle())? {
             return Ok(None);
         }
-        let mut code: u32 = 0;
-        // SAFETY: the process handle is valid, and the out-pointer is a live local.
-        let ok = unsafe { GetExitCodeProcess(self.process, &raw mut code) };
-        if ok == 0 {
-            return Err(refused("reading the exit code"));
+        self.job.request_stop()?;
+        if !self.job.is_empty()? {
+            return Ok(None);
         }
-        Ok(Some(code.cast_signed()))
+        self.exit_code().map(Some)
+    }
+
+    pub(super) async fn wait(&self) -> Result<i32, SpawnError> {
+        self.job.wait_root(self.process.as_handle()).await?;
+        self.job.stopped().await?;
+        self.exit_code()
+    }
+
+    pub(super) fn process_scope(&self) -> ProcessScope {
+        ProcessScope::new(Arc::clone(&self.job))
     }
 
     #[expect(
         unsafe_code,
-        reason = "terminating a process is a kernel call with no safe wrapper"
+        reason = "the exit code is read only after the exact process is signaled"
     )]
-    pub(super) fn kill(&self) -> Result<(), SpawnError> {
-        // SAFETY: the process handle is valid until `Drop`. Terminating an already-ended process fails with
-        // access denied, which is reported rather than hidden.
-        let ok = unsafe { TerminateProcess(self.process, TERMINATED_BY_RUNTROL) };
-        if ok == 0 && self.try_wait()?.is_none() {
-            return Err(refused("terminating the program"));
+    fn exit_code(&self) -> Result<i32, SpawnError> {
+        let mut code = 0;
+        // SAFETY: this retained handle is signaled and the output lives through the call.
+        if unsafe { GetExitCodeProcess(self.process.as_raw_handle(), &raw mut code) } == 0 {
+            return Err(refused("reading the exit code"));
         }
-        Ok(())
+        Ok(code.cast_signed())
+    }
+
+    pub(super) fn kill(&self) -> Result<(), SpawnError> {
+        self.job.request_stop()
     }
 
     pub(super) fn abandon_output(&mut self) {
@@ -490,11 +448,8 @@ impl Child {
 }
 
 impl Child {
-    /// Close the console, which is what lets the output pipe report end of stream.
-    ///
-    /// Not done from `try_wait`, and measured: the console host flushes its last frame a moment after
-    /// the client exits, and closing on the exit itself dropped a one-line echo entirely. The host calls
-    /// this once the output has settled.
+    /// Request console closure after exact process completion. The host continues reading through EOF
+    /// because modern Windows can return from console closure before the final output is flushed.
     pub(super) fn finish(&self) {
         self.close_console_once();
     }
@@ -529,7 +484,6 @@ impl Drop for Child {
         // Reported nowhere on purpose: `Drop` has no error channel, and a process that already ended makes
         // this call fail by design.
         drop(self.kill());
-        close(self.process);
     }
 }
 
@@ -540,7 +494,11 @@ struct PtyReader {
 
 impl Read for PtyReader {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        self.file.read(buf)
+        match self.file.read(buf) {
+            // A closed ConPTY output pipe reports BrokenPipe instead of a zero-byte read.
+            Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => Ok(0),
+            outcome => outcome,
+        }
     }
 }
 

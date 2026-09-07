@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Add observed-terminal text receipts and a bounded, serial owner input subscription with explicit claim and receipt.
+- Preserve unknown outcomes without replay and validate receipt identities and negotiated offer bounds.
+
 - Added `TerminalView.setDialogue` and `TerminalDescriptor.dialogueEnabled` for local input-lease control of a
   live process's courier lifetime.
 - Added `viewerCount` to the terminal descriptor: how many views are attached right now, a proved engine fact

@@ -102,7 +102,20 @@ fn read_file(path: &AbsPath) -> Result<Option<super::File>, String> {
                 record.legacy = true;
             }
         }
-        2 | FILE_SCHEMA => {
+        2 | 3 | FILE_SCHEMA => {
+            if file.schema < FILE_SCHEMA
+                && file.records.iter().any(|record| {
+                    record.lifetime.is_some()
+                        || record.session_completed
+                        || record
+                            .terminal
+                            .as_ref()
+                            .and_then(|owner| owner.resume.as_ref())
+                            .is_some_and(|resume| resume.lifetime.is_some())
+                })
+            {
+                return Err("the older worktree schema cannot carry keeper completion".to_owned());
+            }
             if file.schema == 2
                 && file.records.iter().any(|record| {
                     record
@@ -138,13 +151,72 @@ pub(super) fn check_writable(path: &AbsPath) -> Result<(), String> {
     let _held = lock(&path.as_std_path().with_extension("lock"))?;
     migration::publish(path)?;
     if let Some(file) = read_file(path)?
-        && file.schema == 2
+        && matches!(file.schema, 2 | 3)
     {
         // Schema two writers use this same lock and reject a newer document before every RMW.
         // Publishing the new schema first makes an old cleanup refuse rather than ignore a live resume.
         write_file(path, &file.records)?;
     }
     require_writable(read_file(path)?.as_ref())
+}
+
+#[cfg(windows)]
+pub(super) fn complete(
+    path: &AbsPath,
+    runtime: super::ownership::ProcessStamp,
+    keeper: super::ownership::ProcessStamp,
+    mut check_home: impl FnMut() -> Result<(), String>,
+) -> Result<(), String> {
+    if read_file(path)?.is_none() {
+        return Ok(());
+    }
+    let held = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(path.as_std_path().with_extension("lock"))
+        .map_err(|error| error.to_string())?;
+    // Only this existing synchronous RMW is serialized. No Git operation or Runtime table is held,
+    // and a transient competing writer cannot discard an already-proven generation completion.
+    held.lock().map_err(|error| error.to_string())?;
+    check_home()?;
+    let Some(file) = read_file(path)? else {
+        return Ok(());
+    };
+    let mut records = file.records;
+    let mut changed = false;
+    for record in &mut records {
+        let mut row_changed = record
+            .lifetime
+            .as_mut()
+            .is_some_and(|proof| proof.complete(runtime, keeper));
+        if let Some(resume) = record
+            .terminal
+            .as_mut()
+            .and_then(|terminal| terminal.resume.as_mut())
+        {
+            row_changed |= resume
+                .lifetime
+                .as_mut()
+                .is_some_and(|proof| proof.complete(runtime, keeper));
+        }
+        if row_changed {
+            record.revision = record
+                .revision
+                .checked_add(1)
+                .ok_or("worktree ownership revision exhausted")?;
+            changed = true;
+        }
+    }
+    if changed {
+        if file.schema != FILE_SCHEMA {
+            return Err("keeper completion has no writable ownership schema".to_owned());
+        }
+        validate_records(&records)?;
+        check_home()?;
+        write_file(path, &records)?;
+    }
+    Ok(())
 }
 
 pub(super) fn update(path: &AbsPath, changed: Record) -> Result<Vec<Record>, String> {

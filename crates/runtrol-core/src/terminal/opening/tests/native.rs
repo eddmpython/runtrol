@@ -53,6 +53,7 @@ fn launch<'a>(
     cwd: &'a AbsPath,
 ) -> TerminalLaunch<'a> {
     TerminalLaunch {
+        containment: None,
         program,
         arguments: vec![
             "--exact".to_owned(),
@@ -138,6 +139,87 @@ fn live(identity: ProcessIdentity) -> bool {
     runtrol_childproc::matches_process_start(identity.pid(), identity.started())
 }
 
+#[cfg(windows)]
+async fn stopped(terminal: &Terminal) {
+    let mut exited = terminal.exited();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while exited.borrow().exit_code.is_none() {
+            exited.changed().await.unwrap();
+        }
+    })
+    .await
+    .unwrap();
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn prepared_native_child_executes_only_after_its_one_resume_permission() {
+    let scratch = Scratch::new();
+    let program =
+        runtrol_childproc::resolve(std::env::current_exe().unwrap().to_str().unwrap()).unwrap();
+    let cwd = AbsPath::canonicalize(scratch.0.to_str().unwrap()).unwrap();
+    let prepared = Terminal::prepare(&launch(&scratch, &program, &cwd)).unwrap();
+    let terminal = prepared.terminal();
+    let identity = runtrol_childproc::process_identity(terminal.pid()).unwrap();
+    eprintln!("owned suspended fixture: identity={identity:?}");
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    let suspended = !scratch.marker().exists() && live(identity);
+    let resumed = prepared.resume();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !scratch.marker().exists() && Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    let executed = scratch.marker().exists();
+    terminal.kill().unwrap();
+    stopped(&terminal).await;
+    assert!(suspended, "preparation must not execute the fixture");
+    resumed.unwrap();
+    assert!(executed, "resumption must execute the same fixture");
+    assert!(!live(identity));
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn dropping_prepared_native_child_stops_it_without_executing() {
+    let scratch = Scratch::new();
+    let program =
+        runtrol_childproc::resolve(std::env::current_exe().unwrap().to_str().unwrap()).unwrap();
+    let cwd = AbsPath::canonicalize(scratch.0.to_str().unwrap()).unwrap();
+    let prepared = Terminal::prepare(&launch(&scratch, &program, &cwd)).unwrap();
+    let terminal = prepared.terminal();
+    let identity = runtrol_childproc::process_identity(terminal.pid()).unwrap();
+    eprintln!("owned cancelled fixture: identity={identity:?}");
+    drop(prepared);
+    stopped(&terminal).await;
+    assert!(!scratch.marker().exists());
+    assert!(!live(identity));
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn failed_prepared_host_keeps_exact_cleanup_without_executing() {
+    let scratch = Scratch::new();
+    let program =
+        runtrol_childproc::resolve(std::env::current_exe().unwrap().to_str().unwrap()).unwrap();
+    let cwd = AbsPath::canonicalize(scratch.0.to_str().unwrap()).unwrap();
+    let mut identity = None;
+    let error = super::prepare(&launch(&scratch, &program, &cwd), |child, _size| {
+        identity = runtrol_childproc::process_identity(child.pid());
+        Err(FailedHost {
+            child,
+            cause: Box::new(TerminalError::Runtime(
+                "injected suspended host failure".to_owned(),
+            )),
+        })
+    })
+    .unwrap_err();
+    if let TerminalError::CleanupIncomplete { terminal, .. } = error {
+        stopped(&terminal).await;
+    }
+    assert!(!live(identity.unwrap()));
+    assert!(!scratch.marker().exists());
+}
+
 #[tokio::test]
 async fn a_failed_reader_start_never_returns_an_unowned_live_root() {
     let program =
@@ -159,7 +241,7 @@ async fn a_failed_reader_start_never_returns_an_unowned_live_root() {
                 assert_eq!(terminal.pid(), identity.pid());
                 let mut exited = terminal.exited();
                 tokio::time::timeout(Duration::from_secs(5), async {
-                    while exited.borrow().is_none() {
+                    while exited.borrow().exit_code.is_none() {
                         exited.changed().await.unwrap();
                     }
                 })
@@ -248,11 +330,7 @@ async fn a_failed_exit_confirmation_retains_the_real_root_and_rejects_io() {
     // No exit receiver exists while the real process ends. A delayed registry bind can subscribe
     // only after this point and must still observe the exact exit rather than an empty watch value.
     tokio::time::timeout(Duration::from_secs(5), async {
-        while !terminal
-            .shared
-            .finished
-            .load(std::sync::atomic::Ordering::Acquire)
-        {
+        while terminal.shared.exited.borrow().exit_code.is_none() {
             tokio::time::sleep(Duration::from_millis(2)).await;
         }
     })
@@ -260,7 +338,7 @@ async fn a_failed_exit_confirmation_retains_the_real_root_and_rejects_io() {
     .unwrap();
     let exited = terminal.exited();
     assert!(
-        exited.borrow().is_some(),
+        exited.borrow().exit_code.is_some(),
         "a late observer must retain the exact native exit"
     );
     assert!(

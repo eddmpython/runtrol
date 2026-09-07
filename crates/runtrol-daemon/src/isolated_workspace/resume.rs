@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use super::identity::VerifiedProject;
 use super::ownership::{ProcessStamp, TerminalOwner};
-use super::{IsolatedWorkspaceController, Operation, Record, State, registry, report_cleanup};
+use super::{Operation, Record, Records, State, registry, report_cleanup};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct WorktreeBinding {
@@ -73,12 +73,20 @@ impl WorktreeBinding {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub(super) struct ResumeRecord {
+    #[serde(default)]
+    pub(super) lifetime: Option<super::completion::GenerationProof>,
     pub(super) owner: TerminalOwner,
     process: Option<ProcessStamp>,
 }
 
 impl ResumeRecord {
     pub(super) fn validate(&self) -> Result<(), String> {
+        if let Some(proof) = self.lifetime {
+            proof.validate()?;
+            if !proof.belongs_to(self.owner.runtime) {
+                return Err("resume keeper belongs to another Runtime".to_owned());
+            }
+        }
         self.owner.runtime.validate()?;
         if let Some(process) = self.process {
             process.validate()?;
@@ -87,7 +95,9 @@ impl ResumeRecord {
     }
 
     pub(super) fn is_live(&self) -> bool {
-        self.owner.runtime.is_live() || self.process.is_some_and(ProcessStamp::is_live)
+        self.owner.runtime.is_live()
+            || self.process.is_some_and(ProcessStamp::is_live)
+            || !super::completion::proven(self.lifetime, self.owner.runtime)
     }
 }
 
@@ -207,17 +217,10 @@ pub(crate) fn read_resume_binding(
     WorktreeBinding::from_record(record).map(Some)
 }
 
-impl IsolatedWorkspaceController {
-    #[cfg(test)]
-    pub(crate) fn resume_binding(
-        &self,
-        workspace: &AbsPath,
-    ) -> Result<Option<WorktreeBinding>, String> {
-        read_resume_binding(&self.path, workspace)
-    }
-
+impl Records {
     pub(crate) fn reserve_resume(
         &mut self,
+        containment: &runtrol_childproc::Containment,
         binding: &WorktreeBinding,
         owner: TerminalOwner,
         mut check: impl FnMut(TerminalOwner) -> Result<Option<EndedResume>, String>,
@@ -241,17 +244,18 @@ impl IsolatedWorkspaceController {
             .as_mut()
             .ok_or("the worktree owner disappeared")?;
         let original_retired = check(occupancy.ticket.worker)?;
-        let owner_ended = |previous: TerminalOwner, proof: &Option<EndedResume>| {
-            !previous.runtime.is_live()
+        let owner_ended = |previous: TerminalOwner, proof: &Option<EndedResume>, lifetime| {
+            (!previous.runtime.is_live() && super::completion::proven(lifetime, previous.runtime))
                 || (previous.runtime == owner.runtime
                     && proof.as_ref().is_some_and(|ended| {
                         ended.workspace_id == binding.workspace_id && ended.owner == previous
                     }))
         };
-        let original_ended = owner_ended(occupancy.ticket.worker, &original_retired);
+        let original_ended =
+            owner_ended(occupancy.ticket.worker, &original_retired, record.lifetime);
         let resumed_ended = if let Some(resume) = &occupancy.resume {
             let retired = check(resume.owner)?;
-            owner_ended(resume.owner, &retired)
+            owner_ended(resume.owner, &retired, resume.lifetime)
                 && !resume.process.is_some_and(ProcessStamp::is_live)
         } else {
             true
@@ -261,6 +265,10 @@ impl IsolatedWorkspaceController {
             return Err("the worktree already has a live or uninspectable occupant".to_owned());
         }
         occupancy.resume = Some(ResumeRecord {
+            lifetime: super::completion::GenerationProof::for_owner(
+                containment,
+                Some(owner.runtime),
+            )?,
             owner,
             process: None,
         });
@@ -318,14 +326,29 @@ pub(crate) async fn refuse_unbound_worktree(
     composed: &Arc<crate::Composed>,
     workspace: &AbsPath,
 ) -> Result<(), String> {
+    refuse_worktree(composed, workspace, true).await
+}
+
+/// A native birth cannot inherit a structured session binding or its close proof.
+pub(crate) async fn refuse_unbound_native_worktree(
+    composed: &Arc<crate::Composed>,
+    workspace: &AbsPath,
+) -> Result<(), String> {
+    refuse_worktree(composed, workspace, false).await
+}
+
+async fn refuse_worktree(
+    composed: &Arc<crate::Composed>,
+    workspace: &AbsPath,
+    structured: bool,
+) -> Result<(), String> {
     let path = composed.home.paths().isolated_workspaces().clone();
     let workspace = workspace.clone();
     tokio::task::spawn_blocking(move || {
         let records = registry::read(&path)?;
-        if records
-            .iter()
-            .any(|record| record.terminal.is_some() && workspace.is_under(&record.workspace))
-        {
+        if records.iter().any(|record| {
+            (!structured || record.terminal.is_some()) && workspace.is_under(&record.workspace)
+        }) {
             return Err(
                 "a Core-owned worktree requires its authenticated native resume".to_owned(),
             );

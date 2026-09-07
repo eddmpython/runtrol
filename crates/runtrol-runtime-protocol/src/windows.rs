@@ -48,6 +48,9 @@ pub struct WindowRegistration {
     /// Monotonic across every registration this Runtime generation accepted; a later registration of the same
     /// window has a higher number, so readers can tell which one is current.
     pub registration_generation: u64,
+    /// Private proof returned only to the registering connection; never included in the window index.
+    #[serde(default)]
+    pub owner_token: String,
 }
 
 /// The command a shell-integrated terminal is running right now, as VS Code's shell integration reported it.
@@ -177,6 +180,10 @@ pub struct WindowIndexEndedNotification {
 #[derive(Clone, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WindowMirrorOpenParams {
+    /// Exact registration that owns this execution.
+    pub registration_generation: u64,
+    /// Private registration proof returned to the owning extension.
+    pub owner_token: String,
     /// The window that owns the terminal, by its registered session identity. The mirror is fed on whichever
     /// connection opened it, which is deliberately not the connection that holds the window's registration: a
     /// refused chunk must never take the registration down with it.
@@ -299,5 +306,132 @@ pub struct WindowRevealsEndedNotification {
     /// The subscription this belongs to.
     pub subscription_id: String,
     /// Why it ended.
+    pub reason: WindowIndexEndReason,
+}
+
+/// Exact window, extension, execution, mirror, and shell identity named by an input offer.
+#[derive(Clone, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WindowInputBinding {
+    /// Registered owner window.
+    pub window_session_id: String,
+    /// Exact Runtime registration generation.
+    pub registration_generation: u64,
+    /// Exact Extension Host activation.
+    pub host_generation: String,
+    /// Stable local terminal object key.
+    pub terminal_key: String,
+    /// Exact shell-integration execution.
+    pub execution_id: String,
+    /// Runtime mirror for this execution.
+    pub terminal_id: crate::RuntimeTerminalId,
+    /// Shell PID; Runtime also retains and rechecks its kernel birth identity privately.
+    pub process_id: u32,
+}
+
+/// Bind one dedicated duplex receiver to the private registration proof.
+#[derive(Clone, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WatchWindowInputParams {
+    /// Owner window identity.
+    pub window_session_id: String,
+    /// Exact registration generation.
+    pub registration_generation: u64,
+    /// Private capability returned on registration.
+    pub owner_token: String,
+}
+
+/// The receiver and its bounded offer capacity.
+#[derive(Clone, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WatchWindowInputResult {
+    /// Identity bound to this dedicated connection.
+    pub subscription_id: String,
+    /// Runtime's existing live-terminal bound, projected for the receiver queue.
+    pub max_pending_offers: usize,
+}
+
+/// A body-free offer. Only a successful claim releases caller-owned text.
+#[derive(Clone, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WindowInputOfferedNotification {
+    /// Exact receiver connection.
+    pub subscription_id: String,
+    /// Runtime delivery sequence.
+    pub sequence: u64,
+    /// Immutable execution binding.
+    pub binding: WindowInputBinding,
+}
+
+/// Claim the text of one exact offered delivery once.
+#[derive(Clone, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WindowClaimInputParams {
+    /// Exact receiver connection.
+    pub subscription_id: String,
+    /// Runtime delivery sequence.
+    pub sequence: u64,
+}
+
+/// Transient text released after final authority and execution checks.
+#[derive(Clone, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WindowInputClaim {
+    /// Text passed unchanged to the owner API.
+    pub text: String,
+}
+
+/// Structural owner API outcome.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum WindowInputOutcome {
+    /// Exactly one public API invocation was accepted by the extension.
+    OwnerExtensionAccepted,
+    /// The owner refused before calling the API.
+    Refused,
+    /// Delivery may have happened and must not be replayed.
+    OutcomeUnknown,
+}
+
+/// Closed body-free refusal vocabulary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum WindowInputFailure {
+    /// Current authority does not permit this delivery.
+    AuthorityDenied,
+    /// The bound execution ended.
+    ExecutionEnded,
+    /// The terminal or execution identity changed.
+    ExecutionChanged,
+    /// The exact owner receiver closed.
+    ReceiverClosed,
+    /// The UTF-8 payload exceeds the public input bound.
+    TextTooLarge,
+    /// The public owner input API failed.
+    InputApiFailed,
+}
+
+/// Finish one delivery without copying any input or output into its receipt.
+#[derive(Clone, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WindowInputReceiptParams {
+    /// Exact receiver connection.
+    pub subscription_id: String,
+    /// Runtime delivery sequence.
+    pub sequence: u64,
+    /// The owner's bounded API result.
+    pub outcome: WindowInputOutcome,
+    /// Optional structural reason, never native error text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<WindowInputFailure>,
+}
+
+/// The private input receiver ended.
+#[derive(Clone, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WindowInputEndedNotification {
+    /// Exact receiver connection.
+    pub subscription_id: String,
+    /// Structural reason for retirement.
     pub reason: WindowIndexEndReason,
 }

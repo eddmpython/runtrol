@@ -14,20 +14,27 @@ use runtrol_ipc::wire::{IsolatedWorkspaceLine, IsolatedWorkspaceReleaseLine, Res
 use runtrol_provider::{AbsPath, SessionId};
 use serde::{Deserialize, Serialize};
 
+mod completion;
+pub(crate) use completion::EndedSession;
+mod controller;
+#[cfg(windows)]
+pub use completion::complete_keeper_generation;
 mod identity;
 pub(crate) mod ownership;
 mod recovery;
 mod registry;
 mod resume;
 mod terminal;
+pub(crate) use controller::IsolatedWorkspaceController;
 pub(crate) use identity::VerifiedProject;
 pub(crate) use recovery::{recover_after_restart, report_cleanup};
 pub(crate) use resume::{
-    EndedResume, ResumeReservation, WorktreeBinding, read_resume_binding, refuse_unbound_worktree,
+    EndedResume, ResumeReservation, WorktreeBinding, read_resume_binding,
+    refuse_unbound_native_worktree, refuse_unbound_worktree,
 };
 pub(crate) use terminal::PreparedWorkspace;
 
-const FILE_SCHEMA: u8 = 3;
+const FILE_SCHEMA: u8 = 4;
 const MAX_RECORDS: usize = 128;
 const MAX_FILE_BYTES: u64 = 256 * 1024;
 const GIT_INSPECTION_TIMEOUT: Duration = Duration::from_secs(15);
@@ -35,7 +42,7 @@ const GIT_WORKTREE_TIMEOUT: Duration = Duration::from_mins(1);
 
 struct Operation<'a> {
     containment: &'a Containment,
-    lease: std::sync::Arc<std::fs::File>,
+    lease: std::sync::Arc<dyn Send + Sync>,
 }
 
 async fn capture(
@@ -86,12 +93,16 @@ impl State {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct Record {
+    #[serde(default)]
+    lifetime: Option<completion::GenerationProof>,
     workspace_id: Box<str>,
     request_id: Box<str>,
     project: AbsPath,
     workspace: AbsPath,
     base_commit: Box<str>,
     session_id: Option<Box<str>>,
+    #[serde(default)]
+    session_completed: bool,
     state: State,
     #[serde(default)]
     revision: u64,
@@ -126,36 +137,18 @@ struct File {
     records: Vec<Record>,
 }
 
-/// Durable owner of ordinary-chat linked worktrees.
-pub(crate) struct IsolatedWorkspaceController {
+// A single mutation's working copy. It is refreshed only after acquiring its existing operation
+// stripe, then committed through exact row CAS. Nothing is cached on the shared controller.
+struct Records {
     path: AbsPath,
     records: Vec<Record>,
 }
 
-impl IsolatedWorkspaceController {
-    pub(crate) fn open(path: AbsPath) -> Result<Self, String> {
-        let records = registry::read(&path)?;
-        Ok(Self { path, records })
-    }
-
+impl Records {
     fn refresh_for_write(&mut self) -> Result<(), String> {
         registry::check_writable(&self.path)?;
         self.records = registry::read(&self.path)?;
         Ok(())
-    }
-
-    pub(crate) fn list(&self) -> Response {
-        let records = match registry::read(&self.path) {
-            Ok(records) => records,
-            Err(message) => return Response::Failed(runtrol_ipc::wire::WireError::plain(&message)),
-        };
-        Response::IsolatedWorkspaces(
-            records
-                .iter()
-                .filter(|record| record.state != State::Released && record.terminal.is_none())
-                .map(Record::line)
-                .collect(),
-        )
     }
 
     pub(crate) async fn prepare(
@@ -213,12 +206,14 @@ impl IsolatedWorkspaceController {
             );
         }
         let record = Record {
+            lifetime: completion::GenerationProof::for_owner(containment, None)?,
             workspace_id: request_id.into(),
             request_id: request_id.into(),
             project: base,
             workspace,
             base_commit,
             session_id: None,
+            session_completed: false,
             state: State::Creating,
             revision: 0,
             terminal: None,
@@ -363,6 +358,7 @@ impl IsolatedWorkspaceController {
         workspace_id: Option<&str>,
         session_id: Option<&str>,
         workspace: &str,
+        retained: Option<std::sync::Arc<dyn Send + Sync>>,
     ) -> Result<Response, String> {
         if workspace_id.is_none() && session_id.is_none() {
             return Err(
@@ -384,10 +380,12 @@ impl IsolatedWorkspaceController {
         else {
             return Ok(Response::Done);
         };
-        let operation = Operation {
-            containment,
-            lease: registry::operation(&self.path, &candidate.workspace_id)?,
+        let lease = registry::operation(&self.path, &candidate.workspace_id)?;
+        let lease: std::sync::Arc<dyn Send + Sync> = match retained {
+            Some(retained) => std::sync::Arc::new((lease, retained)),
+            None => lease,
         };
+        let operation = Operation { containment, lease };
         self.refresh_for_write()?;
         let Some(index) = self.records.iter().position(|record| {
             record.workspace.as_str() == workspace
@@ -413,6 +411,7 @@ impl IsolatedWorkspaceController {
         if record.state == State::Released {
             return Ok(release_line(&record, "alreadyRemoved"));
         }
+        completion::require_structured_release(&record)?;
         if record.state == State::Creating && !record.workspace.as_std_path().exists() {
             let released = self.transition(index, State::Released)?;
             return Ok(release_line(&released, "removed"));
@@ -492,6 +491,22 @@ fn validate_records(records: &[Record]) -> Result<(), String> {
     let mut sessions = BTreeSet::new();
     let mut terminals = BTreeSet::new();
     for record in records {
+        if record.session_completed
+            && (record.legacy || record.session_id.is_none() || record.terminal.is_some())
+        {
+            return Err("worktree session completion has no exact structured binding".to_owned());
+        }
+        if let Some(proof) = record.lifetime {
+            proof.validate()?;
+            if record.legacy
+                || record
+                    .terminal
+                    .as_ref()
+                    .is_some_and(|owned| !proof.belongs_to(owned.ticket.worker.runtime))
+            {
+                return Err("worktree completion belongs to another Runtime".to_owned());
+            }
+        }
         validate_uuid(&record.request_id, "isolation request")?;
         validate_uuid(&record.workspace_id, "isolated workspace")?;
         if record.request_id != record.workspace_id {

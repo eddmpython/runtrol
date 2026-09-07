@@ -7,11 +7,17 @@ import json
 import threading
 from collections.abc import Callable, Coroutine, Sequence
 from dataclasses import dataclass
-from typing import Any, TypeVar
+from typing import Any, Literal, TypeVar, cast
 
 from . import _native
 from .errors import translate
-from .generated import JsonObject
+from .generated import (
+    JsonObject, TerminalFailure, TerminalSendTextParams, TerminalTextReceipt,
+    WatchWindowInputParams, WatchWindowInputResult, WindowInputClaim,
+    WindowInputEndedNotification, WindowInputOfferedNotification, WindowInputReceiptParams,
+    WindowRegisterParams, WindowRegistration, WindowUpdateParams,
+    WindowMirrorOpenParams, WindowMirrorOpened, WindowMirrorOutputParams, WindowMirrorEndParams,
+)
 
 T = TypeVar("T")
 Identity = _native.PyIdentity
@@ -54,6 +60,7 @@ class TerminalEvent:
     lost_chunks: int | None = None
     next_sequence: int | None = None
     exit_code: int | None = None
+    failure: TerminalFailure | None = None
 
 
 class AsyncSubscription:
@@ -87,6 +94,7 @@ class AsyncTerminalView:
             lost_chunks=event.lost_chunks,
             next_sequence=event.next_sequence,
             exit_code=event.exit_code,
+            failure=event.failure,
         )
 
     async def call(self, operation: str, params: JsonObject) -> JsonObject:
@@ -108,6 +116,10 @@ class AsyncTerminalView:
     async def write(self, params: JsonObject) -> None:
         await self.call("write", params)
 
+    async def sendText(self, params: TerminalSendTextParams) -> TerminalTextReceipt:
+        """Invoke the exact owner's text API once. An uncertain outcome is never replayed."""
+        return cast(TerminalTextReceipt, await self.call("sendText", cast(JsonObject, params)))
+
     async def resize(self, params: JsonObject) -> None:
         await self.call("resize", params)
 
@@ -119,6 +131,40 @@ class AsyncTerminalView:
 
     async def detach(self, params: JsonObject) -> None:
         await self.call("detach", params)
+
+
+@dataclass(frozen=True, slots=True)
+class WindowInputEvent:
+    """A body-free offer or the typed end of this exact owner subscription."""
+
+    kind: Literal["offered", "ended"]
+    offered: WindowInputOfferedNotification | None = None
+    ended: WindowInputEndedNotification | None = None
+
+
+class AsyncWindowInputSubscription:
+    """Call next, claimInput and inputReceipt serially. Cancellation closes this receiver."""
+
+    def __init__(self, native: _native.PyWindowInput) -> None:
+        self._native = native
+        self.started = cast(WatchWindowInputResult, _object(native.started_json))
+
+    async def next(self) -> WindowInputEvent:
+        value = _object(await _native_await(self._native.call("next", "{}")))
+        if value["kind"] == "offered":
+            return WindowInputEvent("offered", offered=cast(WindowInputOfferedNotification, value["offered"]))
+        if value["kind"] == "ended":
+            return WindowInputEvent("ended", ended=cast(WindowInputEndedNotification, value["ended"]))
+        raise TypeError("owner input notification kind is invalid")
+
+    async def claimInput(self, sequence: int) -> WindowInputClaim:
+        return cast(WindowInputClaim, _object(await _native_await(self._native.call("claimInput", json.dumps(sequence)))))
+
+    async def inputReceipt(self, params: WindowInputReceiptParams) -> None:
+        await _native_await(self._native.call("inputReceipt", json.dumps(params, separators=(",", ":"))))
+
+    async def close(self) -> None:
+        self._native.close()
 
 
 class AsyncRuntimeClient:
@@ -204,6 +250,25 @@ class AsyncRuntimeClient:
 
     async def terminals(self) -> JsonObject:
         return await self.call("terminals.list")
+
+    async def registerWindow(self, params: WindowRegisterParams) -> WindowRegistration:
+        return cast(WindowRegistration, await self.call("windows.register", cast(JsonObject, params)))
+
+    async def updateWindow(self, params: WindowUpdateParams) -> None:
+        await self.call("windows.update", cast(JsonObject, params))
+
+    async def mirrorOpen(self, params: WindowMirrorOpenParams) -> WindowMirrorOpened:
+        return cast(WindowMirrorOpened, await self.call("windows.mirrorOpen", cast(JsonObject, params)))
+
+    async def mirrorOutput(self, params: WindowMirrorOutputParams) -> None:
+        await self.call("windows.mirrorOutput", cast(JsonObject, params))
+
+    async def mirrorEnd(self, params: WindowMirrorEndParams) -> None:
+        await self.call("windows.mirrorEnd", cast(JsonObject, params))
+
+    async def watchInput(self, params: WatchWindowInputParams) -> AsyncWindowInputSubscription:
+        native = await _native_await(self._native.watch_input(json.dumps(params, separators=(",", ":"))))
+        return AsyncWindowInputSubscription(native)
 
     async def terminal_generations(self) -> list[JsonObject]:
         """List exact current and draining generation outcomes for terminal routing."""
@@ -322,6 +387,9 @@ class TerminalView:
     def write(self, params: JsonObject) -> None:
         self.call("write", params)
 
+    def sendText(self, params: TerminalSendTextParams) -> TerminalTextReceipt:
+        return self._runner.call(lambda: self._asynchronous.sendText(params))
+
     def resize(self, params: JsonObject) -> None:
         self.call("resize", params)
 
@@ -333,6 +401,27 @@ class TerminalView:
 
     def detach(self, params: JsonObject) -> None:
         self.call("detach", params)
+
+
+class WindowInputSubscription:
+    """Synchronous owner receiver with the same serial and unknown-outcome contract."""
+
+    def __init__(self, runner: _LoopRunner, asynchronous: AsyncWindowInputSubscription) -> None:
+        self._runner = runner
+        self._asynchronous = asynchronous
+        self.started = asynchronous.started
+
+    def next(self) -> WindowInputEvent:
+        return self._runner.call(self._asynchronous.next)
+
+    def claimInput(self, sequence: int) -> WindowInputClaim:
+        return self._runner.call(lambda: self._asynchronous.claimInput(sequence))
+
+    def inputReceipt(self, params: WindowInputReceiptParams) -> None:
+        self._runner.call(lambda: self._asynchronous.inputReceipt(params))
+
+    def close(self) -> None:
+        self._runner.call(self._asynchronous.close)
 
 
 class RuntimeClient:
@@ -419,6 +508,25 @@ class RuntimeClient:
 
     def terminals(self) -> JsonObject:
         return self._runner.call(self._asynchronous.terminals)
+
+    def registerWindow(self, params: WindowRegisterParams) -> WindowRegistration:
+        return self._runner.call(lambda: self._asynchronous.registerWindow(params))
+
+    def updateWindow(self, params: WindowUpdateParams) -> None:
+        self._runner.call(lambda: self._asynchronous.updateWindow(params))
+
+    def mirrorOpen(self, params: WindowMirrorOpenParams) -> WindowMirrorOpened:
+        return self._runner.call(lambda: self._asynchronous.mirrorOpen(params))
+
+    def mirrorOutput(self, params: WindowMirrorOutputParams) -> None:
+        self._runner.call(lambda: self._asynchronous.mirrorOutput(params))
+
+    def mirrorEnd(self, params: WindowMirrorEndParams) -> None:
+        self._runner.call(lambda: self._asynchronous.mirrorEnd(params))
+
+    def watchInput(self, params: WatchWindowInputParams) -> WindowInputSubscription:
+        subscription = self._runner.call(lambda: self._asynchronous.watchInput(params))
+        return WindowInputSubscription(self._runner, subscription)
 
     def terminal_generations(self) -> list[JsonObject]:
         return self._runner.call(self._asynchronous.terminal_generations)

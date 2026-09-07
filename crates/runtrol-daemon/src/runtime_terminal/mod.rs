@@ -36,6 +36,9 @@ use crate::runtime_inventory::{AuthorizedRoot, RuntimeSessionCatalogue, authoriz
 use crate::runtime_native_sessions::NativeCursorCodec;
 use crate::terminal_surface::HostedTerminal;
 
+mod completion;
+pub(crate) mod owner_input;
+pub(crate) use completion::terminal_failure;
 mod dialogue;
 mod resume;
 mod root_guard;
@@ -79,6 +82,7 @@ struct TerminalAuthorityState {
     /// later holder's generation is still above every earlier one. Bounded by [`MAX_CONTROL_GENERATIONS`].
     control_generations: BTreeMap<TerminalId, u64>,
     mutations: BTreeMap<MutationKey, StoredMutation>,
+    next_text_sequence: u64,
 }
 
 /// How many terminals' control generations are remembered. Above this, the entries of terminals nobody holds
@@ -139,6 +143,7 @@ enum MutationOutcome {
     /// this record across cancellation or an unknown I/O outcome prevents a retry from performing it twice.
     PendingDone,
     Done,
+    Text(runtrol_runtime_protocol::TerminalTextReceipt),
 }
 
 /// One admitted dedicated terminal stream.
@@ -245,7 +250,7 @@ impl TerminalRuntimeAdapter {
         authority: &AuthorizedIntegration,
     ) -> Result<TerminalIndexSnapshot, TerminalRuntimeFailure> {
         let roots = self.validated_roots(composed, authority).await?;
-        self.list_validated(composed, &roots).await
+        self.list_validated(composed, &roots, authority).await
     }
 
     /// Revalidate filesystem authority on the bounded blocking lane used by terminal views.
@@ -268,6 +273,7 @@ impl TerminalRuntimeAdapter {
         &self,
         composed: &Composed,
         roots: &[AuthorizedRoot],
+        authority: &AuthorizedIntegration,
     ) -> Result<TerminalIndexSnapshot, TerminalRuntimeFailure> {
         let generation = runtime_generation()?;
         let control = control_views(&mut *self.state.lock().await, WallMs::now().as_millis());
@@ -285,13 +291,16 @@ impl TerminalRuntimeAdapter {
                 omitted = omitted.saturating_add(1);
                 continue;
             }
-            terminals.push(descriptor(
+            let mut projected = descriptor(
                 &terminal,
                 generation,
                 &changes,
                 control.get(&terminal.id).copied().unwrap_or_default(),
                 composed.courier_gate.dialogue_enabled(terminal.id).await,
-            )?);
+            )?;
+            projected.owner_input_available =
+                owner_input::input_available(composed, authority, &terminal).await;
+            terminals.push(projected);
         }
         let warnings = if omitted == 0 {
             Vec::new()
@@ -538,6 +547,7 @@ impl TerminalRuntimeAdapter {
                     params.geometry.columns,
                     params.geometry.rows,
                     exact_program()?,
+                    &authority,
                 )
                 .await
             }
@@ -567,6 +577,7 @@ impl TerminalRuntimeAdapter {
                         // among them (`resume_would_fork`). A terminal in this folder that nobody has named is therefore
                         // provably some other conversation, and must not hold this one back.
                         holder_known,
+                        &authority,
                     )
                     .await
                 }
@@ -712,7 +723,7 @@ impl TerminalRuntimeAdapter {
             .get(&hosted.id)
             .copied()
             .unwrap_or_default();
-        let opened = TerminalViewOpened {
+        let mut opened = TerminalViewOpened {
             terminal: descriptor(
                 &hosted,
                 runtime_generation()?,
@@ -725,6 +736,8 @@ impl TerminalRuntimeAdapter {
             checkpoint_available: attachment.checkpoint_available,
             control_lease,
         };
+        opened.terminal.owner_input_available =
+            owner_input::input_available(composed, &authority, &hosted).await;
         validate_view_admission(composed, &authority, &pinned_root)?;
         Ok(TerminalView {
             opened,
@@ -809,6 +822,7 @@ impl TerminalRuntimeAdapter {
                 MutationOutcome::Lease(lease) => Ok(lease),
                 MutationOutcome::Opened(_)
                 | MutationOutcome::PendingDone
+                | MutationOutcome::Text(_)
                 | MutationOutcome::Done => Err(TerminalRuntimeFailure::new(
                     RuntimeErrorKind::IdempotencyConflict,
                     "the mutation identity belongs to another terminal operation",
@@ -882,6 +896,7 @@ impl TerminalRuntimeAdapter {
                 MutationOutcome::Lease(lease) => Ok(lease),
                 MutationOutcome::Opened(_)
                 | MutationOutcome::PendingDone
+                | MutationOutcome::Text(_)
                 | MutationOutcome::Done => Err(TerminalRuntimeFailure::new(
                     RuntimeErrorKind::IdempotencyConflict,
                     "the mutation identity belongs to another terminal operation",
@@ -950,7 +965,8 @@ impl TerminalRuntimeAdapter {
     ) -> Result<(), TerminalRuntimeFailure> {
         let terminal_id = private_terminal_id(&params.terminal_id)?;
         let hosted = visible_terminal(composed, authority, terminal_id).await?;
-        self.write_hosted(authority, params, hosted).await
+        self.write_hosted(composed, authority, params, hosted, None)
+            .await
     }
 
     /// Write through an admitted dedicated view whose Windows root handles remain pinned for its lifetime.
@@ -962,14 +978,17 @@ impl TerminalRuntimeAdapter {
     ) -> Result<(), TerminalRuntimeFailure> {
         let terminal_id = private_terminal_id(&params.terminal_id)?;
         let hosted = visible_terminal_in_view(composed, view, terminal_id).await?;
-        self.write_hosted(&view.authority, params, hosted).await
+        self.write_hosted(composed, &view.authority, params, hosted, Some(view))
+            .await
     }
 
     async fn write_hosted(
         &self,
+        composed: &Composed,
         authority: &AuthorizedIntegration,
         params: &TerminalWriteParams,
         hosted: HostedTerminal,
+        view: Option<&TerminalView>,
     ) -> Result<(), TerminalRuntimeFailure> {
         let terminal_id = hosted.id;
         validate_mutation_time(&params.request_id)?;
@@ -992,8 +1011,12 @@ impl TerminalRuntimeAdapter {
                 "terminal input exceeds the public byte limit",
             ));
         }
-        let now = WallMs::now().as_millis();
         let mut state = self.state.lock().await;
+        validate_input_grant(composed, authority)?;
+        if let Some(view) = view {
+            view.require_fresh_root_proof()?;
+        }
+        let now = WallMs::now().as_millis();
         if prior_done_from_state(&mut state, &key, fingerprint, now)? {
             return Ok(());
         }
@@ -1006,6 +1029,14 @@ impl TerminalRuntimeAdapter {
             params.lease_generation,
             now,
         )?;
+        if matches!(
+            &hosted.origin,
+            crate::terminal_surface::TerminalOrigin::ObservedMirror(_)
+        ) {
+            return Err(TerminalRuntimeFailure::invalid(
+                "an observed terminal cannot receive exact bytes through the Runtime writer",
+            ));
+        }
         remember_pending_done(&mut state, key.clone(), fingerprint, now);
         drop(state);
         operation.input(&bytes).await.map_err(|_| {
@@ -1212,12 +1243,12 @@ impl TerminalRuntimeAdapter {
             None => Ok(false),
             Some(MutationOutcome::Done) => Ok(true),
             Some(MutationOutcome::PendingDone) => Err(mutation_in_progress()),
-            Some(MutationOutcome::Lease(_) | MutationOutcome::Opened(_)) => {
-                Err(TerminalRuntimeFailure::new(
-                    RuntimeErrorKind::IdempotencyConflict,
-                    "the mutation identity belongs to another terminal operation",
-                ))
-            }
+            Some(
+                MutationOutcome::Lease(_) | MutationOutcome::Opened(_) | MutationOutcome::Text(_),
+            ) => Err(TerminalRuntimeFailure::new(
+                RuntimeErrorKind::IdempotencyConflict,
+                "the mutation identity belongs to another terminal operation",
+            )),
         }
     }
 
@@ -1421,7 +1452,15 @@ fn validate_control_view(
     let Some(view) = view else {
         return Ok(());
     };
-    let current = crate::runtime_serve::refresh_current(composed, &view.authority)
+    validate_input_grant(composed, &view.authority)?;
+    view.require_fresh_root_proof()
+}
+
+pub(crate) fn validate_input_grant(
+    composed: &Composed,
+    authority: &AuthorizedIntegration,
+) -> Result<(), TerminalRuntimeFailure> {
+    let current = crate::runtime_serve::refresh_current(composed, authority)
         .map_err(|failure| TerminalRuntimeFailure::new(failure.kind, failure.message))?;
     if !has_scopes(&current.grant, &[AppScope::SessionInputWrite]) {
         return Err(TerminalRuntimeFailure::new(
@@ -1429,12 +1468,12 @@ fn validate_control_view(
             "the integration grant lacks the required app scope",
         ));
     }
-    if current.grant.key_generation != view.authority.grant.key_generation
-        || current.grant.grant_generation != view.authority.grant.grant_generation
+    if current.grant.key_generation != authority.grant.key_generation
+        || current.grant.grant_generation != authority.grant.grant_generation
     {
         return Err(root_authority_failure());
     }
-    view.require_fresh_root_proof()
+    Ok(())
 }
 
 async fn visible_terminal(
@@ -1538,6 +1577,7 @@ fn descriptor(
         },
         control_generation: control.generation,
         control_held: control.held,
+        owner_input_available: false,
         dialogue_enabled,
         viewer_count: u32::try_from(hosted.terminal.viewer_count()).unwrap_or(u32::MAX),
         origin,
@@ -1622,7 +1662,7 @@ fn prior_done_from_state(
         None => Ok(false),
         Some(MutationOutcome::Done) => Ok(true),
         Some(MutationOutcome::PendingDone) => Err(mutation_in_progress()),
-        Some(MutationOutcome::Lease(_) | MutationOutcome::Opened(_)) => {
+        Some(MutationOutcome::Lease(_) | MutationOutcome::Opened(_) | MutationOutcome::Text(_)) => {
             Err(TerminalRuntimeFailure::new(
                 RuntimeErrorKind::IdempotencyConflict,
                 "the mutation identity belongs to another terminal operation",
@@ -1671,10 +1711,12 @@ fn finish_done_from_state(
             stored.recorded_at_ms = now;
             Ok(())
         }
-        MutationOutcome::Lease(_) | MutationOutcome::Opened(_) => Err(TerminalRuntimeFailure::new(
-            RuntimeErrorKind::IdempotencyConflict,
-            "the mutation identity belongs to another terminal operation",
-        )),
+        MutationOutcome::Lease(_) | MutationOutcome::Opened(_) | MutationOutcome::Text(_) => {
+            Err(TerminalRuntimeFailure::new(
+                RuntimeErrorKind::IdempotencyConflict,
+                "the mutation identity belongs to another terminal operation",
+            ))
+        }
     }
 }
 

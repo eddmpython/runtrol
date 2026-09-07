@@ -215,7 +215,7 @@ usage list beside the windows a turn reports, so a surface reads one gauge per s
 export interface ProviderAccount { readonly checkedAtMs: number; readonly limitsAbsent?: ProviderLimitsAbsent | null; readonly method?: string | null; readonly plan?: string | null; readonly status: ProviderAccountStatus; readonly why?: string | null; }
 
 /** Whether the operator is signed in to one service, by that service's own word. */
-export type ProviderAccountStatus = "signedIn" | "signedOut" | "unpublished";
+export type ProviderAccountStatus = "signedIn" | "signedOut" | "unpublished" | "unread";
 
 /** Whether one structural provider operation is usable in the observed installation. */
 export type ProviderCapabilityAvailability = "available" | "unsupported" | "unknown";
@@ -351,7 +351,7 @@ export interface RuntimeLimits { readonly challengeLifetimeMs: number; readonly 
 export interface RuntimeLocatorRecord { readonly generations: ReadonlyArray<RuntimeGeneration>; readonly instanceId: string; readonly schema: number; }
 
 /** A public Runtime method implemented by the initial read-only boundary. */
-export type RuntimeMethod = "runtime/initialize" | "runtime/initialized" | "runtime/challenge" | "integrations/requestEnrollment" | "integrations/watchEnrollment" | "integrations/getGrant" | "integrations/rotateKey" | "providers/usage" | "providers/list" | "providers/watch" | "providers/getCapabilities" | "providers/listModels" | "providers/listNativeSessions" | "providers/nativeActivity" | "providers/focusNative" | "sessions/list" | "sessions/watchIndex" | "sessions/get" | "sessions/start" | "sessions/adoptNative" | "sessions/resume" | "sessions/acquireControl" | "sessions/renewControl" | "sessions/releaseControl" | "sessions/submitInput" | "sessions/submitBlocks" | "sessions/setModel" | "sessions/setMode" | "sessions/watchEvents" | "sessions/interrupt" | "sessions/cool" | "sessions/forget" | "sessions/deleteNative" | "sessions/archiveNative" | "terminals/list" | "terminals/watchIndex" | "terminals/open" | "terminals/attach" | "terminals/acquireControl" | "terminals/renewControl" | "terminals/releaseControl" | "terminals/write" | "terminals/resize" | "terminals/detach" | "terminals/stop" | "terminals/setDialogue" | "windows/register" | "windows/update" | "windows/list" | "windows/watchIndex" | "windows/mirrorOpen" | "windows/mirrorOutput" | "windows/mirrorEnd" | "windows/reveal" | "windows/watchReveals" | "approvals/listPending" | "approvals/respond" | "sessions/indexChanged" | "sessions/indexEnded" | "providers/changed" | "providers/watchEnded" | "providers/usageChanged" | "sessions/event" | "sessions/lagged" | "terminals/indexChanged" | "terminals/indexEnded" | "terminals/output" | "terminals/lagged" | "terminals/exited" | "windows/indexChanged" | "windows/indexEnded" | "windows/revealRequested" | "windows/revealsEnded" | "runtime/panicStop";
+export type RuntimeMethod = "runtime/initialize" | "runtime/initialized" | "runtime/challenge" | "integrations/requestEnrollment" | "integrations/watchEnrollment" | "integrations/getGrant" | "integrations/rotateKey" | "providers/usage" | "providers/list" | "providers/watch" | "providers/getCapabilities" | "providers/listModels" | "providers/listNativeSessions" | "providers/nativeActivity" | "providers/focusNative" | "sessions/list" | "sessions/watchIndex" | "sessions/get" | "sessions/start" | "sessions/adoptNative" | "sessions/resume" | "sessions/acquireControl" | "sessions/renewControl" | "sessions/releaseControl" | "sessions/submitInput" | "sessions/submitBlocks" | "sessions/setModel" | "sessions/setMode" | "sessions/watchEvents" | "sessions/interrupt" | "sessions/cool" | "sessions/forget" | "sessions/deleteNative" | "sessions/archiveNative" | "terminals/list" | "terminals/watchIndex" | "terminals/open" | "terminals/attach" | "terminals/acquireControl" | "terminals/renewControl" | "terminals/releaseControl" | "terminals/write" | "windows/inputEnded" | "windows/inputOffered" | "windows/inputReceipt" | "windows/claimInput" | "windows/watchInput" | "terminals/sendText" | "terminals/resize" | "terminals/detach" | "terminals/stop" | "terminals/setDialogue" | "windows/register" | "windows/update" | "windows/list" | "windows/watchIndex" | "windows/mirrorOpen" | "windows/mirrorOutput" | "windows/mirrorEnd" | "windows/reveal" | "windows/watchReveals" | "approvals/listPending" | "approvals/respond" | "sessions/indexChanged" | "sessions/indexEnded" | "providers/changed" | "providers/watchEnded" | "providers/usageChanged" | "sessions/event" | "sessions/lagged" | "terminals/indexChanged" | "terminals/indexEnded" | "terminals/output" | "terminals/lagged" | "terminals/exited" | "windows/indexChanged" | "windows/indexEnded" | "windows/revealRequested" | "windows/revealsEnded" | "runtime/panicStop";
 
 /** The current model information Runtime can truthfully expose. */
 export type RuntimeModelCatalog = { readonly coverage: "known"; readonly models: ReadonlyArray<RuntimeModelChoice>; } | { readonly aliases: ReadonlyArray<string>; readonly coverage: "aliases"; readonly reasoningEfforts: ReadonlyArray<RuntimeReasoningChoice>; readonly why: string; } | { readonly aliases: ReadonlyArray<string>; readonly coverage: "partial"; readonly models: ReadonlyArray<RuntimeModelChoice>; readonly reasoningEfforts: ReadonlyArray<RuntimeReasoningChoice>; readonly why: string; } | { readonly coverage: "unknown"; readonly why: string; } | { readonly coverage: "unsupported"; readonly why: string; };
@@ -436,13 +436,16 @@ export interface TerminalControlLease { readonly expiresAtMs: number; readonly l
 export interface TerminalControlParams { readonly leaseGeneration: number; readonly leaseId: string; readonly requestId: MutationRequestId; readonly terminalId: RuntimeTerminalId; }
 
 /** One live terminal descriptor visible through an approved root. */
-export interface TerminalDescriptor { readonly controlGeneration?: number; readonly controlHeld?: boolean; readonly dialogueEnabled?: boolean; readonly geometry: TerminalGeometry; readonly initialMessageId?: string | null; readonly memoryBytes?: number | null; readonly nativeSessionId?: string | null; readonly openedAtMs: number; readonly origin?: TerminalOrigin; readonly ownerTerminalKey?: string | null; readonly ownerWindowSessionId?: string | null; readonly processState: TerminalProcessState; readonly projectRoot?: string | null; readonly providerId: ProviderId; readonly runtimeGeneration: string; readonly spawnedBy?: RuntimeTerminalId | null; readonly terminalGeneration: number; readonly terminalId: RuntimeTerminalId; readonly viewerCount?: number; readonly workspace: string; }
+export interface TerminalDescriptor { readonly controlGeneration?: number; readonly controlHeld?: boolean; readonly dialogueEnabled?: boolean; readonly geometry: TerminalGeometry; readonly initialMessageId?: string | null; readonly memoryBytes?: number | null; readonly nativeSessionId?: string | null; readonly openedAtMs: number; readonly origin?: TerminalOrigin; readonly ownerInputAvailable?: boolean; readonly ownerTerminalKey?: string | null; readonly ownerWindowSessionId?: string | null; readonly processState: TerminalProcessState; readonly projectRoot?: string | null; readonly providerId: ProviderId; readonly runtimeGeneration: string; readonly spawnedBy?: RuntimeTerminalId | null; readonly terminalGeneration: number; readonly terminalId: RuntimeTerminalId; readonly viewerCount?: number; readonly workspace: string; }
 
 /** Detach only one connection-bound view without stopping the provider process. */
 export interface TerminalDetachParams { readonly terminalId: RuntimeTerminalId; readonly viewId: RuntimeTerminalViewId; }
 
 /** Provider process exit delivered after preceding output has drained. */
-export interface TerminalExitedNotification { readonly exitCode: number; readonly viewId: RuntimeTerminalViewId; }
+export interface TerminalExitedNotification { readonly exitCode: number; readonly failure?: TerminalFailure | null; readonly viewId: RuntimeTerminalViewId; }
+
+/** Mechanical terminal-host failure. No provider content or operating-system error text is carried. */
+export type TerminalFailure = "hostInitializationFailed" | "outputReadFailed" | "controlStateLost" | "inputDeliveryUnknown";
 
 /** Shared PTY geometry visible to every attached viewer. */
 export interface TerminalGeometry { readonly columns: number; readonly rows: number; }
@@ -480,11 +483,20 @@ export type TerminalProcessState = "running" | "stopping";
 /** Set shared PTY geometry under one current terminal control lease. */
 export interface TerminalResizeParams { readonly geometry: TerminalGeometry; readonly leaseGeneration: number; readonly leaseId: string; readonly requestId: MutationRequestId; readonly terminalId: RuntimeTerminalId; }
 
+/** Caller-owned text delivered once through the observing extension's public input API. */
+export interface TerminalSendTextParams { readonly leaseGeneration: number; readonly leaseId: string; readonly requestId: MutationRequestId; readonly terminalId: RuntimeTerminalId; readonly text: string; }
+
 /** Enable or disable process-local dialogue under the exact current terminal input lease. */
 export interface TerminalSetDialogueParams { readonly enabled: boolean; readonly leaseGeneration: number; readonly leaseId: string; readonly requestId: MutationRequestId; readonly terminalId: RuntimeTerminalId; }
 
 /** Stop one hosted provider CLI under the exact current lease. */
 export interface TerminalStopParams { readonly leaseGeneration: number; readonly leaseId: string; readonly requestId: MutationRequestId; readonly terminalId: RuntimeTerminalId; }
+
+/** What the observing extension confirmed, without claiming shell processing or exact PTY bytes. */
+export type TerminalTextOutcome = "ownerExtensionAccepted";
+
+/** Structural result of one acknowledged owner input call. */
+export interface TerminalTextReceipt { readonly deliverySequence: number; readonly outcome: TerminalTextOutcome; readonly ownerRegistrationGeneration: number; readonly requestId: MutationRequestId; }
 
 /** A view starts with one bounded screen snapshot, then receives live output notifications. */
 export interface TerminalViewOpened { readonly checkpointAvailable?: boolean; readonly controlLease?: TerminalControlLease | null; readonly screenBase64: string; readonly terminal: TerminalDescriptor; readonly viewId: RuntimeTerminalViewId; }
@@ -532,11 +544,20 @@ export type WatchWindowIndexParams = Readonly<Record<string, never>>;
 /** Initial window index and the connection-local subscription identity. */
 export interface WatchWindowIndexResult { readonly snapshot: WindowIndexSnapshot; readonly subscriptionId: string; }
 
+/** Bind one dedicated duplex receiver to the private registration proof. */
+export interface WatchWindowInputParams { readonly ownerToken: string; readonly registrationGeneration: number; readonly windowSessionId: string; }
+
+/** The receiver and its bounded offer capacity. */
+export interface WatchWindowInputResult { readonly maxPendingOffers: number; readonly subscriptionId: string; }
+
 /** A window asks to be told when someone wants one of its terminals shown. */
 export interface WatchWindowRevealsParams { readonly windowSessionId: string; }
 
 /** The reveal subscription. */
 export interface WatchWindowRevealsResult { readonly subscriptionId: string; }
+
+/** Claim the text of one exact offered delivery once. */
+export interface WindowClaimInputParams { readonly sequence: number; readonly subscriptionId: string; }
 
 /** One registered window as every reader sees it. */
 export interface WindowDescriptor { readonly hostGeneration: string; readonly hostPid?: number | null; readonly registrationGeneration: number; readonly terminals: ReadonlyArray<ObservedTerminal>; readonly vscodeVersion: string; readonly windowSessionId: string; readonly workspaceFolders: ReadonlyArray<string>; }
@@ -556,12 +577,33 @@ export interface WindowIndexEndedNotification { readonly reason: WindowIndexEndR
 /** Every registered window, in registration order. */
 export interface WindowIndexSnapshot { readonly windows: ReadonlyArray<WindowDescriptor>; }
 
+/** Exact window, extension, execution, mirror, and shell identity named by an input offer. */
+export interface WindowInputBinding { readonly executionId: string; readonly hostGeneration: string; readonly processId: number; readonly registrationGeneration: number; readonly terminalId: RuntimeTerminalId; readonly terminalKey: string; readonly windowSessionId: string; }
+
+/** Transient text released after final authority and execution checks. */
+export interface WindowInputClaim { readonly text: string; }
+
+/** The private input receiver ended. */
+export interface WindowInputEndedNotification { readonly reason: WindowIndexEndReason; readonly subscriptionId: string; }
+
+/** Closed body-free refusal vocabulary. */
+export type WindowInputFailure = "authorityDenied" | "executionEnded" | "executionChanged" | "receiverClosed" | "textTooLarge" | "inputApiFailed";
+
+/** A body-free offer. Only a successful claim releases caller-owned text. */
+export interface WindowInputOfferedNotification { readonly binding: WindowInputBinding; readonly sequence: number; readonly subscriptionId: string; }
+
+/** Structural owner API outcome. */
+export type WindowInputOutcome = "ownerExtensionAccepted" | "refused" | "outcomeUnknown";
+
+/** Finish one delivery without copying any input or output into its receipt. */
+export interface WindowInputReceiptParams { readonly outcome: WindowInputOutcome; readonly reason?: WindowInputFailure | null; readonly sequence: number; readonly subscriptionId: string; }
+
 /** The observed execution ended, or the window stops mirroring it. */
 export interface WindowMirrorEndParams { readonly exitCode?: number | null; readonly terminalId: RuntimeTerminalId; }
 
 /** A window opens a mirror of a terminal it observes: from now on it feeds that terminal's raw execution output
 here, and the terminal appears in the terminal index as an observed mirror other windows may attach to. */
-export interface WindowMirrorOpenParams { readonly commandLine: string; readonly cwd: string; readonly executionId: string; readonly geometry: TerminalGeometry; readonly processId?: number | null; readonly providerId: ProviderId; readonly terminalKey: string; readonly windowSessionId: string; }
+export interface WindowMirrorOpenParams { readonly commandLine: string; readonly cwd: string; readonly executionId: string; readonly geometry: TerminalGeometry; readonly ownerToken: string; readonly processId?: number | null; readonly providerId: ProviderId; readonly registrationGeneration: number; readonly terminalKey: string; readonly windowSessionId: string; }
 
 /** The mirror the Runtime opened. */
 export interface WindowMirrorOpened { readonly terminalId: RuntimeTerminalId; }
@@ -573,7 +615,7 @@ export interface WindowMirrorOutputParams { readonly bytesBase64: string; readon
 export interface WindowRegisterParams { readonly hostGeneration: string; readonly hostPid?: number | null; readonly vscodeVersion: string; readonly windowSessionId: string; readonly workspaceFolders: ReadonlyArray<string>; }
 
 /** The Runtime's record of a registration. */
-export interface WindowRegistration { readonly registrationGeneration: number; }
+export interface WindowRegistration { readonly ownerToken?: string; readonly registrationGeneration: number; }
 
 /** Ask the window that owns a terminal to show it and come forward. */
 export interface WindowRevealParams { readonly terminalKey: string; readonly windowSessionId: string; }

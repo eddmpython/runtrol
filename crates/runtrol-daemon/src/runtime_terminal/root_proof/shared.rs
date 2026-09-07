@@ -84,6 +84,17 @@ impl SharedRootProof {
         self.state.borrow().completed_at + ROOT_PROOF_MAX_AGE
     }
 
+    /// Follow the shared completion clock even when a view replaced its notification receiver.
+    /// An executing check owns the next wake through its completion notification, not another timer.
+    pub(crate) fn refresh_at(&self) -> Option<Instant> {
+        let state = self.state.borrow();
+        if state.running.is_some() || self.busy.load(Ordering::Acquire) {
+            None
+        } else {
+            Some(state.completed_at + ROOT_REFRESH_AFTER)
+        }
+    }
+
     pub(crate) async fn ensure_fresh_until(
         self: &Arc<Self>,
         deadline: Instant,

@@ -6,7 +6,7 @@ from typing import ForwardRef, Literal, NotRequired, Required, TypeAlias, TypedD
 
 JsonValue: TypeAlias = None | bool | int | float | str | list["JsonValue"] | dict[str, "JsonValue"]
 JsonObject: TypeAlias = dict[str, JsonValue]
-SCHEMA_SHA256 = '12bb5c9025a965e760573b73f60a8162c8ebaecf93bb2d30d69205b035c59874'
+SCHEMA_SHA256 = 'c725e4fb30c3679b25e4656fd0263a2a05eb5f5caece40709d8641566df8c553'
 
 AcquireControlParams = TypedDict('AcquireControlParams', {
     'expectedLifecycle': Required[ForwardRef('LifecycleState')],
@@ -246,7 +246,7 @@ ProviderAccount = TypedDict('ProviderAccount', {
     'status': Required[ForwardRef('ProviderAccountStatus')],
     'why': NotRequired[str | None],
 })
-ProviderAccountStatus: TypeAlias = Literal['signedIn'] | Literal['signedOut'] | Literal['unpublished']
+ProviderAccountStatus: TypeAlias = Literal['signedIn'] | Literal['signedOut'] | Literal['unpublished'] | Literal['unread']
 ProviderCapabilityAvailability: TypeAlias = Literal['available'] | Literal['unsupported'] | Literal['unknown']
 ProviderCapabilityObservation = TypedDict('ProviderCapabilityObservation', {
     'availability': Required[ForwardRef('ProviderCapabilityAvailability')],
@@ -430,7 +430,7 @@ RuntimeLocatorRecord = TypedDict('RuntimeLocatorRecord', {
     'instanceId': Required[str],
     'schema': Required[int],
 })
-RuntimeMethod: TypeAlias = Literal['runtime/initialize'] | Literal['runtime/initialized'] | Literal['runtime/challenge'] | Literal['integrations/requestEnrollment'] | Literal['integrations/watchEnrollment'] | Literal['integrations/getGrant'] | Literal['integrations/rotateKey'] | Literal['providers/usage'] | Literal['providers/list'] | Literal['providers/watch'] | Literal['providers/getCapabilities'] | Literal['providers/listModels'] | Literal['providers/listNativeSessions'] | Literal['providers/nativeActivity'] | Literal['providers/focusNative'] | Literal['sessions/list'] | Literal['sessions/watchIndex'] | Literal['sessions/get'] | Literal['sessions/start'] | Literal['sessions/adoptNative'] | Literal['sessions/resume'] | Literal['sessions/acquireControl'] | Literal['sessions/renewControl'] | Literal['sessions/releaseControl'] | Literal['sessions/submitInput'] | Literal['sessions/submitBlocks'] | Literal['sessions/setModel'] | Literal['sessions/setMode'] | Literal['sessions/watchEvents'] | Literal['sessions/interrupt'] | Literal['sessions/cool'] | Literal['sessions/forget'] | Literal['sessions/deleteNative'] | Literal['sessions/archiveNative'] | Literal['terminals/list'] | Literal['terminals/watchIndex'] | Literal['terminals/open'] | Literal['terminals/attach'] | Literal['terminals/acquireControl'] | Literal['terminals/renewControl'] | Literal['terminals/releaseControl'] | Literal['terminals/write'] | Literal['terminals/resize'] | Literal['terminals/detach'] | Literal['terminals/stop'] | Literal['terminals/setDialogue'] | Literal['windows/register'] | Literal['windows/update'] | Literal['windows/list'] | Literal['windows/watchIndex'] | Literal['windows/mirrorOpen'] | Literal['windows/mirrorOutput'] | Literal['windows/mirrorEnd'] | Literal['windows/reveal'] | Literal['windows/watchReveals'] | Literal['approvals/listPending'] | Literal['approvals/respond'] | Literal['sessions/indexChanged'] | Literal['sessions/indexEnded'] | Literal['providers/changed'] | Literal['providers/watchEnded'] | Literal['providers/usageChanged'] | Literal['sessions/event'] | Literal['sessions/lagged'] | Literal['terminals/indexChanged'] | Literal['terminals/indexEnded'] | Literal['terminals/output'] | Literal['terminals/lagged'] | Literal['terminals/exited'] | Literal['windows/indexChanged'] | Literal['windows/indexEnded'] | Literal['windows/revealRequested'] | Literal['windows/revealsEnded'] | Literal['runtime/panicStop']
+RuntimeMethod: TypeAlias = Literal['runtime/initialize'] | Literal['runtime/initialized'] | Literal['runtime/challenge'] | Literal['integrations/requestEnrollment'] | Literal['integrations/watchEnrollment'] | Literal['integrations/getGrant'] | Literal['integrations/rotateKey'] | Literal['providers/usage'] | Literal['providers/list'] | Literal['providers/watch'] | Literal['providers/getCapabilities'] | Literal['providers/listModels'] | Literal['providers/listNativeSessions'] | Literal['providers/nativeActivity'] | Literal['providers/focusNative'] | Literal['sessions/list'] | Literal['sessions/watchIndex'] | Literal['sessions/get'] | Literal['sessions/start'] | Literal['sessions/adoptNative'] | Literal['sessions/resume'] | Literal['sessions/acquireControl'] | Literal['sessions/renewControl'] | Literal['sessions/releaseControl'] | Literal['sessions/submitInput'] | Literal['sessions/submitBlocks'] | Literal['sessions/setModel'] | Literal['sessions/setMode'] | Literal['sessions/watchEvents'] | Literal['sessions/interrupt'] | Literal['sessions/cool'] | Literal['sessions/forget'] | Literal['sessions/deleteNative'] | Literal['sessions/archiveNative'] | Literal['terminals/list'] | Literal['terminals/watchIndex'] | Literal['terminals/open'] | Literal['terminals/attach'] | Literal['terminals/acquireControl'] | Literal['terminals/renewControl'] | Literal['terminals/releaseControl'] | Literal['terminals/write'] | Literal['windows/inputEnded'] | Literal['windows/inputOffered'] | Literal['windows/inputReceipt'] | Literal['windows/claimInput'] | Literal['windows/watchInput'] | Literal['terminals/sendText'] | Literal['terminals/resize'] | Literal['terminals/detach'] | Literal['terminals/stop'] | Literal['terminals/setDialogue'] | Literal['windows/register'] | Literal['windows/update'] | Literal['windows/list'] | Literal['windows/watchIndex'] | Literal['windows/mirrorOpen'] | Literal['windows/mirrorOutput'] | Literal['windows/mirrorEnd'] | Literal['windows/reveal'] | Literal['windows/watchReveals'] | Literal['approvals/listPending'] | Literal['approvals/respond'] | Literal['sessions/indexChanged'] | Literal['sessions/indexEnded'] | Literal['providers/changed'] | Literal['providers/watchEnded'] | Literal['providers/usageChanged'] | Literal['sessions/event'] | Literal['sessions/lagged'] | Literal['terminals/indexChanged'] | Literal['terminals/indexEnded'] | Literal['terminals/output'] | Literal['terminals/lagged'] | Literal['terminals/exited'] | Literal['windows/indexChanged'] | Literal['windows/indexEnded'] | Literal['windows/revealRequested'] | Literal['windows/revealsEnded'] | Literal['runtime/panicStop']
 RuntimeModelCatalog: TypeAlias = JsonObject | JsonObject | JsonObject | JsonObject | JsonObject
 RuntimeModelChoice = TypedDict('RuntimeModelChoice', {
     'description': Required[str],
@@ -563,15 +563,19 @@ TerminalDescriptor = TypedDict('TerminalDescriptor', {
     'controlHeld': NotRequired[bool],
     'dialogueEnabled': NotRequired[bool],
     'geometry': Required[ForwardRef('TerminalGeometry')],
+    'initialMessageId': NotRequired[str | None],
     'memoryBytes': NotRequired[int | None],
     'nativeSessionId': NotRequired[str | None],
     'openedAtMs': Required[int],
     'origin': NotRequired[ForwardRef('TerminalOrigin')],
+    'ownerInputAvailable': NotRequired[bool],
     'ownerTerminalKey': NotRequired[str | None],
     'ownerWindowSessionId': NotRequired[str | None],
     'processState': Required[ForwardRef('TerminalProcessState')],
+    'projectRoot': NotRequired[str | None],
     'providerId': Required[ForwardRef('ProviderId')],
     'runtimeGeneration': Required[str],
+    'spawnedBy': NotRequired[ForwardRef('RuntimeTerminalId') | None],
     'terminalGeneration': Required[int],
     'terminalId': Required[ForwardRef('RuntimeTerminalId')],
     'viewerCount': NotRequired[int],
@@ -583,8 +587,10 @@ TerminalDetachParams = TypedDict('TerminalDetachParams', {
 })
 TerminalExitedNotification = TypedDict('TerminalExitedNotification', {
     'exitCode': Required[int],
+    'failure': NotRequired[ForwardRef('TerminalFailure') | None],
     'viewId': Required[ForwardRef('RuntimeTerminalViewId')],
 })
+TerminalFailure: TypeAlias = Literal['hostInitializationFailed'] | Literal['outputReadFailed'] | Literal['controlStateLost'] | Literal['inputDeliveryUnknown']
 TerminalGeometry = TypedDict('TerminalGeometry', {
     'columns': Required[int],
     'rows': Required[int],
@@ -631,6 +637,13 @@ TerminalResizeParams = TypedDict('TerminalResizeParams', {
     'requestId': Required[ForwardRef('MutationRequestId')],
     'terminalId': Required[ForwardRef('RuntimeTerminalId')],
 })
+TerminalSendTextParams = TypedDict('TerminalSendTextParams', {
+    'leaseGeneration': Required[int],
+    'leaseId': Required[str],
+    'requestId': Required[ForwardRef('MutationRequestId')],
+    'terminalId': Required[ForwardRef('RuntimeTerminalId')],
+    'text': Required[str],
+})
 TerminalSetDialogueParams = TypedDict('TerminalSetDialogueParams', {
     'enabled': Required[bool],
     'leaseGeneration': Required[int],
@@ -643,6 +656,13 @@ TerminalStopParams = TypedDict('TerminalStopParams', {
     'leaseId': Required[str],
     'requestId': Required[ForwardRef('MutationRequestId')],
     'terminalId': Required[ForwardRef('RuntimeTerminalId')],
+})
+TerminalTextOutcome: TypeAlias = Literal['ownerExtensionAccepted']
+TerminalTextReceipt = TypedDict('TerminalTextReceipt', {
+    'deliverySequence': Required[int],
+    'outcome': Required[ForwardRef('TerminalTextOutcome')],
+    'ownerRegistrationGeneration': Required[int],
+    'requestId': Required[ForwardRef('MutationRequestId')],
 })
 TerminalViewOpened = TypedDict('TerminalViewOpened', {
     'checkpointAvailable': NotRequired[bool],
@@ -693,10 +713,23 @@ WatchWindowIndexResult = TypedDict('WatchWindowIndexResult', {
     'snapshot': Required[ForwardRef('WindowIndexSnapshot')],
     'subscriptionId': Required[str],
 })
+WatchWindowInputParams = TypedDict('WatchWindowInputParams', {
+    'ownerToken': Required[str],
+    'registrationGeneration': Required[int],
+    'windowSessionId': Required[str],
+})
+WatchWindowInputResult = TypedDict('WatchWindowInputResult', {
+    'maxPendingOffers': Required[int],
+    'subscriptionId': Required[str],
+})
 WatchWindowRevealsParams = TypedDict('WatchWindowRevealsParams', {
     'windowSessionId': Required[str],
 })
 WatchWindowRevealsResult = TypedDict('WatchWindowRevealsResult', {
+    'subscriptionId': Required[str],
+})
+WindowClaimInputParams = TypedDict('WindowClaimInputParams', {
+    'sequence': Required[int],
     'subscriptionId': Required[str],
 })
 WindowDescriptor = TypedDict('WindowDescriptor', {
@@ -721,6 +754,35 @@ WindowIndexEndedNotification = TypedDict('WindowIndexEndedNotification', {
 WindowIndexSnapshot = TypedDict('WindowIndexSnapshot', {
     'windows': Required[list[ForwardRef('WindowDescriptor')]],
 })
+WindowInputBinding = TypedDict('WindowInputBinding', {
+    'executionId': Required[str],
+    'hostGeneration': Required[str],
+    'processId': Required[int],
+    'registrationGeneration': Required[int],
+    'terminalId': Required[ForwardRef('RuntimeTerminalId')],
+    'terminalKey': Required[str],
+    'windowSessionId': Required[str],
+})
+WindowInputClaim = TypedDict('WindowInputClaim', {
+    'text': Required[str],
+})
+WindowInputEndedNotification = TypedDict('WindowInputEndedNotification', {
+    'reason': Required[ForwardRef('WindowIndexEndReason')],
+    'subscriptionId': Required[str],
+})
+WindowInputFailure: TypeAlias = Literal['authorityDenied'] | Literal['executionEnded'] | Literal['executionChanged'] | Literal['receiverClosed'] | Literal['textTooLarge'] | Literal['inputApiFailed']
+WindowInputOfferedNotification = TypedDict('WindowInputOfferedNotification', {
+    'binding': Required[ForwardRef('WindowInputBinding')],
+    'sequence': Required[int],
+    'subscriptionId': Required[str],
+})
+WindowInputOutcome: TypeAlias = Literal['ownerExtensionAccepted'] | Literal['refused'] | Literal['outcomeUnknown']
+WindowInputReceiptParams = TypedDict('WindowInputReceiptParams', {
+    'outcome': Required[ForwardRef('WindowInputOutcome')],
+    'reason': NotRequired[ForwardRef('WindowInputFailure') | None],
+    'sequence': Required[int],
+    'subscriptionId': Required[str],
+})
 WindowMirrorEndParams = TypedDict('WindowMirrorEndParams', {
     'exitCode': NotRequired[int | None],
     'terminalId': Required[ForwardRef('RuntimeTerminalId')],
@@ -730,8 +792,10 @@ WindowMirrorOpenParams = TypedDict('WindowMirrorOpenParams', {
     'cwd': Required[str],
     'executionId': Required[str],
     'geometry': Required[ForwardRef('TerminalGeometry')],
+    'ownerToken': Required[str],
     'processId': NotRequired[int | None],
     'providerId': Required[ForwardRef('ProviderId')],
+    'registrationGeneration': Required[int],
     'terminalKey': Required[str],
     'windowSessionId': Required[str],
 })
@@ -750,6 +814,7 @@ WindowRegisterParams = TypedDict('WindowRegisterParams', {
     'workspaceFolders': Required[list[str]],
 })
 WindowRegistration = TypedDict('WindowRegistration', {
+    'ownerToken': NotRequired[str],
     'registrationGeneration': Required[int],
 })
 WindowRevealParams = TypedDict('WindowRevealParams', {

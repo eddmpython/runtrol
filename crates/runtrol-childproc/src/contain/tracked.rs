@@ -211,6 +211,9 @@ impl TrackedCommand {
         }
         #[cfg(windows)]
         {
+            if containment.kept_client().is_some() {
+                return self.spawn_for_capture(containment, None).await;
+            }
             let program = self.program.clone();
             let mut command = self.into_command(&program, true, true);
             containment.prepare(command.as_std_mut());
@@ -245,6 +248,7 @@ impl TrackedCommand {
             use windows_sys::Win32::System::Threading::CREATE_SUSPENDED;
 
             let program = self.program.clone();
+            let keeper = containment.kept_client();
             let mut command = self.into_command(&program, true, true);
             containment.prepare(command.as_std_mut());
             crate::console_window::hide_console_window_with_flags(
@@ -252,7 +256,7 @@ impl TrackedCommand {
                 CREATE_SUSPENDED,
             );
             tokio::task::spawn_blocking(move || {
-                let job = super::command_job::CommandJob::new(lease)?;
+                let job = super::command_job::CommandJob::for_client(lease, keeper.as_ref())?;
                 let mut child = command.spawn().map_err(|error| SpawnError::Io {
                     path: program.to_string_lossy().into_owned(),
                     detail: error.to_string(),

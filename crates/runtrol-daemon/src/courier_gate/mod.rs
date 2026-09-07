@@ -32,6 +32,8 @@ mod tests;
 struct Registered {
     token: Zeroizing<[u8; TOKEN_BYTES]>,
     root: Option<ProcessIdentity>,
+    #[cfg(windows)]
+    scope: Option<runtrol_childproc::ProcessScope>,
     waits: std::sync::Arc<tokio::sync::Semaphore>,
     activation: u64,
     enabled: bool,
@@ -206,6 +208,7 @@ impl CourierGate {
     /// # Errors
     ///
     /// Returns the launch error unchanged. A root that cannot be identified remains unbound and is refused.
+    #[cfg(any(not(windows), test))]
     pub(crate) async fn launch<T, E>(
         &self,
         minted: Minted,

@@ -8,6 +8,7 @@ import {
   RuntimeLocator,
   RuntimeRequestError,
   TerminalClient,
+  TerminalView,
   newMutationRequestId,
 } from "../src/index.js";
 import {
@@ -15,6 +16,78 @@ import {
   scriptedTransportFactory,
   validatedLocator,
 } from "../src/testing.js";
+
+test("terminal completion preserves an optional structural failure and the exact process code", async () => {
+  const instanceId = `rtm_${"8".repeat(32)}`;
+  const generation = "9".repeat(64);
+  const terminalId = "019c2b97-5f29-7b00-8000-000000000001";
+  const viewId = "019c2b97-5f29-7b00-8000-000000000002";
+  for (const failure of [undefined, "outputReadFailed", "controlStateLost", "inputDeliveryUnknown", "hostInitializationFailed"]) {
+    const transport = new ScriptedRuntimeTransport([
+      {
+        jsonrpc: "2.0",
+        method: "runtime/challenge",
+        params: {
+          instanceId,
+          nonceId: `nonce_${"0".repeat(32)}`,
+          nonce: Buffer.alloc(32).toString("base64url"),
+          expiresAtMs: Date.now() + 30_000,
+        },
+      },
+      {
+        jsonrpc: "2.0",
+        id: 1,
+        result: {
+          selectedRevision: FINALIZED_REVISIONS[0],
+          runtime: { instanceId, version: "0.1.1", platform: "fixture", buildDigest: generation },
+          serverCapabilities: {
+            integrationEnrollment: true,
+            providerInventory: true,
+            managedSessionList: true,
+            modelDiscovery: true,
+            nativeSessionCatalogue: true,
+            sessionControl: true,
+            sessionEvents: true,
+            terminalSurface: true,
+          },
+          limits: PUBLIC_LIMITS,
+        },
+      },
+      {
+        jsonrpc: "2.0",
+        method: "terminals/exited",
+        params: { viewId, exitCode: 0, ...(failure ? { failure } : {}) },
+      },
+    ]);
+    const runtime = await new RuntimeConnector(scriptedTransportFactory(transport)).connect(
+      validatedLocator(instanceId, "fixture", "0.1.1", generation),
+      { name: "terminal-fixture", version: "1.0.0" },
+    );
+    const view = new TerminalView(runtime, transport, {
+      terminal: {
+        terminalId,
+        runtimeGeneration: generation,
+        providerId: "example",
+        workspace: "C:\\work",
+        processState: "running",
+        openedAtMs: Date.now(),
+        terminalGeneration: 1,
+        geometry: { columns: 100, rows: 30 },
+      },
+      viewId,
+      screenBase64: "",
+    });
+    try {
+      assert.deepEqual(await view.next(), {
+        kind: "exited",
+        exitCode: 0,
+        ...(failure ? { failure } : {}),
+      });
+    } finally {
+      view.close();
+    }
+  }
+});
 
 test("terminal control preserves output that arrives before its response", async () => {
   const instanceId = `rtm_${"8".repeat(32)}`;

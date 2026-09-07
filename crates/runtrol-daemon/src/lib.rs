@@ -55,6 +55,8 @@ pub use generations::{
     GenerationIdentity, GenerationStatus, assemble_superseding, crash_log_path,
     generation_endpoint, status,
 };
+#[cfg(windows)]
+pub use isolated_workspace::complete_keeper_generation;
 pub use relay::{RelayIngress, RelayStage, RelayStatus};
 pub use scope::{Needed, WallRefusal, allowed, needed};
 pub use serve::{

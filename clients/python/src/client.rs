@@ -186,6 +186,20 @@ impl PyRuntimeClient {
         })
     }
 
+    /// Open a single-consumer owner input connection with the private registration capability.
+    fn watch_input<'py>(
+        &self,
+        py: Python<'py>,
+        params_json: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let config = self.config.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            crate::window_input::open(config, params_json)
+                .await
+                .map_err(NativeError::new_err)
+        })
+    }
+
     /// Close this client actor after all earlier commands have drained.
     fn close<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let sender = self.sender.clone();
@@ -413,6 +427,9 @@ async fn execute(
             Ok("{}".to_owned())
         }
         "terminals.list" => result!(client.terminals().list()),
+        operation if operation.starts_with("windows.") => {
+            crate::window_input::window_call(client, operation, params_json).await
+        }
         "panicStop" => {
             client.panic_stop().await?;
             Ok("{}".to_owned())

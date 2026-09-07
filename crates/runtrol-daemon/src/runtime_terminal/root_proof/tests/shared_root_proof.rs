@@ -9,6 +9,30 @@ fn due() -> Instant {
         .expect("fixture age")
 }
 
+#[test]
+fn replacing_a_receiver_keeps_the_refresh_deadline_bound_to_the_completed_proof() {
+    let completed_at = due();
+    let proof = SharedRootProof::new(Arc::new(Semaphore::new(2)), completed_at, || true);
+    let receiver = proof.subscribe();
+    let next_completion = Instant::now();
+    proof.completed(Ok(RootCheck {
+        completed_at: next_completion,
+        value: true,
+    }));
+    assert!(receiver.has_changed().expect("completion was published"));
+    let replacement = proof.subscribe();
+    assert!(
+        !replacement
+            .has_changed()
+            .expect("the replacement starts current")
+    );
+    assert_eq!(
+        proof.refresh_at(),
+        Some(next_completion + ROOT_REFRESH_AFTER)
+    );
+    assert_eq!(proof.expires_at(), next_completion + ROOT_PROOF_MAX_AGE);
+}
+
 #[tokio::test]
 async fn eight_refreshes_share_one_os_call_and_its_actual_completion() {
     let calls = Arc::new(AtomicUsize::new(0));
@@ -28,6 +52,11 @@ async fn eight_refreshes_share_one_os_call_and_its_actual_completion() {
         view.refresh().expect("request shared refresh");
     }
     entered.recv().await.expect("the OS check starts");
+    assert_eq!(
+        proof.refresh_at(),
+        None,
+        "the executing check owns the next wake"
+    );
     let before_release = Instant::now();
     for view in &views {
         view.refresh().expect("join the running refresh");
@@ -38,6 +67,7 @@ async fn eight_refreshes_share_one_os_call_and_its_actual_completion() {
     }
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     let completed_at = proof.fresh().expect("the proof is fresh");
+    assert_eq!(proof.refresh_at(), Some(completed_at + ROOT_REFRESH_AFTER));
     assert!(completed_at >= before_release);
     for view in &views {
         assert_eq!(view.fresh(), Ok(completed_at));
@@ -196,6 +226,11 @@ async fn a_timed_out_running_check_remains_single_flight_until_os_completion() {
             .await
             .expect("the bounded waiter times out");
     }
+    assert_eq!(
+        proof.refresh_at(),
+        None,
+        "a timed-out OS call cannot start a polling loop"
+    );
     proof
         .refresh()
         .expect("the running OS check still owns the flight");

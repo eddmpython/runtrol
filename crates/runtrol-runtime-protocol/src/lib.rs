@@ -90,11 +90,12 @@ pub use terminal::{
     MAX_TERMINAL_WRITE_BYTES, RuntimeTerminalId, RuntimeTerminalViewId,
     TerminalAcquireControlParams, TerminalAttachParams, TerminalControlLease,
     TerminalControlParams, TerminalDescriptor, TerminalDetachParams, TerminalExitedNotification,
-    TerminalGeometry, TerminalIdError, TerminalIndexChangedNotification, TerminalIndexEndReason,
-    TerminalIndexEndedNotification, TerminalIndexSnapshot, TerminalLaggedNotification,
-    TerminalOpenParams, TerminalOpenTarget, TerminalOrigin, TerminalOutputNotification,
-    TerminalProcessState, TerminalResizeParams, TerminalSetDialogueParams, TerminalStopParams,
-    TerminalViewOpened, TerminalWriteParams, WatchTerminalIndexParams, WatchTerminalIndexResult,
+    TerminalFailure, TerminalGeometry, TerminalIdError, TerminalIndexChangedNotification,
+    TerminalIndexEndReason, TerminalIndexEndedNotification, TerminalIndexSnapshot,
+    TerminalLaggedNotification, TerminalOpenParams, TerminalOpenTarget, TerminalOrigin,
+    TerminalOutputNotification, TerminalProcessState, TerminalResizeParams,
+    TerminalSetDialogueParams, TerminalStopParams, TerminalViewOpened, TerminalWriteParams,
+    WatchTerminalIndexParams, WatchTerminalIndexResult,
 };
 pub use windows::{
     ListWindowsParams, MAX_OBSERVED_TERMINALS, MAX_REGISTERED_WINDOWS, MAX_WINDOW_FOLDERS,
@@ -130,3 +131,10 @@ pub const MAX_PENDING_ENROLLMENTS: u16 = 64;
 
 /// Maximum finalized protocol revisions one client may offer during initialization.
 pub const MAX_REVISION_OFFERS: u16 = 16;
+
+pub use terminal::{TerminalSendTextParams, TerminalTextOutcome, TerminalTextReceipt};
+pub use windows::{
+    WatchWindowInputParams, WatchWindowInputResult, WindowClaimInputParams, WindowInputBinding,
+    WindowInputClaim, WindowInputEndedNotification, WindowInputFailure,
+    WindowInputOfferedNotification, WindowInputOutcome, WindowInputReceiptParams,
+};

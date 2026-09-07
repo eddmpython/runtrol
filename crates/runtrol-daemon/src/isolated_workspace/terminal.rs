@@ -9,8 +9,8 @@ use serde::{Deserialize, Serialize};
 use super::identity::{Directory, VerifiedProject};
 use super::ownership::{EndedSpawn, ProcessStamp, SpawnTicket};
 use super::{
-    GIT_WORKTREE_TIMEOUT, IsolatedWorkspaceController, Operation, Record, State, capture, is_clean,
-    registry, release_line, revision,
+    GIT_WORKTREE_TIMEOUT, Operation, Record, Records, State, capture, is_clean, registry,
+    release_line, revision,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -110,7 +110,7 @@ impl PreparedWorkspace {
     }
 }
 
-impl IsolatedWorkspaceController {
+impl Records {
     pub(crate) async fn prepare_terminal(
         &mut self,
         containment: &Containment,
@@ -168,12 +168,17 @@ impl IsolatedWorkspaceController {
             resume: None,
         };
         self.records.push(Record {
+            lifetime: super::completion::GenerationProof::for_owner(
+                containment,
+                Some(ticket.worker.runtime),
+            )?,
             workspace_id: id.clone().into(),
             request_id: id.clone().into(),
             project: project.root().clone(),
             workspace,
             base_commit,
             session_id: None,
+            session_completed: false,
             state: State::Creating,
             revision: 0,
             terminal: Some(terminal),
@@ -296,17 +301,6 @@ impl IsolatedWorkspaceController {
         self.save(&id)
     }
 
-    #[cfg(test)]
-    pub(super) async fn release_terminal(
-        &mut self,
-        containment: &Containment,
-        ended: &EndedSpawn,
-    ) -> Result<Response, String> {
-        self.release_terminal_if_present(containment, ended)
-            .await?
-            .ok_or_else(|| "the exact terminal worktree owner is unknown".to_owned())
-    }
-
     pub(crate) async fn release_terminal_if_present(
         &mut self,
         containment: &Containment,
@@ -341,9 +335,12 @@ impl IsolatedWorkspaceController {
             lease: registry::operation(&self.path, &ticket.reservation_id())?,
         };
         self.refresh_for_write()?;
-        self.terminal_record(ticket)?;
+        let record = self.terminal_record(ticket)?;
         if ticket.worker.runtime.is_live() {
             return Err("the owning Runtime is live or cannot be inspected".to_owned());
+        }
+        if !super::completion::proven(record.lifetime, ticket.worker.runtime) {
+            return Err("the owning generation has no proven descendant completion".to_owned());
         }
         self.remove_terminal(ticket, &operation).await
     }

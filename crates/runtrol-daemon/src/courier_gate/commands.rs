@@ -50,7 +50,7 @@ impl CourierGate {
     }
 
     #[cfg(test)]
-    pub(super) async fn command(&self, session: ManagedSessionId, request: Request) -> Answer {
+    pub(crate) async fn command(&self, session: ManagedSessionId, request: Request) -> Answer {
         let admitted = {
             let state = self.state.lock().await;
             let Some(registered) = state.sessions.get(&session) else {

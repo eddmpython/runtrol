@@ -5,13 +5,15 @@ use std::collections::VecDeque;
 use base64ct::{Base64, Encoding as _};
 use runtrol_runtime_protocol::{
     ErrorResponse, JsonRpcId, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse,
-    ListTerminalsParams, MutationRequestId, RuntimeError, RuntimeErrorKind, RuntimeMethod,
-    SuccessResponse, TerminalAcquireControlParams, TerminalAttachParams, TerminalControlLease,
+    ListTerminalsParams, MAX_TERMINAL_VIEW_QUEUE_CHUNKS, MAX_TERMINAL_WRITE_BYTES,
+    MutationRequestId, RuntimeError, RuntimeErrorKind, RuntimeMethod, SuccessResponse,
+    TerminalAcquireControlParams, TerminalAttachParams, TerminalControlLease,
     TerminalControlParams, TerminalDetachParams, TerminalExitedNotification,
     TerminalIndexChangedNotification, TerminalIndexEndedNotification, TerminalIndexSnapshot,
     TerminalLaggedNotification, TerminalOpenParams, TerminalOutputNotification,
-    TerminalResizeParams, TerminalSetDialogueParams, TerminalStopParams, TerminalViewOpened,
-    TerminalWriteParams, WatchTerminalIndexParams, WatchTerminalIndexResult,
+    TerminalResizeParams, TerminalSendTextParams, TerminalSetDialogueParams, TerminalStopParams,
+    TerminalTextReceipt, TerminalViewOpened, TerminalWriteParams, WatchTerminalIndexParams,
+    WatchTerminalIndexResult,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -231,6 +233,8 @@ pub enum TerminalNotification {
     Exited {
         /// Provider process exit code.
         exit_code: i32,
+        /// Structural host failure, absent on an ordinary process exit.
+        failure: Option<runtrol_runtime_protocol::TerminalFailure>,
     },
 }
 
@@ -361,6 +365,40 @@ impl<'runtime> TerminalView<'runtime> {
         Ok(())
     }
 
+    /// Ask the exact owner extension to invoke its public text-input API once, without replay.
+    /// The receipt confirms that API invocation, not consumption by the terminal process.
+    ///
+    /// # Errors
+    ///
+    /// Authority, size, transport, protocol, or an unknown admitted outcome.
+    pub async fn send_text(
+        &mut self,
+        params: &TerminalSendTextParams,
+    ) -> Result<TerminalTextReceipt, ClientError> {
+        if params.text.len() > MAX_TERMINAL_WRITE_BYTES {
+            return Err(ClientError::Protocol(
+                "owner input exceeds the public UTF-8 byte limit".to_owned(),
+            ));
+        }
+        let receipt: TerminalTextReceipt = self
+            .command(
+                RuntimeMethod::TerminalsSendText,
+                params,
+                Some(&params.request_id),
+            )
+            .await?;
+        if receipt.request_id != params.request_id
+            || receipt.delivery_sequence == 0
+            || receipt.owner_registration_generation == 0
+        {
+            self.runtime.connection.close();
+            return Err(ClientError::Protocol(
+                "owner input receipt does not identify this request".to_owned(),
+            ));
+        }
+        Ok(receipt)
+    }
+
     /// Resize the shared PTY once under the current lease.
     ///
     /// # Errors
@@ -463,6 +501,12 @@ impl<'runtime> TerminalView<'runtime> {
             if matches!(notification, TerminalNotification::Exited { .. }) {
                 self.ended = true;
             }
+            if self.pending.len() >= usize::from(MAX_TERMINAL_VIEW_QUEUE_CHUNKS) {
+                self.runtime.connection.close();
+                return Err(ClientError::Protocol(
+                    "terminal notification queue exceeded the public bound".to_owned(),
+                ));
+            }
             self.pending.push_back(notification);
         }
     }
@@ -498,6 +542,7 @@ impl<'runtime> TerminalView<'runtime> {
                 self.require_view(&exited.view_id)?;
                 Ok(TerminalNotification::Exited {
                     exit_code: exited.exit_code,
+                    failure: exited.failure,
                 })
             }
             _ => Err(ClientError::Protocol(
@@ -533,7 +578,7 @@ fn mutation_failure(error: ClientError, mutation: Option<&MutationRequestId>) ->
     error
 }
 
-fn decode_response<R: DeserializeOwned>(
+pub(crate) fn decode_response<R: DeserializeOwned>(
     response: JsonRpcResponse,
     expected: &JsonRpcId,
 ) -> Result<R, ClientError> {

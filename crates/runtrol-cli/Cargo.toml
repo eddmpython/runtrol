@@ -10,6 +10,7 @@ authors.workspace = true
 publish = false
 
 [dependencies]
+runtrol-terminal-protocol = { workspace = true }
 runtrol-provider = { workspace = true }
 runtrol-ipc = { workspace = true }
 # The bridge reads its own parent so the Runtime knows which shell invoked the provider command.

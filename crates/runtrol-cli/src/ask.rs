@@ -6,16 +6,15 @@
 //! What belongs here is that nobody has to know about it: a command greets, and if the answer is that the two builds
 //! do not speak the same format, that is what the operator is told. It is never a request that silently did nothing.
 //!
-//! # The panic button ends the connection, and that is what success looks like
+//! # Shutdown needs a process completion witness
 //!
 //! Stopping every agent on the machine stops the daemon too. It is not a side effect to be tidied away: the daemon
 //! holds its agents by being inside the same containment, which is what makes "everything stops" a guarantee the
 //! kernel enforces rather than a loop over processes that might miss one.
 //!
-//! So this one request does not come back. The connection ends instead, and reporting that as a failure would tell
-//! an operator their panic button broke at the moment it worked. What is written is what was observed and what it
-//! means, not an outcome nobody saw, and the operator can confirm it with a listing: that starts a fresh daemon and
-//! shows nothing running.
+//! On Windows the command holds exact Runtime and keeper process handles before sending the request. A closed
+//! connection is followed by those process events and successful keeper completion. Missing proof is reported as
+//! unconfirmed shutdown, while the stop request itself is still sent.
 //!
 //! # Watching is the same command with a different ending
 //!
@@ -46,6 +45,10 @@ pub enum Failed {
     /// fact about the daemon.
     #[error("the daemon stopped without answering")]
     NoAnswer,
+
+    /// The request may have stopped Runtime, but exact descendant completion is unconfirmed.
+    #[error("process shutdown is unconfirmed: {0}")]
+    Completion(String),
 
     /// An answer arrived that this build cannot read.
     #[error("the daemon sent an answer this build cannot read: {detail}")]
@@ -162,22 +165,62 @@ pub async fn ask<Write>(
     address: &str,
     runtrol: &std::path::Path,
     request: Request,
-    mut write: Write,
+    write: Write,
 ) -> Result<Outcome, Failed>
 where
     Write: FnMut(&str),
 {
-    let mut connection = crate::link::reach(address, runtrol).await?;
+    let connection = if matches!(request, Request::StopEverything) {
+        crate::link::reach_running(address).await?
+    } else {
+        crate::link::reach(address, runtrol).await?
+    };
+    ask_connected(connection, request, write, false).await
+}
 
+/// Stop one already published generation without starting or redirecting a Runtime.
+///
+/// # Errors
+///
+/// [`Failed`] when the endpoint is unreachable or exact shutdown completion is unconfirmed.
+pub async fn stop_running<Write>(address: &str, write: Write) -> Result<Outcome, Failed>
+where
+    Write: FnMut(&str),
+{
+    let connection = crate::link::reach_running(address).await?;
+    ask_connected(connection, Request::StopEverything, write, true).await
+}
+
+async fn ask_connected<Write>(
+    mut connection: runtrol_ipc::transport::Connection,
+    request: Request,
+    mut write: Write,
+    require_completion: bool,
+) -> Result<Outcome, Failed>
+where
+    Write: FnMut(&str),
+{
+    #[cfg(not(windows))]
+    let _require_completion = require_completion;
+    #[cfg(windows)]
+    let deadline = crate::completion::deadline();
+    let stopping_everything = matches!(request, Request::StopEverything);
     // The greeting first, and its answer read before anything else goes out. A build that spoke without waiting would
     // have its real request refused and would have to work out why from a message about a format it never mentioned.
-    let welcome = exchange(
+    let greeting = exchange(
         &mut connection,
         &Request::Hello {
             wire: runtrol_ipc::WIRE_VERSION,
         },
-    )
-    .await?;
+    );
+    #[cfg(windows)]
+    let welcome = if stopping_everything {
+        crate::completion::within(deadline, greeting).await?
+    } else {
+        greeting.await?
+    };
+    #[cfg(not(windows))]
+    let welcome = greeting.await?;
     crate::link::trace("cli: greeted");
     if let Response::Failed(said) = &welcome {
         return Err(Failed::DifferentBuilds {
@@ -186,10 +229,29 @@ where
     }
 
     let watching = matches!(request, Request::Watch { .. });
-    let stopping_everything = matches!(request, Request::StopEverything);
+    #[cfg(windows)]
+    let completion = stopping_everything.then(|| crate::completion::prepare(&welcome));
 
     crate::link::trace("cli: request sent");
-    let answer = match exchange(&mut connection, &request).await {
+    #[cfg(windows)]
+    if let Some(completion) = completion {
+        // Automated generation removal must leave a legacy Runtime running when it cannot prove completion.
+        // The ordinary panic command still sends its stop and reports the missing proof to the operator.
+        let completion = if require_completion {
+            Ok(completion?)
+        } else {
+            completion
+        };
+        return crate::completion::finish(
+            deadline,
+            completion,
+            exchange(&mut connection, &request),
+            write,
+        )
+        .await;
+    }
+    let exchanged = exchange(&mut connection, &request).await;
+    let answer = match exchanged {
         Ok(answer) => answer,
         // The daemon went away without answering. For every other request that is a fact about the daemon; for
         // this one it is the request having been carried out, because what was stopped includes the daemon.
@@ -308,6 +370,7 @@ mod tests {
                         device: None,
                         push_public_key: None,
                         build_digest: None,
+                        process_completion: None,
                     })
                     .expect("writable");
                     drop(connection.send(&welcome).await);
@@ -319,22 +382,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn silence_is_a_failure_for_every_request_except_the_one_that_stops_the_daemon() {
-        // The exception is narrow on purpose. A daemon that stopped answering is a real failure and has to read
-        // as one; the panic button is the single request whose success is the connection ending, because what it
-        // stops includes the thing that would have answered.
+    async fn shutdown_without_a_windows_process_witness_is_unconfirmed() {
+        // The stop request still reaches a legacy Runtime; Windows refuses to mistake its EOF for proof.
         let address = a_daemon_that_greets_then_vanishes("silence").await;
         let unreachable = std::path::Path::new("this-program-does-not-exist-and-that-is-the-point");
 
         let mut said = Vec::new();
-        ask(
+        let stopped = ask(
             &address,
             unreachable,
             Request::StopEverything,
             |line: &str| said.push(line.to_owned()),
         )
-        .await
-        .expect("a connection that ends is what stopping everything looks like");
+        .await;
+        #[cfg(windows)]
+        assert!(matches!(stopped, Err(Failed::Completion(_))), "{stopped:?}");
+        #[cfg(not(windows))]
+        stopped.expect("the Unix containment ends its own connection");
+        #[cfg(not(windows))]
         assert!(
             said.iter().any(|line| line.contains("the daemon stopped")),
             "{said:?}"
@@ -369,6 +434,7 @@ mod tests {
                     device: None,
                     push_public_key: None,
                     build_digest: None,
+                    process_completion: None,
                 })
                 .expect("writable");
                 if connection.recv().await.is_ok() {

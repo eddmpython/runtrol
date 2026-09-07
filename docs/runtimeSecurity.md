@@ -60,6 +60,12 @@ durable rows per redraw and crowd out the events this journal exists for. They r
 terminal generation, control lease, and transport bounds. This avoids turning conversation bytes into either an audit
 payload or a synchronous storage operation.
 
+Observed-owner input uses the same transient data boundary after `windows/watchInput` admission. Registration
+returns its private owner proof only to that registration's caller; window listings never disclose it. Input offers
+contain structural identity only. One claim releases the pending text after current authority and execution checks,
+and one body-free receipt closes that delivery. Neither the owner relay nor the mutation ledger retains a second
+copy or historical sample of input. A lost receipt leaves the outcome unknown and cannot authorize retransmission.
+
 A draining generation has released redb to its successor, so acknowledged control-plane rows enter an oldest-first
 bounded in-memory relay under a process-unique UUIDv7 epoch and consecutive sequence. The successor commits rows,
 bounded overflow marker, and its receipt watermark in one redb transaction. Only a later poll carries that receipt

@@ -1,0 +1,17 @@
+# Mechanical VT query vocabulary shared by the host and its presentation adapters.
+[package]
+name = "runtrol-terminal-protocol"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[dev-dependencies]
+# Agreement fixtures are shared with Studio's presentation tests. Production remains dependency-free.
+serde_json = { workspace = true, features = ["std"] }
+
+[lints]
+workspace = true

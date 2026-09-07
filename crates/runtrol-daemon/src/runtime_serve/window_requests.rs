@@ -37,9 +37,13 @@ pub(super) async fn window_operation(
     id: JsonRpcId,
     params: serde_json::Value,
 ) -> Answer {
-    if let Err(failure) = authorized_scopes(state, composed, &[AppScope::SessionList]) {
-        return Answer::failure(id, failure);
+    if method == RuntimeMethod::WindowsWatchInput {
+        return super::window_input::watch_input(state, composed, id, params).await;
     }
+    let authority = match authorized_scopes(state, composed, &[AppScope::SessionList]) {
+        Ok(authority) => authority.clone(),
+        Err(failure) => return Answer::failure(id, failure),
+    };
     let token = state.token();
     match method {
         RuntimeMethod::WindowsRegister => {
@@ -50,8 +54,15 @@ pub(super) async fn window_operation(
                     "window registration parameters are invalid",
                 );
             };
-            match composed.windows.register(token, params).await {
-                Ok(registration) => Answer::success(id, &registration),
+            match composed
+                .windows
+                .register_authorized(token, params, authority)
+                .await
+            {
+                Ok(registration) => {
+                    composed.terminals.lock().await.publish_change();
+                    Answer::success(id, &registration)
+                }
                 Err(failure) => refused(id, failure),
             }
         }
@@ -64,7 +75,10 @@ pub(super) async fn window_operation(
                 );
             };
             match composed.windows.update(token, params).await {
-                Ok(()) => Answer::success(id, &EmptyResult {}),
+                Ok(()) => {
+                    composed.terminals.lock().await.publish_change();
+                    Answer::success(id, &EmptyResult {})
+                }
                 Err(failure) => refused(id, failure),
             }
         }
@@ -101,7 +115,9 @@ pub(super) async fn window_operation(
             };
             Answer::watching_window_index(id, &result, updates)
         }
-        RuntimeMethod::WindowsMirrorOpen => mirror_open(token, composed, id, params).await,
+        RuntimeMethod::WindowsMirrorOpen => {
+            mirror_open(token, composed, &authority, id, params).await
+        }
         RuntimeMethod::WindowsMirrorOutput => mirror_output(token, composed, id, params).await,
         RuntimeMethod::WindowsMirrorEnd => mirror_end(token, composed, id, params).await,
         RuntimeMethod::WindowsReveal => reveal(token, composed, id, params).await,
@@ -318,6 +334,7 @@ pub(super) async fn relay_window_reveals(
 async fn mirror_open(
     token: ConnectionToken,
     composed: &Arc<Composed>,
+    authority: &crate::runtime_auth::AuthorizedIntegration,
     id: JsonRpcId,
     params: serde_json::Value,
 ) -> Answer {
@@ -330,7 +347,12 @@ async fn mirror_open(
     };
     if !composed
         .windows
-        .is_registered(&params.window_session_id)
+        .owns_registration(
+            &params.window_session_id,
+            params.registration_generation,
+            &params.owner_token,
+            authority,
+        )
         .await
     {
         return Answer::plain(
@@ -497,3 +519,7 @@ pub(super) async fn relay_window_index(
         }
     }
 }
+
+#[cfg(test)]
+#[path = "tests/owner_input.rs"]
+mod owner_input_tests;

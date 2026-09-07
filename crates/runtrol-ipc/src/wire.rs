@@ -543,6 +543,10 @@ pub enum Response {
         /// is talking to its own generation. Absent only on daemons older than that date.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         build_digest: Option<Box<str>>,
+        /// Owner-local OS identities whose retained process handles prove complete Windows shutdown.
+        /// Boxed so this greeting-only witness does not enlarge every ordinary response and cleanup reply.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        process_completion: Option<Box<ProcessCompletion>>,
     },
 
     /// The sessions and any damaged rows the daemon could not read.
@@ -693,6 +697,9 @@ pub enum Response {
     TerminalExited {
         /// Its exit code.
         code: i32,
+        /// Optional bounded structural host failure code, projected from Runtime's terminal completion.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        failure: Option<Box<str>>,
     },
 
     /// Private generation handoff capabilities and the draining generation's current live claims.
@@ -719,6 +726,20 @@ pub enum Response {
 
     /// It did not work.
     Failed(WireError),
+}
+
+/// Structural shutdown witnesses, never authority to signal a process by a recycled PID.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProcessCompletion {
+    /// Original Runtime process.
+    pub runtime_pid: u32,
+    /// Original Runtime's opaque kernel birth stamp.
+    pub runtime_started: u64,
+    /// Independent proof owner.
+    pub keeper_pid: u32,
+    /// Independent proof owner's opaque kernel birth stamp.
+    pub keeper_started: u64,
 }
 
 /// Private generation handoff capabilities. This never grants public authority by itself.
@@ -2069,6 +2090,7 @@ mod tests {
             device: None,
             push_public_key: None,
             build_digest: None,
+            process_completion: None,
         };
         let encoded = serde_json::to_string(&response).expect("writable");
         let back: Response = serde_json::from_str(&encoded).expect("readable");

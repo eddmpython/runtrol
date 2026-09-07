@@ -9,6 +9,7 @@ use std::io;
 use std::path::Path;
 
 use runtrol_ipc::wire::{Request, Response, TerminalBytes};
+use runtrol_terminal_protocol::QueryFilter;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
 use crate::link::Unreachable;
@@ -57,6 +58,15 @@ pub enum BridgeFailure {
     Refused {
         /// Exact refusal from the daemon.
         message: Box<str>,
+    },
+
+    /// The process ended, but its terminal host could not complete normally.
+    #[error("the terminal host failed ({reason}); process exit code {code}")]
+    Host {
+        /// The actual process exit code, preserved independently of the host failure.
+        code: i32,
+        /// Bounded structural failure code from Runtime, without provider output.
+        reason: Box<str>,
     },
 
     /// The daemon answered with a frame that cannot occur at this point in a terminal stream.
@@ -194,6 +204,7 @@ where
     };
 
     let mut output = tokio::io::stdout();
+    let mut queries = QueryFilter::default();
     // This title is local viewer presentation. It never enters the hosted PTY, shared screen, output ring, another
     // viewer, or the provider transcript. Showing the hosted terminal process rather than the content-named Core
     // executable keeps two simultaneous shell-launched conversations visibly distinct until the provider publishes
@@ -208,23 +219,25 @@ where
     let mut resize = tokio::time::interval(RESIZE_INTERVAL);
     resize.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
+    let result = async {
     loop {
         if !writable {
             let response = receive(&mut connection).await?;
-            if let Some(code) = draw(response, &mut output).await? {
+            if let Some(code) = draw(response, &mut output, &mut queries).await? {
                 return Ok(code);
             }
             continue;
         }
         tokio::select! {
             response = receive(&mut connection) => {
-                if let Some(code) = draw(response?, &mut output).await? {
+                if let Some(code) = draw(response?, &mut output, &mut queries).await? {
                     return Ok(code);
                 }
             }
             read = input.read(&mut input_buffer) => {
                 let read = read?;
                 if read == 0 {
+                    finish_output(&mut output, &mut queries).await?;
                     return Ok(0);
                 }
                 let bytes = input_buffer.get(..read).ok_or_else(|| BridgeFailure::Unreadable {
@@ -254,35 +267,57 @@ where
             }
         }
     }
+    }.await;
+    finish_output(&mut output, &mut queries).await?;
+    result
 }
 
 fn local_process_title(provider: &str, pid: u32) -> Vec<u8> {
     format!("\x1b]0;Runtrol {provider} [{pid}]\x07").into_bytes()
 }
 
-async fn draw(
+async fn draw<W: tokio::io::AsyncWrite + Unpin>(
     response: Response,
-    output: &mut tokio::io::Stdout,
+    output: &mut W,
+    queries: &mut QueryFilter,
 ) -> Result<Option<i32>, BridgeFailure> {
     match response {
         Response::TerminalOutput { bytes } => {
-            output.write_all(bytes.as_ref()).await?;
+            output.write_all(&queries.filter(bytes.as_ref())).await?;
             output.flush().await?;
             Ok(None)
         }
         Response::TerminalLagged {} => {
+            finish_output(output, queries).await?;
             output.write_all(b"\x1b[2J\x1b[H").await?;
             output.flush().await?;
             Ok(None)
         }
-        Response::TerminalExited { code } => Ok(Some(code)),
-        Response::Failed(error) => Err(BridgeFailure::Refused {
-            message: error.message,
-        }),
+        Response::TerminalExited { code, failure } => {
+            finish_output(output, queries).await?;
+            match failure {
+                Some(reason) => Err(BridgeFailure::Host { code, reason }),
+                None => Ok(Some(code)),
+            }
+        }
+        Response::Failed(error) => {
+            finish_output(output, queries).await?;
+            Err(BridgeFailure::Refused {
+                message: error.message,
+            })
+        }
         other => Err(BridgeFailure::Unexpected {
             received: response_kind(&other),
         }),
     }
+}
+
+async fn finish_output<W: tokio::io::AsyncWrite + Unpin>(
+    output: &mut W,
+    queries: &mut QueryFilter,
+) -> Result<(), io::Error> {
+    output.write_all(&queries.finish()).await?;
+    output.flush().await
 }
 
 async fn send(
@@ -330,13 +365,89 @@ fn invoking_ancestors() -> Vec<u32> {
 
 #[cfg(test)]
 mod tests {
-    use super::local_process_title;
+    use super::*;
 
     #[test]
     fn local_bridge_title_names_the_hosted_process_not_the_shared_core_binary() {
         assert_eq!(
             local_process_title("codex", 30_996),
             b"\x1b]0;Runtrol codex [30996]\x07"
+        );
+    }
+
+    #[tokio::test]
+    async fn local_renderer_consumes_queries_across_frames_and_finishes_unknown_tails() {
+        let mut output = Vec::new();
+        let mut filter = QueryFilter::default();
+        for frame in [b"a\x1b[6".as_slice(), b"n\x1b[>qb\x1b["] {
+            draw(
+                Response::TerminalOutput {
+                    bytes: frame.to_vec().into(),
+                },
+                &mut output,
+                &mut filter,
+            )
+            .await
+            .expect("render a raw wire frame");
+        }
+        assert_eq!(output, b"a\x1b\\\x1b\\b");
+        draw(Response::TerminalLagged {}, &mut output, &mut filter)
+            .await
+            .expect("replace the view");
+        assert_eq!(output, b"a\x1b\\\x1b\\b\x1b[\x1b[2J\x1b[H");
+        draw(
+            Response::TerminalOutput {
+                bytes: b"tail\x1b[".to_vec().into(),
+            },
+            &mut output,
+            &mut filter,
+        )
+        .await
+        .expect("render the final incomplete frame");
+        assert_eq!(
+            draw(
+                Response::TerminalExited {
+                    code: 0,
+                    failure: None
+                },
+                &mut output,
+                &mut filter
+            )
+            .await
+            .expect("finish"),
+            Some(0)
+        );
+        assert_eq!(output, b"a\x1b\\\x1b\\b\x1b[\x1b[2J\x1b[Htail\x1b[");
+    }
+
+    #[tokio::test]
+    async fn structural_host_failure_preserves_the_final_fragment_and_process_code() {
+        let mut output = Vec::new();
+        let mut filter = QueryFilter::default();
+        draw(
+            Response::TerminalOutput {
+                bytes: b"last frame\x1b[".to_vec().into(),
+            },
+            &mut output,
+            &mut filter,
+        )
+        .await
+        .expect("render final bytes");
+        let failed = draw(
+            Response::TerminalExited {
+                code: 0,
+                failure: Some("outputReadFailed".into()),
+            },
+            &mut output,
+            &mut filter,
+        )
+        .await;
+        assert!(
+            matches!(failed, Err(BridgeFailure::Host { code: 0, reason }) if reason.as_ref() == "outputReadFailed")
+        );
+        assert_eq!(
+            output, b"last frame\x1b[",
+            "failure prose never enters the provider's terminal output"
         );
     }
 }

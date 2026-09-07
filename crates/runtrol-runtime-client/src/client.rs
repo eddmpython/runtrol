@@ -2116,9 +2116,16 @@ mod tests {
     }
 
     async fn serve_mutation_disconnect_fixture(
-        mut stream: fake_transport::Stream,
+        stream: fake_transport::Stream,
         instance_id: &str,
     ) -> JsonRpcRequest {
+        serve_request_fixture(stream, instance_id).await.1
+    }
+
+    async fn serve_request_fixture(
+        mut stream: fake_transport::Stream,
+        instance_id: &str,
+    ) -> (fake_transport::Stream, JsonRpcRequest) {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .expect("test clock follows Unix epoch");
@@ -2175,8 +2182,9 @@ mod tests {
             serde_json::from_slice(&receive_test_frame(&mut stream).await)
                 .expect("decode initialized notification");
         assert_eq!(initialized.method, RuntimeMethod::Initialized.to_string());
-        serde_json::from_slice(&receive_test_frame(&mut stream).await)
-            .expect("decode mutation request")
+        let request = serde_json::from_slice(&receive_test_frame(&mut stream).await)
+            .expect("decode fixture request");
+        (stream, request)
     }
 
     async fn serve_reconnect_fixture(
@@ -2591,5 +2599,241 @@ mod tests {
         let identity = IntegrationIdentity::from_secret_bytes([7; 32]);
         let restored = IntegrationIdentity::from_secret_bytes(identity.secret_bytes());
         assert_eq!(identity.public_key_base64(), restored.public_key_base64());
+    }
+
+    fn owner_offer(sequence: u64) -> serde_json::Value {
+        serde_json::json!({ "jsonrpc": "2.0", "method": "windows/inputOffered", "params": {
+            "subscriptionId": "owner", "sequence": sequence, "binding": {
+                "windowSessionId": "window", "registrationGeneration": 1, "hostGeneration": "host",
+                "terminalKey": "t1", "executionId": "e1", "processId": 5,
+                "terminalId": "019c2b97-5f29-7b00-8000-000000000001"
+            }
+        }})
+    }
+
+    async fn owner_fixture(
+        frames: Vec<serde_json::Value>,
+        requests: usize,
+    ) -> (RuntimeClient, tokio::task::JoinHandle<Vec<JsonRpcRequest>>) {
+        let (mut listener, endpoint) = fake_transport::Listener::bind();
+        let instance = "rtm_1123456789abcdef0123456789abcdef";
+        let server = tokio::spawn(async move {
+            let stream = listener.accept().await;
+            let (mut stream, watch) = serve_request_fixture(stream, instance).await;
+            assert_eq!(watch.method, "windows/watchInput");
+            send_test_json(
+                &mut stream,
+                &serde_json::json!({ "jsonrpc": "2.0", "id": watch.id,
+                "result": { "subscriptionId": "owner", "maxPendingOffers": 2 } }),
+            )
+            .await;
+            for frame in frames {
+                send_test_json(&mut stream, &frame).await;
+            }
+            let mut received = Vec::new();
+            for _ in 0..requests {
+                received.push(
+                    serde_json::from_slice(&receive_test_frame(&mut stream).await)
+                        .expect("decode owner request"),
+                );
+            }
+            assert!(
+                tokio::time::timeout(Duration::from_secs(3), stream.read_u8())
+                    .await
+                    .expect("receiver closes its pipe")
+                    .is_err()
+            );
+            received
+        });
+        let locator = RuntimeLocator::for_testing_endpoint(instance, endpoint, "0.1.1");
+        let runtime = locator
+            .connect(ClientOptions::new("owner fixture", "1.0.0"))
+            .await
+            .expect("connect owner fixture");
+        (runtime, server)
+    }
+
+    fn owner_watch() -> runtrol_runtime_protocol::WatchWindowInputParams {
+        runtrol_runtime_protocol::WatchWindowInputParams {
+            window_session_id: "window".to_owned(),
+            registration_generation: 1,
+            owner_token: "private".to_owned(),
+        }
+    }
+
+    #[tokio::test]
+    async fn owner_input_typed_refusal_preserves_serial_claim_and_receipt() {
+        use runtrol_runtime_protocol::{WindowInputOutcome, WindowInputReceiptParams};
+        let (mut runtime, server) = owner_fixture(vec![owner_offer(1),
+            serde_json::json!({ "jsonrpc": "2.0", "id": 3, "error": { "code": "controlConflict", "message": "lease changed", "retryable": false, "correlationId": "claim" } }),
+            owner_offer(2), serde_json::json!({ "jsonrpc": "2.0", "id": 4, "result": { "text": "next input" } }),
+            serde_json::json!({ "jsonrpc": "2.0", "id": 5, "result": {} }),
+        ], 3).await;
+        let mut windows = runtime.windows();
+        let mut owner = windows
+            .watch_input(&owner_watch())
+            .await
+            .expect("watch owner");
+        assert!(matches!(
+            owner.next().await.expect("first offer"),
+            crate::WindowInputNotification::Offered(_)
+        ));
+        assert!(matches!(
+            owner.claim_input(1).await,
+            Err(ClientError::Runtime(_))
+        ));
+        assert!(matches!(
+            owner.next().await.expect("next offer"),
+            crate::WindowInputNotification::Offered(_)
+        ));
+        assert_eq!(
+            owner.claim_input(2).await.expect("claim later input").text,
+            "next input"
+        );
+        owner
+            .input_receipt(&WindowInputReceiptParams {
+                subscription_id: "owner".to_owned(),
+                sequence: 2,
+                outcome: WindowInputOutcome::OwnerExtensionAccepted,
+                reason: None,
+            })
+            .await
+            .expect("receipt");
+        drop(owner);
+        let requests = server.await.expect("join owner fixture");
+        assert_eq!(
+            requests
+                .iter()
+                .map(|request| request.method.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "windows/claimInput",
+                "windows/claimInput",
+                "windows/inputReceipt"
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn owner_input_overflow_closes_without_replaying_the_claim() {
+        let (mut runtime, server) =
+            owner_fixture(vec![owner_offer(1), owner_offer(2), owner_offer(3)], 1).await;
+        let mut windows = runtime.windows();
+        let mut owner = windows
+            .watch_input(&owner_watch())
+            .await
+            .expect("watch owner");
+        assert!(matches!(
+            owner.claim_input(1).await,
+            Err(ClientError::Protocol(_))
+        ));
+        assert!(owner.claim_input(1).await.is_err());
+        let requests = server.await.expect("join owner fixture");
+        assert_eq!(requests.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn owner_input_cancelled_read_cannot_consume_a_later_response() {
+        use std::future::Future as _;
+        let (mut runtime, server) = owner_fixture(Vec::new(), 0).await;
+        let mut windows = runtime.windows();
+        let mut owner = windows
+            .watch_input(&owner_watch())
+            .await
+            .expect("watch owner");
+        {
+            let reading = owner.next();
+            tokio::pin!(reading);
+            std::future::poll_fn(|context| {
+                assert!(reading.as_mut().poll(context).is_pending());
+                std::task::Poll::Ready(())
+            })
+            .await;
+        }
+        assert!(
+            server
+                .await
+                .expect("join cancelled owner fixture")
+                .is_empty()
+        );
+        assert!(owner.claim_input(1).await.is_err());
+    }
+
+    fn opened_text_fixture(terminal: &str) -> serde_json::Value {
+        serde_json::json!({ "viewId": "019c2b97-5f29-7b00-8000-000000000002", "screenBase64": "",
+            "terminal": { "terminalId": terminal, "runtimeGeneration": "0".repeat(64), "providerId": "fixture",
+                "workspace": "C:/fixture", "processState": "running", "openedAtMs": 1, "terminalGeneration": 1,
+                "geometry": { "columns": 80, "rows": 24 }, "origin": "observedMirror", "ownerInputAvailable": true }
+        })
+    }
+
+    #[tokio::test]
+    async fn owner_text_receipt_matches_request_and_transport_loss_never_replays() {
+        use runtrol_runtime_protocol::{TerminalAttachParams, TerminalSendTextParams};
+        for mode in ["accepted", "wrongReceipt", "disconnect"] {
+            let (mut listener, endpoint) = fake_transport::Listener::bind();
+            let instance = "rtm_1123456789abcdef0123456789abcdef";
+            let terminal = "019c2b97-5f29-7b00-8000-000000000001";
+            let server = tokio::spawn(async move {
+                let stream = listener.accept().await;
+                let (mut stream, attach) = serve_request_fixture(stream, instance).await;
+                assert_eq!(attach.method, "terminals/attach");
+                send_test_json(&mut stream, &serde_json::json!({ "jsonrpc": "2.0", "id": attach.id, "result": opened_text_fixture(terminal) })).await;
+                let request: JsonRpcRequest =
+                    serde_json::from_slice(&receive_test_frame(&mut stream).await)
+                        .expect("decode text request");
+                assert_eq!(request.method, "terminals/sendText");
+                let params: TerminalSendTextParams =
+                    serde_json::from_value(request.params).expect("typed text");
+                assert_eq!(params.text, "fixture 한글\r");
+                if mode != "disconnect" {
+                    let identity = if mode == "wrongReceipt" {
+                        MutationRequestId::now()
+                    } else {
+                        params.request_id
+                    };
+                    send_test_json(&mut stream, &serde_json::json!({ "jsonrpc": "2.0", "id": request.id, "result": {
+                        "requestId": identity, "deliverySequence": 1, "ownerRegistrationGeneration": 2, "outcome": "ownerExtensionAccepted" } })).await;
+                    assert!(
+                        tokio::time::timeout(Duration::from_secs(3), stream.read_u8())
+                            .await
+                            .expect("text connection closes")
+                            .is_err()
+                    );
+                }
+            });
+            let locator = RuntimeLocator::for_testing_endpoint(instance, endpoint, "0.1.1");
+            let mut runtime = locator
+                .connect(ClientOptions::new("text fixture", "1.0.0"))
+                .await
+                .expect("connect text fixture");
+            let params = TerminalSendTextParams {
+                request_id: MutationRequestId::now(),
+                terminal_id: terminal.parse().expect("terminal UUID"),
+                lease_id: "lease".to_owned(),
+                lease_generation: 1,
+                text: "fixture 한글\r".to_owned(),
+            };
+            {
+                let mut terminals = runtime.terminals();
+                let mut view = terminals
+                    .attach(&TerminalAttachParams {
+                        terminal_id: params.terminal_id.clone(),
+                    })
+                    .await
+                    .expect("attach text fixture");
+                match (mode, view.send_text(&params).await) {
+                    ("accepted", Ok(receipt)) => assert_eq!(receipt.request_id, params.request_id),
+                    ("wrongReceipt", Err(ClientError::Protocol(_))) => {}
+                    ("disconnect", Err(ClientError::Runtime(error))) => {
+                        assert_eq!(error.code, RuntimeErrorKind::OutcomeUnknown);
+                        assert_eq!(error.correlation_id, params.request_id.as_str());
+                    }
+                    (_, result) => panic!("unexpected text result: {result:?}"),
+                }
+            }
+            drop(runtime);
+            server.await.expect("join text fixture");
+        }
     }
 }

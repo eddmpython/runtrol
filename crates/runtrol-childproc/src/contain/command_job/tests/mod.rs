@@ -29,6 +29,9 @@ const HELPER_LIMIT: Duration = Duration::from_secs(30);
 const OBSERVE_LIMIT: Duration = Duration::from_secs(10);
 static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(0);
 
+mod recovery;
+mod terminal;
+
 #[tokio::test]
 #[expect(
     unsafe_code,
@@ -52,7 +55,7 @@ async fn a_sealed_job_refuses_new_members_without_ending_existing_ones() {
             // SAFETY: both handles belong to this fixture; the child has not executed an instruction.
             unsafe {
                 AssignProcessToJobObject(
-                    job.handle.as_raw_handle(),
+                    job.job.handle.as_raw_handle(),
                     child.raw_handle().expect("child handle"),
                 )
             },
@@ -68,7 +71,7 @@ async fn a_sealed_job_refuses_new_members_without_ending_existing_ones() {
     // SAFETY: the initialized limit buffer matches the class and targets this private Job only.
     let sealed = unsafe {
         SetInformationJobObject(
-            job.handle.as_raw_handle(),
+            job.job.handle.as_raw_handle(),
             JobObjectExtendedLimitInformation,
             core::ptr::from_ref(&limits).cast(),
             u32::try_from(size_of_val(&limits)).expect("limit size"),
@@ -93,7 +96,7 @@ async fn a_sealed_job_refuses_new_members_without_ending_existing_ones() {
     // SAFETY: both handles are retained fixture objects; no external process is addressed.
     let admitted = unsafe {
         AssignProcessToJobObject(
-            job.handle.as_raw_handle(),
+            job.job.handle.as_raw_handle(),
             refused.raw_handle().expect("new child handle"),
         )
     };
@@ -198,8 +201,8 @@ async fn failed_assignment_and_resume_retain_the_lease_until_the_root_stops() {
         let mut job = CommandJob::new(Some(lease)).expect("the command Job is created");
         if fail_assignment {
             // The same valid Job still permits query and termination, but assignment must fail.
-            job.handle = duplicate(
-                job.handle.as_raw_handle(),
+            job.job.handle = duplicate(
+                job.job.handle.as_raw_handle(),
                 JOB_OBJECT_QUERY | JOB_OBJECT_TERMINATE,
                 0,
             );
@@ -699,7 +702,7 @@ fn in_job(job: &CommandJob, process: HANDLE) -> bool {
     let mut member = 0;
     assert_ne!(
         // SAFETY: both handles are live and member is a valid output variable.
-        unsafe { IsProcessInJob(process, job.handle.as_raw_handle(), &raw mut member) },
+        unsafe { IsProcessInJob(process, job.job.handle.as_raw_handle(), &raw mut member) },
         0
     );
     member != 0

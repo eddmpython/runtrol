@@ -1517,7 +1517,7 @@
       "description": "One service's account report, structured fields only.\n\nLimit windows a service reports on request (outside any turn) do not travel here: they land in the\nusage list beside the windows a turn reports, so a surface reads one gauge per service.",
       "properties": {
         "checkedAtMs": {
-          "description": "When the service answered, in unix milliseconds, which is how a surface says how stale it is.",
+          "description": "When the answer or failed read completed, in unix milliseconds. A retained gauge keeps its own time.",
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
@@ -1549,10 +1549,10 @@
         },
         "status": {
           "$ref": "#/$defs/ProviderAccountStatus",
-          "description": "Signed in, signed out, or nothing to ask."
+          "description": "The provider's account verdict, or an explicitly failed read."
         },
         "why": {
-          "description": "Why nothing can be asked, in the service's own terms, for an unpublished status.",
+          "description": "Why the surface is unpublished or the latest account read failed.",
           "type": [
             "string",
             "null"
@@ -1581,6 +1581,11 @@
         {
           "const": "unpublished",
           "description": "The service publishes no way to ask.",
+          "type": "string"
+        },
+        {
+          "const": "unread",
+          "description": "The latest account read failed; no new sign-in or usage fact was obtained.",
           "type": "string"
         }
       ]
@@ -3205,6 +3210,36 @@
           "type": "string"
         },
         {
+          "const": "windows/inputEnded",
+          "description": "Deliver or acknowledge caller-owned text through the exact observing extension.",
+          "type": "string"
+        },
+        {
+          "const": "windows/inputOffered",
+          "description": "Deliver or acknowledge caller-owned text through the exact observing extension.",
+          "type": "string"
+        },
+        {
+          "const": "windows/inputReceipt",
+          "description": "Deliver or acknowledge caller-owned text through the exact observing extension.",
+          "type": "string"
+        },
+        {
+          "const": "windows/claimInput",
+          "description": "Deliver or acknowledge caller-owned text through the exact observing extension.",
+          "type": "string"
+        },
+        {
+          "const": "windows/watchInput",
+          "description": "Deliver or acknowledge caller-owned text through the exact observing extension.",
+          "type": "string"
+        },
+        {
+          "const": "terminals/sendText",
+          "description": "Deliver or acknowledge caller-owned text through the exact observing extension.",
+          "type": "string"
+        },
+        {
           "const": "terminals/resize",
           "description": "Set bounded shared PTY geometry under the current terminal lease.",
           "type": "string"
@@ -4246,6 +4281,13 @@
           "$ref": "#/$defs/TerminalGeometry",
           "description": "Current shared PTY geometry."
         },
+        "initialMessageId": {
+          "description": "Identity of the optional initial courier tell. Its body and current delivery state are absent.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "memoryBytes": {
           "description": "Resident memory of the hosted process in bytes, as the operating system reports it at listing time.\n\nPresent only while the process runs and the operating system answered; absent means not measured.",
           "format": "uint64",
@@ -4273,6 +4315,11 @@
           "default": "owned",
           "description": "Who owns the process behind this terminal and how the Runtime reaches it."
         },
+        "ownerInputAvailable": {
+          "default": false,
+          "description": "Whether the exact observing window currently accepts authorized text input.",
+          "type": "boolean"
+        },
         "ownerTerminalKey": {
           "description": "For an observed mirror: the owner window's key for that terminal in the window registry.",
           "type": [
@@ -4291,6 +4338,13 @@
           "$ref": "#/$defs/TerminalProcessState",
           "description": "Structural live process state."
         },
+        "projectRoot": {
+          "description": "Original approved project for a Core-owned worktree. The exact working directory remains `workspace`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "providerId": {
           "$ref": "#/$defs/ProviderId",
           "description": "Opaque provider identity returned by Runtime inventory."
@@ -4298,6 +4352,17 @@
         "runtimeGeneration": {
           "description": "SHA-256 digest of the Runtime generation that owns the process.",
           "type": "string"
+        },
+        "spawnedBy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RuntimeTerminalId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The lead that started this worker in the same Runtime generation."
         },
         "terminalGeneration": {
           "description": "Monotonic process incarnation used to reject stale control acquisition.",
@@ -4361,6 +4426,17 @@
           "format": "int32",
           "type": "integer"
         },
+        "failure": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TerminalFailure"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Bounded host failure independent of the process code. Absent on an ordinary process exit."
+        },
         "viewId": {
           "$ref": "#/$defs/RuntimeTerminalViewId",
           "description": "Exact connection-bound view."
@@ -4371,6 +4447,31 @@
         "exitCode"
       ],
       "type": "object"
+    },
+    "TerminalFailure": {
+      "description": "Mechanical terminal-host failure. No provider content or operating-system error text is carried.",
+      "oneOf": [
+        {
+          "const": "hostInitializationFailed",
+          "description": "A born terminal could not initialize its host lanes.",
+          "type": "string"
+        },
+        {
+          "const": "outputReadFailed",
+          "description": "Reading terminal output failed before normal end of stream.",
+          "type": "string"
+        },
+        {
+          "const": "controlStateLost",
+          "description": "The authoritative terminal control state was lost.",
+          "type": "string"
+        },
+        {
+          "const": "inputDeliveryUnknown",
+          "description": "Delivery of an input frame could not be confirmed in full.",
+          "type": "string"
+        }
+      ]
     },
     "TerminalGeometry": {
       "additionalProperties": false,
@@ -4692,6 +4793,42 @@
       ],
       "type": "object"
     },
+    "TerminalSendTextParams": {
+      "additionalProperties": false,
+      "description": "Caller-owned text delivered once through the observing extension's public input API.",
+      "properties": {
+        "leaseGeneration": {
+          "description": "Exact control generation.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "leaseId": {
+          "description": "Current control lease identity.",
+          "type": "string"
+        },
+        "requestId": {
+          "$ref": "#/$defs/MutationRequestId",
+          "description": "Idempotency identity for this delivery attempt."
+        },
+        "terminalId": {
+          "$ref": "#/$defs/RuntimeTerminalId",
+          "description": "Exact observed mirror."
+        },
+        "text": {
+          "description": "Transient caller-owned text; never part of the structural receipt.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "requestId",
+        "terminalId",
+        "leaseId",
+        "leaseGeneration",
+        "text"
+      ],
+      "type": "object"
+    },
     "TerminalSetDialogueParams": {
       "additionalProperties": false,
       "description": "Enable or disable process-local dialogue under the exact current terminal input lease.",
@@ -4756,6 +4893,49 @@
         "terminalId",
         "leaseId",
         "leaseGeneration"
+      ],
+      "type": "object"
+    },
+    "TerminalTextOutcome": {
+      "description": "What the observing extension confirmed, without claiming shell processing or exact PTY bytes.",
+      "oneOf": [
+        {
+          "const": "ownerExtensionAccepted",
+          "description": "The owner called its public terminal input API exactly once.",
+          "type": "string"
+        }
+      ]
+    },
+    "TerminalTextReceipt": {
+      "additionalProperties": false,
+      "description": "Structural result of one acknowledged owner input call.",
+      "properties": {
+        "deliverySequence": {
+          "description": "Runtime-local sequence of the delivery.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "outcome": {
+          "$ref": "#/$defs/TerminalTextOutcome",
+          "description": "The bounded meaning of this acknowledgement."
+        },
+        "ownerRegistrationGeneration": {
+          "description": "The exact owner registration that accepted the text.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "requestId": {
+          "$ref": "#/$defs/MutationRequestId",
+          "description": "Original idempotency identity."
+        }
+      },
+      "required": [
+        "requestId",
+        "deliverySequence",
+        "ownerRegistrationGeneration",
+        "outcome"
       ],
       "type": "object"
     },
@@ -5025,6 +5205,53 @@
       ],
       "type": "object"
     },
+    "WatchWindowInputParams": {
+      "additionalProperties": false,
+      "description": "Bind one dedicated duplex receiver to the private registration proof.",
+      "properties": {
+        "ownerToken": {
+          "description": "Private capability returned on registration.",
+          "type": "string"
+        },
+        "registrationGeneration": {
+          "description": "Exact registration generation.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "windowSessionId": {
+          "description": "Owner window identity.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "windowSessionId",
+        "registrationGeneration",
+        "ownerToken"
+      ],
+      "type": "object"
+    },
+    "WatchWindowInputResult": {
+      "additionalProperties": false,
+      "description": "The receiver and its bounded offer capacity.",
+      "properties": {
+        "maxPendingOffers": {
+          "description": "Runtime's existing live-terminal bound, projected for the receiver queue.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "subscriptionId": {
+          "description": "Identity bound to this dedicated connection.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "subscriptionId",
+        "maxPendingOffers"
+      ],
+      "type": "object"
+    },
     "WatchWindowRevealsParams": {
       "additionalProperties": false,
       "description": "A window asks to be told when someone wants one of its terminals shown.",
@@ -5050,6 +5277,27 @@
       },
       "required": [
         "subscriptionId"
+      ],
+      "type": "object"
+    },
+    "WindowClaimInputParams": {
+      "additionalProperties": false,
+      "description": "Claim the text of one exact offered delivery once.",
+      "properties": {
+        "sequence": {
+          "description": "Runtime delivery sequence.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "subscriptionId": {
+          "description": "Exact receiver connection.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "subscriptionId",
+        "sequence"
       ],
       "type": "object"
     },
@@ -5209,6 +5457,205 @@
       ],
       "type": "object"
     },
+    "WindowInputBinding": {
+      "additionalProperties": false,
+      "description": "Exact window, extension, execution, mirror, and shell identity named by an input offer.",
+      "properties": {
+        "executionId": {
+          "description": "Exact shell-integration execution.",
+          "type": "string"
+        },
+        "hostGeneration": {
+          "description": "Exact Extension Host activation.",
+          "type": "string"
+        },
+        "processId": {
+          "description": "Shell PID; Runtime also retains and rechecks its kernel birth identity privately.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "registrationGeneration": {
+          "description": "Exact Runtime registration generation.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "terminalId": {
+          "$ref": "#/$defs/RuntimeTerminalId",
+          "description": "Runtime mirror for this execution."
+        },
+        "terminalKey": {
+          "description": "Stable local terminal object key.",
+          "type": "string"
+        },
+        "windowSessionId": {
+          "description": "Registered owner window.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "windowSessionId",
+        "registrationGeneration",
+        "hostGeneration",
+        "terminalKey",
+        "executionId",
+        "terminalId",
+        "processId"
+      ],
+      "type": "object"
+    },
+    "WindowInputClaim": {
+      "additionalProperties": false,
+      "description": "Transient text released after final authority and execution checks.",
+      "properties": {
+        "text": {
+          "description": "Text passed unchanged to the owner API.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "type": "object"
+    },
+    "WindowInputEndedNotification": {
+      "additionalProperties": false,
+      "description": "The private input receiver ended.",
+      "properties": {
+        "reason": {
+          "$ref": "#/$defs/WindowIndexEndReason",
+          "description": "Structural reason for retirement."
+        },
+        "subscriptionId": {
+          "description": "Exact receiver connection.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "subscriptionId",
+        "reason"
+      ],
+      "type": "object"
+    },
+    "WindowInputFailure": {
+      "description": "Closed body-free refusal vocabulary.",
+      "oneOf": [
+        {
+          "const": "authorityDenied",
+          "description": "Current authority does not permit this delivery.",
+          "type": "string"
+        },
+        {
+          "const": "executionEnded",
+          "description": "The bound execution ended.",
+          "type": "string"
+        },
+        {
+          "const": "executionChanged",
+          "description": "The terminal or execution identity changed.",
+          "type": "string"
+        },
+        {
+          "const": "receiverClosed",
+          "description": "The exact owner receiver closed.",
+          "type": "string"
+        },
+        {
+          "const": "textTooLarge",
+          "description": "The UTF-8 payload exceeds the public input bound.",
+          "type": "string"
+        },
+        {
+          "const": "inputApiFailed",
+          "description": "The public owner input API failed.",
+          "type": "string"
+        }
+      ]
+    },
+    "WindowInputOfferedNotification": {
+      "additionalProperties": false,
+      "description": "A body-free offer. Only a successful claim releases caller-owned text.",
+      "properties": {
+        "binding": {
+          "$ref": "#/$defs/WindowInputBinding",
+          "description": "Immutable execution binding."
+        },
+        "sequence": {
+          "description": "Runtime delivery sequence.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "subscriptionId": {
+          "description": "Exact receiver connection.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "subscriptionId",
+        "sequence",
+        "binding"
+      ],
+      "type": "object"
+    },
+    "WindowInputOutcome": {
+      "description": "Structural owner API outcome.",
+      "oneOf": [
+        {
+          "const": "ownerExtensionAccepted",
+          "description": "Exactly one public API invocation was accepted by the extension.",
+          "type": "string"
+        },
+        {
+          "const": "refused",
+          "description": "The owner refused before calling the API.",
+          "type": "string"
+        },
+        {
+          "const": "outcomeUnknown",
+          "description": "Delivery may have happened and must not be replayed.",
+          "type": "string"
+        }
+      ]
+    },
+    "WindowInputReceiptParams": {
+      "additionalProperties": false,
+      "description": "Finish one delivery without copying any input or output into its receipt.",
+      "properties": {
+        "outcome": {
+          "$ref": "#/$defs/WindowInputOutcome",
+          "description": "The owner's bounded API result."
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WindowInputFailure"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional structural reason, never native error text."
+        },
+        "sequence": {
+          "description": "Runtime delivery sequence.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "subscriptionId": {
+          "description": "Exact receiver connection.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "subscriptionId",
+        "sequence",
+        "outcome"
+      ],
+      "type": "object"
+    },
     "WindowMirrorEndParams": {
       "additionalProperties": false,
       "description": "The observed execution ended, or the window stops mirroring it.",
@@ -5251,6 +5698,10 @@
           "$ref": "#/$defs/TerminalGeometry",
           "description": "The observed terminal's geometry, so a viewer renders the same width and height."
         },
+        "ownerToken": {
+          "description": "Private registration proof returned to the owning extension.",
+          "type": "string"
+        },
         "processId": {
           "description": "The shell process id of the observed terminal, when VS Code resolved it.",
           "format": "uint32",
@@ -5264,6 +5715,12 @@
           "$ref": "#/$defs/ProviderId",
           "description": "The provider whose command the window recognised, from the inventory's command names."
         },
+        "registrationGeneration": {
+          "description": "Exact registration that owns this execution.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
         "terminalKey": {
           "description": "The window's key for the terminal, as published to the registry.",
           "type": "string"
@@ -5274,6 +5731,8 @@
         }
       },
       "required": [
+        "registrationGeneration",
+        "ownerToken",
         "windowSessionId",
         "terminalKey",
         "executionId",
@@ -5362,6 +5821,11 @@
       "additionalProperties": false,
       "description": "The Runtime's record of a registration.",
       "properties": {
+        "ownerToken": {
+          "default": "",
+          "description": "Private proof returned only to the registering connection; never included in the window index.",
+          "type": "string"
+        },
         "registrationGeneration": {
           "description": "Monotonic across every registration this Runtime generation accepted; a later registration of the same\nwindow has a higher number, so readers can tell which one is current.",
           "format": "uint64",
@@ -5576,6 +6040,33 @@
     },
     "observed_terminal": {
       "$ref": "#/$defs/ObservedTerminal"
+    },
+    "owner_input_0": {
+      "$ref": "#/$defs/TerminalSendTextParams"
+    },
+    "owner_input_1": {
+      "$ref": "#/$defs/TerminalTextReceipt"
+    },
+    "owner_input_2": {
+      "$ref": "#/$defs/WatchWindowInputParams"
+    },
+    "owner_input_3": {
+      "$ref": "#/$defs/WatchWindowInputResult"
+    },
+    "owner_input_4": {
+      "$ref": "#/$defs/WindowClaimInputParams"
+    },
+    "owner_input_5": {
+      "$ref": "#/$defs/WindowInputClaim"
+    },
+    "owner_input_6": {
+      "$ref": "#/$defs/WindowInputOfferedNotification"
+    },
+    "owner_input_7": {
+      "$ref": "#/$defs/WindowInputReceiptParams"
+    },
+    "owner_input_8": {
+      "$ref": "#/$defs/WindowInputEndedNotification"
     },
     "pending_approvals": {
       "$ref": "#/$defs/PendingApprovalList"
@@ -5796,6 +6287,15 @@
   },
   "required": [
     "method",
+    "owner_input_0",
+    "owner_input_1",
+    "owner_input_2",
+    "owner_input_3",
+    "owner_input_4",
+    "owner_input_5",
+    "owner_input_6",
+    "owner_input_7",
+    "owner_input_8",
     "request",
     "notification",
     "response",

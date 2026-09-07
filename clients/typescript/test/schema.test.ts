@@ -3,8 +3,16 @@ import { test } from "node:test";
 
 import { RuntimeProtocolError } from "../src/errors.js";
 import { validatePublic } from "../src/schema.js";
+import { VALIDATION_SCHEMA } from "../src/generated/schema.js";
 
-function pendingApproval(subjectDigest: readonly number[]): object {
+test("an unread account remains distinct from unsupported and signed-out responses", () => {
+  for (const status of ["unread", "unpublished", "signedOut", "signedIn"]) {
+    const account = { status, why: "fixture account result", checkedAtMs: 25 };
+    assert.deepEqual(validatePublic("ProviderAccount", account), account);
+  }
+});
+
+function pendingApproval(subjectDigest: readonly unknown[]): object {
   return {
     approvals: [{
       approvalId: "approval_fixture",
@@ -33,11 +41,13 @@ test("approval digests accept the complete unsigned byte range", () => {
 });
 
 test("approval digests reject values outside the unsigned byte range", () => {
-  const digest = Array.from({ length: 32 }, (_unused, index) => index === 0 ? 0x100 : index);
-  assert.throws(
-    () => validatePublic("PendingApprovalList", pendingApproval(digest)),
-    RuntimeProtocolError,
-  );
+  for (const invalid of [0x100, -1, 0.5, "1", null, true, {}, [], Number.NaN, Infinity]) {
+    const digest = Array.from({ length: 32 }, (_unused, index) => index === 0 ? invalid : index);
+    assert.throws(
+      () => validatePublic("PendingApprovalList", pendingApproval(digest)),
+      RuntimeProtocolError,
+    );
+  }
 });
 
 function usage(amount: number): object {
@@ -63,4 +73,15 @@ test("a cost that is not a finite number is refused", () => {
   for (const amount of [Number.NaN, Number.POSITIVE_INFINITY]) {
     assert.throws(() => validatePublic("ProviderUsageList", usage(amount)), RuntimeProtocolError);
   }
+});
+
+test("validating and then mutating one wire value cannot change the shared validation graph", () => {
+  const before = JSON.stringify(VALIDATION_SCHEMA);
+  const account = { status: "signedIn", why: "fixture", checkedAtMs: 25 };
+  assert.equal(validatePublic("ProviderAccount", account), account);
+  account.status = "not-a-status";
+  assert.throws(() => validatePublic("ProviderAccount", account), RuntimeProtocolError);
+  const next = Object.freeze({ status: "signedOut", why: "another fixture", checkedAtMs: 26 });
+  assert.equal(validatePublic("ProviderAccount", next), next);
+  assert.equal(JSON.stringify(VALIDATION_SCHEMA), before);
 });

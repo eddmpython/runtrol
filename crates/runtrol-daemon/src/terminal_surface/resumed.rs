@@ -44,31 +44,34 @@ impl ResumeLaunch {
         )
     }
 
-    pub(super) async fn reserve(
+    pub(super) fn reserve(
         &self,
         composed: &Composed,
     ) -> Result<ResumeReservation, TerminalOpenError> {
         composed
             .isolated_workspaces
-            .lock()
-            .await
-            .reserve_resume(&self.owned.binding, self.owned.owner, |pending| {
-                self.validate(composed).map_err(|error| error.to_string())?;
-                if pending.runtime != self.owned.owner.runtime {
-                    return Ok(None);
-                }
-                if !composed
-                    .native_claims
-                    .terminal_absent(pending.terminal)
-                    .map_err(|error| error.to_string())?
-                {
-                    return Ok(None);
-                }
-                Ok(Some(EndedResume::after_claim_retired(
-                    &self.owned.binding,
-                    pending,
-                )))
-            })
+            .reserve_resume(
+                &composed.containment,
+                &self.owned.binding,
+                self.owned.owner,
+                |pending| {
+                    self.validate(composed).map_err(|error| error.to_string())?;
+                    if pending.runtime != self.owned.owner.runtime {
+                        return Ok(None);
+                    }
+                    if !composed
+                        .native_claims
+                        .terminal_absent(pending.terminal)
+                        .map_err(|error| error.to_string())?
+                    {
+                        return Ok(None);
+                    }
+                    Ok(Some(EndedResume::after_claim_retired(
+                        &self.owned.binding,
+                        pending,
+                    )))
+                },
+            )
             .map_err(TerminalOpenError::Provider)
     }
 }
@@ -99,6 +102,7 @@ pub(crate) async fn open_resumed(
         holder_known,
         None,
         Some(launch),
+        super::launch::LaunchAuthority::Worktree,
     )
     .await
 }

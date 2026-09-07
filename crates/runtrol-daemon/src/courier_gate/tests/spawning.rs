@@ -12,6 +12,76 @@ async fn lead(gate: &CourierGate) -> TerminalId {
     terminal
 }
 
+#[cfg(windows)]
+#[tokio::test]
+async fn prepared_worker_rechecks_activation_and_keeps_capacity_until_exact_retirement() {
+    for reenabled in [false, true] {
+        let gate = gate();
+        let terminal = lead(&gate).await;
+        let admitted = admission(&gate, session_id(terminal)).await;
+        let (ticket, _) = gate
+            .reserve_spawn(admitted, here(), 1, None, 1000)
+            .await
+            .unwrap();
+        gate.set_dialogue(terminal, false).await.unwrap();
+        if reenabled {
+            gate.set_dialogue(terminal, true).await.unwrap();
+        }
+        let result = gate
+            .publish_prepared(
+                Some(gate.mint(ticket.worker.terminal).unwrap()),
+                Some(&ticket),
+                None,
+                None,
+                || panic!("an obsolete activation cannot resume the prepared child"),
+                str::to_owned,
+            )
+            .await;
+        assert!(result.is_err());
+        assert_eq!(gate.pending_spawns().await, 0);
+        assert!(
+            gate.cancel_spawn(&ticket).await.is_none(),
+            "a prepared child is no longer a cancellable reservation"
+        );
+        assert!(
+            gate.ended_worker(ticket.worker.terminal)
+                .await
+                .unwrap()
+                .is_some()
+        );
+    }
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn prepared_worker_execution_failure_retains_its_exact_ticket() {
+    let gate = gate();
+    let terminal = lead(&gate).await;
+    let admitted = admission(&gate, session_id(terminal)).await;
+    let (ticket, _) = gate
+        .reserve_spawn(admitted, here(), 1, None, 1000)
+        .await
+        .unwrap();
+    let result = gate
+        .publish_prepared(
+            Some(gate.mint(ticket.worker.terminal).unwrap()),
+            Some(&ticket),
+            None,
+            None,
+            || Err::<(), _>("injected resume refusal".to_owned()),
+            str::to_owned,
+        )
+        .await;
+    assert_eq!(result, Err("injected resume refusal".to_owned()));
+    assert!(gate.cancel_spawn(&ticket).await.is_none());
+    assert!(
+        gate.ended_worker(ticket.worker.terminal)
+            .await
+            .unwrap()
+            .is_some()
+    );
+}
+
 #[tokio::test]
 async fn pending_and_live_workers_share_one_per_lead_limit_and_global_capacity() {
     let gate = gate();

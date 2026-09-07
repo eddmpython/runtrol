@@ -1,7 +1,7 @@
 """Gate: an idle debug daemon stays inside its RSS budget and uses at most one percent of one CPU.
 
 The existing Rust memoryBudget test remains the RSS number source. This gate runs that exact test, then starts a
-separate real daemon and measures process CPU time from the operating system across a ten-second idle window.
+separate real daemon and measures total Runtime and keeper CPU time from the operating system across a ten-second idle window.
 
 Usage::
 
@@ -11,14 +11,14 @@ Usage::
 
 from __future__ import annotations
 
-import ctypes
 import math
 import os
 import subprocess
 import sys
-import tempfile
 import time
 from pathlib import Path
+
+import runtimeFootprint as footprint
 
 ROOT = Path(__file__).resolve().parents[2]
 MEMORY_GATE = [
@@ -92,6 +92,7 @@ def problems(cpu_delta: float, elapsed: float) -> list[str]:
 
 def selftest() -> int:
     """Prove each independent measurement defect makes the gate red."""
+    footprint.selftest()
     if problems(0.0, SAMPLE_SECONDS):
         print("[idleFootprintRatchet --selftest] FAIL. green evidence was rejected.", file=sys.stderr)
         return 2
@@ -110,48 +111,12 @@ def selftest() -> int:
 
 
 def windowsCpuSeconds(pid: int) -> float:
-    """Read one process's kernel and user time through the Windows process API."""
-
-    class FileTime(ctypes.Structure):
-        _fields_ = [("low", ctypes.c_uint32), ("high", ctypes.c_uint32)]
-
-    query_limited_information = 0x1000
-    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
-    kernel.OpenProcess.argtypes = [ctypes.c_ulong, ctypes.c_int, ctypes.c_ulong]
-    kernel.OpenProcess.restype = ctypes.c_void_p
-    kernel.GetProcessTimes.argtypes = [
-        ctypes.c_void_p,
-        ctypes.POINTER(FileTime),
-        ctypes.POINTER(FileTime),
-        ctypes.POINTER(FileTime),
-        ctypes.POINTER(FileTime),
-    ]
-    kernel.CloseHandle.argtypes = [ctypes.c_void_p]
-    handle = kernel.OpenProcess(query_limited_information, False, pid)
-    if not handle:
-        raise Failed(f"OpenProcess could not inspect daemon {pid}")
+    """Read an exact process HANDLE; measured cohorts retain it for the entire interval."""
+    process = footprint.WindowsProcess(pid)
     try:
-        created = FileTime()
-        exited = FileTime()
-        kernel_time = FileTime()
-        user_time = FileTime()
-        if not kernel.GetProcessTimes(
-            handle,
-            ctypes.byref(created),
-            ctypes.byref(exited),
-            ctypes.byref(kernel_time),
-            ctypes.byref(user_time),
-        ):
-            raise Failed(f"GetProcessTimes could not inspect daemon {pid}")
-        ticks = (
-            (kernel_time.high << 32)
-            + kernel_time.low
-            + (user_time.high << 32)
-            + user_time.low
-        )
-        return ticks / 10_000_000
+        return process.times()[1]
     finally:
-        kernel.CloseHandle(handle)
+        process.close()
 
 
 def linuxCpuSeconds(pid: int) -> float:
@@ -224,8 +189,8 @@ def measureCpu() -> tuple[float, float]:
     binary = productBinary()
     if not binary.is_file():
         raise Failed(f"product binary is missing: {binary}")
-    with tempfile.TemporaryDirectory(prefix="runtrol-idle-ratchet-") as raw_home:
-        home = Path(raw_home)
+    ownedHome = footprint.Home("runtrol-idle-ratchet-")
+    with ownedHome as home:
         environment = os.environ.copy()
         environment["RUNTROL_HOME"] = str(home)
         creation_flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
@@ -237,6 +202,7 @@ def measureCpu() -> tuple[float, float]:
             stderr=subprocess.DEVNULL,
             creationflags=creation_flags,
         )
+        cohort: footprint.Cohort | None = None
         try:
             deadline = time.monotonic() + START_WITHIN
             while time.monotonic() < deadline:
@@ -248,14 +214,15 @@ def measureCpu() -> tuple[float, float]:
             else:
                 raise Failed("daemon did not open its home within 20 seconds")
 
+            cohort = footprint.Cohort(daemon, ownedHome)
             quiet = 0
             settle_deadline = time.monotonic() + SETTLE_CEILING_SECONDS
             while quiet < QUIET_SLICES_REQUIRED:
-                slice_before = cpuSeconds(daemon.pid)
+                slice_before = cohort.cpu(cpuSeconds)
                 time.sleep(QUIET_SLICE_SECONDS)
                 if daemon.poll() is not None:
                     raise Failed(f"daemon exited while settling with code {daemon.returncode}")
-                if cpuSeconds(daemon.pid) - slice_before <= QUIET_SLICE_BUDGET_SECONDS:
+                if cohort.cpu(cpuSeconds) - slice_before <= QUIET_SLICE_BUDGET_SECONDS:
                     quiet += 1
                 else:
                     quiet = 0
@@ -264,7 +231,7 @@ def measureCpu() -> tuple[float, float]:
                         "the daemon never went quiet: startup work was still running after "
                         f"{SETTLE_CEILING_SECONDS:.0f} seconds"
                     )
-            cpu_before = cpuSeconds(daemon.pid)
+            cpu_before = cohort.cpu(cpuSeconds)
             started = time.monotonic()
             deadline = started + SAMPLE_SECONDS
             while time.monotonic() < deadline:
@@ -272,10 +239,13 @@ def measureCpu() -> tuple[float, float]:
                     raise Failed(f"daemon exited during the idle sample with code {daemon.returncode}")
                 time.sleep(0.050)
             elapsed = time.monotonic() - started
-            cpu_after = cpuSeconds(daemon.pid)
+            cpu_after = cohort.cpu(cpuSeconds)
             return cpu_after - cpu_before, elapsed
         finally:
-            stop(daemon)
+            if cohort is not None:
+                cohort.stop()
+            else:
+                stop(daemon)
 
 
 def main(argv: list[str]) -> int:
@@ -291,8 +261,9 @@ def main(argv: list[str]) -> int:
         print("[idleFootprintRatchet] FAIL. the idle RSS contract failed.", file=sys.stderr)
         return memory.returncode
     try:
+        footprint.build()
         cpu_delta, elapsed = measureCpu()
-    except (Failed, OSError, ValueError) as error:
+    except (Failed, footprint.Failed, OSError, ValueError, subprocess.SubprocessError) as error:
         print(f"[idleFootprintRatchet] FAIL. {error}", file=sys.stderr)
         return 2
     found = problems(cpu_delta, elapsed)

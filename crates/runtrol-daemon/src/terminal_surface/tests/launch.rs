@@ -9,6 +9,10 @@ use runtrol_provider::WallMs;
 use runtrol_runtime_protocol::{AppScope, IntegrationGrant, IntegrationId};
 use runtrol_store::{IntegrationKey, IntegrationRootRow, IntegrationRow};
 
+#[cfg(windows)]
+#[path = "birth.rs"]
+mod birth;
+
 struct Fixture {
     composed: Arc<Composed>,
     launch: ResumeLaunch,
@@ -30,7 +34,7 @@ impl Fixture {
         let ticket = SpawnTicket::new(runtime, TerminalId::now(), TerminalId::now(), 1).unwrap();
         let mut original = ProcessScratch::start(&scratch);
         let binding = {
-            let mut controller = composed.isolated_workspaces.lock().await;
+            let controller = &composed.isolated_workspaces;
             let prepared = controller
                 .prepare_terminal(&composed.containment, &ticket, &project)
                 .await
@@ -130,10 +134,16 @@ impl Fixture {
             env: Vec::new(),
             env_unset: Vec::new(),
             size: PtySize { cols: 80, rows: 24 },
-            minted: self.composed.courier_gate.mint(terminal).unwrap(),
+            minted: Some(self.composed.courier_gate.mint(terminal).unwrap()),
+            origin: super::super::TerminalOrigin::Owned,
             reservation,
             worker: None,
             resumed: resumed.then(|| self.launch.clone()),
+            authority: if resumed {
+                LaunchAuthority::Worktree
+            } else {
+                LaunchAuthority::TrustedLocal
+            },
         }
     }
 
@@ -154,8 +164,13 @@ impl Fixture {
     }
 
     async fn close(&self) {
+        let mut repeated_stop_failures = 0;
         for row in self.composed.terminals.lock().await.hosted_all() {
-            row.terminal.kill().unwrap();
+            // A refused prepared child is already terminating. Windows may reject a repeated kill;
+            // only the exact exit observer and retirement below prove cleanup, not this request.
+            if row.terminal.kill().is_err() {
+                repeated_stop_failures += 1;
+            }
         }
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
         loop {
@@ -169,7 +184,10 @@ impl Fixture {
                     .composed
                     .native_claims
                     .terminal_absent(self.launch.owned.owner.terminal);
-                let controller_free = self.composed.isolated_workspaces.try_lock().is_ok();
+                let registry_readable = matches!(
+                    self.composed.isolated_workspaces.list(),
+                    runtrol_ipc::wire::Response::IsolatedWorkspaces(_)
+                );
                 let lock_free = |path| {
                     std::fs::OpenOptions::new()
                         .write(true)
@@ -186,10 +204,10 @@ impl Fixture {
                 );
                 let exited = rows
                     .iter()
-                    .filter(|row| row.terminal.exited().borrow().is_some())
+                    .filter(|row| row.terminal.exited().borrow().exit_code.is_some())
                     .count();
                 panic!(
-                    "fixture ownership cleanup deadline: rows={} exited={exited} operations={operations} claim_absent={claim_absent:?} controller_free={controller_free} registry_free={registry_free:?} stripe_free={stripe_free:?}",
+                    "fixture ownership cleanup deadline: rows={} exited={exited} operations={operations} repeated_stop_failures={repeated_stop_failures} claim_absent={claim_absent:?} registry_readable={registry_readable} registry_free={registry_free:?} stripe_free={stripe_free:?}",
                     rows.len()
                 );
             }
@@ -220,14 +238,14 @@ async fn both_ended_processes_keep_the_worktree_until_their_exact_claims_retire(
     };
     let original = claim(fixture.original_ticket.worker);
     original.commit_born().unwrap();
-    assert!(fixture.launch.reserve(&fixture.composed).await.is_err());
+    assert!(fixture.launch.reserve(&fixture.composed).is_err());
     fixture
         .composed
         .native_claims
         .terminal_ended(fixture.original_ticket.worker.terminal);
     let resumed_claim = claim(fixture.launch.owned.owner);
     resumed_claim.commit_born().unwrap();
-    let mut reservation = fixture.launch.reserve(&fixture.composed).await.unwrap();
+    let mut reservation = fixture.launch.reserve(&fixture.composed).unwrap();
     let mut process = ProcessScratch::start(&fixture.scratch);
     reservation.bind(Some(process.identity)).unwrap();
     drop(reservation);
@@ -239,8 +257,6 @@ async fn both_ended_processes_keep_the_worktree_until_their_exact_claims_retire(
         fixture
             .composed
             .isolated_workspaces
-            .lock()
-            .await
             .release_terminal_if_present(&fixture.composed.containment, &old_exit)
             .await
             .is_err(),
@@ -251,18 +267,14 @@ async fn both_ended_processes_keep_the_worktree_until_their_exact_claims_retire(
     owner.owner.terminal = TerminalId::now();
     next.owned = Arc::new(owner);
     assert!(
-        next.reserve(&fixture.composed).await.is_err(),
+        next.reserve(&fixture.composed).is_err(),
         "exited PID is not retired terminal ownership"
     );
     fixture
         .composed
         .native_claims
         .terminal_ended(fixture.launch.owned.owner.terminal);
-    next.reserve(&fixture.composed)
-        .await
-        .unwrap()
-        .abort()
-        .unwrap();
+    next.reserve(&fixture.composed).unwrap().abort().unwrap();
 }
 
 #[tokio::test]
@@ -279,7 +291,28 @@ async fn owner_local_broker_preserves_original_launch_and_refuses_unbound_owned_
         .join("nested")
         .unwrap();
     std::fs::create_dir(child.as_std_path()).unwrap();
-    for cwd in [fixture.launch.owned.binding.workspace.clone(), child] {
+    let runtrol_ipc::Response::IsolatedWorkspace(structured) = fixture
+        .composed
+        .isolated_workspaces
+        .prepare(
+            &fixture.composed.containment,
+            &uuid::Uuid::now_v7().to_string(),
+            fixture.scratch.project.as_str(),
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("structured worktree fixture");
+    };
+    let structured = AbsPath::canonicalize(&structured.workspace).unwrap();
+    let structured_child = structured.join("nested").unwrap();
+    std::fs::create_dir(structured_child.as_std_path()).unwrap();
+    for cwd in [
+        fixture.launch.owned.binding.workspace.clone(),
+        child,
+        structured,
+        structured_child,
+    ] {
         let result = crate::terminal_surface::open_brokered(
             &fixture.composed,
             provider,
@@ -327,7 +360,6 @@ async fn cancellation_and_capacity_refusal_never_call_birth_and_clear_pending_oc
     fixture
         .launch
         .reserve(&fixture.composed)
-        .await
         .unwrap()
         .abort()
         .unwrap();
@@ -344,7 +376,6 @@ async fn cancellation_and_capacity_refusal_never_call_birth_and_clear_pending_oc
     fixture
         .launch
         .reserve(&fixture.composed)
-        .await
         .unwrap()
         .abort()
         .unwrap();
@@ -461,7 +492,7 @@ async fn a_second_viewer_joins_the_existing_native_owner_before_reserving_the_wo
         Some("native".into()),
     );
     super::super::forget_on_exit(Arc::clone(&fixture.composed), existing, &terminal);
-    let reservation = fixture.launch.reserve(&fixture.composed).await.unwrap();
+    let reservation = fixture.launch.reserve(&fixture.composed).unwrap();
     let joined = crate::terminal_surface::open_resumed(
         &fixture.composed,
         provider,
@@ -486,7 +517,7 @@ async fn a_failed_rollback_requires_positive_retirement_of_the_exact_native_clai
     let fixture = Fixture::new().await;
     let old = fixture.launch.owned.owner.terminal;
     let prepared = fixture.prepared(old, true);
-    let reservation = fixture.launch.reserve(&fixture.composed).await.unwrap();
+    let reservation = fixture.launch.reserve(&fixture.composed).unwrap();
     let file = std::fs::OpenOptions::new()
         .write(true)
         .create(true)
@@ -501,24 +532,24 @@ async fn a_failed_rollback_requires_positive_retirement_of_the_exact_native_clai
     owned.owner.terminal = TerminalId::now();
     next.owned = Arc::new(owned);
     assert!(
-        next.reserve(&fixture.composed).await.is_err(),
+        next.reserve(&fixture.composed).is_err(),
         "a pending claim is still an owner"
     );
     prepared.reservation.commit_born().unwrap();
     assert!(
-        next.reserve(&fixture.composed).await.is_err(),
+        next.reserve(&fixture.composed).is_err(),
         "a born claim is still an owner"
     );
     fixture.composed.native_claims.terminal_ended(old);
-    next.reserve(&fixture.composed)
-        .await
-        .unwrap()
-        .abort()
-        .unwrap();
+    next.reserve(&fixture.composed).unwrap().abort().unwrap();
 }
 
+#[cfg(windows)]
 #[tokio::test]
 async fn another_terminal_accepts_input_before_failed_launch_cleanup_is_released() {
+    use crate::isolated_workspace::tests::concurrency::{
+        install_status_hook, release_hook, wait_for_hook,
+    };
     use runtrol_runtime_protocol::{
         MutationRequestId, TerminalAcquireControlParams, TerminalWriteParams,
     };
@@ -545,19 +576,18 @@ async fn another_terminal_accepts_input_before_failed_launch_cleanup_is_released
         )
         .await
         .unwrap();
-    let cleanup_barrier = std::cell::RefCell::new(None);
+    install_status_hook(&fixture.scratch);
     let id = fixture.launch.owned.owner.terminal;
     assert!(
         fixture
             .prepared(id, true)
             .publish(&fixture.composed, &AtomicBool::new(false), |_| {
-                *cleanup_barrier.borrow_mut() =
-                    Some(fixture.composed.isolated_workspaces.try_lock().unwrap());
                 Ok(Terminal::fed(0, PtySize { cols: 80, rows: 24 }).unwrap())
             })
             .await
             .is_err()
     );
+    let hook = wait_for_hook(&fixture.scratch).await;
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
     while !fixture.composed.native_claims.terminal_absent(id).unwrap() {
         assert!(
@@ -582,22 +612,22 @@ async fn another_terminal_accepts_input_before_failed_launch_cleanup_is_released
         ),
     )
     .await;
-    assert!(
-        written.is_ok_and(|result| result.is_ok()),
-        "another terminal must accept input while cleanup is blocked"
-    );
-    assert!(cleanup_barrier.borrow().is_some());
-    assert!(
-        fixture
-            .launch
-            .owned
-            .binding
-            .workspace
-            .as_std_path()
-            .exists()
-    );
-    drop(cleanup_barrier.into_inner());
+    let accepted_while_held = written.is_ok_and(|result| result.is_ok());
+    let hook_still_held = crate::isolated_workspace::ownership::ProcessStamp::from(hook).is_live();
+    let workspace_still_owned = fixture
+        .launch
+        .owned
+        .binding
+        .workspace
+        .as_std_path()
+        .exists();
+    release_hook(&fixture.scratch, hook).await;
     fixture.close().await;
+    assert!(
+        accepted_while_held,
+        "another terminal must accept input while cleanup Git is blocked"
+    );
+    assert!(hook_still_held && workspace_still_owned);
 }
 
 #[tokio::test]
@@ -614,7 +644,7 @@ async fn an_exit_completed_before_publication_is_seen_by_the_late_owner_observer
             // No receiver exists while the real Core watcher observes and settles this exit.
             std::thread::sleep(std::time::Duration::from_millis(600));
             assert!(
-                terminal.exited().borrow().is_some(),
+                terminal.exited().borrow().exit_code.is_some(),
                 "exit must survive before daemon publication"
             );
             Ok(terminal)

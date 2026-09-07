@@ -10,7 +10,9 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use runtrol_core::terminal::{Attachment, Terminal, TerminalLaunch};
+#[cfg(test)]
+use runtrol_core::terminal::TerminalLaunch;
+use runtrol_core::terminal::{Attachment, Terminal};
 use runtrol_provider::{AbsPath, ProviderId, TerminalId, WallMs};
 
 use crate::compose::Composed;
@@ -49,6 +51,9 @@ pub(crate) enum TerminalOpenError {
 /// Every open terminal, by id and by the conversation it shows.
 pub(crate) struct Terminals {
     by_id: BTreeMap<TerminalId, Open>,
+    /// Ordinary and resumed births count before their slow Windows preparation. Workers already own
+    /// the gate's pending reservation, so they are not counted a second time here.
+    pending: std::collections::BTreeSet<TerminalId>,
     /// Which terminal shows which conversation, so a second open joins the first.
     by_conversation: BTreeMap<(ProviderId, Box<str>), TerminalId>,
     /// Which shell invoked which brokered terminal, so a window observing that shell does not mirror it twice.
@@ -62,6 +67,7 @@ impl Default for Terminals {
         let (changes, _initial) = tokio::sync::watch::channel(0);
         Self {
             by_id: BTreeMap::new(),
+            pending: std::collections::BTreeSet::new(),
             by_conversation: BTreeMap::new(),
             brokered_shells: BTreeMap::new(),
             changes,
@@ -145,17 +151,13 @@ pub(crate) struct ObservedOwner {
     pub(crate) feeder: ConnectionToken,
     /// The observed shell, when the window resolved one: the key a brokered open of the same shell retires.
     pub(crate) shell_pid: Option<u32>,
+    pub(crate) registration_generation: u64,
+    pub(crate) execution_id: String,
+    pub(crate) shell_identity: Option<runtrol_provider::ProcessIdentity>,
 }
 
-/// The provider's exact command for stopping a conversation reached through an official attachment.
-#[derive(Clone, Debug)]
-pub(crate) struct OfficialStop {
-    program: runtrol_childproc::Program,
-    arguments: Vec<String>,
-    cwd: AbsPath,
-    env: Vec<(String, String)>,
-    env_unset: Vec<String>,
-}
+mod official_stop;
+use official_stop::OfficialStop;
 
 /// A content-free view of one hosted terminal for public Runtime projection.
 #[derive(Clone)]
@@ -429,43 +431,13 @@ impl Terminals {
         removed
     }
 
-    /// Register a terminal renderer onto a process some other owner started.
-    ///
-    /// The caller reserves a terminal-surface claim before reaching this insertion. That claim does not own the
-    /// external conversation, but it does make this the only central renderer across Runtime generations. Filed by
-    /// `(provider, native)` so the sidebar row binds and a click attaches here, and by pid so a second observation
-    /// does not open a second local renderer.
-    fn insert_external(
-        &mut self,
-        id: TerminalId,
-        provider: ProviderId,
-        native: &str,
-        terminal: Terminal,
-        workspace: AbsPath,
-        origin: TerminalOrigin,
-    ) {
-        self.by_id.insert(
-            id,
-            Open {
-                spawned: None,
-                resumed: None,
-                provider,
-                terminal,
-                workspace,
-                native: Some(native.into()),
-                native_process_pid: None,
-                opened_at_ms: WallMs::now().as_millis(),
-                generation: 1,
-                stopping: false,
-                origin,
-            },
-        );
-        self.by_conversation.insert((provider, native.into()), id);
-        self.publish_change();
-    }
-
     pub(crate) fn len(&self) -> usize {
         self.by_id.len()
+    }
+
+    /// Hosted terminals plus preparations whose capacity is owned by this table.
+    pub(crate) fn occupied(&self) -> usize {
+        self.by_id.len() + self.pending.len()
     }
 
     /// File a terminal the transparent shim opened under every process above the shim (the invoking shell is
@@ -608,29 +580,12 @@ impl Terminals {
     }
 }
 
-/// Drop a terminal from the table and tell the owner, which may be waiting on it to drain.
-/// How long a hosted terminal must sit with no viewer and no output before a draining generation closes it.
-///
-/// A viewer that drops and reconnects (a window reload, a transport blip) must not lose its conversation, so
-/// the terminal is given this grace with nobody watching before it is let go. Fifteen seconds is long enough
-/// to cover a reconnect and short enough that an update's old generations do not pile up for hours.
+/// An unwatched attachment renderer receives a reconnect grace before its draining generation releases it.
 const DRAINING_IDLE_GRACE_MS: u64 = 15_000;
 
-/// Close the terminals a draining generation is only keeping alive out of habit, so it can finish.
-///
-/// A draining generation exits when it has no live work, and an open terminal counts as work. The current
-/// generation keeps a viewerless terminal so a window or a phone can reattach to the one session; a draining
-/// generation cannot be that home (its store has moved), so a conversation nobody is watching and that is not
-/// writing is closed here. The provider keeps the conversation, so the next window resumes it in the current
-/// generation. This is why old generations used to linger for hours holding idle sessions (operator,
-/// 2026-08-29). Only a terminal with no viewer and no output for the grace is closed; one a person is watching,
-/// or one a turn is still writing to, is left alone.
-///
-/// An observed mirror is let go, never killed. Its process belongs to whoever started it (the operator's own
-/// window, another tool), and killing a mirrored process ended the operator's own sessions with `0xC0000001` at
-/// every Runtime update, minutes after each new generation started (five times on 2026-08-29, two sessions at once
-/// each time). Releasing the mirror ends only this generation's feed; the owner window feeds the current generation
-/// afresh.
+/// Release unused presentation clients during generation handover. Owned CLI processes keep their lifetime:
+/// silence and an absent viewer cannot prove that a provider has finished a long-running tool. An official
+/// attachment loses only its renderer; an observed mirror loses only its feed. Both external owners remain live.
 pub(crate) async fn close_idle_while_draining(composed: &Arc<Composed>) {
     close_idle_at(composed, WallMs::now().as_millis(), DRAINING_IDLE_GRACE_MS).await;
 }
@@ -681,7 +636,16 @@ async fn close_idle_at(composed: &Arc<Composed>, now: u64, idle_grace_ms: u64) {
             continue;
         };
         match action {
-            DrainAction::Kill => drop(hosted.terminal.kill()),
+            DrainAction::Kill =>
+            {
+                #[expect(
+                    clippy::print_stderr,
+                    reason = "a background renderer stop has no caller; stderr is the operational failure channel"
+                )]
+                if let Err(error) = stop_renderer(&hosted.terminal).await {
+                    eprintln!("runtrol: could not stop an unused terminal renderer: {error}");
+                }
+            }
             DrainAction::Release => hosted.terminal.release(),
             DrainAction::Keep => {}
         }
@@ -691,11 +655,11 @@ async fn close_idle_at(composed: &Arc<Composed>, now: u64, idle_grace_ms: u64) {
 /// What a draining generation does with one of its terminals.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DrainAction {
-    /// Watched, or still writing: it is live work and the generation waits for it.
+    /// Owned CLI lifetime, or a presentation client still in use.
     Keep,
     /// A mirror nobody watches: forget it; the process it joined is not the Runtime's to end.
     Release,
-    /// A process this Runtime started that nobody watches and that is quiet: end it so the generation can exit.
+    /// End only an unused official attachment renderer, never its external conversation owner.
     Kill,
 }
 
@@ -710,7 +674,8 @@ fn drain_action(
     }
     match origin {
         TerminalOrigin::ObservedMirror(_) => DrainAction::Release,
-        TerminalOrigin::Owned | TerminalOrigin::OfficialAttach(_) => DrainAction::Kill,
+        TerminalOrigin::Owned => DrainAction::Keep,
+        TerminalOrigin::OfficialAttach(_) => DrainAction::Kill,
     }
 }
 
@@ -761,8 +726,6 @@ async fn forget(composed: &Arc<Composed>, id: TerminalId) {
         Ok(Some(ended)) => {
             if let Err(error) = composed
                 .isolated_workspaces
-                .lock()
-                .await
                 .release_terminal_if_present(&composed.containment, &ended)
                 .await
             {
@@ -779,8 +742,6 @@ async fn forget(composed: &Arc<Composed>, id: TerminalId) {
         );
         if let Err(error) = composed
             .isolated_workspaces
-            .lock()
-            .await
             .release_resume(&composed.containment, &ended)
             .await
         {
@@ -797,7 +758,7 @@ fn forget_on_exit(composed: Arc<Composed>, id: TerminalId, terminal: &Terminal) 
     let mut exited = terminal.exited();
     tokio::spawn(async move {
         loop {
-            if exited.borrow().is_some() {
+            if exited.borrow().exit_code.is_some() {
                 break;
             }
             if exited.changed().await.is_err() {
@@ -822,6 +783,7 @@ pub(crate) async fn open_hosted(
     rows: u16,
     prepared_program: Option<runtrol_childproc::Program>,
     holder_known: bool,
+    authority: &crate::runtime_auth::AuthorizedIntegration,
 ) -> Result<(TerminalId, Terminal, Attachment), TerminalOpenError> {
     open_with_arguments(
         composed,
@@ -835,6 +797,14 @@ pub(crate) async fn open_hosted(
         holder_known,
         None,
         None,
+        launch::LaunchAuthority::integration(
+            authority,
+            if native.is_some() {
+                runtrol_runtime_protocol::AppScope::SessionResume
+            } else {
+                runtrol_runtime_protocol::AppScope::SessionStart
+            },
+        ),
     )
     .await
 }
@@ -882,6 +852,7 @@ pub(crate) async fn open_brokered(
         false,
         None,
         None,
+        launch::LaunchAuthority::TrustedLocal,
     )
     .await
 }
@@ -918,6 +889,7 @@ async fn open_with_arguments(
     holder_known: bool,
     worker: Option<&WorkerLaunch>,
     resumed: Option<&ResumeLaunch>,
+    authority: launch::LaunchAuthority,
 ) -> Result<(TerminalId, Terminal, Attachment), TerminalOpenError> {
     let operation = TerminalOperation::begin(composed);
     if let Some(native) = native
@@ -949,7 +921,7 @@ async fn open_with_arguments(
         TerminalClaimAdmission::Reserved(reservation) => reservation,
     };
     if worker.is_none() && resumed.is_none() {
-        crate::isolated_workspace::refuse_unbound_worktree(composed, &cwd)
+        crate::isolated_workspace::refuse_unbound_native_worktree(composed, &cwd)
             .await
             .map_err(TerminalOpenError::Provider)?;
     }
@@ -994,10 +966,12 @@ async fn open_with_arguments(
         env,
         env_unset,
         size: runtrol_childproc::PtySize { cols, rows },
-        minted,
+        minted: Some(minted),
+        origin: TerminalOrigin::Owned,
         reservation,
         worker: worker.cloned(),
         resumed: resumed.cloned(),
+        authority,
     }
     .open(composed, operation)
     .await
@@ -1011,7 +985,6 @@ async fn open_with_arguments(
 /// commands that reach and stop it.
 #[expect(
     clippy::too_many_arguments,
-    clippy::too_many_lines,
     reason = "one official attachment keeps reservation, provider declaration, exact argv, renderer insertion and claim commit in one auditable boundary"
 )]
 pub(crate) async fn open_official_attach(
@@ -1023,7 +996,9 @@ pub(crate) async fn open_official_attach(
     cols: u16,
     rows: u16,
     program: runtrol_childproc::Program,
+    authority: &crate::runtime_auth::AuthorizedIntegration,
 ) -> Result<(TerminalId, Terminal, Attachment), TerminalOpenError> {
+    let operation = TerminalOperation::begin(composed);
     if let Some(existing) = composed.terminals.lock().await.open_for(provider, native) {
         if existing.workspace != cwd {
             return Err(TerminalClaimError::WorkspaceConflict.into());
@@ -1062,7 +1037,7 @@ pub(crate) async fn open_official_attach(
         }
         TerminalClaimAdmission::Reserved(reservation) => reservation,
     };
-    crate::isolated_workspace::refuse_unbound_worktree(composed, &cwd)
+    crate::isolated_workspace::refuse_unbound_native_worktree(composed, &cwd)
         .await
         .map_err(TerminalOpenError::Provider)?;
     let arguments = tui
@@ -1082,6 +1057,7 @@ pub(crate) async fn open_official_attach(
         .map(ToString::to_string)
         .collect::<Vec<_>>();
     let stop = OfficialStop {
+        containment: Arc::clone(&composed.containment),
         program: program.clone(),
         arguments: tui
             .stop
@@ -1093,54 +1069,28 @@ pub(crate) async fn open_official_attach(
         env: env.clone(),
         env_unset: env_unset.clone(),
     };
-    let (terminal, birth_failure) = {
-        let mut terminals = composed.terminals.lock().await;
-        if let Some(existing) = terminals.open_for(provider, native) {
-            if existing.workspace != cwd {
-                return Err(TerminalClaimError::WorkspaceConflict.into());
-            }
-            let attachment = existing.terminal.attach().await;
-            return Ok((existing.id, existing.terminal, attachment));
-        }
-        let held = terminals.len() + composed.courier_gate.pending_spawns().await;
-        if held >= MAX_HOSTED_TERMINALS {
-            return Err(TerminalOpenError::NoRoom {
-                held,
-                limit: MAX_HOSTED_TERMINALS,
-            });
-        }
-        let (terminal, failure) = launch::opened(Terminal::open(&TerminalLaunch {
-            program: &program,
-            arguments,
-            cwd: &cwd,
-            env,
-            env_unset,
-            size: runtrol_childproc::PtySize { cols, rows },
-        }))?;
-        terminals.insert_external(
-            terminal_id,
-            provider,
-            native,
-            terminal.clone(),
-            cwd,
-            TerminalOrigin::OfficialAttach(Box::new(stop)),
-        );
-        composed
-            .open_terminals
-            .store(terminals.len(), std::sync::atomic::Ordering::Release);
-        (terminal, failure)
-    };
-    forget_on_exit(Arc::clone(composed), terminal_id, &terminal);
-    if let Err(error) = reservation.commit_born() {
-        drop(terminal.kill());
-        return Err(error.into());
+    launch::PreparedLaunch {
+        terminal_id,
+        provider,
+        native: Some(native.into()),
+        cwd,
+        program,
+        arguments,
+        env,
+        env_unset,
+        size: runtrol_childproc::PtySize { cols, rows },
+        minted: None,
+        origin: TerminalOrigin::OfficialAttach(Box::new(stop)),
+        reservation,
+        worker: None,
+        resumed: None,
+        authority: launch::LaunchAuthority::integration(
+            authority,
+            runtrol_runtime_protocol::AppScope::SessionResume,
+        ),
     }
-    if let Some(error) = birth_failure {
-        drop(terminal.kill());
-        return Err(error);
-    }
-    let attachment = terminal.attach().await;
-    Ok((terminal_id, terminal, attachment))
+    .open(composed, operation)
+    .await
 }
 
 /// The one row for a brokered command: the shim's own terminal. Any mirror a window opened for the same shell
@@ -1188,6 +1138,7 @@ pub(crate) async fn open_observed_mirror(
             ));
         }
     };
+    let shell_identity = composed.windows.mirror_shell(&params).await;
     let replaced = {
         let terminals = composed.terminals.lock().await;
         if let Some(shell_pid) = params.process_id
@@ -1221,7 +1172,7 @@ pub(crate) async fn open_observed_mirror(
     };
     let terminal = {
         let mut terminals = composed.terminals.lock().await;
-        let held = terminals.len() + composed.courier_gate.pending_spawns().await;
+        let held = terminals.occupied() + composed.courier_gate.pending_spawns().await;
         if held >= MAX_HOSTED_TERMINALS {
             return Err(TerminalOpenError::NoRoom {
                 held,
@@ -1246,6 +1197,9 @@ pub(crate) async fn open_observed_mirror(
                 terminal_key: params.terminal_key,
                 feeder,
                 shell_pid: params.process_id,
+                registration_generation: params.registration_generation,
+                execution_id: params.execution_id,
+                shell_identity,
             },
         );
         composed
@@ -1316,10 +1270,10 @@ pub(crate) async fn end_observed_mirrors_of(composed: &Arc<Composed>, feeder: Co
 /// so its paired provider command stops the owner first and the renderer is then released.
 pub(crate) async fn stop_hosted(hosted: &HostedTerminal) -> Result<(), String> {
     match &hosted.origin {
-        TerminalOrigin::Owned => hosted.terminal.kill().map_err(|error| error.to_string()),
+        TerminalOrigin::Owned => stop_renderer(&hosted.terminal).await,
         TerminalOrigin::OfficialAttach(stop) => {
-            run_official_stop(stop).await?;
-            hosted.terminal.kill().map_err(|error| error.to_string())
+            official_stop::run(stop).await?;
+            stop_renderer(&hosted.terminal).await
         }
         TerminalOrigin::ObservedMirror(_) => {
             Err("the window that owns this terminal stops it".to_owned())
@@ -1327,56 +1281,14 @@ pub(crate) async fn stop_hosted(hosted: &HostedTerminal) -> Result<(), String> {
     }
 }
 
-async fn run_official_stop(stop: &OfficialStop) -> Result<(), String> {
-    const STOP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
-    let child = runtrol_childproc::PtyChild::spawn(runtrol_childproc::PtySpawn {
-        program: &stop.program,
-        arguments: &stop.arguments,
-        cwd: &stop.cwd,
-        env: &stop.env,
-        env_unset: &stop.env_unset,
-        size: runtrol_childproc::PtySize { cols: 80, rows: 24 },
-    })
-    .map_err(|error| format!("starting the provider's official stop command: {error}"))?;
-    let reader = child
-        .reader()
-        .map_err(|error| format!("draining the provider's official stop command: {error}"))?;
-    let draining = std::thread::Builder::new()
-        .name("runtrol-official-stop-drain".to_owned())
-        .spawn(move || {
-            use std::io::Read as _;
-            let mut reader = reader;
-            let mut buffer = [0_u8; 4096];
-            while reader.read(&mut buffer).is_ok_and(|read| read != 0) {}
-        })
-        .map_err(|error| format!("draining the provider's official stop output: {error}"))?;
-    let deadline = tokio::time::Instant::now() + STOP_TIMEOUT;
-    let code = loop {
-        match child.try_wait() {
-            Ok(Some(code)) => break code,
-            Ok(None) if tokio::time::Instant::now() < deadline => {
-                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-            }
-            Ok(None) => {
-                drop(child.kill());
-                return Err("the provider's official stop command exceeded 10 seconds".to_owned());
-            }
-            Err(error) => {
-                return Err(format!(
-                    "waiting for the provider's official stop command: {error}"
-                ));
-            }
-        }
-    };
-    child.finish();
-    drop(draining.join());
-    if code == 0 {
-        Ok(())
-    } else {
-        Err(format!(
-            "the provider's official stop command exited with code {code}"
-        ))
-    }
+async fn stop_renderer(terminal: &Terminal) -> Result<(), String> {
+    let terminal = terminal.clone();
+    // A session Job seals and retains exact descendants before termination. Keep that bounded OS
+    // work off the input reactor; cancellation leaves this worker and the exit observer owning it.
+    tokio::task::spawn_blocking(move || terminal.kill())
+        .await
+        .map_err(|error| format!("terminal stop worker failed: {error}"))?
+        .map_err(|error| error.to_string())
 }
 
 /// Attach without resizing. Public attach never grants geometry authority implicitly.
@@ -1402,6 +1314,8 @@ pub(crate) async fn attach_current(
 
 #[cfg(test)]
 mod tests {
+    mod draining;
+
     use std::io::Write as _;
     use std::process::{Command, Stdio};
     use std::time::{Duration, Instant};
@@ -1465,6 +1379,7 @@ mod tests {
             panic!("a fresh terminal unexpectedly joined another terminal");
         };
         let terminal = Terminal::open(&TerminalLaunch {
+            containment: None,
             program,
             arguments: vec![
                 "--exact".to_owned(),
@@ -1584,6 +1499,8 @@ mod tests {
         process_id: Option<u32>,
     ) -> runtrol_runtime_protocol::WindowMirrorOpenParams {
         runtrol_runtime_protocol::WindowMirrorOpenParams {
+            registration_generation: 0,
+            owner_token: String::new(),
             window_session_id: "window-1".to_owned(),
             terminal_key: key.to_owned(),
             execution_id: format!("e-{key}"),
@@ -1946,12 +1863,12 @@ mod tests {
     }
 
     #[test]
-    fn a_draining_generation_ends_only_the_quiet_unwatched_processes_it_started() {
+    fn a_draining_generation_preserves_owned_work_and_only_retires_unused_renderers() {
         use super::{DRAINING_IDLE_GRACE_MS, DrainAction, TerminalOrigin, drain_action};
         let grace = DRAINING_IDLE_GRACE_MS;
         assert_eq!(
             drain_action(&TerminalOrigin::Owned, 0, grace, grace),
-            DrainAction::Kill
+            DrainAction::Keep
         );
         assert_eq!(
             drain_action(&TerminalOrigin::Owned, 1, grace, grace),
@@ -1962,6 +1879,7 @@ mod tests {
             DrainAction::Keep
         );
         let official = TerminalOrigin::OfficialAttach(Box::new(super::OfficialStop {
+            containment: std::sync::Arc::new(runtrol_childproc::Containment::without_any()),
             program: runtrol_childproc::resolve("rustc").expect("the Rust compiler is installed"),
             arguments: Vec::new(),
             cwd: runtrol_provider::AbsPath::canonicalize(

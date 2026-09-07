@@ -1,9 +1,11 @@
-//! Authenticate process ancestry away from the single-thread Runtime's input lane.
+//! Authenticate exact session membership away from the single-thread Runtime's input lane.
 
 use std::sync::Arc;
 
 use base64ct::{Base64UrlUnpadded, Encoding as _};
-use runtrol_childproc::{Containment, ProcessTree};
+use runtrol_childproc::Containment;
+#[cfg(not(windows))]
+use runtrol_childproc::ProcessTree;
 use runtrol_courier::PROTOCOL_VERSION;
 use runtrol_courier::env::TOKEN_BYTES;
 use runtrol_courier::wire::Hello;
@@ -17,7 +19,7 @@ use super::{Admitted, CourierGate, Denied};
 mod tests;
 
 impl CourierGate {
-    /// Admit a hello only when its token, containment and exact process ancestry agree.
+    /// Admit a hello only when its token and exact session process membership agree.
     /// The captured activation remains provisional until command admission rechecks it.
     pub(crate) async fn admit(
         &self,
@@ -30,7 +32,7 @@ impl CourierGate {
             return Err(Denied::Version(hello.protocol_version));
         }
         let peer = peer.ok_or(Denied::NoPeer)?;
-        let (expected, root, admitted) = {
+        let (expected, root, admitted, membership) = {
             let state = self.state.lock().await;
             let registered = state
                 .sessions
@@ -40,6 +42,16 @@ impl CourierGate {
                 registered.token.clone(),
                 registered.root,
                 registered.admission(hello.session),
+                {
+                    #[cfg(windows)]
+                    {
+                        registered.scope.clone()
+                    }
+                    #[cfg(not(windows))]
+                    {
+                        ()
+                    }
+                },
             )
         };
         let root = root.ok_or(Denied::RootUnbound)?;
@@ -55,10 +67,25 @@ impl CourierGate {
                 Ok(false) => return Err(Denied::OutsideContainment),
                 Err(error) => return Err(Denied::Unanswered(error.to_string())),
             }
-            let tree = ProcessTree::capture_for([root.pid(), peer.pid()])
-                .map_err(|error| Denied::Unanswered(error.to_string()))?;
-            if !tree.contains_identity(root, peer) {
-                return Err(Denied::OutsideTree);
+            #[cfg(windows)]
+            {
+                let scope = membership.ok_or(Denied::RootUnbound)?;
+                for identity in [root, peer] {
+                    match scope.contains(identity) {
+                        Ok(true) => {}
+                        Ok(false) => return Err(Denied::OutsideTree),
+                        Err(error) => return Err(Denied::Unanswered(error.to_string())),
+                    }
+                }
+            }
+            #[cfg(not(windows))]
+            {
+                let () = membership;
+                let tree = ProcessTree::capture_for([root.pid(), peer.pid()])
+                    .map_err(|error| Denied::Unanswered(error.to_string()))?;
+                if !tree.contains_identity(root, peer) {
+                    return Err(Denied::OutsideTree);
+                }
             }
             Ok(())
         })

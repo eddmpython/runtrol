@@ -183,7 +183,12 @@ pub async fn assemble_superseding(
     let deadline = tokio::time::Instant::now() + STORE_HANDOVER_DEADLINE;
     loop {
         drain_predecessors(home.paths(), identity.digest()).await;
-        match Composed::assemble(None, builtin) {
+        // Assembly performs filesystem work and the private keeper admission handshake. Neither may
+        // block the async worker serving other generations or use a blocking mutex inside that worker.
+        let assembled = tokio::task::spawn_blocking(move || Composed::assemble(None, builtin))
+            .await
+            .map_err(|error| ComposeError::Assembly(error.to_string()))?;
+        match assembled {
             // Either exclusive file still held by a predecessor means the handover is in flight, not failed.
             Err(ComposeError::Store(runtrol_store::StoreError::AlreadyOpen { .. }))
                 if tokio::time::Instant::now() < deadline =>

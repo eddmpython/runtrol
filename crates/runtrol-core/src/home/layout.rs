@@ -136,7 +136,7 @@ impl Layout {
     ///
     /// [`HomeError::Layout`] when a segment cannot be joined, and on Unix
     /// [`HomeError::SocketPathTooLong`] when the socket path would not fit the kernel's field.
-    pub(crate) fn resolve(root: AbsPath) -> Result<Self, HomeError> {
+    pub fn resolve(root: AbsPath) -> Result<Self, HomeError> {
         let entry = |segment: &'static str| {
             root.join(segment)
                 .map_err(|source| HomeError::Layout { segment, source })

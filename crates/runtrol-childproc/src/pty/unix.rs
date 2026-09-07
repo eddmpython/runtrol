@@ -229,7 +229,11 @@ struct PtyReader {
 
 impl Read for PtyReader {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        self.file.read(buf)
+        match self.file.read(buf) {
+            // Linux reports a closed PTY slave as EIO on its master rather than a zero-byte read.
+            Err(error) if error.raw_os_error() == Some(libc::EIO) => Ok(0),
+            outcome => outcome,
+        }
     }
 }
 

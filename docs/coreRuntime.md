@@ -51,10 +51,15 @@ evict the PTY hot path's resident pages.
 The terminal root-proof freshness and failure behavior are specified in
 [terminalSurface.md](terminalSurface.md#live-authority-without-a-database-hot-path).
 
+Terminal preparation and durable worktree binding run outside shared admission locks. Each worktree operation uses
+its existing bounded operation lease and revision-checked registry transaction; a slow Git checkout or cleanup in one
+project does not hold a process-wide controller lock over another project. Windows terminal process and descendant
+completion follow the [exact lifetime contract](terminalSurface.md#exact-windows-lifetime).
+
 ## Memory and idle CPU contract
 
-The active gates measure the real debug daemon from outside the process. Provider fixtures and watch clients are not
-charged to the daemon's RSS budget.
+The active gates measure Runtime from outside its processes. On Windows, the Runtime and its independent process
+completion keeper share the existing RSS and idle CPU budgets. Provider fixtures and watch clients are excluded.
 
 | Measurement | Windows | macOS | Linux |
 |---|---:|---:|---:|
@@ -76,6 +81,11 @@ subscriber and no provider activity. The first provider watch requests every ins
 turn boundaries request only the provider that moved, with the existing ten-minute sweep as a backstop after that
 first demand. An unused Runtime therefore pays neither the child-process memory nor the inventory rebuild CPU of a
 report nobody can observe.
+
+Each provider publishes its account result when that provider finishes. A slower provider cannot hold another
+provider's completed report, and concurrent requests coalesce within that provider's existing probe lane. A failed
+read preserves the original observation time of the last confirmed report and explicitly identifies the failed
+refresh. It does not turn missing new data into an unsupported capability or a fresh measurement.
 
 The Linux ceiling records the higher hosted debug measurement. The macOS residual allowance records measured
 allocator retention. On macOS the daemon performs one early self-exec with the system allocator's

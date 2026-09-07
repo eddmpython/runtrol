@@ -136,6 +136,24 @@ pub enum RuntimeMethod {
     /// Write exact caller-owned bytes once under the current terminal lease.
     #[serde(rename = "terminals/write")]
     TerminalsWrite,
+    /// Deliver or acknowledge caller-owned text through the exact observing extension.
+    #[serde(rename = "windows/inputEnded")]
+    WindowsInputEnded,
+    /// Deliver or acknowledge caller-owned text through the exact observing extension.
+    #[serde(rename = "windows/inputOffered")]
+    WindowsInputOffered,
+    /// Deliver or acknowledge caller-owned text through the exact observing extension.
+    #[serde(rename = "windows/inputReceipt")]
+    WindowsInputReceipt,
+    /// Deliver or acknowledge caller-owned text through the exact observing extension.
+    #[serde(rename = "windows/claimInput")]
+    WindowsClaimInput,
+    /// Deliver or acknowledge caller-owned text through the exact observing extension.
+    #[serde(rename = "windows/watchInput")]
+    WindowsWatchInput,
+    /// Deliver or acknowledge caller-owned text through the exact observing extension.
+    #[serde(rename = "terminals/sendText")]
+    TerminalsSendText,
     /// Set bounded shared PTY geometry under the current terminal lease.
     #[serde(rename = "terminals/resize")]
     TerminalsResize,
@@ -281,6 +299,12 @@ impl RuntimeMethod {
             Self::TerminalsRenewControl => "terminals/renewControl",
             Self::TerminalsReleaseControl => "terminals/releaseControl",
             Self::TerminalsWrite => "terminals/write",
+            Self::WindowsInputEnded => "windows/inputEnded",
+            Self::WindowsInputOffered => "windows/inputOffered",
+            Self::WindowsInputReceipt => "windows/inputReceipt",
+            Self::WindowsClaimInput => "windows/claimInput",
+            Self::WindowsWatchInput => "windows/watchInput",
+            Self::TerminalsSendText => "terminals/sendText",
             Self::TerminalsResize => "terminals/resize",
             Self::TerminalsDetach => "terminals/detach",
             Self::TerminalsStop => "terminals/stop",
@@ -370,6 +394,12 @@ impl FromStr for RuntimeMethod {
             "terminals/renewControl" => Ok(Self::TerminalsRenewControl),
             "terminals/releaseControl" => Ok(Self::TerminalsReleaseControl),
             "terminals/write" => Ok(Self::TerminalsWrite),
+            "windows/inputEnded" => Ok(Self::WindowsInputEnded),
+            "windows/inputOffered" => Ok(Self::WindowsInputOffered),
+            "windows/inputReceipt" => Ok(Self::WindowsInputReceipt),
+            "windows/claimInput" => Ok(Self::WindowsClaimInput),
+            "windows/watchInput" => Ok(Self::WindowsWatchInput),
+            "terminals/sendText" => Ok(Self::TerminalsSendText),
             "terminals/resize" => Ok(Self::TerminalsResize),
             "terminals/detach" => Ok(Self::TerminalsDetach),
             "terminals/stop" => Ok(Self::TerminalsStop),
@@ -460,6 +490,12 @@ mod tests {
             RuntimeMethod::TerminalsRenewControl,
             RuntimeMethod::TerminalsReleaseControl,
             RuntimeMethod::TerminalsWrite,
+            RuntimeMethod::WindowsInputEnded,
+            RuntimeMethod::WindowsInputOffered,
+            RuntimeMethod::WindowsInputReceipt,
+            RuntimeMethod::WindowsClaimInput,
+            RuntimeMethod::WindowsWatchInput,
+            RuntimeMethod::TerminalsSendText,
             RuntimeMethod::TerminalsResize,
             RuntimeMethod::TerminalsDetach,
             RuntimeMethod::TerminalsStop,

@@ -113,6 +113,9 @@ function compactValidationNode(node) {
         // the existing activation memory budget as the public contract grows.
         if (key !== "type") return true;
         if (Object.hasOwn(node, "const")) return false;
+        // Integer formats also prove the JSON number type, integrality and their signed range.
+        if (value === "integer"
+          && (String(node.format).startsWith("uint") || node.format === "int32")) return false;
         if (value !== "object") return true;
         return !Object.hasOwn(node, "properties")
           && !Object.hasOwn(node, "required")
@@ -151,6 +154,53 @@ function compactValidationSchema(sourceDefinitions) {
   };
 }
 
+// Share equal schema values instead of allocating the same reference, type or field spelling repeatedly.
+// This changes neither the complete projection nor the validator. Wire values never enter this graph.
+function sharedValidationSource(projection) {
+  const values = new Map();
+  function visit(value) {
+    if (Array.isArray(value)) value.forEach(visit);
+    else if (value && typeof value === "object") {
+      for (const [key, child] of Object.entries(value)) {
+        visit(key);
+        visit(child);
+      }
+    }
+    if (value === null || !(typeof value === "object" || typeof value === "string" && value.length > 3)) return;
+    const key = JSON.stringify(value);
+    const known = values.get(key);
+    if (known) known.count += 1;
+    else values.set(key, { value, count: 1 });
+  }
+  visit(projection);
+  const shared = new Map([...values.entries()]
+    .filter(([key, entry]) => entry.count > 1 && key.length > 8)
+    .map(([key, entry], index) => [key, { value: entry.value, name: `node${index}` }]));
+  function render(value, defining) {
+    const key = JSON.stringify(value);
+    if (key !== defining && shared.has(key)) return shared.get(key).name;
+    if (Array.isArray(value)) return `[${value.map((child) => render(child)).join(",")}]`;
+    if (value && typeof value === "object") {
+      return `{${Object.entries(value).map(([name, child]) => (
+        `${shared.has(JSON.stringify(name)) ? `[${render(name)}]` : JSON.stringify(name)}:${render(child)}`
+      )).join(",")}}`;
+    }
+    return key;
+  }
+  const declarations = [...shared.entries()].map(([key, entry]) => (
+    `const ${entry.name}=${render(entry.value, key)}`
+  ));
+  const root = render(projection);
+  // Evaluate only JSON-escaped generated literals, before adding TypeScript annotations. Every byte of the
+  // original projection must survive sharing, including property order, constants, bounds and reference names.
+  const restored = new Function(`${declarations.join(";\n")};\nreturn ${root};`)();
+  if (JSON.stringify(restored) !== JSON.stringify(projection)) {
+    throw new Error("shared validation literals changed the public schema projection");
+  }
+  return declarations.map((declaration) => `${declaration} as const;\n`).join("")
+    + `export const VALIDATION_SCHEMA = ${root} as const;\n`;
+}
+
 const declarations = Object.entries(definitions).map(([name, node]) => {
   const docs = documentation(node);
   const plainObject = node && typeof node === "object" && !Array.isArray(node)
@@ -175,7 +225,7 @@ const generated = `// Generated from crates/runtrol-runtime-protocol/schema/runt
   + `${declarations.join("\n\n")}\n`;
 const validationSchema = compactValidationSchema(definitions);
 const generatedSchemaText = "// Generated validation projection. The complete public schema remains in schema/runtime.schema.json. Do not edit.\n\n"
-  + `export const VALIDATION_SCHEMA = ${JSON.stringify(validationSchema)} as const;\n`;
+  + sharedValidationSource(validationSchema);
 
 async function compare(path, expected, label) {
   let actual;

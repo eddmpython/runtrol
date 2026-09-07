@@ -6,7 +6,8 @@
 //! `view_count`, `lease_holder`, `output_flowing`, `checkpoint_available`, `lagged`, `message_pending` and
 //! `process_exited`. Nothing else may appear: no working, stuck or turn state is derived from output, silence
 //! or timing here, and a view's sequence is exact across an announced loss boundary. Explicit courier
-//! activation is a proved control fact governed by `docs/sessionDialogue.md`.
+//! activation is a proved control fact governed by `docs/sessionDialogue.md`. Owner input availability is
+//! an exact registered receiver fact; these hosted terminals have no such external owner receiver.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -85,6 +86,7 @@ const DESCRIPTOR_KEYS: &[&str] = &[
     "origin",
     "ownerWindowSessionId",
     "ownerTerminalKey",
+    "ownerInputAvailable",
     "memoryBytes",
 ];
 
@@ -274,7 +276,7 @@ async fn drain_until(
                 received.clear();
                 received.extend_from_slice(&screen);
             }
-            runtrol_runtime_client::TerminalNotification::Exited { exit_code } => {
+            runtrol_runtime_client::TerminalNotification::Exited { exit_code, .. } => {
                 panic!("{name}: the fixture exited early with {exit_code}")
             }
         }
@@ -324,7 +326,7 @@ async fn drain_to_exit(
                 });
                 *expected_sequence = next_sequence;
             }
-            runtrol_runtime_client::TerminalNotification::Exited { exit_code } => {
+            runtrol_runtime_client::TerminalNotification::Exited { exit_code, .. } => {
                 seen.push(Seen::Exited {
                     view: name,
                     code: exit_code,
@@ -348,6 +350,10 @@ async fn next_index_where(
                 runtrol_runtime_client::TerminalIndexNotification::Changed(changed) => {
                     let terminals = changed.snapshot.terminals;
                     for descriptor in &terminals {
+                        assert!(
+                            !descriptor.owner_input_available,
+                            "a hosted terminal cannot advertise an external owner's input receiver"
+                        );
                         let unknown: Vec<String> = descriptor_keys(descriptor)
                             .into_iter()
                             .filter(|key| !DESCRIPTOR_KEYS.contains(&key.as_str()))

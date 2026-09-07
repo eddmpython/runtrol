@@ -65,7 +65,7 @@ async fn schema_one_migration_preserves_unverified_ownership_and_excludes_cached
     let scratch = Scratch::make();
     let containment = Containment::without_any();
     let id = "01234567-89ab-cdef-0123-456789abcdef";
-    let mut controller = IsolatedWorkspaceController::open(scratch.registry.clone()).unwrap();
+    let controller = IsolatedWorkspaceController::open(scratch.registry.clone()).unwrap();
     let Response::IsolatedWorkspace(workspace) = controller
         .prepare(&containment, id, scratch.project.as_str())
         .await
@@ -80,7 +80,13 @@ async fn schema_one_migration_preserves_unverified_ownership_and_excludes_cached
         serde_json::from_slice(&std::fs::read(&current).unwrap()).unwrap();
     *file.get_mut("schema").unwrap() = serde_json::json!(1);
     for record in file.get_mut("records").unwrap().as_array_mut().unwrap() {
-        for field in ["revision", "terminal", "legacy"] {
+        for field in [
+            "revision",
+            "terminal",
+            "legacy",
+            "lifetime",
+            "session_completed",
+        ] {
             record.as_object_mut().unwrap().remove(field);
         }
     }
@@ -92,7 +98,7 @@ async fn schema_one_migration_preserves_unverified_ownership_and_excludes_cached
     )
     .unwrap();
     let mut old_writer = ProcessScratch::waiting_legacy_commit(&scratch);
-    let mut reopened = IsolatedWorkspaceController::open(scratch.registry.clone()).unwrap();
+    let reopened = IsolatedWorkspaceController::open(scratch.registry.clone()).unwrap();
     let Response::IsolatedWorkspaces(listed) = reopened.list() else {
         panic!("legacy list")
     };
@@ -176,8 +182,8 @@ async fn stale_controllers_preserve_other_generation_and_reject_stale_row_revisi
         1,
     )
     .unwrap();
-    let mut old = IsolatedWorkspaceController::open(scratch.registry.clone()).unwrap();
-    let mut new = IsolatedWorkspaceController::open(scratch.registry.clone()).unwrap();
+    let old = IsolatedWorkspaceController::open(scratch.registry.clone()).unwrap();
+    let new = IsolatedWorkspaceController::open(scratch.registry.clone()).unwrap();
     let first = old
         .prepare_terminal(&containment, &one, &project)
         .await
@@ -213,7 +219,7 @@ async fn stale_controllers_preserve_other_generation_and_reject_stale_row_revisi
 async fn another_process_native_lock_refuses_and_releases_after_exact_exit() {
     let scratch = Scratch::make();
     let containment = Containment::without_any();
-    let mut controller = IsolatedWorkspaceController::open(scratch.registry.clone()).unwrap();
+    let controller = IsolatedWorkspaceController::open(scratch.registry.clone()).unwrap();
     let project = VerifiedProject::discover(&scratch.project).unwrap();
     let owner =
         SpawnTicket::new(current_process(), TerminalId::now(), TerminalId::now(), 1).unwrap();

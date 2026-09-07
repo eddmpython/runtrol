@@ -424,22 +424,29 @@ async fn perform_runtime_open(
     id: JsonRpcId,
 ) -> Answer {
     let mut guard = RuntimeOpenGuard::new(opening, returning.clone());
-    if let Some(displaced) = guard.take_displaced_agent()
-        && displaced
+    if let Some(displaced) = guard.take_displaced_agent() {
+        let session = displaced.session();
+        if displaced
             .close(CloseMode::Graceful { grace_ms: 0 })
             .await
             .is_err()
-    {
-        return send_open_denied(
-            id,
-            guard,
-            returning,
-            RuntimeControlFailure::new(
-                RuntimeErrorKind::RuntimeUnavailable,
-                "the displaced idle provider process could not be stopped safely",
-            ),
-        )
-        .await;
+        {
+            return send_open_denied(
+                composed,
+                id,
+                guard,
+                returning,
+                RuntimeControlFailure::new(
+                    RuntimeErrorKind::RuntimeUnavailable,
+                    "the displaced idle provider process could not be stopped safely",
+                ),
+            )
+            .await;
+        }
+        guard = match record_open_close(composed, session, guard).await {
+            Ok(guard) => guard,
+            Err(failure) => return control_failure(id, &failure),
+        };
     }
     let method = match guard.opening() {
         Some(opening) => opening.method,
@@ -449,6 +456,7 @@ async fn perform_runtime_open(
         Ok(authority) => authority.clone(),
         Err(failure) => {
             return send_open_denied(
+                composed,
                 id,
                 guard,
                 returning,
@@ -465,6 +473,7 @@ async fn perform_runtime_open(
         Ok(current) if current.path == workspace => {}
         Ok(_) | Err(_) => {
             return send_open_denied(
+                composed,
                 id,
                 guard,
                 returning,
@@ -486,6 +495,7 @@ async fn perform_runtime_open(
     };
     let Ok(prepared) = prepared else {
         return send_open_denied(
+            composed,
             id,
             guard,
             returning,
@@ -499,6 +509,7 @@ async fn perform_runtime_open(
     if method == RuntimeMethod::SessionsAdoptNative {
         let Ok(roots) = authorized_roots(&authority) else {
             return send_open_denied(
+                composed,
                 id,
                 guard,
                 returning,
@@ -527,6 +538,7 @@ async fn perform_runtime_open(
         });
         if !verified {
             return send_open_denied(
+                composed,
                 id,
                 guard,
                 returning,
@@ -554,7 +566,7 @@ async fn perform_runtime_open(
                 })
         });
         if !choices_are_current {
-            return send_open_denied(
+            return send_open_denied(composed,
                 id,
                 guard,
                 returning,
@@ -575,6 +587,7 @@ async fn perform_runtime_open(
             } else {
                 let Some(native) = &opening.native else {
                     return send_open_denied(
+                        composed,
                         id,
                         guard,
                         returning,
@@ -595,6 +608,25 @@ async fn perform_runtime_open(
         },
         None => return control_failure(id, &RuntimeControlFailure::outcome_unknown()),
     };
+    if let Err(message) = crate::serve::reopen_structured_workspace(
+        composed,
+        intent.session,
+        intent.workspace.clone(),
+    )
+    .await
+    {
+        return send_open_denied(
+            composed,
+            id,
+            guard,
+            returning,
+            RuntimeControlFailure {
+                kind: RuntimeErrorKind::WorkspaceConflict,
+                message: message.into(),
+            },
+        )
+        .await;
+    }
     let opened = tokio::time::timeout(
         Duration::from_millis(crate::serve::MODEL_PREPARATION_BUDGET_MS),
         prepared.driver.open(intent.clone()),
@@ -608,10 +640,15 @@ async fn perform_runtime_open(
                 Err(_) => false,
             };
             if !still_authorized {
-                drop(agent.close(CloseMode::Kill).await);
-                return send_open_unknown(id, guard, returning).await;
+                if agent.close(CloseMode::Kill).await.is_ok() {
+                    guard = match record_open_close(composed, intent.session, guard).await {
+                        Ok(guard) => guard,
+                        Err(failure) => return control_failure(id, &failure),
+                    };
+                }
+                return send_open_unknown(composed, id, guard, returning).await;
             }
-            send_opened(id, guard, returning, intent, agent).await
+            send_opened(composed, id, guard, returning, intent, agent).await
         }
         // The provider said no, and said why. That is a denial with its own kind (not installed, not
         // signed in, over quota, unsupported, unreadable), not an unknown outcome: nothing may have
@@ -620,6 +657,7 @@ async fn perform_runtime_open(
         // reasons (two driver bounds) were only found by probing the drivers directly.
         Ok(Err(error)) => {
             send_open_denied(
+                composed,
                 id,
                 guard,
                 returning,
@@ -628,7 +666,7 @@ async fn perform_runtime_open(
             .await
         }
         // Only the deadline passing is genuinely unknown: the provider may still be opening.
-        Err(_) => send_open_unknown(id, guard, returning).await,
+        Err(_) => send_open_unknown(composed, id, guard, returning).await,
     }
 }
 
@@ -668,7 +706,26 @@ pub(super) fn reasoning_effort_is_current(
     }
 }
 
+async fn record_open_close(
+    composed: &Composed,
+    session: runtrol_provider::SessionId,
+    guard: RuntimeOpenGuard,
+) -> Result<RuntimeOpenGuard, RuntimeControlFailure> {
+    let (guard, result) = crate::serve::record_completed_close(composed, session, guard)
+        .await
+        .map_err(|message| RuntimeControlFailure {
+            kind: RuntimeErrorKind::Internal,
+            message: message.into(),
+        })?;
+    result.map_err(|message| RuntimeControlFailure {
+        kind: RuntimeErrorKind::Internal,
+        message: message.into(),
+    })?;
+    Ok(guard)
+}
+
 async fn send_open_denied(
+    composed: &Composed,
     id: JsonRpcId,
     guard: RuntimeOpenGuard,
     returning: &mpsc::UnboundedSender<RuntimeReturned>,
@@ -689,12 +746,13 @@ async fn send_open_denied(
         return runtime_owner_stopped(id);
     }
     match hearing.await {
-        Ok(completion) => finish_open_completion(id, completion, returning).await,
+        Ok(completion) => finish_open_completion(composed, id, completion, returning).await,
         Err(_) => runtime_owner_stopped(id),
     }
 }
 
 async fn send_open_unknown(
+    composed: &Composed,
     id: JsonRpcId,
     guard: RuntimeOpenGuard,
     returning: &mpsc::UnboundedSender<RuntimeReturned>,
@@ -710,12 +768,13 @@ async fn send_open_unknown(
         return runtime_owner_stopped(id);
     }
     match hearing.await {
-        Ok(completion) => finish_open_completion(id, completion, returning).await,
+        Ok(completion) => finish_open_completion(composed, id, completion, returning).await,
         Err(_) => runtime_owner_stopped(id),
     }
 }
 
 async fn send_opened(
+    composed: &Composed,
     id: JsonRpcId,
     guard: RuntimeOpenGuard,
     returning: &mpsc::UnboundedSender<RuntimeReturned>,
@@ -739,12 +798,13 @@ async fn send_opened(
         return runtime_owner_stopped(id);
     }
     match hearing.await {
-        Ok(completion) => finish_open_completion(id, completion, returning).await,
+        Ok(completion) => finish_open_completion(composed, id, completion, returning).await,
         Err(_) => runtime_owner_stopped(id),
     }
 }
 
 async fn finish_open_completion(
+    composed: &Composed,
     id: JsonRpcId,
     completion: RuntimeOpenCompletion,
     returning: &mpsc::UnboundedSender<RuntimeReturned>,
@@ -753,21 +813,9 @@ async fn finish_open_completion(
         RuntimeOpenCompletion::Answer(Ok(result)) => Answer::success(id, &result),
         RuntimeOpenCompletion::Answer(Err(failure)) => control_failure(id, &failure),
         RuntimeOpenCompletion::Cleanup { agent, reservation } => {
-            drop(agent.close(CloseMode::Kill).await);
-            let (answered, hearing) = oneshot::channel();
-            if returning
-                .send(RuntimeReturned::OpenCleaned {
-                    reservation,
-                    answered,
-                })
-                .is_err()
-            {
-                return runtime_owner_stopped(id);
-            }
-            match hearing.await {
-                Ok(Ok(result)) => Answer::success(id, &result),
-                Ok(Err(failure)) => control_failure(id, &failure),
-                Err(_) => runtime_owner_stopped(id),
+            match crate::serve::close_runtime_open(composed, agent, reservation, returning).await {
+                Ok(result) => Answer::success(id, &result),
+                Err(failure) => control_failure(id, &failure),
             }
         }
     }
@@ -856,7 +904,7 @@ pub(super) async fn session_operation(
     let Ok(reply) = hearing.await else {
         return runtime_owner_stopped(id);
     };
-    super::response::runtime_control_answer(id, reply, returning).await
+    super::response::runtime_control_answer(composed, id, reply, returning).await
 }
 
 /// Whether this provider accepts a runtrol switch to the named mode.
@@ -1076,6 +1124,12 @@ fn parse_session_operation(
         | RuntimeMethod::WindowsMirrorEnd
         | RuntimeMethod::WindowsReveal
         | RuntimeMethod::WindowsWatchReveals
+        | RuntimeMethod::TerminalsSendText
+        | RuntimeMethod::WindowsWatchInput
+        | RuntimeMethod::WindowsClaimInput
+        | RuntimeMethod::WindowsInputReceipt
+        | RuntimeMethod::WindowsInputOffered
+        | RuntimeMethod::WindowsInputEnded
         | RuntimeMethod::WindowsIndexChanged
         | RuntimeMethod::WindowsIndexEnded
         | RuntimeMethod::WindowsRevealRequested

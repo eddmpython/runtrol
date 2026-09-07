@@ -4,11 +4,14 @@ from .client import (
     AsyncRuntimeClient,
     AsyncSubscription,
     AsyncTerminalView,
+    AsyncWindowInputSubscription,
     Identity,
     RuntimeClient,
     Subscription,
     TerminalEvent,
     TerminalView,
+    WindowInputEvent,
+    WindowInputSubscription,
     new_mutation_request_id,
 )
 from .errors import (
@@ -29,6 +32,7 @@ __all__ = [
     "AsyncRuntimeClient",
     "AsyncSubscription",
     "AsyncTerminalView",
+    "AsyncWindowInputSubscription",
     "Identity",
     "LegacyGenerationBusyError",
     "NativeConversationBusyError",
@@ -45,5 +49,7 @@ __all__ = [
     "TerminalGoneError",
     "TerminalWorkspaceConflictError",
     "TerminalView",
+    "WindowInputEvent",
+    "WindowInputSubscription",
     "new_mutation_request_id",
 ]

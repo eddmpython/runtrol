@@ -299,7 +299,7 @@ async fn next_output(
                 runtrol_runtime_client::TerminalNotification::Lagged { .. } => {
                     panic!("the small fixture stream must not lag")
                 }
-                runtrol_runtime_client::TerminalNotification::Exited { exit_code } => {
+                runtrol_runtime_client::TerminalNotification::Exited { exit_code, .. } => {
                     panic!("the attachment renderer exited early with {exit_code}")
                 }
             }

@@ -62,7 +62,9 @@ function validationFailure(schema: JsonSchema, value: unknown, path: string): st
   const objectIsImplied = schema.properties !== undefined
     || schema.required !== undefined
     || schema.additionalProperties !== undefined;
-  const expectedTypes = declaredTypes ?? (objectIsImplied ? ["object"] : undefined);
+  const numberIsImplied = schema.format === "int32" || schema.format?.startsWith("uint");
+  const expectedTypes = declaredTypes
+    ?? (objectIsImplied ? ["object"] : numberIsImplied ? ["number"] : undefined);
   if (expectedTypes && !expectedTypes.some((type) => matchesType(value, type))) {
     return `${path} has the wrong JSON type`;
   }

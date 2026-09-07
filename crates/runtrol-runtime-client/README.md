@@ -6,6 +6,16 @@ revision, proves a consumer-owned integration identity, and exposes typed provid
 Version 0.1.1 implements finalized protocol revision `2026-08-13` and is tested with Runtime 0.1.1. Crate SemVer and
 wire revision negotiation are independent compatibility checks.
 
+For an input-enabled observed terminal, attach its exact generation, acquire its control lease and call
+`TerminalView::send_text`. The returned receipt acknowledges the owner extension's public text API invocation;
+it does not promise exact bytes or shell execution. An unknown outcome must not be replayed. The
+[terminal surface contract](../../docs/terminalSurface.md#observed-owner-input) owns these receipt semantics.
+
+An owning extension uses `WindowClient::watch_input` on a dedicated connection, then serially calls `next`,
+`claim_input` and `input_receipt`. The receiver applies the Runtime's negotiated offer bound. Drop or close the
+subscription when its owner ends; cancelling an in-flight operation also closes that exact connection. A typed
+claim refusal needs no second receipt. Never claim or invoke input again after a lost response.
+
 `SessionClient::watch_index` turns one connection into a dedicated stream. Its acknowledgement contains the initial
 authorized snapshot, later notifications carry only changed complete snapshots, and authority loss has a typed final
 reason. The SDK performs no polling.
@@ -132,6 +142,6 @@ if let Some(approval) = pending.approvals.first()
 # }
 ```
 
-Keep the same mutation request identity when retrying an uncertain transport outcome. Runtime returns the exact known
-result, an idempotency conflict, or an explicit unknown outcome. It never reruns an ambiguous provider mutation
-automatically.
+For operations that permit an explicit retry, keep the same mutation request identity. Runtime returns the exact
+known result, an idempotency conflict, or an explicit unknown outcome. Terminal input with an unknown outcome must
+not be replayed, and the SDK never retries an ambiguous provider mutation automatically.

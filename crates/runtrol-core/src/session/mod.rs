@@ -24,7 +24,7 @@ pub use gauges::{AccountGauges, ProviderGauge};
 pub use manager::{
     AgentLease, ApprovalAuthority, AttachError, AttachedSession, ClosingReservation,
     ClosingSession, LiveSession, OpenReservation, ProviderUpdateReservation, Pumped, ReservedOpen,
-    SessionError, SessionManager, TakenAgent,
+    SessionError, SessionManager, TakenAgent, WorkspaceCleanupReservation,
 };
 pub use mint::Identity;
 pub use state::{CloseReason, FailureCode, Lifecycle, Observed, Refused, SessionState, Waiting};

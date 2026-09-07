@@ -24,7 +24,7 @@ fn retire_original(
 
 async fn bound(
     scratch: &Scratch,
-    controller: &mut IsolatedWorkspaceController,
+    controller: &IsolatedWorkspaceController,
     runtime: ProcessIdentity,
     worker: ProcessIdentity,
 ) -> (SpawnTicket, WorktreeBinding) {
@@ -48,11 +48,11 @@ async fn bound(
 async fn resumed_dirty_and_committed_work_preserves_original_binding_and_base() {
     for committed in [false, true] {
         let scratch = Scratch::make();
-        let mut controller = IsolatedWorkspaceController::open(scratch.registry.clone()).unwrap();
+        let controller = IsolatedWorkspaceController::open(scratch.registry.clone()).unwrap();
         let mut old_worker = ProcessScratch::start(&scratch);
         let (ticket, binding) = bound(
             &scratch,
-            &mut controller,
+            &controller,
             current_process(),
             old_worker.identity,
         )
@@ -77,14 +77,14 @@ async fn resumed_dirty_and_committed_work_preserves_original_binding_and_base() 
             .unwrap();
         let owner = occupant(current_process());
         let mut reservation = controller
-            .reserve_resume(&binding, owner, |owner| {
+            .reserve_resume(&Containment::without_any(), &binding, owner, |owner| {
                 Ok(retire_original(&binding, ticket, owner))
             })
             .unwrap();
         let mut resumed = ProcessScratch::start(&scratch);
         reservation.bind(Some(resumed.identity)).unwrap();
         drop(reservation);
-        let mut other = IsolatedWorkspaceController::open(scratch.registry.clone()).unwrap();
+        let other = IsolatedWorkspaceController::open(scratch.registry.clone()).unwrap();
         assert!(
             other
                 .release_terminal(
@@ -127,11 +127,9 @@ async fn resumed_dirty_and_committed_work_preserves_original_binding_and_base() 
 async fn live_original_and_pending_resume_exclude_other_controllers_without_blocking_binding_inspection()
  {
     let scratch = Scratch::make();
-    let mut controller = IsolatedWorkspaceController::open(scratch.registry.clone()).unwrap();
-    let mut runtime = ProcessScratch::start(&scratch);
+    let controller = IsolatedWorkspaceController::open(scratch.registry.clone()).unwrap();
     let mut worker = ProcessScratch::start(&scratch);
-    let (ticket, binding) =
-        bound(&scratch, &mut controller, runtime.identity, worker.identity).await;
+    let (ticket, binding) = bound(&scratch, &controller, current_process(), worker.identity).await;
     let owner = occupant(current_process());
     assert!(
         controller
@@ -142,24 +140,26 @@ async fn live_original_and_pending_resume_exclude_other_controllers_without_bloc
     );
     assert!(
         controller
-            .reserve_resume(&binding, owner, |owner| Ok(retire_original(
-                &binding, ticket, owner
-            )))
+            .reserve_resume(&Containment::without_any(), &binding, owner, |owner| Ok(
+                retire_original(&binding, ticket, owner)
+            ))
             .is_err()
     );
     worker.stop();
-    runtime.stop();
     let mut reservation = controller
-        .reserve_resume(&binding, owner, |owner| {
+        .reserve_resume(&Containment::without_any(), &binding, owner, |owner| {
             Ok(retire_original(&binding, ticket, owner))
         })
         .unwrap();
-    let mut other = IsolatedWorkspaceController::open(scratch.registry.clone()).unwrap();
+    let other = IsolatedWorkspaceController::open(scratch.registry.clone()).unwrap();
     assert!(
         other
-            .reserve_resume(&binding, occupant(current_process()), |owner| Ok(
-                retire_original(&binding, ticket, owner)
-            ))
+            .reserve_resume(
+                &Containment::without_any(),
+                &binding,
+                occupant(current_process()),
+                |owner| Ok(retire_original(&binding, ticket, owner))
+            )
             .is_err()
     );
     assert!(
@@ -179,9 +179,12 @@ async fn live_original_and_pending_resume_exclude_other_controllers_without_bloc
     );
     assert!(
         other
-            .reserve_resume(&binding, occupant(current_process()), |owner| Ok(
-                retire_original(&binding, ticket, owner)
-            ))
+            .reserve_resume(
+                &Containment::without_any(),
+                &binding,
+                occupant(current_process()),
+                |owner| Ok(retire_original(&binding, ticket, owner))
+            )
             .is_err()
     );
     other
@@ -200,22 +203,19 @@ async fn live_original_and_pending_resume_exclude_other_controllers_without_bloc
 #[tokio::test]
 async fn cancellation_and_late_authority_refusal_leave_no_pending_occupant() {
     let scratch = Scratch::make();
-    let mut controller = IsolatedWorkspaceController::open(scratch.registry.clone()).unwrap();
+    let controller = IsolatedWorkspaceController::open(scratch.registry.clone()).unwrap();
     let mut worker = ProcessScratch::start(&scratch);
-    let (ticket, binding) = bound(
-        &scratch,
-        &mut controller,
-        current_process(),
-        worker.identity,
-    )
-    .await;
+    let (ticket, binding) = bound(&scratch, &controller, current_process(), worker.identity).await;
     worker.stop();
     let before = std::fs::read(registry::data_path(&scratch.registry).unwrap()).unwrap();
     assert!(
         controller
-            .reserve_resume(&binding, occupant(current_process()), |_| Err(
-                "revoked".to_owned()
-            ))
+            .reserve_resume(
+                &Containment::without_any(),
+                &binding,
+                occupant(current_process()),
+                |_| Err("revoked".to_owned())
+            )
             .is_err()
     );
     assert_eq!(
@@ -223,9 +223,12 @@ async fn cancellation_and_late_authority_refusal_leave_no_pending_occupant() {
         before
     );
     let reservation = controller
-        .reserve_resume(&binding, occupant(current_process()), |owner| {
-            Ok(retire_original(&binding, ticket, owner))
-        })
+        .reserve_resume(
+            &Containment::without_any(),
+            &binding,
+            occupant(current_process()),
+            |owner| Ok(retire_original(&binding, ticket, owner)),
+        )
         .unwrap();
     drop(reservation);
     assert!(
@@ -240,9 +243,12 @@ async fn cancellation_and_late_authority_refusal_leave_no_pending_occupant() {
             .is_none()
     );
     let next = controller
-        .reserve_resume(&binding, occupant(current_process()), |owner| {
-            Ok(retire_original(&binding, ticket, owner))
-        })
+        .reserve_resume(
+            &Containment::without_any(),
+            &binding,
+            occupant(current_process()),
+            |owner| Ok(retire_original(&binding, ticket, owner)),
+        )
         .unwrap();
     drop(next);
 }
@@ -250,19 +256,14 @@ async fn cancellation_and_late_authority_refusal_leave_no_pending_occupant() {
 #[tokio::test]
 async fn a_previous_resume_exit_cannot_clear_the_next_occupant() {
     let scratch = Scratch::make();
-    let mut controller = IsolatedWorkspaceController::open(scratch.registry.clone()).unwrap();
+    let controller = IsolatedWorkspaceController::open(scratch.registry.clone()).unwrap();
     let mut original = ProcessScratch::start(&scratch);
-    let (ticket, binding) = bound(
-        &scratch,
-        &mut controller,
-        current_process(),
-        original.identity,
-    )
-    .await;
+    let (ticket, binding) =
+        bound(&scratch, &controller, current_process(), original.identity).await;
     original.stop();
     let old_owner = occupant(current_process());
     let mut old = controller
-        .reserve_resume(&binding, old_owner, |owner| {
+        .reserve_resume(&Containment::without_any(), &binding, old_owner, |owner| {
             Ok(retire_original(&binding, ticket, owner))
         })
         .unwrap();
@@ -272,7 +273,7 @@ async fn a_previous_resume_exit_cannot_clear_the_next_occupant() {
     first.stop();
     let new_owner = occupant(current_process());
     let mut next = controller
-        .reserve_resume(&binding, new_owner, |owner| {
+        .reserve_resume(&Containment::without_any(), &binding, new_owner, |owner| {
             Ok(Some(EndedResume::after_claim_retired(&binding, owner)))
         })
         .unwrap();
@@ -314,19 +315,14 @@ async fn a_previous_resume_exit_cannot_clear_the_next_occupant() {
 #[tokio::test]
 async fn an_exact_bound_process_that_exits_before_the_observer_is_reclaimed() {
     let scratch = Scratch::make();
-    let mut controller = IsolatedWorkspaceController::open(scratch.registry.clone()).unwrap();
+    let controller = IsolatedWorkspaceController::open(scratch.registry.clone()).unwrap();
     let mut original = ProcessScratch::start(&scratch);
-    let (ticket, binding) = bound(
-        &scratch,
-        &mut controller,
-        current_process(),
-        original.identity,
-    )
-    .await;
+    let (ticket, binding) =
+        bound(&scratch, &controller, current_process(), original.identity).await;
     original.stop();
     let owner = occupant(current_process());
     let mut reservation = controller
-        .reserve_resume(&binding, owner, |owner| {
+        .reserve_resume(&Containment::without_any(), &binding, owner, |owner| {
             Ok(retire_original(&binding, ticket, owner))
         })
         .unwrap();
@@ -348,15 +344,10 @@ async fn an_exact_bound_process_that_exits_before_the_observer_is_reclaimed() {
 #[tokio::test]
 async fn unowned_siblings_and_replaced_filesystem_objects_cannot_supply_a_resume_binding() {
     let scratch = Scratch::make();
-    let mut controller = IsolatedWorkspaceController::open(scratch.registry.clone()).unwrap();
+    let controller = IsolatedWorkspaceController::open(scratch.registry.clone()).unwrap();
     let mut original = ProcessScratch::start(&scratch);
-    let (ticket, binding) = bound(
-        &scratch,
-        &mut controller,
-        current_process(),
-        original.identity,
-    )
-    .await;
+    let (ticket, binding) =
+        bound(&scratch, &controller, current_process(), original.identity).await;
     original.stop();
     let unknown = binding.workspace.parent().unwrap().join("unowned").unwrap();
     std::fs::create_dir(unknown.as_std_path()).unwrap();
@@ -378,9 +369,12 @@ async fn unowned_siblings_and_replaced_filesystem_objects_cannot_supply_a_resume
         );
         assert!(
             controller
-                .reserve_resume(&binding, occupant(current_process()), |owner| Ok(
-                    retire_original(&binding, ticket, owner)
-                ))
+                .reserve_resume(
+                    &Containment::without_any(),
+                    &binding,
+                    occupant(current_process()),
+                    |owner| Ok(retire_original(&binding, ticket, owner))
+                )
                 .is_err()
         );
         std::fs::remove_dir(directory.as_std_path()).unwrap();
@@ -407,9 +401,12 @@ async fn unowned_siblings_and_replaced_filesystem_objects_cannot_supply_a_resume
     changed.project = VerifiedProject::discover(&foreign.project).unwrap();
     assert!(
         controller
-            .reserve_resume(&changed, occupant(current_process()), |owner| Ok(
-                retire_original(&binding, ticket, owner)
-            ))
+            .reserve_resume(
+                &Containment::without_any(),
+                &changed,
+                occupant(current_process()),
+                |owner| Ok(retire_original(&binding, ticket, owner))
+            )
             .is_err()
     );
     let unknown = AbsPath::canonicalize(unknown.as_str()).unwrap();
@@ -419,15 +416,10 @@ async fn unowned_siblings_and_replaced_filesystem_objects_cannot_supply_a_resume
 #[tokio::test]
 async fn schema_two_upgrade_preserves_committed_identity_and_excludes_stale_occupant_writes() {
     let scratch = Scratch::make();
-    let mut controller = IsolatedWorkspaceController::open(scratch.registry.clone()).unwrap();
+    let controller = IsolatedWorkspaceController::open(scratch.registry.clone()).unwrap();
     let mut original = ProcessScratch::start(&scratch);
-    let (ticket, binding) = bound(
-        &scratch,
-        &mut controller,
-        current_process(),
-        original.identity,
-    )
-    .await;
+    let (ticket, binding) =
+        bound(&scratch, &controller, current_process(), original.identity).await;
     original.stop();
     std::fs::write(
         binding.workspace.as_std_path().join("committed.txt"),
@@ -448,6 +440,11 @@ async fn schema_two_upgrade_preserves_committed_identity_and_excludes_stale_occu
     let mut old: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     *old.get_mut("schema").unwrap() = serde_json::json!(2);
+    old.pointer_mut("/records/0")
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .remove("lifetime");
     old.pointer_mut("/records/0/terminal")
         .unwrap()
         .as_object_mut()
@@ -456,9 +453,12 @@ async fn schema_two_upgrade_preserves_committed_identity_and_excludes_stale_occu
     std::fs::write(&path, serde_json::to_vec(&old).unwrap()).unwrap();
     let stale = registry::read(&scratch.registry).unwrap().remove(0);
     let reservation = controller
-        .reserve_resume(&binding, occupant(current_process()), |owner| {
-            Ok(retire_original(&binding, ticket, owner))
-        })
+        .reserve_resume(
+            &Containment::without_any(),
+            &binding,
+            occupant(current_process()),
+            |owner| Ok(retire_original(&binding, ticket, owner)),
+        )
         .unwrap();
     let new: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     assert_eq!(
@@ -499,19 +499,14 @@ async fn schema_two_upgrade_preserves_committed_identity_and_excludes_stale_occu
 #[tokio::test]
 async fn a_contended_cancellation_is_explicit_and_only_exact_current_owner_proof_recovers_it() {
     let scratch = Scratch::make();
-    let mut controller = IsolatedWorkspaceController::open(scratch.registry.clone()).unwrap();
+    let controller = IsolatedWorkspaceController::open(scratch.registry.clone()).unwrap();
     let mut original = ProcessScratch::start(&scratch);
-    let (ticket, binding) = bound(
-        &scratch,
-        &mut controller,
-        current_process(),
-        original.identity,
-    )
-    .await;
+    let (ticket, binding) =
+        bound(&scratch, &controller, current_process(), original.identity).await;
     original.stop();
     let owner = occupant(current_process());
     let reservation = controller
-        .reserve_resume(&binding, owner, |owner| {
+        .reserve_resume(&Containment::without_any(), &binding, owner, |owner| {
             Ok(retire_original(&binding, ticket, owner))
         })
         .unwrap();
@@ -521,39 +516,59 @@ async fn a_contended_cancellation_is_explicit_and_only_exact_current_owner_proof
         "rollback contention must reach the caller"
     );
     writer.stop();
-    let mut next = IsolatedWorkspaceController::open(scratch.registry.clone()).unwrap();
+    let next = IsolatedWorkspaceController::open(scratch.registry.clone()).unwrap();
     assert!(
-        next.reserve_resume(&binding, occupant(current_process()), |owner| Ok(
-            retire_original(&binding, ticket, owner)
-        ))
+        next.reserve_resume(
+            &Containment::without_any(),
+            &binding,
+            occupant(current_process()),
+            |owner| Ok(retire_original(&binding, ticket, owner))
+        )
         .is_err()
     );
     let wrong_terminal = occupant(current_process());
     assert!(
-        next.reserve_resume(&binding, occupant(current_process()), |_| Ok(Some(
-            EndedResume::after_claim_retired(&binding, wrong_terminal)
-        )))
+        next.reserve_resume(
+            &Containment::without_any(),
+            &binding,
+            occupant(current_process()),
+            |_| Ok(Some(EndedResume::after_claim_retired(
+                &binding,
+                wrong_terminal
+            )))
+        )
         .is_err()
     );
     let mut another_runtime = ProcessScratch::start(&scratch);
     assert!(
-        next.reserve_resume(&binding, occupant(another_runtime.identity), |_| Ok(Some(
-            EndedResume::after_claim_retired(&binding, owner)
-        )))
+        next.reserve_resume(
+            &Containment::without_any(),
+            &binding,
+            occupant(another_runtime.identity),
+            |_| Ok(Some(EndedResume::after_claim_retired(&binding, owner)))
+        )
         .is_err()
     );
     another_runtime.stop();
     assert!(
-        next.reserve_resume(&binding, occupant(current_process()), |_| Err(
-            "native claim state unavailable".to_owned()
-        ))
+        next.reserve_resume(
+            &Containment::without_any(),
+            &binding,
+            occupant(current_process()),
+            |_| Err("native claim state unavailable".to_owned())
+        )
         .is_err()
     );
     let recovered = next
-        .reserve_resume(&binding, occupant(current_process()), |pending| {
-            assert!(pending == ticket.worker || pending == owner);
-            Ok(Some(EndedResume::after_claim_retired(&binding, pending)))
-        })
+        .reserve_resume(
+            &Containment::without_any(),
+            &binding,
+            occupant(current_process()),
+            |pending| {
+                assert!(pending == ticket.worker || pending == owner);
+                Ok(Some(EndedResume::after_claim_retired(&binding, pending)))
+            },
+        )
         .unwrap();
     recovered.abort().unwrap();
     assert!(
@@ -572,20 +587,18 @@ async fn a_contended_cancellation_is_explicit_and_only_exact_current_owner_proof
 #[tokio::test]
 async fn a_short_unrelated_writer_does_not_strand_a_prebirth_rollback() {
     let scratch = Scratch::make();
-    let mut controller = IsolatedWorkspaceController::open(scratch.registry.clone()).unwrap();
+    let controller = IsolatedWorkspaceController::open(scratch.registry.clone()).unwrap();
     let mut original = ProcessScratch::start(&scratch);
-    let (ticket, binding) = bound(
-        &scratch,
-        &mut controller,
-        current_process(),
-        original.identity,
-    )
-    .await;
+    let (ticket, binding) =
+        bound(&scratch, &controller, current_process(), original.identity).await;
     original.stop();
     let reservation = controller
-        .reserve_resume(&binding, occupant(current_process()), |owner| {
-            Ok(retire_original(&binding, ticket, owner))
-        })
+        .reserve_resume(
+            &Containment::without_any(),
+            &binding,
+            occupant(current_process()),
+            |owner| Ok(retire_original(&binding, ticket, owner)),
+        )
         .unwrap();
     let mut writer = ProcessScratch::holding_registry(&scratch);
     std::thread::scope(|scope| {
@@ -612,15 +625,9 @@ async fn a_short_unrelated_writer_does_not_strand_a_prebirth_rollback() {
 #[tokio::test]
 async fn a_reparse_workspace_cannot_reuse_the_captured_directory_binding() {
     let scratch = Scratch::make();
-    let mut controller = IsolatedWorkspaceController::open(scratch.registry.clone()).unwrap();
+    let controller = IsolatedWorkspaceController::open(scratch.registry.clone()).unwrap();
     let mut original = ProcessScratch::start(&scratch);
-    let (_, binding) = bound(
-        &scratch,
-        &mut controller,
-        current_process(),
-        original.identity,
-    )
-    .await;
+    let (_, binding) = bound(&scratch, &controller, current_process(), original.identity).await;
     original.stop();
     let held = binding.workspace.as_std_path().with_extension("held");
     std::fs::rename(binding.workspace.as_std_path(), &held).unwrap();
@@ -638,13 +645,12 @@ async fn a_reparse_workspace_cannot_reuse_the_captured_directory_binding() {
 }
 
 #[tokio::test]
-async fn an_ended_worker_in_another_live_runtime_keeps_its_worktree_until_runtime_retirement() {
+async fn an_ended_worker_in_another_runtime_requires_positive_lifetime_completion() {
     let scratch = Scratch::make();
-    let mut controller = IsolatedWorkspaceController::open(scratch.registry.clone()).unwrap();
+    let controller = IsolatedWorkspaceController::open(scratch.registry.clone()).unwrap();
     let mut runtime = ProcessScratch::start(&scratch);
     let mut worker = ProcessScratch::start(&scratch);
-    let (ticket, binding) =
-        bound(&scratch, &mut controller, runtime.identity, worker.identity).await;
+    let (ticket, binding) = bound(&scratch, &controller, runtime.identity, worker.identity).await;
     worker.stop();
     assert!(
         controller
@@ -654,36 +660,45 @@ async fn an_ended_worker_in_another_live_runtime_keeps_its_worktree_until_runtim
     );
     assert!(
         controller
-            .reserve_resume(&binding, occupant(current_process()), |owner| Ok(
-                retire_original(&binding, ticket, owner)
-            ))
+            .reserve_resume(
+                &Containment::without_any(),
+                &binding,
+                occupant(current_process()),
+                |owner| Ok(retire_original(&binding, ticket, owner))
+            )
             .is_err()
     );
     runtime.stop();
-    controller
-        .reserve_resume(&binding, occupant(current_process()), |_| Ok(None))
-        .unwrap()
-        .abort()
-        .unwrap();
+    let resumed = controller.reserve_resume(
+        &Containment::without_any(),
+        &binding,
+        occupant(current_process()),
+        |_| Ok(None),
+    );
+    #[cfg(windows)]
+    assert!(
+        resumed.is_err(),
+        "root exit alone cannot prove descendant completion"
+    );
+    #[cfg(not(windows))]
+    resumed.unwrap().abort().unwrap();
 }
 
 #[tokio::test]
 async fn malformed_or_old_schema_occupants_never_become_resume_authority() {
     let scratch = Scratch::make();
-    let mut controller = IsolatedWorkspaceController::open(scratch.registry.clone()).unwrap();
+    let controller = IsolatedWorkspaceController::open(scratch.registry.clone()).unwrap();
     let mut original = ProcessScratch::start(&scratch);
-    let (ticket, binding) = bound(
-        &scratch,
-        &mut controller,
-        current_process(),
-        original.identity,
-    )
-    .await;
+    let (ticket, binding) =
+        bound(&scratch, &controller, current_process(), original.identity).await;
     original.stop();
     let mut reservation = controller
-        .reserve_resume(&binding, occupant(current_process()), |owner| {
-            Ok(retire_original(&binding, ticket, owner))
-        })
+        .reserve_resume(
+            &Containment::without_any(),
+            &binding,
+            occupant(current_process()),
+            |owner| Ok(retire_original(&binding, ticket, owner)),
+        )
         .unwrap();
     assert!(reservation.bind(None).is_err());
     drop(reservation);

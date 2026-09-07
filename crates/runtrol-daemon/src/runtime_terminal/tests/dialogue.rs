@@ -418,6 +418,9 @@ async fn observed_mirrors_cannot_enable_dialogue_even_with_a_current_lease() {
             terminal_key: "fixture-terminal".to_owned(),
             feeder: crate::window_registry::ConnectionToken::next(),
             shell_pid: None,
+            registration_generation: 0,
+            execution_id: String::new(),
+            shell_identity: None,
         },
     ));
     assert_eq!(
