@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { OWNED_QUERY_LITERALS, QUERY_CARRY_LIMIT, QUERY_MODE_DIGITS, QUERY_TERMINATOR, TerminalQueryFilter } from "./terminalQueryFilter";
+import { MouseModeFilter } from "./mouseModeFilter";
 import agreement from "../../../crates/runtrol-terminal-protocol/fixtures/queries.json";
 
 test("Studio and the Rust host agree on the complete owned query grammar and bounds", () => {
@@ -24,6 +25,23 @@ test("unknown VT, drawing, keys and oversized candidates survive every split", (
     for (let split = 0; split <= text.length; split += 1) {
       const filter = new TerminalQueryFilter();
       assert.equal(filter.filter(text.slice(0, split)) + filter.filter(text.slice(split)) + filter.finish(), text);
+    }
+  }
+});
+
+test("the complete Studio presentation path preserves ANSI, indexed and truecolor drawing at every split", () => {
+  const colours = [
+    "\x1b[31mred\x1b[0m", "\x1b[96;44mcyan\x1b[39;49m",
+    "\x1b[38;5;208mindexed\x1b[0m", "\x1b[38;2;254;128;32mforeground\x1b[0m",
+    "\x1b[48;2;12;34;56mbackground\x1b[0m", "\x1b[38:2::254:128:32mcolon\x1b[0m",
+  ];
+  for (const text of colours) {
+    for (let split = 0; split <= text.length; split += 1) {
+      const queries = new TerminalQueryFilter();
+      const mouse = new MouseModeFilter();
+      const output = mouse.filter(queries.filter(text.slice(0, split)))
+        + mouse.filter(queries.filter(text.slice(split))) + mouse.filter(queries.finish()) + mouse.finish();
+      assert.equal(output, text);
     }
   }
 });

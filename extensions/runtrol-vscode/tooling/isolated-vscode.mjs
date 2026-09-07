@@ -83,11 +83,17 @@ function namesTheLaunchingAgent(name) {
     || name.startsWith("ANTHROPIC_CUSTOM_MODEL_OPTION");
 }
 
-/// A copy of an environment with the outer extension host's identity and any launching agent's markers removed.
+function omitFromIsolatedHost(name) {
+  // A native GUI baseline owns its display environment. Command tools commonly disable ANSI colours for their
+  // captured output; inheriting that setting made the real provider TUIs monochrome in otherwise colour-capable PTYs.
+  return namesTheOuterHost(name) || namesTheLaunchingAgent(name) || name === "NO_COLOR";
+}
+
+/// An independent native GUI environment, without the outer host identity or the command tool's display mode.
 export function withoutHostIdentity(baseEnvironment = process.env) {
   const environment = { ...baseEnvironment };
   for (const name of Object.keys(environment)) {
-    if (namesTheOuterHost(name) || namesTheLaunchingAgent(name)) delete environment[name];
+    if (omitFromIsolatedHost(name)) delete environment[name];
   }
   return environment;
 }
@@ -103,7 +109,7 @@ export function withoutHostIdentity(baseEnvironment = process.env) {
 // On import because the only reason to import this module is to launch an isolated VS Code, and the cost of one
 // harness forgetting is three gates red with a message that names a folder and never mentions an environment.
 for (const name of Object.keys(process.env)) {
-  if (namesTheOuterHost(name) || namesTheLaunchingAgent(name)) delete process.env[name];
+  if (omitFromIsolatedHost(name)) delete process.env[name];
 }
 
 export function isolatedHostEnvironment(root, baseEnvironment = process.env) {

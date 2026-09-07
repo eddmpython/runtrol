@@ -73,6 +73,21 @@ transport or Studio navigation.
 The screen model exists only for geometry, host query answers, and late-view snapshots. It is dropped with the hosted
 terminal and is never persisted as a conversation copy.
 
+### Colour output
+
+Provider colour remains terminal output. Studio preserves ANSI SGR, indexed colours and RGB colours through both
+presentation filters; it does not choose a replacement provider palette. If a TUI is monochrome while workbench
+icons retain their colours, inspect the environment that launched its Runtime before changing terminal rendering.
+The PTY inherits that environment except for the manifest's declared additions and removals. In particular,
+[`NO_COLOR`](https://no-color.org/) can ask the provider to omit colour even when the manifest advertises a
+colour-capable terminal. Changing a launching shell's environment does not change an already-running CLI.
+
+Native GUI verification removes the command tool's inherited `NO_COLOR` through the existing isolated-host
+environment builder in `extensions/runtrol-vscode/tooling/isolated-vscode.mjs`. Ordinary product launches retain
+explicit user environment preferences. Compare the same Runtime image, provider build and terminal settings before
+and after a launch-environment change; a plain screenshot alone cannot distinguish suppressed provider output from
+a rendering defect.
+
 ### Exact Windows lifetime
 
 Each managed terminal owns a private nested Windows Job, bound atomically at suspended process creation. Its root

@@ -218,6 +218,7 @@ function verifyIsolatedHostEnvironment() {
     ELECTRON_RUN_AS_NODE: "1",
     RUNTROL_HOME: "/explicit-daemon-home",
     VSCODE_PID: "123",
+    NO_COLOR: "1",
   };
   // Unit tests prove environment construction without changing the runner's configured keychain. The real
   // multi-window gate exercises the configured keychain path on macOS.
@@ -227,6 +228,8 @@ function verifyIsolatedHostEnvironment() {
   const canonicalRoot = realpathSync.native(out);
   assert.equal(environment.ELECTRON_RUN_AS_NODE, undefined);
   assert.equal(environment.VSCODE_PID, undefined);
+  assert.equal(environment.NO_COLOR, undefined);
+  assert.equal(baseEnvironment.NO_COLOR, "1");
   assert.equal(environment.RUNTROL_HOME, "/explicit-daemon-home");
   if (process.platform === "win32") {
     assert.equal(environment.LOCALAPPDATA, canonicalRoot);
