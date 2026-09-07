@@ -29,8 +29,10 @@ so a new field cannot be added without recording it. `shippedRuntimeInterop` dow
 the last published packages, runs each one, and requires this build's client to complete a real initialization
 against it before the release pipeline will publish.
 
-Everything after the initialization exchange may assume both ends are the same build, because a manager that
-installed the Runtime rolls an older daemon forward before using it. See `docs/coreRuntime.md`.
+The installing manager selects its current Runtime generation for new work, but existing terminal views and index
+watches still connect to the exact generation that owns them. Those connections may cross builds and must respect
+the negotiated revision and advertised capabilities. [Core generation continuity](coreRuntime.md#generations-a-running-runtime-and-the-build-that-replaces-it)
+and the [terminal contract](terminalSurface.md#public-runtime-contract) own generation selection and reconnect behavior.
 
 ## Local transport and locator
 
@@ -167,8 +169,9 @@ machine-wide cursor cannot be replayed into a folder listing or the other way ro
 ## Session and mutation rules
 
 Runtime stores only supervision metadata and provider-native pointers. It never stores a conversation copy. Native
-session discovery uses an official provider command or protocol registered by the provider extension. Runtime never
-scans provider storage for conversation files.
+session discovery consumes the driver-declared catalogue with its source and coverage. [Provider architecture](providerArchitecture.md#session-ownership)
+owns the permitted command, protocol, and bounded native-store metadata sources; [Core's thin boundary](coreRuntime.md#thin-boundary)
+keeps those reads separate from interpreting or retaining conversation content.
 
 A session in the index carries `waitingOn` when Core observed its running turn stop for something. `person` means a
 pending approval or a request for free-form input, and `quota` means an account limit. Both are derived from the

@@ -5,9 +5,10 @@
 The PC product is the Runtrol Studio VS Code extension. There is no standalone desktop updater or GUI process.
 
 VS Code owns extension delivery. Each platform VSIX contains one matching Core binary. On activation the extension
-streams that binary into one extension-global managed location. A changed binary replaces the stable name by content,
-while an already running daemon and its provider children keep their existing process identities. The next daemon
-start uses the new bytes. Reinstalling an earlier VSIX applies the same mechanism in reverse.
+materializes an immutable, content-named executable in extension-global storage. A changed build starts a new Runtime
+generation beside the previous one, which keeps serving its existing owners until they finish. Reinstalling an earlier
+VSIX uses the same generation mechanism. [Core generation lifetime](coreRuntime.md#generations-a-running-runtime-and-the-build-that-replaces-it) owns the
+contract, and [Runtime operations](runtimeOperations.md#update-and-rollback) owns upgrade and rollback procedures.
 
 ## Studio Marketplace delivery
 

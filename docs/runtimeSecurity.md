@@ -20,7 +20,7 @@ actions. The installed `runtrol` command provides this surface independently; St
 | Data | Owner and handling |
 |---|---|
 | Provider credential | Provider CLI only. Runtime never holds or forwards a model API key |
-| Provider conversation | Provider CLI only. Runtime never scans, parses for meaning, rewrites, or stores a copy |
+| Provider conversation | Provider CLI only. Runtime never parses for meaning, rewrites, or stores a conversation copy. Bounded metadata reads follow the [provider-owned catalogue boundary](providerArchitecture.md#session-ownership) |
 | Consumer input | Consumer until Runtime transports the exact bytes to the provider. No durable copy or automatic retry |
 | Live provider event | Bounded transient transport and replay only. It is not a transcript store |
 | Native session pointer | Provider ID, opaque native ID, workspace identity, and bounded metadata in Runtime |

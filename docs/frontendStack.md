@@ -21,7 +21,8 @@ All public surfaces must satisfy these rules:
 - Support light and dark color schemes without adding a glow, gradient, outline, or shadow to the mark.
 - Keep navigation and input usable with a keyboard and expose meaningful accessible names.
 - Respect reduced-motion preferences.
-- Persist only small interface preferences such as locale and theme. Never persist conversation content.
+- Keep durable interface state limited to small preferences such as locale and theme. Device identity and connection
+  state follow the [phone storage boundary](phonePwa.md#browser-storage-and-rendering). Never persist conversation content.
 - Render only bounded live data authorized for that surface, and never place conversation bodies in a navigation
   projection.
 - Treat a visible loading delay or input stutter as a failed product gate.

@@ -49,7 +49,8 @@ def documentationProblems(
         "runtimeSecurity.md": (
             "same OS user",
             "never holds or forwards a model API key",
-            "never scans, parses for meaning, rewrites, or stores a copy",
+            "never parses for meaning, rewrites, or stores a conversation copy",
+            "providerArchitecture.md#session-ownership",
             "control lease",
             "Hosted companions",
         ),
@@ -85,40 +86,71 @@ def documentationProblems(
         for token in ("2026-08-13", "0.1.1"):
             if token not in body:
                 found.append(f"{name} omits compatibility value `{token}`")
-    if "official" not in providerArchitecture or "never scan" not in providerArchitecture:
-        found.append("providerArchitecture.md does not freeze official catalogue and no-scan boundaries")
+    # These are documentation anchors, not a proof of driver behavior. The driver contracts and
+    # structural-read tests own that evidence; this gate keeps the public provenance boundary visible.
+    for token in ("provider-owned source", "coverage", "bounded native-store metadata adapter"):
+        if token not in providerArchitecture:
+            found.append(f"providerArchitecture.md omits catalogue provenance boundary `{token}`")
+    for token in ("source and coverage", "providerArchitecture.md#session-ownership"):
+        if token not in protocol:
+            found.append(f"runtimeProtocol.md omits catalogue provenance boundary `{token}`")
+    if "Runtime never scans provider storage" in " ".join(protocol.split()):
+        found.append("runtimeProtocol.md contradicts the permitted provider-owned metadata source")
+    if "never scans, parses for meaning" in docs.get("runtimeSecurity.md", ""):
+        found.append("runtimeSecurity.md contradicts the permitted provider-owned metadata source")
     return found
 
 
 def selftest() -> int:
     """Prove missing docs, vocabulary, and boundary text make the gate red."""
     docs = {
-        "runtimeProtocol.md": "2026-08-13 runtime.locator.json 32-bit big-endian UUIDv7 Store rollback floor method scope error",
+        "runtimeProtocol.md": (
+            "2026-08-13 runtime.locator.json 32-bit big-endian UUIDv7 Store rollback floor method scope error "
+            "source and coverage providerArchitecture.md#session-ownership"
+        ),
         "runtimeIntegration.md": (
             "runtimeNotInstalled Review Integration Requests outcomeUnknown presenceRequired "
             "Consumer private keys stay outside Runtime runtrol runtime-locator"
         ),
         "runtimeSecurity.md": (
-            "same OS user never holds or forwards a model API key never scans, parses for meaning, rewrites, or stores a copy "
-            "control lease Hosted companions"
+            "same OS user never holds or forwards a model API key "
+            "never parses for meaning, rewrites, or stores a conversation copy "
+            "providerArchitecture.md#session-ownership control lease Hosted companions"
         ),
         "runtimeOperations.md": (
             "Windows, macOS, and Linux Sigstore runtrol endpoint RuntrolRuntime runtrol panic runtimeNotInstalled"
         ),
     }
     packages = {"README": "2026-08-13 0.1.1", "CHANGELOG": "2026-08-13 0.1.1"}
-    arguments = (docs, {"method"}, {"scope"}, {"error"}, packages, "official catalogue never scan")
+    catalogue = "provider-owned source coverage bounded native-store metadata adapter"
+    arguments = (docs, {"method"}, {"scope"}, {"error"}, packages, catalogue)
     if documentationProblems(*arguments):
         print("[runtimeDocumentation --selftest] FAIL. the green fixture was rejected.", file=sys.stderr)
         return 2
-    mutations = (
-        ({key: value for key, value in docs.items() if key != "runtimeSecurity.md"}, {"method"}, {"scope"}, {"error"}, packages, "official catalogue never scan"),
-        (docs, {"missingMethod"}, {"scope"}, {"error"}, packages, "official catalogue never scan"),
-        (docs, {"method"}, {"missingScope"}, {"error"}, packages, "official catalogue never scan"),
-        (docs, {"method"}, {"scope"}, {"missingError"}, packages, "official catalogue never scan"),
-        (docs, {"method"}, {"scope"}, {"error"}, {"README": "empty"}, "official catalogue never scan"),
+    mutations = [
+        ({key: value for key, value in docs.items() if key != "runtimeSecurity.md"}, {"method"}, {"scope"}, {"error"}, packages, catalogue),
+        (docs, {"missingMethod"}, {"scope"}, {"error"}, packages, catalogue),
+        (docs, {"method"}, {"missingScope"}, {"error"}, packages, catalogue),
+        (docs, {"method"}, {"scope"}, {"missingError"}, packages, catalogue),
+        (docs, {"method"}, {"scope"}, {"error"}, {"README": "empty"}, catalogue),
         (docs, {"method"}, {"scope"}, {"error"}, packages, "provider files"),
-    )
+    ]
+    for name, token in (
+        ("runtimeSecurity.md", "never parses for meaning, rewrites, or stores a conversation copy"),
+        ("runtimeSecurity.md", "providerArchitecture.md#session-ownership"),
+        ("runtimeProtocol.md", "source and coverage"),
+        ("runtimeProtocol.md", "providerArchitecture.md#session-ownership"),
+    ):
+        changed = {**docs, name: docs[name].replace(token, "")}
+        mutations.append((changed, {"method"}, {"scope"}, {"error"}, packages, catalogue))
+    for token in ("provider-owned source", "coverage", "bounded native-store metadata adapter"):
+        mutations.append((docs, {"method"}, {"scope"}, {"error"}, packages, catalogue.replace(token, "")))
+    for name, contradiction in (
+        ("runtimeProtocol.md", "Runtime never scans provider storage"),
+        ("runtimeSecurity.md", "Runtime never scans, parses for meaning"),
+    ):
+        changed = {**docs, name: f"{docs[name]} {contradiction}"}
+        mutations.append((changed, {"method"}, {"scope"}, {"error"}, packages, catalogue))
     for index, mutation in enumerate(mutations, start=1):
         if not documentationProblems(*mutation):
             print(f"[runtimeDocumentation --selftest] FAIL. mutation {index} escaped.", file=sys.stderr)
