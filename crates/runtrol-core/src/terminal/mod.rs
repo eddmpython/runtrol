@@ -963,8 +963,7 @@ impl Shared {
             Ok(()) => Ok(()),
             // A short write, a broken pipe, or an unanswered write all leave the same question: how much of
             // the input reached the process? Nothing may be written again on top of an unknown, so the
-            // terminal ends here and the question never has to be answered (`terminalTransportIntegrity`,
-            // input: one receipt, never replayed).
+            // terminal ends here with one receipt and no replay (docs/terminalSurface.md, input authority).
             Err(cause) => Err(self.close_uncertain_writer(&cause).await),
         }
     }
@@ -1264,7 +1263,7 @@ fn terminal_writer_closed() -> std::io::Error {
 /// The reader thread: block on the terminal, hand each chunk to the host task, stop at end of stream.
 /// The host's read loop: one blocking read, then whatever is already waiting up to the chunk size, then one
 /// publication. Bytes and order are exactly the terminal's; only the read boundary is the host's, and a
-/// burst that would have been hundreds of scraps is a few full chunks (`terminalTransportIntegrity`, raw lane).
+/// burst that would have been hundreds of scraps is a few full chunks (docs/terminalSurface.md, raw byte lane).
 fn read_terminal(mut reader: Box<dyn TerminalRead>, chunks: &mpsc::Sender<ReadChunk>) {
     let mut buffer = vec![0u8; CHUNK_BYTES];
     loop {

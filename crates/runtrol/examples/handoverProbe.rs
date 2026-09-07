@@ -23,7 +23,7 @@
 //! handoverProbe input-hex <home> <identity file> <digest> <terminal id> <hex bytes>
 //! ```
 //!
-//! The two `screen` phases exist for the raw-lane parity journey (`terminalTransportIntegrity`, `TERM-01`): one
+//! The two `screen` phases test the raw byte lane defined in docs/terminalSurface.md: one
 //! renders what a Runtrol viewer received, the other renders what the same program draws on a `ConPTY` that
 //! Runtrol never touched, both through the same terminal model at the same geometry, so the two texts can be
 //! compared line by line.

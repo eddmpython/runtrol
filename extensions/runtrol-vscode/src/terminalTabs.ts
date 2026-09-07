@@ -129,7 +129,7 @@ export class TerminalTabs implements vscode.Disposable {
 
   /// Where a tab's loading, failure, and exit live once the pane holds provider bytes only: the workbench
   /// progress indicator while the terminal opens, the tab title afterwards, and a notification for a failure the
-  /// person has to read (`terminalTransportIntegrity`, Studio presentation).
+  /// person has to read (docs/terminalSurface.md, Studio presentation).
   private presentationFor(terminalOf: () => vscode.Terminal | null): TerminalPresentation {
     return {
       opening: (work) => {

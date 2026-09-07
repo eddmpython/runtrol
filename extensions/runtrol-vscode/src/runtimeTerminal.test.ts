@@ -384,6 +384,8 @@ test("reconnecting input keeps byte and action bounds and a failed reattach ends
         replacement.reject(new RuntimeTransportError("exact generation is unavailable"));
         await input;
         assert.deepEqual(shown, ["opening"], "reachability remains the index watch's message");
+        assert.match(disconnected[0] ?? "", /output connection ended; exact reattachment failed: exact generation is unavailable/u,
+          "a failed reconnect must not erase the original transport break");
       }
       assert.equal(disconnected.length, 1);
       assert.equal(pty.descriptor(), null);

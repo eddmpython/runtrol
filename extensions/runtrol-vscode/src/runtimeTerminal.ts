@@ -40,6 +40,7 @@ type InputMeasurement = {
 
 type ViewRecovery = {
   view: TerminalView;
+  cause: unknown;
   ready: Promise<void>;
   finish(): void;
 };
@@ -55,7 +56,7 @@ type ViewRecovery = {
 /// The Core answers the terminal's own questions and translates the mouse, so two viewers (this tab and
 /// a phone) share one screen and one keyboard.
 
-/// Where a tab shows what is not provider output: the pane carries provider bytes only (`terminalTransportIntegrity`,
+/// Where a tab shows what is not provider output: the pane carries provider bytes only (docs/terminalSurface.md,
 /// Studio presentation), so opening, ending, and failing are told to the workbench instead.
 export type TerminalPresentation = {
   /// The terminal is opening; `work` settles when the first view is connected or the open failed.
@@ -533,14 +534,26 @@ export class RuntimeTerminal implements vscode.Pseudoterminal {
             }
             return;
         }
-      } catch {
+      } catch (disconnection: unknown) {
         if (this.closed) return;
-        const recovery = this.beginRecovery(view);
+        const recovery = this.beginRecovery(view, disconnection);
         if (!recovery) return;
-        view = await this.runtime.attachTerminal(
-          view.opened.terminal.runtimeGeneration,
-          view.opened.terminal.terminalId,
-        );
+        try {
+          view = await this.runtime.attachTerminal(
+            view.opened.terminal.runtimeGeneration,
+            view.opened.terminal.terminalId,
+          );
+        } catch (attachment: unknown) {
+          // The failed connection is a second event. Keep the original break so a busy endpoint cannot
+          // erase the reason recovery began, including a control failure that withdrew the output view.
+          const first = recovery.cause instanceof Error ? recovery.cause.message : String(recovery.cause);
+          const second = attachment instanceof Error ? attachment.message : String(attachment);
+          const message = `${first}; exact reattachment failed: ${second}`;
+          const options = { cause: new AggregateError([recovery.cause, attachment], message) };
+          throw attachment instanceof RuntimeTransportError
+            ? new RuntimeTransportError(message, options)
+            : new Error(message, options);
+        }
         if (this.closed || this.recovery !== recovery) {
           view.close();
           return;
@@ -559,13 +572,13 @@ export class RuntimeTerminal implements vscode.Pseudoterminal {
 
   /// Withdraw one broken view immediately. Only its output pump attaches a replacement; unsent controls wait
   /// on this single bounded recovery while the failed mutation keeps its original rejected outcome.
-  private beginRecovery(view: TerminalView): ViewRecovery | null {
+  private beginRecovery(view: TerminalView, cause: unknown): ViewRecovery | null {
     if (this.closed) return null;
     if (this.recovery?.view === view) return this.recovery;
     if (this.view !== view) return null;
     let finish!: () => void;
     const ready = new Promise<void>((resolve) => { finish = resolve; });
-    const recovery = { view, ready, finish };
+    const recovery = { view, cause, ready, finish };
     this.recovery = recovery;
     this.view = null;
     this.lease = null;
@@ -575,7 +588,7 @@ export class RuntimeTerminal implements vscode.Pseudoterminal {
 
   /// Run one action under this view's control lease.
   ///
-  /// Exactly one view holds input and resize authority (`terminalTransportIntegrity`, input and geometry). Typing
+  /// Exactly one view holds input and resize authority (docs/terminalSurface.md, input and geometry). Typing
   /// takes it: a lease lost to another window, or expired after a quiet thirty seconds, is acquired again and the
   /// action runs once under the new lease (the Runtime refused the first attempt, so nothing was applied twice).
   /// A resize only follows: with `takeOver` false the action runs solely while this view already holds control,
@@ -626,7 +639,7 @@ export class RuntimeTerminal implements vscode.Pseudoterminal {
         if (commandView && this.view !== commandView) return;
         if (commandView && (error instanceof RuntimeTransportError
           || (error instanceof RuntimeRequestError && error.failure.code === "outcomeUnknown"))) {
-          this.beginRecovery(commandView);
+          this.beginRecovery(commandView, error);
           return;
         }
         this.fail(error);

@@ -1,7 +1,7 @@
 // The drag-select eye pass: a provider that switches mouse reporting on, opened as a Runtrol tab in an isolated
 // real VS Code window, dragged across by a real pointer, photographed, and answered with Enter.
 //
-// What it proves, all at once (`terminalTransportIntegrity`, `TERM-05`):
+// What it proves, all at once (docs/terminalSurface.md, viewer-edge selection):
 //   - the Core forwards the provider's mouse-mode switch unchanged (the viewer's own capture carries it, and the
 //     same program on a bare ConPTY draws the same screen);
 //   - the Studio tab still selects on drag, because it takes that one control family out at its own edge;

@@ -3,8 +3,8 @@
 //! The Runtime sets them on the process it starts for a managed session and on nothing else: no global `PATH`
 //! entry, no provider setting, no project file, no service. They are inherited down that process tree, which is
 //! how a coding agent's shell finds the courier without being told, and how nothing outside that tree does.
-//! The names are the contract the `session-fabric` design fixed, so both the daemon that sets them and the
-//! command that reads them spell them from here.
+//! This module owns the names, so both the daemon that sets them and the command that reads them spell them
+//! from here. The activation and lifetime procedure lives in docs/sessionDialogue.md.
 
 /// The absolute path of the Runtime executable, which is also the courier command.
 pub const COURIER_EXE_ENV: &str = "RUNTROL_COURIER_EXE";

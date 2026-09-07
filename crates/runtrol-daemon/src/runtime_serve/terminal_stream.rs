@@ -973,7 +973,7 @@ async fn send_terminal_index_end(
 /// A window that stopped reading (a frozen renderer, a suspended machine) fills its socket and would otherwise hold
 /// this relay forever. The healthy viewers never wait on it either way, since each view drains its own receiver
 /// from the shared ring; this bound only turns a permanently stalled view into an explicit close instead of a
-/// silent hang (`terminalTransportIntegrity`, lag replacement and disconnect).
+/// silent hang (docs/terminalSurface.md, slow viewers and disconnect).
 pub(crate) const VIEW_WRITE_DEADLINE: Duration = Duration::from_secs(10);
 
 /// Authorize each output frame at its send boundary, including exit drain and lag replacement frames.
