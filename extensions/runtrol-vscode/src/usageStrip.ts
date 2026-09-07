@@ -288,6 +288,9 @@ export function escapeHtml(text: string): string {
 /// page's margin, padding, colour and background away from the page's own rule. The background it handed
 /// over was `transparent`, which is how the panel came to sit on the browser's dark canvas instead of the
 /// sidebar's colour. One element, one owner.
+// Chips grow to their caption limit, then ellipsize; the expanded panel owns the complete account label.
+// Provider names yield to the update action. Meter names yield to reset times, and bars span the row.
+// Sign out is a quiet action below the figures.
 export const USAGE_STYLE = `
 .empty { margin: 0; opacity: 0.8; }
 .chips { display: flex; flex-wrap: wrap; gap: 2px 6px; }
@@ -301,10 +304,7 @@ export const USAGE_STYLE = `
 .chip.reached .fill { stroke: var(--vscode-errorForeground); }
 .chip.bare .fill { display: none; }
 .ring .icon { position: absolute; left: 8.5px; top: 8.5px; width: 9px; height: 9px; }
-/* The caption belongs to its own chip. It was a fixed 38px box with no overflow rule, so a service's own
-   word for its account ("team-managed") spilled across its neighbours and read as one run-on word,
-   "20%team-managed" (operator's window, 2026-08-28). The chip grows for a longer word up to a cap, and past
-   that the word is cut with an ellipsis: the hover panel says the whole sentence. */
+
 .caption { max-width: 100%; overflow: hidden; text-overflow: ellipsis; font-size: 10px; line-height: 12px; opacity: 0.9; white-space: nowrap; }
 .chip.reached .caption { color: var(--vscode-errorForeground); }
 .panels { margin-top: 4px; }
@@ -313,19 +313,15 @@ export const USAGE_STYLE = `
 .panel h2 .who { min-width: 0; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .panel .plan { font-weight: 400; opacity: 0.75; }
 .panel .version { font-weight: 400; opacity: 0.6; font-size: 11px; font-variant-numeric: tabular-nums; }
-/* The Update button holds the right end of the line and never wraps; the name yields before it does. */
+
 .panel .action.update { flex: none; margin: 0; padding: 1px 8px; font-size: 11px; line-height: 16px; border-radius: 3px; border: 1px solid var(--vscode-button-border, transparent); background: var(--vscode-button-background); color: var(--vscode-button-foreground); cursor: pointer; }
 .panel .action.update:hover { background: var(--vscode-button-hoverBackground); }
 .panel p { margin: 0 0 4px; opacity: 0.9; }
 .panel .position.reached { color: var(--vscode-errorForeground); opacity: 1; }
-/* The name has the line, and the bar sits under it. A model window is named by its model, and a model name
-   does not fit beside a bar in a panel this wide: the column was 72px and the name was the part that
-   disappeared (operator, 2026-08-28). */
+
 .meter { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 1px 6px; align-items: baseline; margin: 3px 0; }
 .meter .label { min-width: 0; display: flex; align-items: baseline; gap: 6px; font-size: 11px; }
-/* The name yields before the reset does. The reset is a fixed short phrase and the name is the part that
-   varies, and it arrives already shortened from its middle, so an ellipsis here is the last guard rather
-   than the usual case. */
+
 .meter .what { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .meter .when { flex: none; opacity: 0.7; }
 .meter.governing .what { font-weight: 600; }
@@ -336,7 +332,7 @@ ${WIDTH_STYLE}
 .panel .age { font-size: 11px; opacity: 0.7; }
 .action { margin: 2px 0 4px; padding: 2px 10px; border: 1px solid var(--vscode-button-border, transparent); border-radius: 2px; background: var(--vscode-button-background); color: var(--vscode-button-foreground); cursor: pointer; }
 .action:hover { background: var(--vscode-button-hoverBackground); }
-/* Ending a login is not the panel's main move: a quiet line, readable but never louder than the figures. */
+
 .action.quiet { display: block; background: transparent; border-color: transparent; color: var(--vscode-descriptionForeground); padding: 0; margin: 2px 0 2px; }
 .action.quiet:hover { background: transparent; color: var(--vscode-foreground); text-decoration: underline; }
 `;

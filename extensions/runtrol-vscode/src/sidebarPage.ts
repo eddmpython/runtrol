@@ -357,19 +357,17 @@ function firstRunHtml(): string {
 
 // Codicon glyphs the page uses, as inline masks over the theme foreground: the webview cannot load the editor's
 // icon font, and an <img> would not follow the theme colour. Each is the codicon outline in a 16-unit box.
+// The body owns the sidebar background and full height; #page preserves its flex column across repaint.
+// Only the conversation list scrolls. Its right padding leaves the scrollbar on the panel edge.
+// Project names keep a minimum width; metadata and branch labels yield while their icons keep their size.
+// Native titles stay on one line. Working rotates only the provider glyph; status words describe actions.
+// Row actions overlay the memory figure without relayout and paint an opaque base under theme hover colors.
+// Blocked rows reserve a status slot beside their actions. Git numbers use the editor theme colors.
 const STYLE = `
 :root { color-scheme: light dark; }
-/* The panel's height, taken twice: the editor gives the frame its height and the document has to claim it, or
-   the page is only as tall as its rows and the usage strip stops being the bottom of the sidebar. */
-html { height: 100%; }
-/* The panel paints the sidebar's own background, and it is the only thing that paints one.
 
-   Transparent is not the same as inheriting here. A view like this one is an iframe, and what shows through a
-   transparent body is the frame's own backdrop, which is neither the sidebar nor the editor: measured on the
-   operator's window, the editor drew #1E1E1E, the sidebar the editor itself paints drew #252526, and this
-   page drew #121212. So the list sat in a near black box inside a lighter sidebar and the usage strip, the
-   one element that did name a colour, stood out as a grey card glued to it (operator, 2026-08-28: why does
-   Agent Usage use a black background). One owner for one fact: the strip no longer names it. */
+html { height: 100%; }
+
 body { margin: 0; padding: 6px 0 6px 8px; height: 100%; min-height: 100%; box-sizing: border-box; display: flex; flex-direction: column; overflow: hidden; color: var(--vscode-sideBar-foreground, var(--vscode-foreground)); background: var(--vscode-sideBar-background); font: var(--vscode-font-size) var(--vscode-font-family); user-select: none; }
 button { font: inherit; color: inherit; }
 .notice { margin: 4px 4px 0; padding: 4px 6px; border-radius: 4px; font-size: 12px; background: var(--vscode-editorWidget-background); border-left: 3px solid var(--vscode-widget-border); }
@@ -387,14 +385,10 @@ button { font: inherit; color: inherit; }
 .first-act i { grid-row: 1 / span 2; }
 .first-act span { font-weight: 600; }
 .first-act small { opacity: 0.7; }
-/* The list scrolls and the usage strip does not: a person looking for how much is left should not have to
-   scroll a list of conversations to find it (operator, 2026-08-28). */
-/* The element a repaint replaces. It carries the page's column so that wrapping the content for repainting
-   does not change where anything sits: without this the usage zone stopped being the bottom of the panel and
-   floated up under the last conversation (measured 2026-08-28). */
+
+
 #page { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
-/* The scrollbar sits on the panel's edge, not 8px inside it: the body gives up its right padding and the
-   scroller carries it, so the bar is outside the padded content (operator, 2026-08-29: why the gap). */
+
 .scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; padding-right: 8px; }
 .zone { padding: 4px 0 2px; }
 .zone + .zone { border-top: 1px solid var(--vscode-sideBarSectionHeader-border, var(--vscode-widget-border)); margin-top: 4px; }
@@ -407,10 +401,7 @@ button { font: inherit; color: inherit; }
 .project-row .chevron { flex: none; width: 10px; height: 10px; margin-right: -2px; background: currentColor; opacity: 0.6; -webkit-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M5 3l6 5-6 5z'/></svg>") center / contain no-repeat; mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M5 3l6 5-6 5z'/></svg>") center / contain no-repeat; transform: rotate(90deg); transition: transform 80ms; }
 .project.collapsed .project-row .chevron { transform: rotate(0deg); }
 .project.collapsed .rows { display: none; }
-/* The project's name is what the row is. An item with hidden overflow may shrink to nothing, and with the
-   chips beside it refusing to shrink at all, that is what it did: at a real panel width the second project
-   showed its branch, its count and its chips with no name at all (measured 2026-08-28). It keeps a floor and
-   takes the free space; the chips beside it give theirs up first. */
+
 .project-row .name { flex: 0 1 auto; min-width: 3.5em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .project-row .count { flex: none; }
 .project-row .count { font-weight: 400; opacity: 0.55; font-size: 11px; }
@@ -419,12 +410,10 @@ button { font: inherit; color: inherit; }
 .badge.attention { background: var(--vscode-notificationsWarningIcon-foreground); color: var(--vscode-sideBar-background); }
 .badge.live { background: var(--vscode-progressBar-background); color: var(--vscode-sideBar-background); }
 .badge.branch { flex: 0 2 auto; min-width: 2.5em; background: transparent; font-weight: 400; opacity: 0.7; display: inline-flex; align-items: center; gap: 3px; padding: 0 2px; max-width: 90px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-/* The icon holds its size and the name gives way with an ellipsis. Shrinking the whole chip evenly ate the
-   icon first and left a bare "featu", which names nothing; a branch mark with a shortened name still says
-   what it is (measured 2026-08-28). */
+
 .badge.branch .ci { flex: none; width: 11px; height: 11px; }
 .badge.branch .what { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* The editor's own git colours, so the numbers read the same as the explorer's file decorations beside them. */
+
 .badge.changes { flex: none; background: transparent; font-weight: 500; display: inline-flex; align-items: center; gap: 4px; padding: 0 2px; font-variant-numeric: tabular-nums; }
 .badge.changes .add { color: var(--vscode-gitDecoration-addedResourceForeground); }
 .badge.changes .del { color: var(--vscode-gitDecoration-deletedResourceForeground); }
@@ -432,35 +421,26 @@ button { font: inherit; color: inherit; }
 .badge.changes .ahead { opacity: 0.7; font-weight: 400; }
 .conv .glyph-slot { position: relative; flex: none; display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; }
 .conv .glyph { flex: none; width: 14px; height: 14px; filter: grayscale(1); opacity: 0.64; }
-/* An open tab and its sidebar row use the same accented provider SVG. Work adds only compositor rotation, so
-   opening a terminal never claims the model is active and a stopped turn consumes no animation work. */
+
 .conv.open .glyph, .conv.working .glyph { filter: none; opacity: 1; }
 .conv.working .glyph { animation: spin 1.1s linear infinite; will-change: transform; }
 @keyframes spin { to { transform: rotate(360deg); } }
-/* One line, and the tail fades out rather than ending in dots: the reader sees there is more without a
-   glyph spending width to say so, and two-line rows made the list hard to scan (operator, 2026-08-28). */
+
 .conv .title { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; line-height: 1.4; -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 20px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 20px), transparent); }
 .conv.pinned .title::before { content: ""; display: inline-block; width: 9px; height: 9px; margin-right: 4px; background: currentColor; opacity: 0.55; -webkit-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M10 1l5 5-3 1-2 2 1 4-3 1-2-4-4 4-1-1 4-4-4-2 1-3 4 1 2-2z'/></svg>") center / contain no-repeat; mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M10 1l5 5-3 1-2 2 1 4-3 1-2-4-4 4-1-1 4-4-4-2 1-3 4 1 2-2z'/></svg>") center / contain no-repeat; }
-/* Working needs no word: the moving provider icon says it. Only states that change what the person can do spend
-   width, and they say their meaning instead of asking the person to memorize coloured dots. */
+
 .conv-state { flex: none; max-width: 72px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; line-height: 15px; padding: 0 5px; border-radius: 8px; }
 .conv-state.attention { color: var(--vscode-notificationsWarningIcon-foreground, #cca700); background: color-mix(in srgb, currentColor 14%, transparent); }
 .conv-state.error { color: var(--vscode-errorForeground, #f85149); background: color-mix(in srgb, currentColor 14%, transparent); }
 .conv-state.muted { color: var(--vscode-descriptionForeground); background: var(--vscode-badge-background); }
 .more .more-label { flex: 1 1 auto; font-size: 11px; opacity: 0.65; }
 .more:hover .more-label { opacity: 1; }
-/* One slot on the right, and nothing in the row moves when the cursor arrives. The actions hold their width
-   at rest and the memory figure sits on top of them; hovering swaps which one is painted, not the layout.
-   Appearing actions used to relayout the row and shift the name under the cursor (operator, 2026-08-28), and
-   on hover the actions are what the person came for. */
+
 .tail { flex: none; display: inline-flex; align-items: center; gap: 4px; justify-content: flex-end; margin-left: 2px; }
 .dialogue-on { display: inline-flex; color: var(--vscode-charts-green); }
-/* The figure stays in the flow. It was taken out of it so the hover buttons could sit on top of it, and in a
-   box that had shrunk to nothing it broke "306 MB" across two lines and printed the running dot through it
-   (measured 2026-08-28). The buttons now overlay the whole row instead, so nothing has to hide here. */
+
 .memory { flex: none; white-space: nowrap; font-size: 10px; font-variant-numeric: tabular-nums; opacity: 0.6; }
-/* Theme hover colours can be translucent. An opaque base prevents conversation text showing through.
-   Project actions take real space and replace whole metadata values, preserving counts at narrow widths. */
+
 .actions { position: absolute; right: 3px; top: 1px; bottom: 1px; display: inline-flex; align-items: center; gap: 1px; padding-left: 8px; visibility: hidden; background: linear-gradient(var(--vscode-list-hoverBackground), var(--vscode-list-hoverBackground)), var(--vscode-sideBar-background); }
 .row:hover .actions, .row:focus-within .actions { visibility: visible; }
 .project-row .actions { position: static; display: none; flex: none; margin-left: auto; padding-left: 0; }
@@ -468,9 +448,7 @@ button { font: inherit; color: inherit; }
 .project-row:is(:hover, :focus-within) :is(.branch, .changes) { display: none; }
 .project-row:is(:hover, :focus-within) .name { min-width: 0; }
 .row:hover .memory, .row:focus-within .memory { visibility: hidden; }
-/* A blocked row must keep saying Elsewhere or Unavailable while its actions appear. The action strip used to
-   cover that state at the exact moment a person clicked, so the following notification seemed to contradict
-   the row. Give the word a fixed hover slot and place the actions immediately before it. */
+
 .conv.stateful:hover .conv-state, .conv.stateful:focus-within .conv-state { position: absolute; right: 4px; z-index: 2; box-sizing: border-box; width: 82px; text-align: center; }
 .conv.stateful:hover .actions, .conv.stateful:focus-within .actions { right: 90px; }
 .act { border: 0; background: transparent; color: var(--vscode-foreground); padding: 2px; border-radius: 3px; cursor: pointer; line-height: 0; }
