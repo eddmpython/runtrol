@@ -1,3 +1,5 @@
+import { isDeepStrictEqual } from "node:util";
+
 import type { NativeChatCatalogue, ProviderLine, SessionLine } from "./runtimeTypes";
 
 export function sessionRowsEqual(left: readonly SessionLine[], right: readonly SessionLine[]): boolean {
@@ -23,18 +25,9 @@ export function sessionRowsEqual(left: readonly SessionLine[], right: readonly S
 }
 
 export function providerRowsEqual(left: readonly ProviderLine[], right: readonly ProviderLine[]): boolean {
-  if (left.length !== right.length) {
-    return false;
-  }
-  return left.every((value, index) => {
-    const candidate = right[index];
-    return candidate !== undefined
-      && value.providerId === candidate.providerId
-      && value.displayName === candidate.displayName
-      && value.installation.state === candidate.installation.state
-      && value.installation.version === candidate.installation.version
-      && value.installation.why === candidate.installation.why;
-  });
+  // Account observations and discovered actions change independently of installation. Keep the entire
+  // descriptor current, including observation times that decide whether an older usage report still applies.
+  return isDeepStrictEqual(left, right);
 }
 
 /// Why the conversation list is not everything, in each service's own words, or null when it is.

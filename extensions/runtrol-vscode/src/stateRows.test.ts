@@ -57,10 +57,40 @@ test("every visible provider field invalidates the snapshot", () => {
     { providerId: "provider-2" },
     { displayName: "Provider Two" },
     { installation: { state: "missing" as const, why: "missing" } },
+    { icon: "service.svg" },
+    { commandNames: ["service"] },
+    { switchableModes: ["interactive"] },
   ]) {
     assert.equal(providerRowsEqual([PROVIDER], [{ ...PROVIDER, ...changed }]), false);
   }
   assert.equal(providerRowsEqual([PROVIDER], []), false);
+});
+
+test("account-only publications replace stale usage and recovery actions", () => {
+  const unread: ProviderLine = { ...PROVIDER, account: {
+    status: "unread", checkedAtMs: 100, why: "Account request timed out",
+  } };
+  assert.equal(providerRowsEqual([unread], [structuredClone(unread)]), true);
+  for (const account of [
+    { status: "signedOut", checkedAtMs: 101 },
+    { status: "signedIn", checkedAtMs: 101 },
+    { status: "unpublished", checkedAtMs: 101 },
+    { ...unread.account!, checkedAtMs: 101 },
+    { ...unread.account!, why: "Account request refused" },
+    { status: "signedIn", checkedAtMs: 101, limitsAbsent: { kind: "unread", why: "Limits unavailable" } },
+    { status: "signedIn", checkedAtMs: 101, limitsAbsent: { kind: "unmetered", why: "Team metering" } },
+    null,
+  ] satisfies ProviderLine["account"][]) {
+    assert.equal(providerRowsEqual([unread], [{ ...PROVIDER, account }]), false);
+  }
+  const signedIn: ProviderLine = { ...PROVIDER, account: {
+    status: "signedIn", checkedAtMs: 101, plan: "Team", method: "browser",
+  } };
+  for (const changed of [{ plan: "Individual" }, { method: "device" }]) {
+    assert.equal(providerRowsEqual([signedIn], [{ ...signedIn,
+      account: { ...signedIn.account!, ...changed },
+    }]), false);
+  }
 });
 
 test("a complete catalogue says nothing, because there is nothing to qualify", () => {

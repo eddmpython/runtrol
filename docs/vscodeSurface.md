@@ -143,6 +143,8 @@ age remain visible and are explicitly marked as the last report. A partial respo
 cannot read limits uses the same retry behavior. A confirmed sign-out removes figures measured for the previous
 account; only a later provider report may replace them. A successful report that publishes no numeric usage also
 retires superseded figures. Failure retains evidence, while a confirmed absence replaces it.
+Account observations apply independently of installation changes and usage pushes, so signing out clears older
+figures immediately and a successful account refresh removes an obsolete retry action.
 
 At a provider-reported reset, expired windows and the older aggregate blocking verdict disappear. Remaining windows
 retain their values and report age, and the chip offers a retry. Reset is not evidence of zero consumption or

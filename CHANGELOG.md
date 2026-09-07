@@ -89,6 +89,7 @@ and refactoring that no user can observe do not belong here.
 
 ### Fixed
 
+- Account status changes update usage and recovery actions even when the installed CLI has not changed.
 - Resizing a quiet terminal can regain expired control without taking input or geometry authority from another window.
 - Provider-owned conversation titles refresh after an observed native turn ends, even when the conversation
   was already listed before its title appeared.
