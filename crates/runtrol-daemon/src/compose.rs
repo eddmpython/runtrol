@@ -336,6 +336,8 @@ pub struct Composed {
     pub(crate) provider_preparing: tokio::sync::Mutex<
         std::collections::HashMap<ProviderId, std::sync::Arc<tokio::sync::Mutex<()>>>,
     >,
+    /// Read-only activity drivers, invalidated directly when full discovery selects another program.
+    pub(crate) native_drivers: crate::native_observation::NativeDrivers,
     /// Fast structural provider inventory keyed to the local executable search surface.
     ///
     /// Provider list requests arrive in pairs around an operation and explicit Studio refreshes may arrive in a
@@ -508,6 +510,7 @@ impl Composed {
             device_authority: DeviceAuthority::new(granted, paired_devices),
             probe_cache_writing: tokio::sync::Mutex::new(()),
             provider_preparing: tokio::sync::Mutex::new(std::collections::HashMap::new()),
+            native_drivers: crate::native_observation::NativeDrivers::default(),
             account_reports: tokio::sync::Mutex::new(
                 crate::account_probe::AccountReports::default(),
             ),
@@ -582,6 +585,7 @@ impl Composed {
             device_authority: DeviceAuthority::new(granted, paired_devices),
             probe_cache_writing: tokio::sync::Mutex::new(()),
             provider_preparing: tokio::sync::Mutex::new(std::collections::HashMap::new()),
+            native_drivers: crate::native_observation::NativeDrivers::default(),
             account_reports: tokio::sync::Mutex::new(
                 crate::account_probe::AccountReports::default(),
             ),

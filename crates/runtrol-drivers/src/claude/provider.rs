@@ -5,7 +5,7 @@
 //! in front of the operator's first list.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use async_trait::async_trait;
 use runtrol_childproc::{Containment, Program};
@@ -19,6 +19,9 @@ use crate::claude::agent::ClaudeAgent;
 use crate::claude::models::{ClaudeModels, discover_reasoning_efforts};
 use crate::claude::roster::ClaudeRoster;
 use crate::claude::store::ClaudeStore;
+
+// Shared across driver replacements, so a cancelled observation cannot bypass a still-running scan.
+static ROSTER_SCAN: LazyLock<crate::roster_scan::RosterScan> = LazyLock::new(Default::default);
 
 /// The driver for the CLI that runs one process per session.
 #[derive(Debug)]
@@ -291,13 +294,13 @@ impl Provider for ClaudeProvider {
         let provider = self.id;
         // Small file reads and one existence check per record: blocking work, kept off the reactor so a slow
         // disk cannot stall every other provider's answer.
-        tokio::task::spawn_blocking(move || roster.running(provider))
-            .await
-            .map_err(|join| ProviderError::Protocol {
+        ROSTER_SCAN
+            .run(
                 provider,
-                doing: "reading which of this CLI's conversations have a model answering",
-                detail: join.to_string(),
-            })?
+                "reading which of this CLI's conversations have a model answering",
+                move || roster.running(provider),
+            )
+            .await
     }
 
     fn session_directory(&self) -> Option<std::path::PathBuf> {
@@ -311,13 +314,13 @@ impl Provider for ClaudeProvider {
         let provider = self.id;
         // One small roster scan names both process existence and the busy subset. Keeping this off the reactor
         // makes the 250 ms observation clock independent of filesystem latency.
-        tokio::task::spawn_blocking(move || roster.activity(provider))
-            .await
-            .map_err(|join| ProviderError::Protocol {
+        ROSTER_SCAN
+            .run(
                 provider,
-                doing: "reading which conversations this CLI's live processes own",
-                detail: join.to_string(),
-            })?
+                "reading which conversations this CLI's live processes own",
+                move || roster.activity(provider),
+            )
+            .await
     }
 
     async fn delete_native_session(

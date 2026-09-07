@@ -164,7 +164,9 @@ repeat floor than a process-backed reader because the latter can briefly use hun
 and no unread report, the supervisor sleeps until an activity wake or its slow backstop instead of polling while
 idle. An activity edge inside a repeat floor stays in the same bounded provider set and runs when that floor expires;
 it is never dropped into the backstop. [`account_probe.rs`](../crates/runtrol-daemon/src/account_probe.rs) owns every
-executable deadline, floor, quiet interval, and backstop.
+executable deadline, floor, quiet interval, and backstop. A successful unsupported or unmetered result waits for an
+actual activity edge, account action, or verified provider update instead of joining the slow sweep. An account
+response from a replaced executable is refused, and the current installation is checked again.
 
 ## Terminal tabs
 

@@ -30,6 +30,18 @@ Program resolution and file identity checks run outside the async executor throu
 program, but a slow filesystem call does not occupy the terminal input executor. Admission stays with the blocking
 worker until it finishes, including when its caller is cancelled, so cancellation cannot accumulate running scans.
 
+Read-only native activity reuses a prepared observer for each registered provider. Every uncached roster observation
+rechecks the exact executable, interpreted entry point, and unwrapped launcher files through that same bounded
+inspection lane. Changed or missing files discard reuse and require full preparation. A later full discovery also
+replaces an older observer identity when a new PATH candidate is selected, even if the old program remains installed.
+[`native_observation.rs`](../crates/runtrol-daemon/src/native_observation.rs) owns this one shared observer cache and
+rejects an older concurrent preparation. Starting a process or requesting a catalogue still performs full discovery;
+an activity observation cannot authorize a launch. An unchanged probe-cache hit does not invalidate provider inventory.
+
+Native roster scans keep their admission slot inside the filesystem worker until that worker finishes. A cancelled
+caller or a replaced driver cannot admit another blocked worker for the same driver kind. Independent kinds retain
+separate slots. [`roster_scan.rs`](../crates/runtrol-drivers/src/roster_scan.rs) owns this cancellation boundary.
+
 The cache is keyed by provider identifier and the complete resolved program identity: executable path, size, modification time, launcher-resolved leading arguments, and the same file facts for any leading argument that names an absolute regular file. This makes an interpreted package entry point part of the identity instead of trusting the unchanged interpreter. The reported version and the exact driver-owned flag question are stored observations. A hit is valid only when both the program identity and question surface still match. There is no time-based TTL.
 
 The cache is opened lazily from `RUNTROL_HOME/probe.json`, written through a flushed sibling file, and atomically replaced. Only driver discovery is serialized around that single file. Provider discovery, model lookup, process open, command writes, and cleanup are awaited in tasks rather than in the daemon's sole session owner. The owner therefore remains eligible to pump events and handle requests whose preparation has completed. This is an ownership guarantee, not an end-to-end latency bound. An unreadable or future-schema cache is treated as absent because every value can be asked again. A write failure is returned to the caller because repeated cold probes are user-visible latency.
@@ -72,6 +84,13 @@ Active session routing does not calculate a transcript path. It carries the prov
 uses the provider's official protocol or resume surface. A CLI with no listing surface may have a provider-specific,
 read-only store adapter for its native catalogue. That exception is bounded to catalogue metadata and structured
 provider labels, and does not make Runtime the owner of the files.
+
+The native activity adapter also distinguishes an absent first-turn log from a completed search that can be reused.
+On Windows, [`codex/roster/missing.rs`](../crates/runtrol-drivers/src/codex/roster/missing.rs) retains bounded absence
+only while the provider home's directory identity and filename notifications remain unchanged. Creating the first
+session directory or log invalidates absence on the next existing roster observation. An incomplete search or an
+unsupported notification surface retains no absence and keeps the bounded search. There is no additional polling
+timer, expiry interval, or transcript copy.
 
 ## Drift and manifest validation
 

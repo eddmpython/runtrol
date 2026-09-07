@@ -42,6 +42,8 @@
 pub mod cache;
 mod inspection;
 
+pub use inspection::{ProgramFacts, inspect_program};
+
 use core::time::Duration;
 
 use runtrol_childproc::{Containment, Program, SpawnError, capture, resolve};
@@ -191,8 +193,19 @@ pub async fn probe(
     cache: &mut ProbeCache,
     contained_by: &Containment,
 ) -> Result<Entry, ProbeError> {
-    let (_, entry) = probe_program(manifest, &[], cache, contained_by).await?;
-    Ok(entry)
+    Ok(probe_program(manifest, &[], cache, contained_by)
+        .await?
+        .entry)
+}
+
+/// One probe result bound to the complete filesystem observation made when its program was resolved.
+pub struct ProbedProgram {
+    /// The invocation that was resolved and asked.
+    pub program: Program,
+    /// Version and flag observations for its exact binary.
+    pub entry: Entry,
+    /// The initial binary and launcher facts, never reconstructed after the probe.
+    pub facts: std::sync::Arc<ProgramFacts>,
 }
 
 /// Resolve and probe one CLI, returning the exact program that was examined.
@@ -209,17 +222,23 @@ pub async fn probe_program(
     bound_flags: &[&str],
     cache: &mut ProbeCache,
     contained_by: &Containment,
-) -> Result<(Program, Entry), ProbeError> {
-    let (program, bin) = inspection::inspect(manifest).await?;
+) -> Result<ProbedProgram, ProbeError> {
+    let (program, facts) = inspection::inspect(manifest).await?;
+    let facts = std::sync::Arc::new(facts);
+    let bin = &facts.binary;
 
-    if let Some(known) = cache.get(manifest.id, &bin)
+    if let Some(known) = cache.get(manifest.id, bin)
         && known
             .asked_flags
             .iter()
             .map(String::as_str)
             .eq(bound_flags.iter().copied())
     {
-        return Ok((program, known.clone()));
+        return Ok(ProbedProgram {
+            program,
+            entry: known.clone(),
+            facts,
+        });
     }
 
     // The two questions are independent (same resolved program, different argv), and each one starts a
@@ -238,16 +257,19 @@ pub async fn probe_program(
     let flags = flags?;
     let entry = Entry {
         probed_at: WallMs::now(),
-        bin,
+        bin: bin.clone(),
         version,
         flags,
         asked_flags: bound_flags.iter().map(|flag| (*flag).to_owned()).collect(),
     };
     cache.put(manifest.id, entry.clone());
-    Ok((program, entry))
+    Ok(ProbedProgram {
+        program,
+        entry,
+        facts,
+    })
 }
 
-/// Try the manifest's candidate names on the operator's search path.
 /// Try the manifest's candidate names on the operator's search path.
 ///
 /// Public because a driver needs the answer and must not work it out again: resolution unwraps the launchers a package
@@ -921,7 +943,11 @@ Options:
         let mut cache = ProbeCache::open(&cache_path);
         let contained_by = Containment::without_any();
 
-        let (program, mut first) = probe_program(&manifest, &[], &mut cache, &contained_by)
+        let ProbedProgram {
+            program,
+            entry: mut first,
+            ..
+        } = probe_program(&manifest, &[], &mut cache, &contained_by)
             .await
             .expect("an installed CLI must be probeable");
         assert_eq!(
@@ -950,9 +976,10 @@ Options:
         cache.put(manifest.id, first.clone());
         cache.save().expect("the cache must be writable");
         let mut reopened = ProbeCache::open(&cache_path);
-        let (_, second) = probe_program(&manifest, &[], &mut reopened, &contained_by)
-            .await
-            .expect("the second ask must be answered");
+        let ProbedProgram { entry: second, .. } =
+            probe_program(&manifest, &[], &mut reopened, &contained_by)
+                .await
+                .expect("the second ask must be answered");
         assert_eq!(
             second, first,
             "the second ask must be the remembered answer, not a second process"
@@ -965,9 +992,10 @@ Options:
         reopened.put(manifest.id, stale);
         reopened.save().expect("the stale identity is writable");
         let mut changed = ProbeCache::open(&cache_path);
-        let (_, third) = probe_program(&manifest, &[], &mut changed, &contained_by)
-            .await
-            .expect("a changed identity must be probed again");
+        let ProbedProgram { entry: third, .. } =
+            probe_program(&manifest, &[], &mut changed, &contained_by)
+                .await
+                .expect("a changed identity must be probed again");
         assert_ne!(
             third.version, "9.9.9-stale",
             "an answer for a different binary identity must not be reused"

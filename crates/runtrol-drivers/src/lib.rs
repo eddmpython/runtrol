@@ -26,6 +26,7 @@ pub mod framing;
 pub mod kinds;
 pub mod legacy_mcp;
 mod operator;
+mod roster_scan;
 mod shipped;
 
 pub use framing::{FrameError, Incoming, LineError, Lines, Pending, RequestId};

@@ -272,7 +272,7 @@ mod tests {
     /// The lock this reports is one another process holds. This process holding it is the closest a unit
     /// test can get on Windows, where an open handle is the lock; on Unix an advisory lock taken by this
     /// same process is re-entrant by design, so only the Windows half of the claim is asserted here and the
-    /// cross-process half is measured against the real CLI (`codex/roster.rs`).
+    /// cross-process half is measured against the real CLI (`codex/roster/mod.rs`).
     /// The holder question answered against a file this process is holding: the answer must be this process.
     /// The cross-process half is measured against the real CLI (2026-08-30: one live conversation lock named
     /// `codex.exe` pid 20404, the process running that conversation).

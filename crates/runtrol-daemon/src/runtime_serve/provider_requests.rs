@@ -550,8 +550,7 @@ pub(crate) async fn observe_native_activity(
             if let Some(activity) = discovering.cached_native_activity(provider).await {
                 return Ok(activity);
             }
-            let prepared = crate::provider_prepare::prepared_driver(composed, provider).await;
-            let prepared = prepared.map_err(|_| ())?;
+            let prepared = discovering.native_driver(composed, provider).await?;
             let activity = prepared
                 .driver
                 .native_process_activity()

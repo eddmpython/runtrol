@@ -12,7 +12,7 @@
 //! daemon rather than two.
 
 use std::collections::BTreeSet;
-use std::sync::{Arc, Weak};
+use std::sync::{Arc, LazyLock, Weak};
 
 use async_trait::async_trait;
 use runtrol_childproc::{Containment, Program};
@@ -30,6 +30,9 @@ use tokio::sync::Mutex;
 use crate::codex::agent::CodexAgent;
 use crate::codex::conn::Connection;
 use crate::codex::roster::CodexRoster;
+
+// Shared across driver replacements, so a cancelled observation cannot bypass a still-running scan.
+static ROSTER_SCAN: LazyLock<crate::roster_scan::RosterScan> = LazyLock::new(Default::default);
 
 /// What runtrol calls itself in the handshake.
 ///
@@ -411,13 +414,13 @@ impl Provider for CodexProvider {
         let provider = self.id;
         // Directory listing, small opens and bounded reads: blocking work, kept off the reactor so a slow
         // disk cannot stall every other provider's answer on the same observation clock.
-        tokio::task::spawn_blocking(move || roster.activity(provider))
-            .await
-            .map_err(|join| ProviderError::Protocol {
+        ROSTER_SCAN
+            .run(
                 provider,
-                doing: "reading which conversations this CLI's live processes own",
-                detail: join.to_string(),
-            })?
+                "reading which conversations this CLI's live processes own",
+                move || roster.activity(provider),
+            )
+            .await
     }
 
     async fn native_sessions(

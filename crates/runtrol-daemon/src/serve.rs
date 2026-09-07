@@ -164,6 +164,23 @@ impl DiscoveryGates {
         lane
     }
 
+    /// Reuse a read-only observer after checking the exact files its preparation approved.
+    pub(crate) async fn native_driver(
+        &self,
+        composed: &Composed,
+        provider: ProviderId,
+    ) -> Result<Arc<crate::provider_prepare::PreparedDriver>, ()> {
+        if self.known.binary_search(&provider).is_err() {
+            return Err(());
+        }
+        composed
+            .native_drivers
+            .get_or_prepare(provider, || {
+                crate::provider_prepare::prepared_terminal_driver(composed, provider)
+            })
+            .await
+    }
+
     /// One still-fresh process roster previously measured for this provider.
     pub(crate) async fn cached_native_activity(
         &self,

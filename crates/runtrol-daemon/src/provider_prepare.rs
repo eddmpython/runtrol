@@ -42,6 +42,8 @@ pub(crate) struct PreparedDriver {
     pub(crate) binary_identity: [u8; 32],
     /// Exact resolved program used by the probe, retained for the terminal surface.
     pub(crate) terminal_program: Option<runtrol_childproc::Program>,
+    /// Initial resolution facts retained with the observer, never restated after preparation.
+    pub(crate) program_facts: Option<Arc<runtrol_core::probe::ProgramFacts>>,
 }
 
 /// Build a driver and retain the exact binary identity needed to scope a provider cursor.
@@ -52,7 +54,7 @@ pub(crate) async fn prepared_driver(
     prepare_driver(composed, id, false).await
 }
 
-/// Prepare a driver while retaining the exact executable for an immediate terminal launch.
+/// Prepare a driver while retaining the exact executable for terminal launch or read-only identity rechecks.
 pub(crate) async fn prepared_terminal_driver(
     composed: &Composed,
     id: ProviderId,
@@ -106,7 +108,11 @@ async fn prepare_driver(
     let bound_flags = entry.flags.iter().map(|flag| flag.flag).collect::<Vec<_>>();
     // Resolution belongs to the probe, and the returned value is the exact program handed to the driver. Resolving
     // again here would let a PATH change select a different executable from the one whose version and flags were read.
-    let (program, probed) = runtrol_core::probe_program(
+    let runtrol_core::probe::ProbedProgram {
+        program,
+        entry: probed,
+        facts,
+    } = runtrol_core::probe_program(
         &declared.manifest,
         &bound_flags,
         &mut cache,
@@ -114,20 +120,21 @@ async fn prepare_driver(
     )
     .await
     .map_err(|error| ProviderPreparationError::new(error.to_string()))?;
-    {
-        // The save is a re-read-merge-replace of one shared file; two finishing at once must not interleave.
-        let _writing = composed.probe_cache_writing.lock().await;
-        cache
-            .save()
-            .map_err(|error| ProviderPreparationError::new(error.to_string()))?;
+    if cache.is_dirty() {
+        {
+            // The save is a re-read-merge-replace of one shared file; two finishing at once must not interleave.
+            let _writing = composed.probe_cache_writing.lock().await;
+            cache
+                .save()
+                .map_err(|error| ProviderPreparationError::new(error.to_string()))?;
+        }
+        crate::runtime_inventory::invalidate_provider_inventory(composed).await;
     }
-    crate::runtime_inventory::invalidate_provider_inventory(composed).await;
 
     let checked = checked_flags(provider, entry, probed.flags)?;
 
-    let encoded_facts = serde_json::to_vec(&probed.bin)
-        .map_err(|error| ProviderPreparationError::new(error.to_string()))?;
-    let binary_identity: [u8; 32] = Sha256::digest(encoded_facts).into();
+    let binary_identity = binary_identity(&probed.bin)?;
+    composed.native_drivers.record_preparation(id, &facts).await;
     let terminal_program = retain_terminal_program.then(|| program.clone());
     Ok(PreparedDriver {
         driver: make(&DriverContext {
@@ -143,7 +150,17 @@ async fn prepare_driver(
         }),
         binary_identity,
         terminal_program,
+        program_facts: retain_terminal_program.then_some(facts),
     })
+}
+
+/// The non-secret binary facts scope discovery caches and provider cursors.
+pub(crate) fn binary_identity(
+    facts: &runtrol_core::BinFacts,
+) -> Result<[u8; 32], ProviderPreparationError> {
+    let encoded = serde_json::to_vec(facts)
+        .map_err(|error| ProviderPreparationError::new(error.to_string()))?;
+    Ok(Sha256::digest(encoded).into())
 }
 
 /// How long one model catalogue answer may stand before the provider is asked again.
@@ -288,6 +305,7 @@ mod tests {
             }),
             binary_identity: [identity; 32],
             terminal_program: None,
+            program_facts: None,
         }
     }
 

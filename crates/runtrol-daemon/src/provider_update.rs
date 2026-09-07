@@ -286,6 +286,7 @@ async fn verify_provider(composed: &Composed, provider: ProviderId) -> Result<()
         cache.save().map_err(|error| error.to_string())?;
     }
     crate::runtime_inventory::invalidate_provider_inventory(composed).await;
+    composed.account_probe_wake.provider(provider).await;
     Ok(())
 }
 

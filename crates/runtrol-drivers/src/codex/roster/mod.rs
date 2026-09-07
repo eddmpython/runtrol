@@ -53,6 +53,9 @@ use runtrol_provider::{
 
 use crate::operator::{HomeProblem, provider_home};
 
+mod missing;
+use missing::MissingLogs;
+
 /// The CLI's own override for where it keeps everything.
 const HOME_ENV: &str = "CODEX_HOME";
 
@@ -203,6 +206,7 @@ pub(super) struct CodexRoster {
     /// Where each conversation's log is and how far it has been read, so a later look reads only what was
     /// appended. Shared because the driver hands clones to the blocking pool.
     followed: Arc<Mutex<HashMap<Box<str>, Followed>>>,
+    missing: Arc<Mutex<MissingLogs>>,
     /// The process each conversation's lock names, and that conversation's folder. Shared for the same reason.
     bound: Arc<Mutex<HashMap<Box<str>, Bound>>>,
     /// How the holder of a lock is asked for. The product asks through a short-lived helper, which keeps the
@@ -224,12 +228,14 @@ pub(super) struct CodexRoster {
 struct MachineFacts {
     owned: Arc<Mutex<Option<Ownership>>>,
     followed: Arc<Mutex<HashMap<Box<str>, Followed>>>,
+    missing: Arc<Mutex<MissingLogs>>,
     bound: Arc<Mutex<HashMap<Box<str>, Bound>>>,
 }
 
 static MACHINE: std::sync::LazyLock<MachineFacts> = std::sync::LazyLock::new(|| MachineFacts {
     owned: Arc::new(Mutex::new(None)),
     followed: Arc::new(Mutex::new(HashMap::new())),
+    missing: Arc::new(Mutex::new(MissingLogs::default())),
     bound: Arc::new(Mutex::new(HashMap::new())),
 });
 
@@ -255,6 +261,7 @@ impl CodexRoster {
             owned: Arc::clone(&MACHINE.owned),
             owned_for,
             followed: Arc::clone(&MACHINE.followed),
+            missing: Arc::clone(&MACHINE.missing),
             bound: Arc::clone(&MACHINE.bound),
             ask_holder: runtrol_childproc::holder_of,
             identify: live_identity,
@@ -270,6 +277,7 @@ impl CodexRoster {
             owned: Arc::new(Mutex::new(None)),
             owned_for,
             followed: Arc::new(Mutex::new(HashMap::new())),
+            missing: Arc::new(Mutex::new(MissingLogs::default())),
             bound: Arc::new(Mutex::new(HashMap::new())),
             ask_holder: runtrol_childproc::holder_of_here,
             identify: live_identity,
@@ -335,6 +343,8 @@ impl CodexRoster {
         // outside a runtime task.
         let mut followed = self.followed.blocking_lock();
         followed.retain(|thread, _| owned.iter().any(|owned| owned.as_str() == thread.as_ref()));
+        let mut missing = self.missing.blocking_lock();
+        missing.begin(home, &owned, &followed);
         for thread in owned {
             if let Some(binding) = holder(
                 self.ask_holder,
@@ -344,7 +354,13 @@ impl CodexRoster {
                 &mut bound,
                 thread.as_str(),
             ) {
-                if answering(home, &mut followed, thread.as_str(), binding.identity) {
+                if answering(
+                    home,
+                    &mut followed,
+                    thread.as_str(),
+                    binding.identity,
+                    &mut missing,
+                ) {
                     active.push(thread.clone());
                 }
                 processes.push(NativeProcessBinding {
@@ -490,6 +506,7 @@ fn answering(
     followed: &mut HashMap<Box<str>, Followed>,
     thread: &str,
     owner: ProcessIdentity,
+    missing: &mut MissingLogs,
 ) -> bool {
     if let Some(known) = followed.get_mut(thread) {
         let Ok(size) = fs::metadata(&known.log).map(|metadata| metadata.len()) else {
@@ -528,7 +545,7 @@ fn answering(
             .boundary
             .is_some_and(|boundary| boundary.answers_for(owner));
     }
-    let Some(log) = locate_log(home, thread) else {
+    let Some(log) = missing.locate(home, thread) else {
         return false;
     };
     let Some((read_to, boundary)) = last_boundary(&log) else {
@@ -551,54 +568,76 @@ fn answering(
 /// suffix rather than a guess at the timestamp. Bounded, and done once per conversation: the answer is kept
 /// for as long as a live process owns it.
 fn locate_log(home: &Path, thread: &str) -> Option<PathBuf> {
+    search_log(home, thread).0
+}
+
+/// An absence can be retained only after a complete, readable tree with no redirected subdirectories.
+fn search_log(home: &Path, thread: &str) -> (Option<PathBuf>, bool) {
     let suffix = format!("-{thread}.{LOG_EXTENSION}");
     let sessions = home.join(SESSIONS_DIRECTORY);
     let mut days = Vec::new();
-    collect_day_directories(&sessions, 0, &mut days);
+    let mut complete =
+        fs::symlink_metadata(&sessions).is_ok_and(|metadata| !metadata.file_type().is_symlink());
+    complete &= collect_day_directories(&sessions, 0, &mut days);
     // Newest first: a conversation a process is holding was written to recently, and the day directories
     // sort by name into calendar order.
     days.sort_by(|left, right| right.cmp(left));
     for day in days.into_iter().take(MAX_DAY_DIRECTORIES) {
         let Ok(entries) = fs::read_dir(&day) else {
+            complete = false;
             continue;
         };
         for (index, entry) in entries.enumerate() {
             if index >= MAX_DAY_ENTRIES {
+                complete = false;
                 break;
             }
-            let Ok(entry) = entry else { continue };
+            let Ok(entry) = entry else {
+                complete = false;
+                continue;
+            };
             let path = entry.path();
             if path
                 .file_name()
                 .and_then(|name| name.to_str())
                 .is_some_and(|name| name.ends_with(&suffix))
             {
-                return Some(path);
+                return (Some(path), complete);
             }
         }
     }
-    None
+    (None, complete)
 }
 
 /// Every `<year>/<month>/<day>` directory under the sessions root, three levels down.
-fn collect_day_directories(at: &Path, depth: usize, into: &mut Vec<PathBuf>) {
+fn collect_day_directories(at: &Path, depth: usize, into: &mut Vec<PathBuf>) -> bool {
     if depth == 3 {
         into.push(at.to_path_buf());
-        return;
+        return true;
     }
     let Ok(entries) = fs::read_dir(at) else {
-        return;
+        return false;
     };
+    let mut complete = true;
     for (index, entry) in entries.enumerate() {
         if index >= MAX_DAY_ENTRIES || into.len() >= MAX_DAY_DIRECTORIES {
-            return;
+            return false;
         }
-        let Ok(entry) = entry else { continue };
+        let Ok(entry) = entry else {
+            complete = false;
+            continue;
+        };
+        match entry.file_type() {
+            Ok(kind) if !kind.is_symlink() => {}
+            // A subtree notification follows directory names, not a symbolic link's remote target.
+            Ok(_) | Err(_) => complete = false,
+        }
         let path = entry.path();
         if path.is_dir() {
-            collect_day_directories(&path, depth + 1, into);
+            complete &= collect_day_directories(&path, depth + 1, into);
         }
     }
+    complete
 }
 
 /// The state of the last turn boundary in the log, and the size the answer was read at.
@@ -838,7 +877,7 @@ mod tests {
 
     static NEXT_SCRATCH: AtomicUsize = AtomicUsize::new(0);
 
-    struct Scratch(PathBuf);
+    pub(super) struct Scratch(PathBuf);
 
     impl Drop for Scratch {
         fn drop(&mut self) {
@@ -850,7 +889,7 @@ mod tests {
         ProviderId::parse("codex").expect("the built-in provider identity parses")
     }
 
-    const OPEN_THREAD: &str = "01a03afd-5184-7512-8b48-b77dd957d18a";
+    pub(super) const OPEN_THREAD: &str = "01a03afd-5184-7512-8b48-b77dd957d18a";
     #[cfg(windows)]
     const DONE_THREAD: &str = "01a0471d-786c-7561-a8d5-db5ddb837c0c";
 
@@ -875,7 +914,7 @@ mod tests {
         usize::try_from(SCAN_CHUNK_BYTES).expect("the bounded scan chunk fits the test platform")
     }
 
-    fn opened(id: &str) -> String {
+    pub(super) fn opened(id: &str) -> String {
         opened_at(id, TURN_AT)
     }
 
@@ -903,7 +942,7 @@ mod tests {
     }
 
     /// A home shaped the way the CLI shapes its own, with the given conversations and logs.
-    fn home(logs: &[(&str, String)]) -> (Scratch, PathBuf) {
+    pub(super) fn home(logs: &[(&str, String)]) -> (Scratch, PathBuf) {
         let serial = NEXT_SCRATCH.fetch_add(1, Ordering::Relaxed);
         let root = std::env::temp_dir().join(format!(
             "runtrol-codex-roster-{}-{serial}",
@@ -1411,7 +1450,13 @@ mod tests {
             let log = locate_log(&root, OPEN_THREAD).expect("the fixture log exists");
             let owner = fixture_identity(1).expect("fixture owner");
             let mut followed = HashMap::new();
-            assert!(!answering(&root, &mut followed, OPEN_THREAD, owner));
+            assert!(!answering(
+                &root,
+                &mut followed,
+                OPEN_THREAD,
+                owner,
+                &mut MissingLogs::default()
+            ));
             let mut file = OpenOptions::new()
                 .append(true)
                 .open(log)
@@ -1423,7 +1468,13 @@ mod tests {
                     .expect("fixture split is in range"),
             )
             .expect("finish the prefix");
-            assert!(answering(&root, &mut followed, OPEN_THREAD, owner));
+            assert!(answering(
+                &root,
+                &mut followed,
+                OPEN_THREAD,
+                owner,
+                &mut MissingLogs::default()
+            ));
         }
     }
 
@@ -1476,7 +1527,13 @@ mod tests {
         let log = locate_log(&root, OPEN_THREAD).expect("the fixture log exists");
         let owner = fixture_identity(1).expect("fixture owner");
         let mut followed = HashMap::new();
-        assert!(!answering(&root, &mut followed, OPEN_THREAD, owner));
+        assert!(!answering(
+            &root,
+            &mut followed,
+            OPEN_THREAD,
+            owner,
+            &mut MissingLogs::default()
+        ));
         let mut file = OpenOptions::new()
             .append(true)
             .open(log)
@@ -1487,7 +1544,13 @@ mod tests {
                 .expect("fixture split is in range"),
         )
         .expect("finish the fixture");
-        assert!(!answering(&root, &mut followed, OPEN_THREAD, owner));
+        assert!(!answering(
+            &root,
+            &mut followed,
+            OPEN_THREAD,
+            owner,
+            &mut MissingLogs::default()
+        ));
     }
 
     #[test]

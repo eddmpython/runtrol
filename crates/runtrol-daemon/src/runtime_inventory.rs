@@ -226,7 +226,7 @@ fn merge_account_usage(
 ) -> runtrol_runtime_protocol::ProviderUsageList {
     let probed = provider_usage(&reports.probed_gauges());
     let mut merged = current.clone();
-    for (provider, at) in reports.signed_out() {
+    for (provider, at) in reports.usage_absent() {
         merged.providers.retain(|gauge| {
             gauge.provider_id.as_str() != provider.as_str() || gauge.at_ms > at.as_millis()
         });
@@ -1128,6 +1128,37 @@ mod tests {
             newer,
             "a later provider turn is new usage evidence"
         );
+    }
+
+    #[test]
+    fn a_successful_absence_retires_older_merged_usage_but_not_a_later_turn() {
+        let id = runtrol_provider::ProviderId::parse("account-fixture").expect("provider");
+        for unmetered in [false, true] {
+            let mut reports = crate::account_probe::AccountReports::default();
+            let mut report = runtrol_provider::AccountReport::unpublished("fixture");
+            report.status = runtrol_provider::AccountStatus::SignedIn;
+            report.limits = Some(runtrol_provider::AccountLimits::new(Vec::new(), false));
+            report.tokens_today = Some(42);
+            reports.record(id, report, runtrol_provider::WallMs::from_millis(10));
+            let current = merge_account_usage(
+                &runtrol_runtime_protocol::ProviderUsageList {
+                    providers: Vec::new(),
+                },
+                &reports,
+            );
+            let mut absent = runtrol_provider::AccountReport::unpublished("surface removed");
+            if unmetered {
+                absent.status = runtrol_provider::AccountStatus::SignedIn;
+                absent.limits_absent = Some(runtrol_provider::LimitsAbsent::Unmetered {
+                    why: "team metering".into(),
+                });
+            }
+            reports.record(id, absent, runtrol_provider::WallMs::from_millis(20));
+            assert!(merge_account_usage(&current, &reports).providers.is_empty());
+            let mut later = current;
+            later.providers.first_mut().expect("one gauge").at_ms = 30;
+            assert_eq!(merge_account_usage(&later, &reports), later);
+        }
     }
 
     #[test]

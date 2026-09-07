@@ -267,10 +267,29 @@ impl AccountReports {
         self.latest.get(&provider)
     }
 
-    /// A confirmed sign-out retires older gauges, including a probe previously merged into a watch value.
-    pub(crate) fn signed_out(&self) -> impl Iterator<Item = (ProviderId, WallMs)> + '_ {
+    /// A successful no-usage verdict waits for a real activity, account action, or installation change.
+    fn needs_sweep(&self, provider: ProviderId) -> bool {
+        self.get(provider).is_none_or(|reported| {
+            reported.report.limits.is_some()
+                || reported
+                    .report
+                    .limits_absent
+                    .as_ref()
+                    .is_some_and(runtrol_provider::LimitsAbsent::is_worth_retrying)
+        })
+    }
+
+    /// A successful absence retires older gauges already merged into a watch value. A failed read retains
+    /// evidence, but an unsupported surface or unmetered account must not keep publishing old numbers.
+    pub(crate) fn usage_absent(&self) -> impl Iterator<Item = (ProviderId, WallMs)> + '_ {
         self.latest.iter().filter_map(|(id, report)| {
-            matches!(report.report.status, AccountStatus::SignedOut).then_some((*id, report.at))
+            (report.report.limits.is_none()
+                && !report
+                    .report
+                    .limits_absent
+                    .as_ref()
+                    .is_some_and(runtrol_provider::LimitsAbsent::is_worth_retrying))
+            .then_some((*id, report.at))
         })
     }
 
@@ -634,7 +653,11 @@ async fn due_now(
             .collect()
     };
     if swept_at.millis_until(now).unwrap_or(0) >= millis(ROUND_INTERVAL) {
-        return usable();
+        let reports = composed.account_reports.lock().await;
+        return usable()
+            .into_iter()
+            .filter(|id| reports.needs_sweep(*id))
+            .collect();
     }
     if composed
         .open_terminals
@@ -743,10 +766,25 @@ fn publish_account(
 
 /// One service's answer, or an explicit failed read including driver preparation failure.
 async fn ask(composed: &Arc<Composed>, id: ProviderId) -> Result<AccountReport, String> {
-    let driver = crate::provider_prepare::driver(composed, id)
+    // Keep the exact resolved invocation so completion needs only its metadata, never another PATH search.
+    let prepared = crate::provider_prepare::prepared_terminal_driver(composed, id)
         .await
         .map_err(|error| error.message().to_owned())?;
-    read_account(driver.account()).await
+    let program = prepared
+        .terminal_program
+        .ok_or_else(|| "account preparation did not retain its executable".to_owned())?;
+    let answer = read_account(prepared.driver.account()).await;
+    let current = runtrol_core::probe::inspect_program(&program)
+        .await
+        .map_err(|error| error.to_string())?;
+    if Some(&current) != prepared.program_facts.as_deref() {
+        composed.account_probe_wake.provider(id).await;
+        return Err(
+            "the provider CLI changed while reading usage; checking the current installation"
+                .to_owned(),
+        );
+    }
+    answer
 }
 
 async fn read_account(
@@ -812,6 +850,10 @@ mod tests {
             "a real replacement verdict clears the retained gauge"
         );
         assert!(reports.retained_gauges.is_empty());
+        assert!(
+            !reports.needs_sweep(id),
+            "a confirmed absence is not polled"
+        );
     }
 
     #[test]
@@ -996,6 +1038,10 @@ mod tests {
         assert!(!reports.record_answer((id, Ok(report), WallMs::from_millis(30))));
         let descriptor = reports.descriptor(id).expect("latest completed answer");
         assert_eq!(descriptor.checked_at_ms, 30);
+        assert!(
+            !reports.needs_sweep(id),
+            "an unsupported surface waits for a real change"
+        );
         assert_eq!(
             descriptor.status,
             runtrol_runtime_protocol::ProviderAccountStatus::Unpublished
@@ -1083,6 +1129,10 @@ mod tests {
         );
         assert!(descriptor.plan.is_none());
         assert!(reports.get(provider).is_none());
+        assert!(
+            reports.needs_sweep(provider),
+            "a failure has not established an absent surface"
+        );
         assert!(reports.probed_gauges().is_empty());
         reports.record(
             provider,

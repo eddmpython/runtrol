@@ -63,6 +63,8 @@ and refactoring that no user can observe do not belong here.
 
 ### Changed
 
+- Background provider observation reuses verified installation metadata and avoids repeatedly searching for
+  conversation files that have not appeared yet. Canceled discovery cannot accumulate blocking roster scans.
 - Project change counts recover after a Git timeout, repository initialization, or first commit without reloading
   the window. Failed reads show a reason, and Look again retries them. Concurrent changes share one read per project.
 

@@ -937,11 +937,11 @@ async fn open_with_arguments(
         program
     } else {
         let mut cache = runtrol_core::ProbeCache::open(composed.home.paths().probe_cache());
-        let (program, _probed) =
+        let probed =
             runtrol_core::probe_program(&declared.manifest, &[], &mut cache, &composed.containment)
                 .await
                 .map_err(|error| TerminalOpenError::Provider(error.to_string()))?;
-        program
+        probed.program
     };
     // The courier token and environment this managed process is born with. Minted before the launch and
     // touching no shared state, so a launch that fails below leaves the gate exactly as it was.
