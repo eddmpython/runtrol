@@ -150,6 +150,13 @@ provider CLI if needed. Reinstallation creates a new Runtime instance and requir
 
 ## Failure handling
 
+If Runtime exits unexpectedly, Studio shows the connection failure and marks affected terminal tabs as failed.
+Use **Try now** in the sidebar or the Runtrol refresh command to reconnect without reloading the editor. After
+connection returns, start a new conversation or explicitly resume an available provider-owned conversation.
+Reconnection does not revive an exited process or clear its failed tab: close that tab when its retained screen is
+no longer needed. A forced Runtime exit can end supervised provider processes; live generation handoff above is a
+different operation and preserves its existing owners.
+
 | Symptom | Safe response |
 |---|---|
 | Installer checksum failure | Stop and obtain the exact attested archive again |
