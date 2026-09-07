@@ -42,8 +42,8 @@ await Promise.all([
     platform: "node",
     format: "cjs",
     target: "node20",
-    // Phone UI and QR generation share a bounded sibling bundle loaded only by an explicit pairing command.
-    external: ["vscode", "./pairingQrVendor"],
+    // Phone connection UI and provider account tasks load only after an explicit user command.
+    external: ["vscode", "./connectionActions"],
     alias: {
       "@runtrol/runtime-client": path.join(repositoryRoot, "clients/typescript/src/index.ts"),
     },
@@ -67,13 +67,13 @@ await Promise.all([
     logLevel: "info",
   }),
   build({
-    entryPoints: [path.join(extensionRoot, "src/pairingQrVendor.ts")],
-    outfile: path.join(dist, "pairingQrVendor.js"),
+    entryPoints: [path.join(extensionRoot, "src/connectionActions.ts")],
+    outfile: path.join(dist, "connectionActions.js"),
     bundle: true,
     platform: "node",
     format: "cjs",
     target: "node20",
-    external: ["vscode", "./pairingQrVendor"],
+    external: ["vscode", "./connectionActions"],
     minify: true,
     sourcemap: false,
     logLevel: "info",

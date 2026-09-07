@@ -112,7 +112,7 @@ function strip(chips: readonly UsageChip[]): string {
 test("an unread account offers usage retry without signing in, signing out, or repairing its CLI", () => {
   for (const meters of [[], [{ key: "window", label: "5h", percent: 48, resets: "", governing: true }]]) {
     const chips = usageChips([row({ state: "unread", meters, position: "Account request timed out" })],
-      new Set(["codex"]), new Map(), new Set(["codex"]));
+      new Set(["codex"]), new Map(), new Set());
     assert.equal(chips[0]?.action, "retryUsage");
     assert.match(chips[0]?.caption ?? "", /Retry/u);
     const html = strip(chips);
@@ -121,6 +121,14 @@ test("an unread account offers usage retry without signing in, signing out, or r
     assert.ok(html.includes("usage unreadable; retry usage"));
     assert.doesNotMatch(html, /data-action="(?:signIn|signOut|fix)"/u);
   }
+});
+
+test("known sign-in survives an unread limit surface and keeps its sign-out action", () => {
+  const html = strip(usageChips([row({ state: "unread", position: "Limit request timed out" })],
+    new Set(["codex"]), new Map(), new Set(["codex"])));
+  assert.ok(html.includes('data-action="retryUsage"'));
+  assert.ok(html.includes('data-action="signOut"'));
+  assert.ok(!html.includes('data-action="signIn"'));
 });
 
 const assets = {

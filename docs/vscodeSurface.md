@@ -136,7 +136,18 @@ request a fresh provider report through the same bounded refresh path. A failed 
 nor a provider declaring that it publishes no usage. If an earlier report exists, its figures and original report
 age remain visible and are explicitly marked as the last report. A partial response that confirms sign-in but
 cannot read limits uses the same retry behavior. A confirmed sign-out removes figures measured for the previous
-account; only a later provider report may replace them.
+account; only a later provider report may replace them. A successful report that publishes no numeric usage also
+retires superseded figures. Failure retains evidence, while a confirmed absence replaces it.
+
+At a provider-reported reset, expired windows and the older aggregate blocking verdict disappear. Remaining windows
+retain their values and report age, and the chip offers a retry. Reset is not evidence of zero consumption or
+a renewed allowance. One timer targets the next reported reset so a quiet sidebar updates without another provider
+query or periodic repaint.
+
+Sign-in and sign-out use the provider's discovered command in a native VS Code task terminal. The CLI owns its
+authentication and browser interaction. Completion of that exact task requests one structured account refresh;
+neither an exit code nor an unrelated task proves sign-in or sign-out. A sign-out action appears only after confirmed
+sign-in. The command handler and task listener are loaded on the first explicit account action.
 
 The Runtime subscription is the refresh clock. Structured provider account events publish immediately to the shared
 `providers/usageChanged` watch. Hosted terminal writes use a cheap quiet-edge clock only while a terminal is open, and
@@ -317,6 +328,8 @@ before termination, so nothing lists a dead process afterwards.
 | `sidebarView.ts` | VS Code webview host, Runtime-state projection, bounded view state, and command dispatch | provider calls from page code or conversation content |
 | `sidebarPage.ts` | pure sidebar HTML, CSS, project and conversation row markup | Runtime access, provider policy, or durable state |
 | `usageDisplay.ts`, `usageStrip.ts` | provider-neutral usage semantics, chips, gauges, and detail panels | inferred capacity or provider-specific branches |
+| `providerAccountAction.ts` | explicit provider account tasks and exact completion refresh | credentials, browser authentication, or interpreting command output |
+| `connectionActions.ts`, `connectionSurface.ts` | bounded command-only loading for phone and provider account actions | activation-time account work or provider discovery |
 | `stateRows.ts` | exact row equality and incomplete-discovery notices | rendering, Runtime calls, or transcript inspection |
 | `controller.ts` | explicit user actions, provider-neutral navigation, workspace binding | transcript discovery or an agent loop |
 | `terminalTabs.ts` | one public Runtime terminal view per editor tab | reading, storing, rewriting, or retrying terminal input |
@@ -383,6 +396,7 @@ manifest, and CI installs the same required build tool before invoking the exten
 | `node tooling/real-window-eye.mjs` | isolated real VS Code visual journey and screenshots |
 | `node tooling/drag-select-eye.mjs` | a real pointer drag selects text in a Runtrol tab whose provider switched mouse reporting on, with screenshots and a public-wire screen comparison |
 | `node tooling/window-registry-eye.mjs` | two isolated windows and a development-mode third register with one Runtime, follow terminal open, command, and close, and survive an Extension Host restart as one entry each, read through the public wire |
+| `node tooling/provider-account-eye.mjs` | real Windows task completion refreshes the account once, an unrelated task does not, and the native task terminal is photographed without executing authentication |
 | `vscodePackage` | complete target SSOT, exact archive contents, Runtime bytes, workflow, README, and brand metadata |
 | `crossPlatformMatrix` | exact VSIX installation and first-run action on native Windows, macOS, and Linux |
 | `vscodeUpgradeRollback` | active-session continuity across official VSIX upgrade and rollback |

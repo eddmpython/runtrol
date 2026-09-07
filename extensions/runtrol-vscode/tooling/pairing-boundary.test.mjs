@@ -4,9 +4,9 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 
-test("phone commands load their existing sibling once and share its working QR encoder", async () => {
+test("connection commands share one cold sibling and register account listeners only when needed", async () => {
   const compiled = await build({
-    entryPoints: ["pairingSurface", "pairingQrVendor"].map((name) => (
+    entryPoints: ["connectionSurface", "connectionActions"].map((name) => (
       fileURLToPath(new URL(`../src/${name}.ts`, import.meta.url))
     )),
     outdir: "pairing-memory-output",
@@ -14,7 +14,7 @@ test("phone commands load their existing sibling once and share its working QR e
     platform: "node",
     format: "cjs",
     target: "node20",
-    external: ["vscode", "./pairingQrVendor"],
+    external: ["vscode", "./connectionActions"],
     write: false,
   });
   const ordinaryRequire = createRequire(import.meta.url);
@@ -23,7 +23,20 @@ test("phone commands load their existing sibling once and share its working QR e
   let sibling;
   let loads = 0;
   let panelHtml = "";
+  const listeners = new Set();
+  let execution;
+  const subscribe = (listener) => {
+    listeners.add(listener);
+    return { dispose: () => listeners.delete(listener) };
+  };
   const editor = {
+    Task: class { constructor(definition) { this.definition = definition; } },
+    ShellExecution: class {},
+    TaskScope: { Global: 1 }, TaskRevealKind: { Always: 1 }, TaskPanelKind: { Shared: 1 },
+    tasks: {
+      onDidEndTask: subscribe, onDidEndTaskProcess: subscribe,
+      executeTask: async (task) => { execution = { task }; return execution; },
+    },
     ViewColumn: { Active: 1 },
     window: {
       showInformationMessage: async (message) => { notices.push(message); },
@@ -40,10 +53,10 @@ test("phone commands load their existing sibling once and share its working QR e
   };
   function load(name) {
     if (name === "vscode") return editor;
-    if (name !== "./pairingQrVendor") return ordinaryRequire(name);
+    if (name !== "./connectionActions") return ordinaryRequire(name);
     if (!sibling) {
       loads += 1;
-      sibling = evaluate("pairingQrVendor");
+      sibling = evaluate("connectionActions");
     }
     return sibling;
   }
@@ -54,7 +67,7 @@ test("phone commands load their existing sibling once and share its working QR e
     new Function("module", "exports", "require", output.text)(module, module.exports, load);
     return module.exports;
   }
-  const surface = evaluate("pairingSurface");
+  const surface = evaluate("connectionSurface");
   assert.equal(loads, 0, "ordinary activation does not load phone UI or QR tables");
   const client = { once: async (request) => {
     requests.push(request.ask);
@@ -69,6 +82,7 @@ test("phone commands load their existing sibling once and share its working QR e
   await surface.reviewPhonePairings(client);
   await surface.pairPhone(client);
   assert.equal(loads, 1);
+  assert.equal(listeners.size, 0, "phone UI does not subscribe to account task events");
   assert.deepEqual(requests, ["devices", "pairingProposals", "pairingBegin"]);
   assert.ok(notices.length >= 2);
   const encoded = panelHtml.match(/data:image\/svg\+xml;base64,([A-Za-z0-9+/=]+)/u);
@@ -77,4 +91,16 @@ test("phone commands load their existing sibling once and share its working QR e
   assert.match(svg, /^<svg /u);
   assert.match(svg, /viewBox="0 0 \d+ \d+"/u);
   assert.ok(encoded[0].length < 32 * 1024, "the pairing image remains bounded without the PNG runtime");
+  let refreshed = 0;
+  const runtime = { providersUsage: async () => { refreshed += 1; } };
+  for (let activation = 0; activation < 2; activation += 1) {
+    const context = { subscriptions: [] };
+    await surface.runAccountCommand(context, runtime, "fixture", "1", "Sign in", "fixture-command");
+    assert.equal(context.subscriptions.length, 1);
+    for (const listener of listeners) listener({ execution });
+    assert.equal(refreshed, activation + 1);
+    for (const subscription of context.subscriptions) subscription.dispose();
+    assert.equal(listeners.size, 0, "deactivation releases account listeners and permits reactivation");
+  }
+  assert.equal(loads, 1, "both connection surfaces reuse the same bounded companion");
 });

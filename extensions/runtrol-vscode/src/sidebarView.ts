@@ -124,6 +124,7 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
   private verifyingProvider: boolean | null = null;
   private reach: string | null = null;
   private pendingReveal: string | null = null;
+  private usageReset: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -159,7 +160,11 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
       localResourceRoots: [vscode.Uri.joinPath(this.context.extensionUri, "resources", "provider-icons")],
     };
     view.onDidDispose(() => {
-      if (this.view === view) this.view = null;
+      if (this.view === view) {
+        this.view = null;
+        if (this.usageReset) clearTimeout(this.usageReset);
+        this.usageReset = null;
+      }
     });
     view.onDidChangeVisibility(() => {
       if (view.visible) this.render();
@@ -215,6 +220,8 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
 
   dispose(): void {
     for (const subscription of this.subscriptions) subscription.dispose();
+    if (this.usageReset) clearTimeout(this.usageReset);
+    this.usageReset = null;
     this.view = null;
   }
 
@@ -303,8 +310,19 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
 
   private render(): void {
     this.updateContext();
+    if (this.usageReset) clearTimeout(this.usageReset);
+    this.usageReset = null;
     const view = this.view;
     if (!view) return;
+    // A provider-declared deadline, not a polling clock. A quiet visible window must retire its bars too.
+    const now = Date.now();
+    const reset = Math.min(...this.state.usage.flatMap((gauge) =>
+      (gauge.windows ?? []).flatMap((window) =>
+        typeof window.resetsAtMs === "number" && window.resetsAtMs > now ? [window.resetsAtMs] : [])));
+    if (view.visible && Number.isFinite(reset)) {
+      this.usageReset = setTimeout(() => this.render(), Math.min(reset - now, 2_147_483_647));
+      this.usageReset.unref();
+    }
     const model = this.buildModel();
     this.model = model;
     this.updateBadge(view, model);
@@ -379,7 +397,7 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
       .filter((provider) => provider.help?.signIn)
       .map((provider) => provider.providerId));
     const signOutAble = new Set(this.state.providers
-      .filter((provider) => this.help.signOutFor(provider.providerId) !== null)
+      .filter((provider) => provider.account?.status === "signedIn" && this.help.signOutFor(provider.providerId) !== null)
       .map((provider) => provider.providerId));
     // The CLI release beside each service's name: Runtime's probe of the binary, or the Core's inspection when
     // the probe said nothing. And the release the Update button goes to, when the Core confirmed one.

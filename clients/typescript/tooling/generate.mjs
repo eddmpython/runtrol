@@ -174,7 +174,7 @@ function sharedValidationSource(projection) {
   }
   visit(projection);
   const shared = new Map([...values.entries()]
-    .filter(([key, entry]) => entry.count > 1 && key.length > 8)
+    .filter(([key, entry]) => entry.count > 1 && key.length > 5)
     .map(([key, entry], index) => [key, { value: entry.value, name: `node${index}` }]));
   function render(value, defining) {
     const key = JSON.stringify(value);

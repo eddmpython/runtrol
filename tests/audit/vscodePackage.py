@@ -939,7 +939,7 @@ def expectedEntries(target: str) -> set[str]:
         "extension/dist/codicon.css",
         "extension/dist/codicon.ttf",
         "extension/dist/extension.js",
-        "extension/dist/pairingQrVendor.js",
+        "extension/dist/connectionActions.js",
         # The `vscode:uninstall` hook. It runs on the VS Code start after Studio is removed and takes away
         # Runtrol's own residue: managed Core images, shims, the daemons running from them, and the state root.
         "extension/dist/uninstall.js",

@@ -72,7 +72,7 @@ try {
   await writeFile(path.join(development, "package.json"), JSON.stringify(packageManifest));
   await build({ entryPoints: [path.join(extensionRoot, "src/extension.ts")],
     outfile: path.join(development, "dist/extension.js"), bundle: true, platform: "node", format: "cjs",
-    target: "node20", external: ["vscode", "./pairingQrVendor"], minify: true,
+    target: "node20", external: ["vscode", "./connectionActions"], minify: true,
     alias: { "@runtrol/runtime-client": path.join(root, "clients/typescript/src/index.ts") },
     define: { RUNTROL_INCLUDE_TEST_JOURNEY: "true" }, logLevel: "silent" });
   const testEntry = path.join(coordination, "journey.cjs");

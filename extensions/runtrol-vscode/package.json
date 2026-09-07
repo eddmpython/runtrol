@@ -99,6 +99,15 @@
     "onCommand:runtrol.moveProjectDown"
   ],
   "contributes": {
+    "taskDefinitions": [{
+      "type": "runtrol-account",
+      "required": ["provider", "token"],
+      "properties": {
+        "provider": { "type": "string" },
+        "version": { "type": "string" },
+        "token": { "type": "string" }
+      }
+    }],
     "viewsContainers": {
       "activitybar": [
         {

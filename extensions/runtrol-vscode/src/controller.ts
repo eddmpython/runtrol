@@ -28,6 +28,7 @@ import type {
   WorkspaceAccess,
 } from "./runtimeTypes";
 import { abortableDelay } from "./abortableDelay";
+import { runAccountCommand } from "./connectionSurface";
 
 /// How long a stopped conversation is given to leave this window's live rows before it is kept rather than
 /// deleted. The Core sees an exit within a few hundred milliseconds; ten seconds covers a slow machine.
@@ -974,23 +975,14 @@ export class Controller implements vscode.Disposable {
     this.offerInTerminal(picked.offer);
   }
 
-  /// Put a coding service's own command in the operator's terminal, running it or leaving it for them.
-  ///
-  /// `run` is the line between two different things a person means by pressing a button here. An install
-  /// command (`npm i -g …`) is Runtrol fetching and executing on somebody's behalf, the one capability this
-  /// product refused from the start, so it is placed and left for the person to read and run. A sign-in is
-  /// the opposite: the provider CLI authenticates itself through its own browser flow, holding its own
-  /// credential, which is exactly the thin boundary this product keeps. Leaving `claude auth login` typed but
-  /// unrun did not honour that boundary, it just made sign-in not work (operator, 2026-08-29: pressing sign
-  /// in only wrote to the terminal and no login opened). So a sign-in runs to the end, and the person
-  /// completes it in the browser the CLI opens.
-  private offerInTerminal(offer: HelpOffer, run = false): void {
+  /// Leave repair and install commands in the terminal for review. Account commands have owned task completion.
+  private offerInTerminal(offer: HelpOffer): void {
     if (this.helpTerminal?.exitStatus !== undefined) {
       this.helpTerminal = null;
     }
     this.helpTerminal ??= vscode.window.createTerminal({ name: "Runtrol: coding service" });
     this.helpTerminal.show(true);
-    this.helpTerminal.sendText(offer.command, run);
+    this.helpTerminal.sendText(offer.command, false);
   }
 
   async interrupt(from?: SessionLine): Promise<void> {
@@ -1131,19 +1123,19 @@ export class Controller implements vscode.Disposable {
       this.say(`${providerDisplayName(session.providerId, this.state.providers)} is not listed.`, "info");
       return;
     }
-    this.signInProvider(provider);
+    await this.signInProvider(provider);
   }
 
-  /// The service's own sign-in command, typed into a terminal and left there: Runtrol never runs a login
-  /// itself and never holds what one produces. Reachable from a conversation row and from the usage strip.
-  signInProvider(provider: ProviderLine): void {
+  /// Run the declared sign-in command in the CLI's terminal; the CLI owns its browser and credentials.
+  async signInProvider(provider: ProviderLine): Promise<void> {
     const signIn = offersFor(provider, "needsSigningIn").find((offer) => offer.command === provider.help?.signIn) ?? null;
     if (!signIn) {
       this.say(`${provider.displayName} declares no sign-in command; sign in at its own surface.`, "info");
       return;
     }
     // Run it: the CLI opens its own browser flow and the person finishes there. Runtrol holds nothing.
-    this.offerInTerminal(signIn, true);
+    await runAccountCommand(this.context, this.runtime, provider.providerId, provider.installation.version,
+      signIn.label, signIn.command);
   }
 
   /// What the Core's private help line says about one service: the sign-out command, when it declares one.
@@ -1167,11 +1159,8 @@ export class Controller implements vscode.Disposable {
       this.say(`${provider.displayName} declares no sign-out command; sign out at its own surface.`, "info");
       return;
     }
-    this.offerInTerminal({
-      label: `Sign out of ${provider.displayName}`,
-      command,
-      because: "this coding service keeps its own login, and its own command is what ends it",
-    }, true);
+    await runAccountCommand(this.context, this.runtime, provider.providerId, provider.installation.version,
+      `Sign out of ${provider.displayName}`, command);
   }
 
   /// Answer the question a conversation is waiting on from its row, with the service's own options, without

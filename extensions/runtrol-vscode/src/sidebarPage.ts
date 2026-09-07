@@ -459,23 +459,21 @@ button { font: inherit; color: inherit; }
    box that had shrunk to nothing it broke "306 MB" across two lines and printed the running dot through it
    (measured 2026-08-28). The buttons now overlay the whole row instead, so nothing has to hide here. */
 .memory { flex: none; white-space: nowrap; font-size: 10px; font-variant-numeric: tabular-nums; opacity: 0.6; }
-/* Always at the right edge of the row, never packed against the name: a person reaching for delete should
-   find it in the same place on every row (operator, 2026-08-28). */
-/* The hover actions sit over the right end of the row rather than beside it.
-   Measured 2026-08-28 at a real panel width: hidden, they still held 113px of a 304px project row, which is
-   where the branch name went. Reserving the space was meant to stop the row reflowing when they appear, and
-   taking them out of the flow stops it just as completely: the row's own content never moves, and what the
-   buttons cover is the faded tail a name was already losing. They carry the hover colour so nothing shows
-   through them. */
-.actions { position: absolute; right: 3px; top: 1px; bottom: 1px; display: inline-flex; align-items: center; gap: 1px; padding-left: 8px; visibility: hidden; background: var(--vscode-list-hoverBackground); }
+/* Theme hover colours can be translucent. An opaque base prevents conversation text showing through.
+   Project actions take real space and replace whole metadata values, preserving counts at narrow widths. */
+.actions { position: absolute; right: 3px; top: 1px; bottom: 1px; display: inline-flex; align-items: center; gap: 1px; padding-left: 8px; visibility: hidden; background: linear-gradient(var(--vscode-list-hoverBackground), var(--vscode-list-hoverBackground)), var(--vscode-sideBar-background); }
 .row:hover .actions, .row:focus-within .actions { visibility: visible; }
+.project-row .actions { position: static; display: none; flex: none; margin-left: auto; padding-left: 0; }
+.project-row:is(:hover, :focus-within) .actions { display: inline-flex; }
+.project-row:is(:hover, :focus-within) :is(.branch, .changes) { display: none; }
+.project-row:is(:hover, :focus-within) .name { min-width: 0; }
 .row:hover .memory, .row:focus-within .memory { visibility: hidden; }
 /* A blocked row must keep saying Elsewhere or Unavailable while its actions appear. The action strip used to
    cover that state at the exact moment a person clicked, so the following notification seemed to contradict
    the row. Give the word a fixed hover slot and place the actions immediately before it. */
 .conv.stateful:hover .conv-state, .conv.stateful:focus-within .conv-state { position: absolute; right: 4px; z-index: 2; box-sizing: border-box; width: 82px; text-align: center; }
 .conv.stateful:hover .actions, .conv.stateful:focus-within .actions { right: 90px; }
-.act { border: 0; background: transparent; padding: 2px; border-radius: 3px; cursor: pointer; opacity: 0.75; line-height: 0; }
+.act { border: 0; background: transparent; color: var(--vscode-foreground); padding: 2px; border-radius: 3px; cursor: pointer; line-height: 0; }
 .act:hover, .act:focus-visible { background: var(--vscode-toolbar-hoverBackground); opacity: 1; outline: none; }
 .project[draggable="true"] .project-row { cursor: grab; }
 .project.dragging { opacity: 0.4; }

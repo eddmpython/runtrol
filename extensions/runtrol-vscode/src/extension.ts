@@ -30,7 +30,7 @@ import { projectlessRoot } from "./projectlessWorkspace";
 import { accentForWorkspace, ProjectStore } from "./projects";
 import { isBroken, isUsable } from "./providerHealth";
 import { materializeProviderShims } from "./providerShims";
-import { managePhones, pairPhone, reviewPhonePairings } from "./pairingSurface";
+import { managePhones, pairPhone, reviewPhonePairings } from "./connectionSurface";
 import type { RemoteConnection } from "./protocol";
 import { SelectionStore } from "./selectionStore";
 import { ServiceTroubleReported } from "./serviceHelp";

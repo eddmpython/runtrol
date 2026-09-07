@@ -13,6 +13,45 @@ import {
 
 const NOW = Date.parse("2026-08-18T12:00:00Z");
 
+test("a newer successful absence retires earlier numbers before the separate usage push", () => {
+  for (const account of [
+    { status: "unpublished", why: "surface removed", checkedAtMs: NOW },
+    { status: "signedIn", limitsAbsent: { kind: "unmetered", why: "team metering" }, checkedAtMs: NOW },
+  ] as const) {
+    const providers = [{ ...PROVIDERS[1]!, account }];
+    const previous = gauge({ windows: [window("five_hour", { usedPercent: 100 })], reached: true });
+    const retired = usageRows([previous], providers, NOW)[0]!;
+    assert.deepEqual(retired.meters, []);
+    assert.equal(retired.reached, false);
+    assert.equal(retired.age, null);
+    const later = usageRows([{ ...previous, atMs: NOW + 1 }], providers, NOW + 1)[0]!;
+    assert.equal(later.meters[0]?.percent, 100);
+  }
+});
+
+test("a live unread report loses an expired blocking window and recovers on a new report", () => {
+  const providers = [{ ...PROVIDERS[1]!, account: {
+    status: "unread" as const, why: "Limit request timed out", checkedAtMs: NOW,
+  } }];
+  const previous = gauge({ reached: true, windows: [
+    window("five_hour", { usedPercent: 100, governing: true, resetsAtMs: NOW }),
+    window("seven_day", { usedPercent: 20, resetsAtMs: NOW + 60_000 }),
+  ] });
+  const row = usageRows([previous], providers, NOW)[0]!;
+  assert.deepEqual(row.meters.map((meter) => meter.percent), [20]);
+  assert.equal(row.reached, false);
+  assert.equal(row.state, "unread");
+  assert.equal(previous.windows?.length, 2, "projection never mutates the provider report");
+  const empty = usageRows([previous], providers, NOW + 60_000)[0]!;
+  assert.deepEqual(empty.meters, []);
+  assert.equal(empty.reached, false);
+  const recovered = usageRows([gauge({ atMs: NOW + 60_001, windows: [
+    window("five_hour", { usedPercent: 1, resetsAtMs: NOW + 120_000 }),
+  ] })], PROVIDERS, NOW + 60_001).find((candidate) => candidate.providerId === "codex")!;
+  assert.equal(recovered.state, "available");
+  assert.equal(recovered.meters[0]?.percent, 1);
+});
+
 test("an account read failure keeps the last gauge and its age without inventing sign-in state", () => {
   const providers: ProviderLine[] = PROVIDERS.map((provider) => ({ ...provider,
     account: { status: "unread", why: "Account request timed out", checkedAtMs: NOW },
@@ -267,6 +306,7 @@ test("a service that reported a period and no number leads with its own reason",
   const [row] = usageRows(
     [gauge({
       providerId: "grok",
+      atMs: NOW, // The period and its unmetered reason are one completed provider response.
       windows: [window("billing_period", {
         windowMinutes: 10_080,
         resetsAtMs: NOW + 4 * 86_400_000,
@@ -296,6 +336,7 @@ test("a service that did state a number keeps its number and not the reason", ()
   const [row] = usageRows(
     [gauge({
       providerId: "grok",
+      atMs: NOW + 1, // A newer numeric report supersedes the earlier unmetered account response.
       windows: [window("billing_period", { usedPercent: 42, windowMinutes: 10_080 })],
     })],
     providers,

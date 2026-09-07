@@ -64,7 +64,7 @@ export function usageChips(
   signInAble: ReadonlySet<string> = new Set(),
   /// Each service's CLI release and confirmed update, by provider id.
   releases: ReadonlyMap<string, ServiceRelease> = new Map(),
-  /// The services that publish a sign-out command of their own.
+  /// Accounts confirmed signed in whose services publish a sign-out command.
   signOutAble: ReadonlySet<string> = new Set(),
 ): UsageChip[] {
   return rows.map((row) => {
@@ -268,7 +268,7 @@ function signInButton(chip: UsageChip): string {
 /// Quiet on purpose: it ends a working login, so it dresses as a link rather than a button and sits last.
 /// The service's own command runs in a terminal exactly as sign-in does (operator, 2026-08-29).
 function signOutButton(chip: UsageChip): string {
-  if (!chip.canSignOut || chip.state !== "available") return "";
+  if (!chip.canSignOut || (chip.state !== "available" && chip.state !== "unread")) return "";
   return `<button class="action quiet" type="button" data-action="signOut" data-provider="${escapeHtml(chip.providerId)}">Sign out of ${escapeHtml(chip.name)}</button>`;
 }
 

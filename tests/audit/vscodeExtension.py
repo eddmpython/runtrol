@@ -116,8 +116,8 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
     for token, meaning in forbidden.items():
         if token in all_source:
             found.append(f"{meaning} is reachable through `{token}`")
-    # The conversation pane carries the service's bytes and nothing else (`terminalTransportIntegrity`, Studio
-    # presentation, 2026-09-02): no opening mark, no clear before a checkpoint, no exit or error sentence. What
+    # The conversation pane carries the service's bytes and nothing else (docs/terminalSurface.md, Studio
+    # presentation): no opening mark, no clear before a checkpoint, no exit or error sentence. What
     # the pseudoterminal module may write is what the Runtime sent, after the one viewer-edge mouse filter.
     pane = sources.get("runtimeTerminal.ts", "")
     for token, meaning in {
@@ -783,15 +783,15 @@ def run() -> int:
         EXTENSION / "dist" / name
         for name in (
             "extension.js",
-            "pairingQrVendor.js",
+            "connectionActions.js",
         )
     ]
     for bundle in bundles:
         if not bundle.is_file() or bundle.stat().st_size > 336 * 1024:
             failures.append(f"{bundle.relative_to(ROOT)} is missing or exceeds 336 KiB")
-    qr_bundle = EXTENSION / "dist" / "pairingQrVendor.js"
-    if qr_bundle.is_file() and qr_bundle.stat().st_size > 32 * 1024:
-        failures.append(f"{qr_bundle.relative_to(ROOT)} exceeds its pairing-only 32 KiB budget")
+    connection_bundle = EXTENSION / "dist" / "connectionActions.js"
+    if connection_bundle.is_file() and connection_bundle.stat().st_size > 32 * 1024:
+        failures.append(f"{connection_bundle.relative_to(ROOT)} exceeds its connection-actions 32 KiB budget")
     extension_bundle = EXTENSION / "dist" / "extension.js"
     if extension_bundle.is_file() and "RUNTROL_VSCODE_REAL_PROVIDER_JOURNEY" in extension_bundle.read_text(
         encoding="utf-8"

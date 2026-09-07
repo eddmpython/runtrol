@@ -26,10 +26,8 @@ import type { ProviderUsageGauge, ProviderUsageWindow } from "./runtimeTypes";
 /// this is not a guess about staleness, it is the service's own word about when its own number stopped
 /// being true.
 ///
-/// **A snapshot older than [`MAX_AGE`].** What is left after the first rule is a number that is still about
-/// the right window, and the only question is how far it has drifted. Fifteen minutes of drift is small
-/// against the alternative of showing nothing, and past that the honest answer is that this window does not
-/// know yet.
+/// **A snapshot older than [`MAX_AGE_MS`].** Reconnection has a bounded display lifetime. A retained
+/// report describes what the provider said at its timestamp, not guaranteed current usage.
 ///
 /// What is never thrown away is the instant the reading was taken. The row carries it, and the hover says
 /// how long ago it was, so a restored bar is a bar somebody can tell is a moment old.
@@ -38,10 +36,8 @@ const KEY = "runtrol.usageMemory.v1";
 
 /// How old a remembered strip may be and still be drawn.
 ///
-/// Set from what the numbers do rather than from a round figure: the shortest window any of these services
-/// meters is five hours, so a quarter of an hour is a twentieth of it, which is under a percentage point of
-/// drift even for somebody working without pause. The fresh answer replaces it seconds later anyway; this
-/// bound is about what a person sees while that is happening.
+/// This is a reconnection display ceiling, not an estimate of usage drift or a freshness guarantee.
+/// The original provider report and its timestamp remain visible until a fresh answer replaces them.
 const MAX_AGE_MS = 15 * 60_000;
 
 /// How long a burst of usage changes may collect before one write is made.
@@ -99,11 +95,22 @@ export function rememberedUsage(
   return stored.gauges
     .filter(isGauge)
     .filter((gauge) => nowMs - gauge.atMs <= MAX_AGE_MS && gauge.atMs <= nowMs)
-    .map((gauge) => ({
-      ...gauge,
-      windows: (gauge.windows ?? []).filter((window) => stillTrue(window, nowMs)),
-    }))
-    .filter((gauge) => gauge.windows.length > 0 || gauge.cost !== undefined);
+    .map((gauge) => usageBeforeReset(gauge, nowMs))
+    .filter((gauge) => (gauge.windows?.length ?? 0) > 0 || gauge.cost !== undefined);
+}
+
+/// A report's windows stop describing the current period at their own reset, both live and restored.
+/// Never turn an expired limit into zero usage. Remove it and retain only still-valid provider evidence.
+export function usageBeforeReset(gauge: ProviderUsageGauge, nowMs: number): ProviderUsageGauge {
+  const original = gauge.windows ?? [];
+  const windows = original.filter((window) => stillTrue(window, nowMs));
+  if (windows.length === original.length) return gauge;
+  return {
+    ...gauge,
+    windows,
+    // The aggregate verdict has no window attribution. Surviving governing flags cannot renew it.
+    reached: false,
+  };
 }
 
 /// Whether a remembered window is still about the period it was read in.

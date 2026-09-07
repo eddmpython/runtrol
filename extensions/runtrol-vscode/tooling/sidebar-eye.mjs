@@ -113,7 +113,7 @@ const THEME = `
    to be wider than it. */
 /* Width only. The harness used to paint the background too, which is the page's own job, and painting it
    here meant the harness could never show the page failing to paint it. That is exactly what happened. */
-html, body { width: 320px; }
+html, body { width: ${Number(process.env.RUNTROL_EYE_WIDTH ?? 320)}px; }
 `;
 
 function conversation(over = {}) {
@@ -279,6 +279,11 @@ if (process.env.RUNTROL_EYE_EMPTY_PICKER === "1") {
   };
 }
 const unreadUsage = process.env.RUNTROL_EYE_UNREAD_USAGE === "1";
+const projectActions = process.env.RUNTROL_EYE_PROJECT_ACTIONS === "1";
+if (projectActions) {
+  Object.assign(model.projects[0], { name: "alphaWork", attention: 2, live: 1,
+    changes: { added: 1600, removed: 1300, untracked: 0, ahead: 0 } });
+}
 const ownerInput = process.env.RUNTROL_EYE_OWNER_INPUT === "1";
 if (ownerInput) {
   model.projects[0].rows = [
@@ -359,7 +364,11 @@ html = html.replace("</head>", `<script nonce="${assets.nonce}">
 html = html.replace("</body>", `<script nonce="${assets.nonce}">
   window.addEventListener("load", function () {
     var chip = document.querySelectorAll(".chip")[0];
-    if (chip && ${!sixProjects && !ownerInput}) chip.${unreadUsage ? "focus" : "click"}();
+    if (chip && ${!sixProjects && !ownerInput && !projectActions}) chip.${unreadUsage ? "focus" : "click"}();
+    if (${projectActions}) {
+      document.querySelector('.project-row')?.focus();
+      document.querySelector('.project-row .act')?.focus();
+    }
     if (${ownerInput}) {
       var input = document.querySelector('[data-command="runtrol.openInputView"]');
       input?.closest('.row')?.focus();
@@ -400,7 +409,7 @@ try {
     browser: {
       enabled: true, provider: "nativeCdp", allowedOrigins: [origin], maxRisk: "externalEffect",
       actions: ["navigate", "waitFor", "screenshot"], methods: [],
-      viewport: { width: 320, height: 900, deviceScaleFactor: 2, mobile: false, touch: false },
+      viewport: { width: Number(process.env.RUNTROL_EYE_WIDTH ?? 320), height: 900, deviceScaleFactor: 2, mobile: false, touch: false },
       externalEffects: "acknowledged", purpose: "Inspect the current Studio markup and stylesheet with synthetic state",
     },
   }), "utf8");

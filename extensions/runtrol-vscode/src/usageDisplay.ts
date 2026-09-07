@@ -1,6 +1,7 @@
 import type { ProviderLine, ProviderUsageGauge, ProviderUsageWindow } from "./runtimeTypes";
 import { awaitsVerification, isBroken } from "./providerHealth";
 import { providerDisplayName, providerIcon } from "./sessionDisplay";
+import { usageBeforeReset } from "./usageMemory";
 
 /// `signedOut` is its own state because it has its own action (sign in), the way `unavailable` has "fix".
 export type UsageState = "available" | "checking" | "unavailable" | "disconnected" | "signedOut" | "unread";
@@ -143,8 +144,15 @@ export function usageRows(
     providerIds.push(gauge.providerId);
   }
   return providerIds.map((providerId) => {
-    const gauge = byProvider.get(providerId);
     const provider = providersById.get(providerId) ?? null;
+    const account = provider?.account ?? null;
+    const previous = byProvider.get(providerId);
+    // Account and usage pushes can arrive separately. A successful absence supersedes older numbers.
+    const retired = account && previous && previous.atMs <= account.checkedAtMs
+      && (account.status === "signedOut" || account.status === "unpublished"
+        || (account.limitsAbsent?.kind === "unmetered" && previous.atMs < account.checkedAtMs));
+    const gauge = previous && !retired ? usageBeforeReset(previous, nowMs) : undefined;
+    const expired = gauge !== undefined && gauge !== previous;
     const name = providerDisplayName(providerId, providers);
     if (provider && awaitsVerification(provider)) {
       return {
@@ -202,12 +210,12 @@ export function usageRows(
         age: reportAge(gauge, nowMs),
       };
     }
-    const account = provider?.account ?? null;
     if (account?.status === "unread"
-      || (account?.status === "signedIn" && account.limitsAbsent?.kind === "unread")) {
-      const why = account.status === "unread"
+      || (account?.status === "signedIn" && account.limitsAbsent?.kind === "unread")
+      || (expired && account?.status !== "signedOut")) {
+      const why = account?.status === "unread"
         ? account.why ?? "The account status could not be read."
-        : account.limitsAbsent?.why ?? "Usage could not be read.";
+        : account?.limitsAbsent?.why ?? "Waiting for usage after the reported reset.";
       return {
         key: `usage:${encodeURIComponent(providerId)}`,
         name,

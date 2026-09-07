@@ -57,6 +57,18 @@ test("a window with no stated reset survives on the age bound alone", async () =
   assert.equal(rememberedUsage(store, NOW).length, 1);
 });
 
+test("restoring a partial reset removes the expired blocker without changing other windows", async () => {
+  const store = memento();
+  rememberUsage(store, [gauge({ reached: true, windows: [
+    { id: "five_hour", usedPercent: 100, governing: true, resetsAtMs: NOW },
+    { id: "seven_day", usedPercent: 20, governing: true, resetsAtMs: NOW + 60_000 },
+  ] })]);
+  await writeRememberedUsageNow();
+  const restored = rememberedUsage(store, NOW);
+  assert.equal(restored[0]?.reached, false);
+  assert.deepEqual(restored[0]?.windows?.map((window) => window.usedPercent), [20]);
+});
+
 test("a strip from yesterday is not drawn at all", async () => {
   const store = memento();
   rememberUsage(store, [gauge({ atMs: NOW - 24 * 3_600_000 })]);
