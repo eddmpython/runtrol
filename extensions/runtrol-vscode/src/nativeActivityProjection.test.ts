@@ -59,7 +59,7 @@ test("a failed roster read revokes its old live proof instead of leaving Elsewhe
   assert.deepEqual([...projected.activeByProvider.get("codex") ?? []], []);
   assert.deepEqual([...projected.attachableByProvider.get("codex") ?? []], []);
   assert.deepEqual([...projected.unconfirmedByProvider.get("codex") ?? []], ["old-codex"]);
-  assert.deepEqual([...projected.discoveredProviders], ["claude"]);
+  assert.deepEqual([...projected.refreshProviders], ["claude"]);
 });
 
 test("an authoritative empty roster removes a conversation that has stopped", () => {
@@ -71,7 +71,7 @@ test("an authoritative empty roster removes a conversation that has stopped", ()
   assert.deepEqual([...projected.active], []);
   assert.deepEqual([...projected.attachable], []);
   assert.deepEqual([...projected.unconfirmed], []);
-  assert.deepEqual([...projected.discoveredProviders], []);
+  assert.deepEqual([...projected.refreshProviders], []);
 });
 
 test("repeated failures keep the uncertain owner blocked without calling it live", () => {

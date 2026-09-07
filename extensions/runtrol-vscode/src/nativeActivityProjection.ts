@@ -16,7 +16,8 @@ export type NativeActivityProjection = {
   readonly focusableByProvider: ReadonlyMap<string, ReadonlySet<string>>;
   readonly activeByProvider: ReadonlyMap<string, ReadonlySet<string>>;
   readonly unconfirmedByProvider: ReadonlyMap<string, ReadonlySet<string>>;
-  readonly discoveredProviders: ReadonlySet<string>;
+  /// Catalogues invalidated by a newly observed identity or an observed completed native turn.
+  readonly refreshProviders: ReadonlySet<string>;
 };
 
 /// Providers that own a live conversation no row lists, each with the sorted identities that are missing.
@@ -50,6 +51,7 @@ export function projectNativeActivity(
   answers: readonly NativeActivityAnswer[],
   previousLive: ReadonlyMap<string, ReadonlySet<string>>,
   previousUnconfirmed: ReadonlyMap<string, ReadonlySet<string>> = new Map(),
+  previousActive: ReadonlyMap<string, ReadonlySet<string>> = new Map(),
 ): NativeActivityProjection {
   const live = new Set<string>();
   const attachable = new Set<string>();
@@ -61,7 +63,7 @@ export function projectNativeActivity(
   const focusableByProvider = new Map<string, ReadonlySet<string>>();
   const activeByProvider = new Map<string, ReadonlySet<string>>();
   const unconfirmedByProvider = new Map<string, ReadonlySet<string>>();
-  const discoveredProviders = new Set<string>();
+  const refreshProviders = new Set<string>();
   for (const [providerId, activity] of answers) {
     const prior = new Set([
       ...(previousLive.get(providerId) ?? []),
@@ -83,8 +85,12 @@ export function projectNativeActivity(
     unconfirmedByProvider.set(providerId, providerUnconfirmed);
     for (const nativeId of providerLive) {
       live.add(nativeProcessKey(providerId, nativeId));
-      if (!prior.has(nativeId)) discoveredProviders.add(providerId);
+      if (!prior.has(nativeId)) refreshProviders.add(providerId);
     }
+    // A listed identity can gain its first title after its turn. Failed proof is not completion; no timer
+    // or output heuristic invents an edge when the source did not expose one.
+    if ([...previousActive.get(providerId) ?? []].some((nativeId) =>
+      !providerActive.has(nativeId) && !providerUnconfirmed.has(nativeId))) refreshProviders.add(providerId);
     for (const nativeId of providerAttachable) attachable.add(nativeProcessKey(providerId, nativeId));
     for (const nativeId of providerFocusable) focusable.add(nativeProcessKey(providerId, nativeId));
     for (const nativeId of providerActive) active.add(nativeProcessKey(providerId, nativeId));
@@ -101,6 +107,6 @@ export function projectNativeActivity(
     focusableByProvider,
     activeByProvider,
     unconfirmedByProvider,
-    discoveredProviders,
+    refreshProviders,
   };
 }

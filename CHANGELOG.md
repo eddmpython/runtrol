@@ -87,6 +87,8 @@ and refactoring that no user can observe do not belong here.
 
 ### Fixed
 
+- Provider-owned conversation titles refresh after an observed native turn ends, even when the conversation
+  was already listed before its title appeared.
 - Provider and usage subscriptions stop when their current permission is withdrawn, including while the data is
   unchanged. An old subscription cannot send its first usage snapshot after revocation.
 - Restarting extensions from the sidebar closes Runtrol's conversation tabs before the host restarts, including

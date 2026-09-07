@@ -1693,8 +1693,7 @@ export class Controller implements vscode.Disposable {
       }
     }
     this.hostedTerminalIdentities = next;
-    for (const providerId of changedProviders) this.deferNativeDiscovery(providerId, true);
-    if (changedProviders.size > 0) this.scheduleNativeDiscoveries();
+    this.scheduleNativeDiscoveries(changedProviders);
   }
 
   private applyListing(
@@ -1736,9 +1735,7 @@ export class Controller implements vscode.Disposable {
       this.chatDiscoveryAsked.add(providerId);
       this.deferNativeDiscovery(providerId, false);
     }
-    if (waking.length > 0) this.scheduleNativeDiscoveries();
-    for (const providerId of titleProviders) this.deferNativeDiscovery(providerId, true);
-    if (titleProviders.length > 0) this.scheduleNativeDiscoveries();
+    this.scheduleNativeDiscoveries(titleProviders);
     if (selected && !this.state.selected) {
       void this.clearPersistedSelection().catch((error: unknown) => {
         this.say(
@@ -1815,9 +1812,9 @@ export class Controller implements vscode.Disposable {
       answers,
       this.nativeActivityByProvider,
       this.nativeUnconfirmedByProvider,
+      this.nativeActiveByProvider,
     );
     this.applyNativeActivityProjection(projected);
-    for (const providerId of projected.discoveredProviders) this.deferNativeDiscovery(providerId, true);
     this.deferUnlistedDiscoveries(projected);
     this.scheduleNativeDiscoveries();
   }
@@ -1860,6 +1857,7 @@ export class Controller implements vscode.Disposable {
     this.state.setAttachableNative(projected.attachable);
     this.state.setFocusableNative(projected.focusable);
     this.state.setUnconfirmedNative(projected.unconfirmed);
+    this.scheduleNativeDiscoveries(projected.refreshProviders);
   }
 
   /// Revoke the live badge when Runtime proof is unavailable, while retaining a deny-only owner guard.
@@ -2007,7 +2005,8 @@ export class Controller implements vscode.Disposable {
     this.flushNativeDiscoveries();
   }
 
-  private scheduleNativeDiscoveries(): void {
+  private scheduleNativeDiscoveries(titles: Iterable<string> = []): void {
+    for (const providerId of titles) this.deferNativeDiscovery(providerId, true);
     if (
       this.disposed
       || this.nativeDiscoveryPauseDepth > 0
