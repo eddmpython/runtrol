@@ -100,10 +100,10 @@ async function discoverSuites(root) {
 // and the assertion cannot pass by accident on a host that reaps children on its own.
 async function verifyOwnedProcessTreeCleanup() {
   const marker = "runtrol probe leaf";
-  const leaf = `setTimeout(() => {}, 600000); /* ${marker} */`;
+  const leaf = `setTimeout(() => {}, 60000); /* ${marker} */`;
   const rootScript = "const { spawn } = require('node:child_process');"
     + `spawn(process.execPath, ['-e', ${JSON.stringify(leaf)}], { stdio: 'ignore' });`
-    + "setTimeout(() => {}, 600000);";
+    + "setTimeout(() => {}, 60000);";
   const root = spawn(process.execPath, ["-e", rootScript], { stdio: "ignore", windowsHide: true });
   let captured = [];
   try {
@@ -129,21 +129,15 @@ async function verifyOwnedProcessTreeCleanup() {
       "the captured snapshot terminates the whole tree, descendants included",
     );
   } finally {
-    for (const pid of [root.pid, ...captured.map((identity) => identity.pid)]) {
-      try {
-        process.kill(pid, "SIGKILL");
-      } catch (error) {
-        // Teardown of the probe tree. ESRCH is the state this is trying to reach, so only a
-        // different failure means the probe left something behind.
-        if (error.code !== "ESRCH") throw error;
-      }
-    }
+    // The PID can already belong to another process after the successful sweep.
+    // Retain the captured generation and use the same native-handle authority as production tooling.
+    await terminateCapturedIdentities(captured);
   }
 }
 
 function verifyConvergentSignalErrors() {
   assert.equal(isConvergentSignalError({ code: "ESRCH" }, "linux"), true);
-  assert.equal(isConvergentSignalError({ code: "EPERM" }, "win32"), true);
+  assert.equal(isConvergentSignalError({ code: "EPERM" }, "win32"), false);
   assert.equal(isConvergentSignalError({ code: "EPERM" }, "linux"), false);
   assert.equal(isConvergentSignalError({ code: "EACCES" }, "win32"), false);
 }

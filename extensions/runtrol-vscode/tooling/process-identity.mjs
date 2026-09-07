@@ -4,7 +4,6 @@ import path from "node:path";
 // Win32_Process includes every process command line. Busy development hosts can exceed Node's 1 MiB spawnSync
 // default even though the bounded JSON snapshot is still small enough to inspect safely in memory.
 export const WINDOWS_PROCESS_ROWS_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
-const PROCESS_START_TOLERANCE_MS = 2_000;
 
 export function processRows() {
   if (process.platform === "win32") {
@@ -36,8 +35,11 @@ export function descendantPids(rows, rootPid) {
 }
 
 function startedWithParent(row, parent) {
-  if (!Number.isFinite(row.startedAt) || !Number.isFinite(parent.startedAt)) return true;
-  return row.startedAt + PROCESS_START_TOLERANCE_MS >= parent.startedAt;
+  // Both observations use the same system clock. Rounded timestamps may be equal, but a child
+  // cannot precede this parent generation; an unknown birth grants no lineage authority.
+  return Number.isFinite(row.startedAt) && row.startedAt > 0
+    && Number.isFinite(parent.startedAt) && parent.startedAt > 0
+    && row.startedAt >= parent.startedAt;
 }
 
 export function normalizedExecutable(value) {
@@ -97,7 +99,7 @@ function windowsRows() {
     ppid: Number(row.ParentProcessId),
     executable: typeof row.ExecutablePath === "string" ? row.ExecutablePath : "",
     command: typeof row.CommandLine === "string" ? row.CommandLine : "",
-    startedAt: Number.isFinite(Number(row.CreationTimeMs)) ? Number(row.CreationTimeMs) : null,
+    startedAt: Number.isFinite(Number(row.CreationTimeMs)) && Number(row.CreationTimeMs) > 0 ? Number(row.CreationTimeMs) : null,
   }));
 }
 

@@ -12,6 +12,7 @@ import {
 
 import { extensionInstallPrefix } from "./extension-manifest.mjs";
 import { descendantPids, normalizedExecutable, ownedProcessRoots, processRows } from "./process-identity.mjs";
+import { terminateWindowsProcesses } from "./processTermination.mjs";
 
 export const TESTED_VSCODE_VERSION = "1.132.1";
 
@@ -327,6 +328,11 @@ export async function terminateExactProcesses(marker, executable) {
   };
 
   const identities = matchingIdentities();
+  if (process.platform === "win32") {
+    await terminateCapturedIdentities(identities);
+    terminateWindowsIdentities(matchingIdentities(), false);
+    return;
+  }
   signalExactProcesses(identities, "SIGTERM");
   let survivors = await waitForExactProcesses(identities, 5_000);
   if (survivors.length > 0) {
@@ -368,6 +374,10 @@ export async function terminateCapturedIdentities(identities) {
   if (owned.length === 0) {
     return;
   }
+  if (process.platform === "win32") {
+    terminateWindowsIdentities(owned, true);
+    return;
+  }
   signalExactProcesses(owned, "SIGTERM");
   let survivors = await waitForExactProcesses(owned, 5_000);
   if (survivors.length > 0) {
@@ -381,14 +391,20 @@ export async function terminateCapturedIdentities(identities) {
   }
 }
 
+function terminateWindowsIdentities(identities, retry) {
+  let pending = terminateWindowsProcesses(identities, 5_000);
+  if (retry && pending.length > 0) pending = terminateWindowsProcesses(pending, 5_000);
+  if (pending.length > 0) {
+    throw new Error(`owned process cleanup left exact PIDs ${pending.map((row) => row.pid).join(", ")}`);
+  }
+}
+
 function signalExactProcesses(identities, signal) {
+  if (process.platform === "win32") throw new Error("Windows process termination requires verified native handles");
   for (const identity of identities) {
     try {
       process.kill(identity.pid, signal);
     } catch (error) {
-      // Windows can report EPERM after a process has entered kernel teardown but before enumeration stops
-      // returning its row. The bounded exact-identity wait below remains the authority: a real survivor is retried
-      // with SIGKILL and then fails cleanup, while an already exiting process converges without a false failure.
       if (!isConvergentSignalError(error)) {
         throw error;
       }
@@ -397,7 +413,7 @@ function signalExactProcesses(identities, signal) {
 }
 
 export function isConvergentSignalError(error, platform = process.platform) {
-  return error?.code === "ESRCH" || (platform === "win32" && error?.code === "EPERM");
+  return platform !== "win32" && error?.code === "ESRCH";
 }
 
 async function waitForExactProcesses(identities, milliseconds) {
