@@ -17,6 +17,11 @@ pub(super) struct MissingLogs {
 }
 
 impl MissingLogs {
+    #[cfg(test)]
+    pub(super) const fn searches(&self) -> usize {
+        self.searches
+    }
+
     pub(super) fn begin(
         &mut self,
         home: &Path,

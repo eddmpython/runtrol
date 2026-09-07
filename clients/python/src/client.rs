@@ -15,6 +15,7 @@ use runtrol_runtime_protocol::{
     ListNativeSessionsParams, ListPendingApprovalsParams, MutationRequestId, PendingEnrollmentId,
     RespondApprovalParams, ResumeSessionParams, RuntimeError, RuntimeErrorKind, SetModeParams,
     SetModelParams, StartSessionParams, SubmitBlocksParams, SubmitInputParams, WatchEventsParams,
+    WatchProvidersParams,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -496,7 +497,9 @@ async fn open_subscription(
     let (sender, receiver) = mpsc::channel(SUBSCRIPTION_CAPACITY);
     match kind {
         "providers" => {
-            tokio::spawn(provider_subscription(config, ready, sender));
+            let params: WatchProvidersParams = serde_json::from_str(params_json)
+                .map_err(|error| native_error_json("invalidRequest", &error.to_string()))?;
+            tokio::spawn(provider_subscription(config, params, ready, sender));
         }
         "sessions" => {
             tokio::spawn(session_index_subscription(config, ready, sender));
@@ -530,6 +533,7 @@ async fn open_subscription(
 
 async fn provider_subscription(
     config: ConnectConfig,
+    params: WatchProvidersParams,
     ready: oneshot::Sender<Result<String, String>>,
     sender: mpsc::Sender<Result<String, String>>,
 ) {
@@ -541,7 +545,7 @@ async fn provider_subscription(
         }
     };
     let mut providers = runtime.providers();
-    let mut subscription = match providers.watch().await {
+    let mut subscription = match providers.watch_with(params).await {
         Ok(subscription) => subscription,
         Err(error) => {
             let _sent = ready.send(Err(crate::error_json(&error)));
@@ -557,6 +561,9 @@ async fn provider_subscription(
             Ok(ProviderNotification::Changed(value)) => (envelope("changed", &value), false),
             Ok(ProviderNotification::UsageChanged(value)) => {
                 (envelope("usageChanged", &value), false)
+            }
+            Ok(ProviderNotification::NativeActivityChanged(value)) => {
+                (envelope("nativeActivityChanged", &value), false)
             }
             Ok(ProviderNotification::Ended(value)) => (envelope("ended", &value), true),
             Err(error) => (Err(error), true),

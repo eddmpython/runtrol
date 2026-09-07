@@ -1,287 +1,362 @@
-//! Whether an editor-panel Claude session has a turn open, read from its transcript's turn boundaries.
+//! Structural turn and title metadata from the provider's original session file.
 //!
-//! A session the Claude editor extension drives writes no `status` into the process roster (measured
-//! 2026-08-30: a `claude-vscode` record carries `pid`, `cwd`, `sessionId` and names, and no status at all),
-//! so the roster alone cannot say whether its model is answering. The transcript is a structured surface all
-//! the same: every assistant message records a `stop_reason`, and the last one in the file says whether the
-//! turn is still open. This reads only those byte markers and the record `type`, never the message text, and
-//! keeps no copy. It is the same nameplate-only rule the catalogue reads a stored conversation's title by
-//! (`thinPrinciple.md`): structural keys found as bytes, no body decoded.
+//! No message is retained or interpreted. Model proof uses only direct record/message metadata and its
+//! timestamp relative to the exact process birth. Filesystem stamps invalidate reads, never model state.
 
-use std::collections::HashMap;
-use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
+use std::collections::{BTreeSet, HashMap};
+use std::fs::{self, File};
+use std::io::{self, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
-use std::{fs, io};
+use std::time::SystemTime;
 
+use runtrol_provider::{NativeSessionId, ProcessIdentity, WallMs};
+use serde::Deserialize;
+use sha2::{Digest as _, Sha256};
 use tokio::sync::Mutex;
 
-const PROJECTS_DIRECTORY: &str = "projects";
+use crate::native_turn::NativeTurn;
+
+use super::store::PROJECTS_DIRECTORY;
 const TRANSCRIPT_EXTENSION: &str = "jsonl";
-
-/// The turn is open while the last assistant message paused for a tool.
-const TURN_TOOL: &[u8] = b"\"stop_reason\":\"tool_use\"";
-/// The turn is closed when the last assistant message ended for the person, either way it can end.
-const TURN_END: &[u8] = b"\"stop_reason\":\"end_turn\"";
-const TURN_STOP: &[u8] = b"\"stop_reason\":\"stop_sequence\"";
-/// A person's prompt records as a user message. After the last closed turn it is a turn starting before its
-/// first assistant token is written; a tool result records the same way but only ever before a turn closes.
-const USER_RECORD: &[u8] = b"\"type\":\"user\"";
-
-/// The tail read from the end when the file grew. A turn marker is written on every assistant message, so the
-/// final quarter-megabyte almost always holds one; a window with none is doubled up to the ceiling.
-const FIRST_WINDOW_BYTES: u64 = 256 * 1024;
-/// The most this reads backwards before answering "cannot tell", which is reported as no turn open.
 const MAX_WINDOW_BYTES: u64 = 8 * 1024 * 1024;
-/// The most project directories one search for a transcript walks. One per folder the CLI ever ran in.
 const MAX_PROJECT_DIRECTORIES: usize = 8192;
 
-/// An open turn whose transcript has not grown in this long is read as ended. A turn stopped at the keyboard
-/// leaves the last marker `tool_use` with nothing after it, and only the clock tells that from a live pause.
-const OPEN_TURN_FRESH: Duration = Duration::from_secs(45);
-/// How long a "no transcript for this session yet" answer is kept before the directories are searched again,
-/// so a session in the first moment before its file exists is not searched for on every observation.
-const MISS_RETRY: Duration = Duration::from_secs(5);
-
-/// What one session's transcript looked like at the last observation.
-#[derive(Clone, Debug)]
-struct Followed {
-    /// The transcript this session writes to.
-    transcript: PathBuf,
-    /// Its length then, so an unchanged file is answered from `answering` without another read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FileStamp {
     size: u64,
-    /// Whether a turn was open at that point.
-    answering: bool,
+    modified: Option<SystemTime>,
+    created: Option<SystemTime>,
 }
 
-/// A session whose transcript could not be located, and when that was last tried.
-#[derive(Clone, Debug)]
-struct Missing {
-    at: SystemTime,
+impl FileStamp {
+    fn read(metadata: &fs::Metadata) -> Self {
+        let (created, modified) = crate::native_watch::source_times(metadata);
+        Self {
+            size: metadata.len(),
+            // Unsupported timestamps only disable that invalidation key. They never imply idle.
+            modified,
+            created,
+        }
+    }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
+struct Followed {
+    transcript: PathBuf,
+    stamp: FileStamp,
+    read_to: u64,
+    read_turns: bool,
+    metadata: Metadata,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct Metadata {
+    boundary: Option<NativeTurn>,
+    title: Option<[u8; 32]>,
+    folder: Option<[u8; 32]>,
+}
+
+#[derive(Debug)]
 enum Known {
     Found(Followed),
-    NotYet(Missing),
+    NotYet(Option<runtrol_childproc::watch::DirectoryChanges>),
 }
 
-/// Reads whether a session's model is answering from its transcript, keeping each file's last size and state
-/// so an unchanged transcript costs one `stat` and a growing one is read only over what it grew by.
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct MetadataObservation {
+    pub(super) model: Option<bool>,
+    pub(super) revision: [u8; 32],
+    pub(super) unavailable: bool,
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct TranscriptActivity {
-    /// `<config>/projects`, or `None` when the CLI keeps no home this process can find.
     projects: Option<PathBuf>,
-    /// Per session, shared because the driver hands clones of the roster to the blocking pool.
     seen: Arc<Mutex<HashMap<Box<str>, Known>>>,
-    /// The clock, so tests can pin freshness. The product reads the wall clock.
-    now: fn() -> SystemTime,
 }
 
 impl TranscriptActivity {
-    pub(super) fn new(projects: Option<PathBuf>) -> Self {
+    pub(super) fn new(config: Option<PathBuf>) -> Self {
         Self {
-            projects: projects.map(|config| config.join(PROJECTS_DIRECTORY)),
+            projects: config.map(|config| config.join(PROJECTS_DIRECTORY)),
             seen: Arc::new(Mutex::new(HashMap::new())),
-            now: SystemTime::now,
         }
     }
 
     #[cfg(test)]
-    fn rooted(projects: PathBuf, now: fn() -> SystemTime) -> Self {
+    fn rooted(projects: PathBuf, _now: fn() -> SystemTime) -> Self {
         Self {
             projects: Some(projects),
             seen: Arc::new(Mutex::new(HashMap::new())),
-            now,
         }
     }
 
-    /// Whether this session has a turn open, reading only what its transcript grew by since the last look.
-    pub(super) fn answering(&self, session: &str) -> bool {
+    #[cfg(test)]
+    fn answering(&self, session: &str) -> bool {
+        self.read_metadata(session, true)
+            .unwrap_or_default()
+            .and_then(|metadata| metadata.boundary)
+            .is_some_and(|boundary| boundary.answering)
+    }
+
+    pub(super) fn retain(&self, live: &BTreeSet<NativeSessionId>) {
+        self.seen
+            .blocking_lock()
+            .retain(|native, _| live.iter().any(|live| live.as_str() == native.as_ref()));
+    }
+
+    pub(super) fn observation(
+        &self,
+        session: &str,
+        owner: Option<ProcessIdentity>,
+        read_turns: bool,
+    ) -> MetadataObservation {
+        let (metadata, unavailable) = match self.read_metadata(session, read_turns) {
+            Ok(metadata) => (metadata, false),
+            Err(()) => (None, true),
+        };
+        let mut signature = Sha256::new();
+        // Creation and the first published folder make a previously unlisted identity available to the catalogue.
+        // Neither fact says anything about model work, and later body appends leave this proof unchanged.
+        signature.update([u8::from(metadata.is_some())]);
+        let Metadata {
+            boundary,
+            title,
+            folder,
+        } = metadata.unwrap_or_default();
+        if let Some(boundary) = boundary {
+            signature.update([u8::from(boundary.answering)]);
+            signature.update(boundary.at.map_or(0, WallMs::as_millis).to_le_bytes());
+        }
+        if let Some(title) = title {
+            signature.update(title);
+        }
+        if let Some(folder) = folder {
+            signature.update(folder);
+        }
+        MetadataObservation {
+            model: boundary.and_then(|boundary| boundary.state_for(owner)),
+            revision: signature.finalize().into(),
+            unavailable,
+        }
+    }
+
+    fn read_metadata(&self, session: &str, read_turns: bool) -> Result<Option<Metadata>, ()> {
         let Some(projects) = &self.projects else {
-            return false;
+            return Ok(None);
         };
         let mut seen = self.seen.blocking_lock();
-        let cached = match seen.get(session) {
-            Some(Known::Found(followed)) => Some(followed.transcript.clone()),
-            Some(Known::NotYet(missing)) if elapsed(self.now, missing.at) < MISS_RETRY => {
-                return false;
-            }
-            _ => None,
-        };
-        let transcript = if let Some(path) = cached {
-            path
-        } else if let Some(path) = locate_transcript(projects, session) {
-            path
-        } else {
-            seen.insert(session.into(), Known::NotYet(Missing { at: (self.now)() }));
-            return false;
+        let Some(transcript) = cached_transcript(projects, session, &mut seen)? else {
+            return Ok(None);
         };
         let Ok(metadata) = fs::metadata(&transcript) else {
-            // The transcript went away underneath a live process: nothing can be said about a turn, and the
-            // path is dropped so a session that reappears is located again.
             seen.remove(session);
-            return false;
+            return Err(());
         };
-        let size = metadata.len();
-        if let Some(Known::Found(followed)) = seen.get(session)
-            && followed.size == size
+        let stamp = FileStamp::read(&metadata);
+        let previous = match seen.get(session) {
+            Some(Known::Found(known)) => Some(known),
+            _ => None,
+        };
+        if let Some(previous) = previous
+            && previous.stamp == stamp
+            && (!read_turns || previous.read_turns)
         {
-            return followed.answering && fresh(self.now, &metadata);
+            return Ok(Some(previous.metadata));
         }
-        let answering = last_turn_open(&transcript, size).unwrap_or(false);
+        let continuing = previous.is_some_and(|previous| {
+            previous.stamp.created == stamp.created
+                && previous.stamp.size < stamp.size
+                && (!read_turns || previous.read_turns)
+                && stamp.size.saturating_sub(previous.read_to) <= MAX_WINDOW_BYTES
+        });
+        let from = if continuing {
+            previous.map_or(0, |known| known.read_to)
+        } else {
+            stamp.size.saturating_sub(MAX_WINDOW_BYTES)
+        };
+        let Ok(bytes) = read_range(&transcript, from, stamp.size) else {
+            // A failed read cannot preserve model proof. Keep no fabricated closed boundary.
+            seen.remove(session);
+            return Err(());
+        };
+        let mut metadata = if continuing {
+            previous.map_or_else(Metadata::default, |known| known.metadata)
+        } else {
+            Metadata::default()
+        };
+        let mut position = 0;
+        let skip_fragment = from > 0 && !continuing;
+        let mut read_to = from;
+        for (index, line) in bytes.split(|byte| *byte == b'\n').enumerate() {
+            let complete = position + line.len() < bytes.len();
+            if !(skip_fragment && index == 0) {
+                if read_turns && let Some(next) = turn_boundary(line) {
+                    metadata.boundary = Some(next);
+                }
+                // The direct aiTitle field is already the catalogue's provider-owned nameplate.
+                // Most body records do not contain that key, so they require no JSON walk for titles.
+                if (memchr::memmem::find(line, b"\"aiTitle\"").is_some()
+                    || metadata.folder.is_none()
+                        && memchr::memmem::find(line, b"\"cwd\"").is_some())
+                    && let Ok(record) = serde_json::from_slice::<CatalogueRecord<'_>>(line)
+                {
+                    if let Some(name) = record.ai_title {
+                        metadata.title = Some(Sha256::digest(name.as_bytes()).into());
+                    }
+                    if metadata.folder.is_none()
+                        && let Some(folder) = record.cwd
+                    {
+                        metadata.folder = Some(Sha256::digest(folder.as_bytes()).into());
+                    }
+                }
+            }
+            position = position.saturating_add(line.len()).saturating_add(1);
+            if complete {
+                read_to = from + position as u64;
+            }
+        }
         seen.insert(
             session.into(),
             Known::Found(Followed {
                 transcript,
-                size,
-                answering,
+                stamp,
+                read_to,
+                read_turns,
+                metadata,
             }),
         );
-        answering && fresh(self.now, &metadata)
+        Ok(Some(metadata))
     }
 }
 
-/// How long since `at`, saturating at zero so a clock that stepped back is not a negative age.
-fn elapsed(now: fn() -> SystemTime, at: SystemTime) -> Duration {
-    now().duration_since(at).unwrap_or(Duration::ZERO)
+fn cached_transcript(
+    projects: &Path,
+    session: &str,
+    seen: &mut HashMap<Box<str>, Known>,
+) -> Result<Option<PathBuf>, ()> {
+    if let Some(Known::NotYet(Some(watch))) = seen.get_mut(session)
+        && matches!(watch.changed(), Ok(false))
+    {
+        return Ok(None);
+    }
+    if let Some(Known::Found(known)) = seen.get(session) {
+        return Ok(Some(known.transcript.clone()));
+    }
+    // Install before searching. Without notification proof, an absence is never reused.
+    let mut changes = None;
+    if let Ok(watch) = runtrol_childproc::watch::DirectoryChanges::new(projects) {
+        changes = Some(watch);
+    }
+    let (found, complete) = locate_transcript(projects, session);
+    if found.is_none() && complete {
+        seen.insert(session.into(), Known::NotYet(changes));
+    }
+    if found.is_some() || complete {
+        Ok(found)
+    } else {
+        Err(())
+    }
 }
 
-/// Whether the transcript was written to recently enough that an open turn is a live pause, not an abandoned one.
-fn fresh(now: fn() -> SystemTime, metadata: &fs::Metadata) -> bool {
-    let Ok(modified) = metadata.modified() else {
-        // A file system that does not report a modification time cannot disqualify an open turn, so the
-        // structural answer stands on its own.
-        return true;
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CatalogueRecord<'a> {
+    #[serde(borrow)]
+    ai_title: Option<std::borrow::Cow<'a, str>>,
+    #[serde(borrow)]
+    cwd: Option<std::borrow::Cow<'a, str>>,
+}
+
+#[derive(Deserialize)]
+struct TurnRecord<'a> {
+    r#type: &'a str,
+    timestamp: Option<&'a str>,
+    #[serde(borrow)]
+    message: Option<&'a serde_json::value::RawValue>,
+    #[serde(default, rename = "isSidechain")]
+    sidechain: bool,
+}
+
+#[derive(Deserialize)]
+struct MessageStop<'a> {
+    stop_reason: Option<&'a str>,
+}
+
+fn turn_boundary(line: &[u8]) -> Option<NativeTurn> {
+    let Ok(record) = serde_json::from_slice::<TurnRecord<'_>>(line) else {
+        return None;
     };
-    now().duration_since(modified).unwrap_or(Duration::ZERO) < OPEN_TURN_FRESH
+    if record.sidechain {
+        return None;
+    }
+    let at = record.timestamp.and_then(WallMs::from_iso8601);
+    let answering = match record.r#type {
+        "user" => true,
+        "assistant" => {
+            let Ok(message) = serde_json::from_str::<MessageStop<'_>>(record.message?.get()) else {
+                return None;
+            };
+            match message.stop_reason? {
+                "tool_use" => true,
+                "end_turn" | "stop_sequence" => false,
+                // An unknown terminal marker supersedes earlier proof without pretending it ended.
+                _ => {
+                    return Some(NativeTurn {
+                        answering: false,
+                        at: None,
+                    });
+                }
+            }
+        }
+        _ => return None,
+    };
+    Some(NativeTurn { answering, at })
 }
 
-/// The transcript file this session writes to, `projects/<any folder slug>/<session>.jsonl`.
-///
-/// The folder slug the CLI builds from the working directory is lossy (its drive letter is upper-cased and
-/// every other non-alphanumeric byte becomes a dash), so the folder is not computed from the workspace; the
-/// directories are few, one per folder the CLI ever ran in, and asking each is cheaper than guessing wrong.
-/// The same reasoning the store locates a conversation by (`store.rs`).
-fn locate_transcript(projects: &Path, session: &str) -> Option<PathBuf> {
+fn locate_transcript(projects: &Path, session: &str) -> (Option<PathBuf>, bool) {
     if session.is_empty() || session.contains(['/', '\\', '.']) {
-        return None;
+        return (None, true);
     }
-    let file_name = format!("{session}.{TRANSCRIPT_EXTENSION}");
-    // A projects directory that cannot be listed holds no transcript this can name, which is the same answer
-    // a missing one gives: the session is reported as not answering rather than guessed about.
-    let Ok(directories) = fs::read_dir(projects) else {
-        return None;
+    let entries = match fs::read_dir(projects) {
+        Ok(entries) => entries,
+        Err(error) => return (None, error.kind() == io::ErrorKind::NotFound),
     };
-    directories
-        .flatten()
-        .take(MAX_PROJECT_DIRECTORIES)
-        .map(|entry| entry.path().join(&file_name))
-        .find(|candidate| candidate.is_file())
-}
-
-/// Whether the transcript's last turn marker leaves a turn open, reading its tail backwards.
-///
-/// Widens the tail until it holds a turn marker, up to [`MAX_WINDOW_BYTES`]; a file whose last marker is
-/// further back than that is reported as "cannot tell" (`None`), which the caller reads as no turn open.
-fn last_turn_open(path: &Path, size: u64) -> Option<bool> {
-    let mut window = FIRST_WINDOW_BYTES;
-    loop {
-        let start = size.saturating_sub(window);
-        // A transcript that cannot be read says nothing about a turn: the caller reads None as not answering.
-        let Ok(tail) = read_range(path, start, size) else {
-            return None;
-        };
-        // A window that did not begin at the file's start opens inside a record; drop that fragment so a
-        // half-read marker at the edge cannot be matched or missed.
-        let bytes = if start > 0 {
-            match memchr(tail.as_slice(), b'\n') {
-                Some(newline) => tail.get(newline + 1..).unwrap_or_default(),
-                None => tail.as_slice(),
-            }
-        } else {
-            tail.as_slice()
-        };
-        if let Some(open) = turn_state(bytes) {
-            return Some(open);
+    let name = format!("{session}.{TRANSCRIPT_EXTENSION}");
+    for (index, entry) in entries.enumerate() {
+        if index >= MAX_PROJECT_DIRECTORIES {
+            return (None, false);
         }
-        if start == 0 || window >= MAX_WINDOW_BYTES {
-            return None;
-        }
-        window = (window * 2).min(MAX_WINDOW_BYTES);
-    }
-}
-
-/// Whether the last turn marker in these bytes leaves a turn open, or `None` when they hold no marker.
-///
-/// The last marker decides: a `tool_use` is a turn still going, an `end_turn` or `stop_sequence` is a turn
-/// finished, unless a user record follows it, which is the next turn beginning before its assistant reply is
-/// written (a plain text answer records no `stop_reason` of its own until it ends, so the open turn is seen
-/// only by the person's prompt sitting after the last closed one).
-fn turn_state(bytes: &[u8]) -> Option<bool> {
-    let tool = rfind(bytes, TURN_TOOL);
-    let closed = rfind(bytes, TURN_END).max(rfind(bytes, TURN_STOP));
-    match (tool, closed) {
-        // A conversation's very first turn has no marker at all yet: the person's prompt is in the file and
-        // the first structural marker only arrives with the first tool pause or the turn's end. A user record
-        // with no marker anywhere before it is that open first turn (fresh-gated like every open answer);
-        // with no user record either, the file holds only setup records and nothing is being answered.
-        (None, None) => rfind(bytes, USER_RECORD).is_some().then_some(true),
-        (Some(_), None) => Some(true),
-        (None, Some(close)) => Some(user_after(bytes, close)),
-        (Some(open), Some(close)) => {
-            if open > close {
-                Some(true)
-            } else {
-                Some(user_after(bytes, close))
-            }
+        let Ok(entry) = entry else {
+            return (None, false);
+        };
+        let path = entry.path().join(&name);
+        match fs::metadata(&path) {
+            Ok(metadata) if metadata.is_file() => return (Some(path), true),
+            Ok(_) => {}
+            Err(error)
+                if error.kind() == io::ErrorKind::NotFound
+                    || error.kind() == io::ErrorKind::NotADirectory => {}
+            Err(_) => return (None, false),
         }
     }
+    (None, true)
 }
 
-/// Whether a user record begins after byte `after` in these bytes.
-fn user_after(bytes: &[u8], after: usize) -> bool {
-    rfind(bytes, USER_RECORD).is_some_and(|user| user > after)
-}
-
-/// Read bytes `[start, end)` of a file into a buffer.
-fn read_range(path: &Path, start: u64, end: u64) -> io::Result<Vec<u8>> {
+fn read_range(path: &Path, from: u64, to: u64) -> io::Result<Vec<u8>> {
     let mut file = File::open(path)?;
-    if start > 0 {
-        file.seek(SeekFrom::Start(start))?;
+    file.seek(SeekFrom::Start(from))?;
+    let mut bytes = Vec::new();
+    let expected = to.saturating_sub(from).min(MAX_WINDOW_BYTES);
+    file.take(expected).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 != expected {
+        return Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "the metadata source changed during its bounded read",
+        ));
     }
-    let length = usize::try_from(end.saturating_sub(start)).unwrap_or(0);
-    let mut bytes = vec![0_u8; length];
-    let mut filled = 0;
-    while let Some(slot) = bytes.get_mut(filled..) {
-        if slot.is_empty() {
-            break;
-        }
-        let read = file.read(slot)?;
-        if read == 0 {
-            break;
-        }
-        filled += read;
-    }
-    bytes.truncate(filled);
     Ok(bytes)
-}
-
-/// The last start offset of `needle` in `haystack`, or `None`.
-fn rfind(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    if needle.is_empty() || haystack.len() < needle.len() {
-        return None;
-    }
-    haystack
-        .windows(needle.len())
-        .rposition(|window| window == needle)
-}
-
-/// The first offset of `byte` in `haystack`, or `None`.
-fn memchr(haystack: &[u8], byte: u8) -> Option<usize> {
-    haystack.iter().position(|&candidate| candidate == byte)
 }
 
 #[cfg(test)]
@@ -405,13 +480,13 @@ mod tests {
     }
 
     #[test]
-    fn an_open_turn_whose_transcript_went_quiet_is_read_as_ended() {
+    fn output_silence_does_not_close_a_structurally_open_turn() {
         let scratch = Scratch::new();
         let session = "aaaaaaaa-0000-4000-8000-000000000005";
         scratch.transcript("slug", session, &assistant("tool_use"));
-        // The clock runs ahead of the file's fresh modification time, so the open marker is stale.
+        // Age is not a model state. The same boundary remains open under the later fixture clock.
         let activity = TranscriptActivity::rooted(scratch.root.join(PROJECTS_DIRECTORY), stale);
-        assert!(!activity.answering(session));
+        assert!(activity.answering(session));
     }
 
     #[test]
@@ -420,6 +495,42 @@ mod tests {
         fs::create_dir_all(scratch.root.join(PROJECTS_DIRECTORY)).expect("projects exists");
         let activity = TranscriptActivity::rooted(scratch.root.join(PROJECTS_DIRECTORY), RECENT);
         assert!(!activity.answering("bbbbbbbb-0000-4000-8000-000000000001"));
+    }
+
+    #[test]
+    fn first_file_and_delayed_folder_publish_catalogue_revisions_without_model_proof() {
+        let scratch = Scratch::new();
+        let projects = scratch.root.join(PROJECTS_DIRECTORY);
+        fs::create_dir_all(&projects).expect("isolated projects");
+        let session = "bbbbbbbb-0000-4000-8000-000000000002";
+        let activity = TranscriptActivity::rooted(projects.clone(), RECENT);
+        let missing = activity.observation(session, None, false);
+        scratch.transcript("slug", session, "");
+        let created = activity.observation(session, None, false);
+        assert_ne!(missing.revision, created.revision);
+        let path = projects.join("slug").join(format!("{session}.jsonl"));
+        let mut file = fs::OpenOptions::new()
+            .append(true)
+            .open(path)
+            .expect("provider source");
+        file.write_all(b"{\"body\":{\"cwd\":\"untrusted\"}}\n{\"cwd\":\"C:/fixture")
+            .expect("nested field and incomplete direct metadata");
+        assert_eq!(
+            created.revision,
+            activity.observation(session, None, false).revision
+        );
+        file.write_all(b"\"}\n")
+            .expect("provider finishes its folder metadata");
+        let placed = activity.observation(session, None, false);
+        assert_ne!(created.revision, placed.revision);
+        file.write_all(b"{\"body\":\"ordinary output\"}\n")
+            .expect("opaque body append");
+        let unchanged = activity.observation(session, None, false);
+        assert_eq!(placed.revision, unchanged.revision);
+        for observed in [missing, created, placed, unchanged] {
+            assert_eq!(observed.model, None);
+            assert!(!observed.unavailable);
+        }
     }
 
     #[test]
@@ -488,5 +599,130 @@ mod tests {
         );
         let activity = TranscriptActivity::rooted(scratch.root.join(PROJECTS_DIRECTORY), RECENT);
         assert!(!activity.answering(session));
+    }
+
+    #[cfg(windows)]
+    fn exact_owner(at: &str) -> ProcessIdentity {
+        let millis = WallMs::from_iso8601(at)
+            .expect("fixture timestamp")
+            .as_millis();
+        ProcessIdentity::new(7, (11_644_473_600_000 + millis) * 10_000)
+            .expect("fixture exact birth")
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn model_proof_belongs_to_the_current_incarnation_without_an_idle_clock() {
+        let scratch = Scratch::new();
+        let session = "cccccccc-0000-4000-8000-000000000001";
+        let body = "{\"type\":\"assistant\",\"timestamp\":\"2026-09-07T00:00:01Z\",\"message\":{\"stop_reason\":\"tool_use\"}}\n";
+        scratch.transcript("slug", session, body);
+        let activity = TranscriptActivity::new(Some(scratch.root.clone()));
+        let current = exact_owner("2026-09-07T00:00:00Z");
+        let resumed = exact_owner("2026-09-07T00:00:02Z");
+        assert_eq!(
+            activity.observation(session, Some(current), true).model,
+            Some(true)
+        );
+        assert_eq!(
+            activity.observation(session, Some(resumed), true).model,
+            None
+        );
+        assert_eq!(activity.observation(session, None, true).model, None);
+        assert_eq!(
+            activity.observation(session, Some(current), true).model,
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn late_direct_title_changes_revision_while_body_and_nested_title_do_not() {
+        let scratch = Scratch::new();
+        let session = "cccccccc-0000-4000-8000-000000000002";
+        let projects = scratch.transcript("slug", session, "{\"type\":\"setup\"}\n");
+        let activity = TranscriptActivity::new(Some(scratch.root.clone()));
+        let first = activity.observation(session, None, false);
+        let path = projects.join("slug").join(format!("{session}.jsonl"));
+        let mut file = fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .expect("fixture source");
+        file.write_all(b"{\"type\":\"assistant\",\"message\":{\"aiTitle\":\"untrusted body\",\"stop_reason\":\"end_turn\"}}\n")
+            .expect("body fixture");
+        assert_eq!(
+            activity.observation(session, None, false).revision,
+            first.revision
+        );
+        file.write_all(b"{\"aiTitle\":\"first nameplate\"}\n")
+            .expect("title fixture");
+        let titled = activity.observation(session, None, false);
+        assert_ne!(titled.revision, first.revision);
+        assert_eq!(
+            activity.observation(session, None, false).revision,
+            titled.revision
+        );
+        file.write_all(b"{\"type\":\"user\",\"message\":{\"content\":\"ordinary output\"}}\n")
+            .expect("body append");
+        assert_eq!(
+            activity.observation(session, None, false).revision,
+            titled.revision
+        );
+        file.write_all(b"{\"aiTitle\":\"later nameplate\"}\n")
+            .expect("late title fixture");
+        assert_ne!(
+            activity.observation(session, None, false).revision,
+            titled.revision
+        );
+        drop(file);
+        fs::write(&path, b"{\"type\":\"setup\"}\n").expect("replacement source");
+        assert_eq!(
+            activity.observation(session, None, false).revision,
+            first.revision
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn modern_roster_title_observation_does_not_read_turn_state() {
+        let scratch = Scratch::new();
+        let session = "cccccccc-0000-4000-8000-000000000003";
+        scratch.transcript(
+            "slug",
+            session,
+            "{\"type\":\"user\",\"timestamp\":\"2026-09-07T00:00:01Z\"}\n",
+        );
+        let activity = TranscriptActivity::new(Some(scratch.root.clone()));
+        let owner = Some(exact_owner("2026-09-07T00:00:00Z"));
+        assert_eq!(activity.observation(session, owner, false).model, None);
+        assert_eq!(activity.observation(session, owner, true).model, Some(true));
+    }
+
+    #[test]
+    fn partial_line_is_revisited_and_short_reads_do_not_supply_cached_proof() {
+        let scratch = Scratch::new();
+        let session = "cccccccc-0000-4000-8000-000000000004";
+        let projects =
+            scratch.transcript("slug", session, "{\"aiTitle\":\"first\"}\n{\"aiTitle\":\"");
+        let activity = TranscriptActivity::new(Some(scratch.root.clone()));
+        let first = activity.observation(session, None, false);
+        let path = projects.join("slug").join(format!("{session}.jsonl"));
+        let mut file = fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .expect("fixture source");
+        file.write_all(b"second\"}\n")
+            .expect("complete title fixture");
+        let second = activity.observation(session, None, false);
+        assert_ne!(second.revision, first.revision);
+        assert_eq!(
+            read_range(
+                &path,
+                0,
+                fs::metadata(&path).expect("fixture metadata").len() + 1
+            )
+            .expect_err("short source has no complete read proof")
+            .kind(),
+            io::ErrorKind::UnexpectedEof
+        );
     }
 }

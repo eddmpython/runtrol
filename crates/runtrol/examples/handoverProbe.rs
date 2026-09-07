@@ -863,6 +863,7 @@ async fn windows_probe(home: &Path, identity_file: &Path, digest: &str) -> Resul
     let update = client
         .windows()
         .update(&WindowUpdateParams {
+            workspace_folders: None,
             terminals: vec![ObservedTerminal {
                 terminal_key: "t1".to_owned(),
                 name: "pwsh".to_owned(),

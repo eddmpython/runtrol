@@ -27,6 +27,7 @@ export type ConversationActivity =
   | "needsYou"
   | "attention"
   | "working"
+  | "unknown"
   | "waitingOnQuota"
   | "ready"
   | "saved";
@@ -230,6 +231,7 @@ export function conversations(
   attachableNative: ReadonlySet<string> = new Set(),
   /// Live provider owners whose terminal a registered VS Code window is proved to own.
   focusableNative: ReadonlySet<string> = new Set(),
+  unknownNativeActivity: ReadonlySet<string> = new Set(),
 ): Conversation[] {
   const nativeByKey = new Map<string, NativeChatLine>();
   for (const chat of nativeChats) {
@@ -345,7 +347,11 @@ export function conversations(
   }
   // Pinned rows first, then running conversations above idle ones, and inside each of those bands a fixed
   // order. Pinning is a placement choice, so it sorts ahead of everything else.
-  const projected = rows.map((row): Conversation => {
+  const projected = rows.map((original): Conversation => {
+    const native = original.native?.nativeSessionId ?? original.hostedTerminal?.nativeSessionId;
+    const row = native && (original.presence.kind === "hosted" || original.presence.kind === "external")
+      && unknownNativeActivity.has(nativeProcessKey(original.providerId, native))
+      ? { ...original, activity: "unknown" as const } : original;
     const terminal = row.hostedTerminal;
     if (!terminal?.projectRoot) return row;
     const projectless = isProjectless(terminal.projectRoot, projectlessRoot);
@@ -388,6 +394,7 @@ function activityRank(activity: ConversationActivity): number {
     case "attention": return 4;
     case "working": return 3;
     case "waitingOnQuota": return 2;
+    case "unknown":
     case "ready": return 1;
     case "saved": return 0;
   }
@@ -866,6 +873,8 @@ export function conversationStatus(row: Conversation): string {
       return "Running";
     case "waitingOnQuota":
       return "Limit";
+    case "unknown":
+      return "Activity unavailable";
     case "ready":
       return "Ready";
     case "saved":

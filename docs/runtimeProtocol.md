@@ -88,13 +88,15 @@ optional GUI. A public connection cannot approve itself.
 
 ## Methods and scopes
 
-`ServerCapabilities.terminalInputPriority` advertises terminal holder precedence. Its owner-approved scope and
-Studio enrollment behavior are defined in [the terminal input contract](terminalSurface.md#public-runtime-contract).
+`ServerCapabilities.terminalInputPriority` advertises terminal holder precedence. The owner-approved
+`session.input.priority` scope and Studio enrollment behavior are defined in
+[the terminal input contract](terminalSurface.md#public-runtime-contract).
 Clients must not assume that an older generation enforces this policy.
 
 | Methods | Required public authority |
 |---|---|
-| `providers/list`, `providers/watch`, `providers/getCapabilities`, `providers/usage` | `provider.read` |
+| `providers/list`, `providers/getCapabilities`, `providers/usage` | `provider.read` |
+| `providers/watch` | `provider.read`, plus `session.native.discover` when native activity is requested |
 | `providers/listModels` | `model.read` |
 | `providers/listNativeSessions` | `session.native.discover`, plus an approved root when one is named |
 | `providers/nativeActivity` | `session.native.discover` |
@@ -126,7 +128,8 @@ Clients must not assume that an older generation enforces this policy.
 | `runtime/panicStop` | Same-user transport admission, no request arguments |
 
 Notifications are `providers/changed`, `providers/usageChanged` (the account usage snapshot, sent once when a
-provider subscription starts and again on every change), `providers/watchEnded`, `sessions/indexChanged`,
+provider subscription starts and again on every change), `providers/nativeActivityChanged` (only on a watch that
+explicitly requested native activity), `providers/watchEnded`, `sessions/indexChanged`,
 `sessions/indexEnded`, `sessions/event`, `sessions/lagged`, `terminals/indexChanged`, `terminals/indexEnded`,
 `windows/indexChanged`, `windows/indexEnded`, `windows/revealRequested`, `windows/revealsEnded`,
 `windows/inputOffered`, `windows/inputEnded`,
@@ -162,13 +165,24 @@ registered window owns is focusable when its own process chain owns a window on 
 a console window), proved by the same search the click repeats; the Runtime brings that window forward and cannot
 pick a tab inside it. A focusable conversation is one `providers/focusNative` can show where it runs; it says
 nothing about attaching or mirroring, and `attachable` names only the provider's own attachment, so the two never
-overlap. It is separate from the catalogue because a panel asks it on a
-250 ms compatibility clock and a
-catalogue is not cheap. A listing reads every stored conversation's head; the activity request reads only the
-provider's bounded process roster. The measured driver validates both PID and kernel process-start identity, so a
+overlap. Native activity remains separate from the cold catalogue: it reads the provider's bounded process roster,
+while catalogue discovery inspects stored conversation metadata. The measured driver validates both PID and kernel process-start identity, so a
 stale roster file cannot alias a reused PID. Runtime may use the same content-free binding internally to attach a
 provider-minted native identity to the exact daemon-owned PTY process or to select a measured live terminal route.
 Only the route's availability appears in `attachable`; implementation details and process coordinates remain private.
+
+When `ServerCapabilities.providerNativeActivityWatch` is advertised, a consumer may request native activity on its
+existing provider subscription. Runtime publishes current observations and subsequent structural revisions from one
+shared producer per provider. Installed driver notifications wake observation from filesystem changes and exact
+process completion; they do not infer model work from terminal output or file growth. A driver without this source
+uses the existing bounded compatibility observation. Changes to registered owner windows refresh focusability without
+requiring another provider scan. Provider and native-discovery authority are checked when the watch starts and again
+before publication, including after asynchronous focus resolution.
+
+TypeScript `providers.watch({ nativeActivity: true })` negotiates this opt-in against the connected generation. Its
+subscription reports whether native activity was accepted, so a consumer can retain compatibility observation for an
+older Runtime. Ordinary provider watches receive no new native notifications. The protocol schema owns the request
+and notification shapes; [provider architecture](providerArchitecture.md#live-terminal-access) owns driver evidence.
 On Windows, the ancestry snapshot opens only the observed candidates and their bounded ancestor chains for birth
 checks. It checks each candidate before and after the parent-table snapshot and rechecks retained identities when
 used. Unrelated processes contribute parent-table entries but require no process handles. The capture and identity

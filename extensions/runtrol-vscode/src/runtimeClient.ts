@@ -57,6 +57,11 @@ import {
 import { collectNativeChats } from "./nativeChatCatalogue";
 import { providerCommandNames } from "./observedMirrorState";
 import { TerminalFleet } from "./terminalFleet";
+import { RuntimeRoutes, type RuntimeRoute, type ReadyRuntimeRoute, type RuntimeRouteCandidate } from "./runtimeRoutes";
+import { RuntimeGenerations } from "./runtimeGenerations";
+import { WindowPreparations } from "./windowPreparations";
+import { WindowConnections, type WindowOwnershipGroup, type WindowGroupCandidate } from "./windowConnections";
+import type { WindowOwner, WindowSnapshot, WindowGroupHandle } from "./windowRegistry";
 import { errorKindOf } from "./serviceHelp";
 import { workspaceIdentity } from "./workspaceCollision";
 import type { NativeChatCatalogue, NativeChatLine } from "./runtimeTypes";
@@ -69,8 +74,6 @@ const SECRET_KEY = "runtrol.runtime.integration.v1";
 export type RuntimeSource = { runtimeExecutable: string; preferDigest: string | null };
 const ENROLLMENT_DECISION_SETTLE_MS = 5_000;
 const ENROLLMENT_DECISION_POLL_MS = 50;
-const RUNTIME_LOCATOR_SETTLE_MS = 12_000;
-const RUNTIME_LOCATOR_POLL_MS = 25;
 // The in-memory lease is authoritative while the Extension Host is alive. Persisting it only
 // improves reload recovery, so SecretStorage latency must not delay an interactive session action.
 const CONTROL_PERSISTENCE_INLINE_MS = 0;
@@ -105,9 +108,57 @@ export type RuntimeSessionAction = {
 export class StudioRuntimeClient implements vscode.Disposable {
   private readonly connector = new RuntimeConnector();
   private command: RuntimeClient | null = null;
-  /// The command connection this window's registration was made on; a new connection needs a new one.
-  private windowRegisteredOn: RuntimeClient | null = null;
-  private windowRegistration: WindowRegistration | null = null;
+  private readonly lifetime = new AbortController();
+  private primaryChanged = new AbortController();
+  private windowOwner: WindowOwner | null = null;
+  private readonly windowPreparations = new WindowPreparations<RuntimeClient>({
+    listed: () => this.generationSource.latest?.generations ?? [],
+    lookup: revision => this.currentWindowGroup(revision),
+    prepare: (route, signal) => this.prepareWindow(route, signal),
+  }, this.lifetime.signal);
+  private readonly generationSource = new RuntimeGenerations(
+    () => this.runtimeLocator(),
+    snapshot => {
+      this.windowPreparations.pruneMembership();
+      this.windowGroups.pruneMembership();
+      if (this.options) this.routes.observe(snapshot);
+    },
+    error => this.routes.observationFailed(error),
+  );
+  private readonly windowGroups = new WindowConnections<RuntimeClient>({
+    listed: () => this.generationSource.latest?.generations ?? [],
+    connect: (route, _lane, signal) => this.connector.connectWithRetry(route.locator, this.requireOptions(), { signal }),
+    authorityRevision: connection => {
+      const grant = connection.initialization.grant;
+      if (!grant) throw new Error("window connection has no authenticated integration grant");
+      return grantRevision(grant);
+    },
+    connectionFailure: error => errorKindOf(error) === undefined,
+    reveal: (group, terminalKey) => { this.windowOwner?.reveal(group, terminalKey); },
+    input: (group, subscription) => {
+      if (!this.windowOwner) throw new Error("window owner is unavailable");
+      return this.windowOwner.input(group, subscription);
+    },
+    failed: (group, lane, error) => { this.windowOwner?.failed(group, lane, error); },
+  }, this.lifetime.signal);
+  private readonly routes = new RuntimeRoutes<RuntimeClient, WindowOwnershipGroup<RuntimeClient> | null>({
+    prepare: (route, signal) => this.prepareRoute(route, signal),
+    changed: route => {
+      const oldInstance = this.command?.initialization.runtime.instanceId;
+      this.command = route?.command ?? null;
+      this.closeActivity();
+      this.primaryChanged.abort();
+      this.primaryChanged = new AbortController();
+      if (route && oldInstance && oldInstance !== route.command.initialization.runtime.instanceId) {
+        this.controls.clear();
+      }
+    },
+    failed: () => {
+      // Wake the existing index recovery path so a failed primary preparation is visible and retried there.
+      this.primaryChanged.abort();
+      this.primaryChanged = new AbortController();
+    },
+  });
   /// The 250 ms process-roster clock must never queue in front of operator commands.
   ///
   /// A provider can take tens of milliseconds to validate its structural activity surface on Windows. Sharing
@@ -115,14 +166,9 @@ export class StudioRuntimeClient implements vscode.Disposable {
   /// depends on it. One persistent authenticated connection and one narrow queue preserve ordering inside the
   /// activity lane without adding a connection per tick or delaying the command lane.
   private activity: RuntimeClient | null = null;
-  /// The observed mirror's own connection. It carries only this window's captured provider output, so a chunk
-  /// the Runtime refuses closes this and nothing else: not a person's click, and not the command connection
-  /// that holds this window's registration in the Runtime's window registry.
-  private mirror: RuntimeClient | null = null;
-  private mirrorTail: Promise<void> = Promise.resolve();
   private options: ClientOptions | null = null;
   private stored: StoredIntegration | null = null;
-  private locator: Promise<ValidatedLocator> | null = null;
+  private integrationEpoch = 0;
   private firstInspection: Promise<ValidatedLocator | null> | null = null;
   private commandTail: Promise<void> = Promise.resolve();
   private activityTail: Promise<void> = Promise.resolve();
@@ -176,16 +222,10 @@ export class StudioRuntimeClient implements vscode.Disposable {
   /// A running generation of the installed build is remembered as the settled locator, so `initialize` does not
   /// inspect again. Anything else answers null and leaves the settling to `initialize`'s own loop.
   private async inspectOnce(): Promise<ValidatedLocator | null> {
-    const inspected = await RuntimeLocator.system({
-      ...(process.platform === "win32" && this.runtimeExecutable && isAbsolute(this.runtimeExecutable)
-        ? { runtimeExecutable: this.runtimeExecutable }
-        : {}),
-      ...(this.preferDigest ? { preferDigest: this.preferDigest } : {}),
-    }).inspect();
-    if (inspected.state !== "running") return null;
-    if (this.preferDigest && inspected.locator.digest !== this.preferDigest) return null;
-    this.locator ??= Promise.resolve(inspected.locator);
-    return inspected.locator;
+    const inspected = await this.generationSource.snapshot(this.lifetime.signal);
+    if (inspected.current.state !== "running") return null;
+    if (this.preferDigest && inspected.current.locator.digest !== this.preferDigest) return null;
+    return inspected.current.locator;
   }
 
   async initialize(): Promise<void> {
@@ -216,31 +256,30 @@ export class StudioRuntimeClient implements vscode.Disposable {
 
   /// Open one provider-faithful terminal on its own public Runtime connection.
   async openTerminal(params: TerminalOpenParams): Promise<TerminalView> {
-    await this.commandClient();
-    const dedicated = await this.withRuntimeLocator((locator) => this.connector.connectWithRetry(
-      locator,
-      this.requireOptions(),
-    ));
-    try {
-      return await dedicated.terminals().open(params);
-    } catch (error) {
-      dedicated.close();
-      if (
-        params.target.kind === "native"
-        && error instanceof RuntimeRequestError
-        && error.failure.code === "terminalAlreadyLive"
-      ) {
-        const existing = await this.findTerminal(
-          params.providerId,
-          params.target.nativeSessionId,
-          params.workspace,
-        );
-        if (existing) {
-          return this.attachTerminal(existing.runtimeGeneration, existing.terminalId);
+    await this.generationSource.snapshot(this.lifetime.signal);
+    return this.routes.run(async route => {
+      const dedicated = await this.connector.connectWithRetry(route.locator, this.requireOptions(), { signal: this.lifetime.signal });
+      try {
+        return await dedicated.terminals().open(params);
+      } catch (error) {
+        dedicated.close();
+        if (
+          params.target.kind === "native"
+          && error instanceof RuntimeRequestError
+          && error.failure.code === "terminalAlreadyLive"
+        ) {
+          const existing = await this.findTerminal(
+            params.providerId,
+            params.target.nativeSessionId,
+            params.workspace,
+          );
+          if (existing) {
+            return this.attachTerminal(existing.runtimeGeneration, existing.terminalId);
+          }
         }
+        throw error;
       }
-      throw error;
-    }
+    });
   }
 
   /// Reattach one view to the exact generation that owns an already live terminal.
@@ -336,96 +375,116 @@ export class StudioRuntimeClient implements vscode.Disposable {
     return providerCommandNames((await this.read((runtime) => runtime.providers().list())).providers);
   }
 
-  /// Open a mirror of a terminal this window observes, on the mirror's own connection.
-  mirrorOpen(params: WindowMirrorOpenParams): Promise<WindowMirrorOpened> {
-    return this.mirrorLane((runtime) => runtime.windows().mirrorOpen(params));
+  setWindowOwner(owner: WindowOwner): { dispose(): void } {
+    if (this.windowOwner && this.windowOwner !== owner) throw new Error("this Studio window already has an owner");
+    this.windowOwner = owner;
+    return { dispose: () => {
+      if (this.windowOwner !== owner) return;
+      this.windowOwner = null;
+      this.windowPreparations.clear(new Error("Studio window owner detached"));
+      this.windowGroups.clear("Studio window owner detached");
+    } };
   }
 
-  /// One chunk of the observed execution's output, in order with every other chunk and behind nothing else.
-  mirrorOutput(params: WindowMirrorOutputParams): Promise<void> {
-    return this.mirrorLane((runtime) => runtime.windows().mirrorOutput(params));
-  }
-
-  mirrorEnd(params: WindowMirrorEndParams): Promise<void> {
-    return this.mirrorLane((runtime) => runtime.windows().mirrorEnd(params));
-  }
-
-  /// Ask the window that owns a terminal to show it and come forward.
-  revealAtOwner(params: WindowRevealParams): Promise<WindowRevealResult> {
-    return this.read((runtime) => runtime.windows().reveal(params));
-  }
-
-  /// Ask the window that owns a live conversation's terminal to show it and come forward. The Runtime knows which
-  /// window that is; this window never learns it.
-  focusNative(params: NativeFocusParams): Promise<NativeFocusResult> {
-    return this.read((runtime) => runtime.providers().focusNative(params));
-  }
-
-  /// Follow reveal requests for this window on a dedicated connection until `signal` aborts, reconnecting after
-  /// a Runtime restart; `onRequest` gets the key of the terminal to show.
-  async watchWindowReveals(
-    windowSessionId: string,
-    onRequest: (terminalKey: string) => void,
-    signal: AbortSignal,
-  ): Promise<void> {
-    while (!signal.aborted) {
-      let runtime: RuntimeClient | null = null;
-      try {
-        runtime = await this.withRuntimeLocator(
-          (locator) => this.connector.connectWithRetry(locator, this.requireOptions()),
-        );
-        const subscription = await runtime.windows().watchReveals({ windowSessionId });
-        while (!signal.aborted) {
-          const notification = await subscription.next();
-          if (notification.kind !== "requested") break;
-          onRequest(notification.requested.terminalKey);
-        }
-      } catch (error) {
-        if (signal.aborted) return;
-        // The Runtime went away or refused (a registration not made yet); the next round asks again.
-        void error;
-      } finally {
-        runtime?.close();
-      }
-      if (!signal.aborted) await abortableDelay(2_000, signal);
+  async publishWindow(state: WindowSnapshot): Promise<WindowGroupHandle> {
+    // Include candidates and retained groups. An old execution ending must invalidate its original owner.
+    const updates = await this.windowGroups.update(state);
+    for (const result of updates) {
+      // The group's failure callback owns reporting; a failed retained group cannot redirect the primary.
+      if (result.status === "rejected") void result.reason;
     }
-  }
-
-  /// Every hosted terminal the Runtime lists right now, with what each process holds in memory.
-  /// Register this window and publish the terminals it observes, on the persistent command connection. A
-  /// registration lives as long as its connection, so a fresh connection registers again before it updates.
-  async publishWindow(register: WindowRegisterParams, update: WindowUpdateParams): Promise<WindowRegistration> {
-    return this.read(async (runtime) => {
-      if (this.windowRegisteredOn !== runtime || this.windowRegistration === null) {
-        this.windowRegistration = await runtime.windows().register(register);
-        this.windowRegisteredOn = runtime;
-      }
-      await runtime.windows().update(update);
-      return this.windowRegistration;
+    await this.generationSource.snapshot(this.lifetime.signal);
+    return this.routes.run(async route => {
+      const group = await this.ensureWindowGroup(route);
+      await group.update(this.requireWindowOwner().state());
+      return group;
     });
   }
 
-  async withWindowInput(
-    params: WatchWindowInputParams,
-    run: (subscription: WindowInputSubscription) => Promise<void>,
-    signal: AbortSignal,
-  ): Promise<void> {
-    signal.throwIfAborted();
-    const runtime = await this.withRuntimeLocator(
-      (locator) => this.connector.connectWithRetry(locator, this.requireOptions(), { signal }),
-    );
-    let subscription: WindowInputSubscription | null = null;
-    const abort = () => { if (subscription) subscription.close(); else runtime.close(); };
-    signal.addEventListener("abort", abort, { once: true });
+  revealAtOwner(params: WindowRevealParams, runtimeGeneration?: string): Promise<WindowRevealResult> {
+    return this.withRegisteredWindow(runtimeGeneration, group => group.connection.windows().reveal(params));
+  }
+
+  focusNative(params: NativeFocusParams): Promise<NativeFocusResult> {
+    return this.withRegisteredWindow(undefined, group => group.connection.providers().focusNative(params));
+  }
+
+  private async withRegisteredWindow<T>(generation: string | undefined,
+    action: (group: WindowOwnershipGroup<RuntimeClient>) => Promise<T>): Promise<T> {
+    const snapshot = await this.generationSource.snapshot(this.lifetime.signal);
+    if (generation !== undefined) {
+      const locator = snapshot.generations.find(candidate => candidate.digest === generation);
+      if (!locator) throw new Error("the terminal owner generation is no longer available");
+      const group = await this.ensureWindowGroup({ locator, currentRevision: locator.revision });
+      return action(group);
+    }
+    return this.routes.run(async route => action(await this.ensureWindowGroup(route)));
+  }
+
+  private requireWindowOwner(): WindowOwner {
+    if (!this.windowOwner) throw new Error("this Studio window has not started its terminal registry");
+    return this.windowOwner;
+  }
+
+  private async prepareWindow(route: RuntimeRoute, signal: AbortSignal): Promise<WindowGroupCandidate<RuntimeClient>> {
+    const epoch = this.integrationEpoch;
+    const options = this.requireOptions();
+    const owner = this.requireWindowOwner();
+    const existing = this.currentWindowGroup(route.currentRevision);
+    const registration = existing?.connection
+      ?? await this.connector.connectWithRetry(route.locator, options, { signal });
+    try { this.assertIntegrationEpoch(epoch, signal); }
+    catch (error) { if (!existing) registration.close(); throw error; }
+    const candidate = await this.windowGroups.prepare(route, registration, owner.state(), signal);
     try {
       signal.throwIfAborted();
-      subscription = await runtime.windows().watchInput(params);
+      if (this.windowOwner !== owner) throw new Error("the Studio window owner changed during registration");
+      this.assertIntegrationEpoch(epoch, signal);
+      await candidate.update(owner.state());
+      this.assertIntegrationEpoch(epoch, signal);
+      return candidate;
+    } catch (error) {
+      candidate.abort();
+      throw error;
+    }
+  }
+
+  private currentWindowGroup(revision: string): WindowOwnershipGroup<RuntimeClient> | undefined {
+    let existing = this.windowGroups.lookup(revision);
+    const currentGrant = this.requireOptions().credentials?.grant;
+    const previousGrant = existing?.connection.initialization.grant;
+    if (existing && currentGrant && previousGrant
+      && grantRevision(currentGrant) !== grantRevision(previousGrant)) {
+      // An authority replacement ends old bindings. No old mirror or pending text is rebound to the new proof.
+      existing.close("window integration authority changed");
+      existing = undefined;
+    }
+    return existing;
+  }
+
+  private ensureWindowGroup(route: RuntimeRoute): Promise<WindowOwnershipGroup<RuntimeClient>> {
+    return this.windowPreparations.ensure(route, this.lifetime.signal);
+  }
+
+  private async prepareRoute(route: RuntimeRoute, signal: AbortSignal): Promise<RuntimeRouteCandidate<RuntimeClient, WindowOwnershipGroup<RuntimeClient> | null>> {
+    const command = await this.prepareCommand(route, signal);
+    let window: WindowGroupCandidate<RuntimeClient> | null = null;
+    try {
       signal.throwIfAborted();
-      await run(subscription);
-    } finally {
-      signal.removeEventListener("abort", abort);
-      subscription?.close();
-      runtime.close();
+      if (this.windowOwner) {
+        window = await this.windowPreparations.prepareRoute(route, signal);
+        await window.update(this.requireWindowOwner().state());
+      }
+      signal.throwIfAborted();
+      return {
+        command,
+        commit: () => window?.commit() ?? null,
+        abort: () => { window?.abort(); command.close(); },
+      };
+    } catch (error) {
+      window?.abort();
+      command.close();
+      throw error;
     }
   }
 
@@ -844,6 +903,7 @@ export class StudioRuntimeClient implements vscode.Disposable {
     snapshot: (providers: ProviderList) => void,
     signal: AbortSignal,
     usage: (usage: import("@runtrol/runtime-client").ProviderUsageList) => void = () => undefined,
+    native: (snapshot: readonly import("@runtrol/runtime-client").NativeActivityObservation[] | null) => void = () => undefined,
   ): Promise<void> {
     const watch = Symbol("provider watch");
     this.providerWatch = watch;
@@ -853,22 +913,29 @@ export class StudioRuntimeClient implements vscode.Disposable {
       snapshot(providers);
     };
     try {
-      await this.withRuntimeLocator(async (locator) => {
+      await this.followPrimary(async (locator, signal) => {
+        if (this.providerWatch === watch) native(null);
         try {
           const subscription = await this.connector.watchProvidersWithReconnect(
             locator,
             this.requireOptions(),
             { signal },
+            { nativeActivity: true },
           );
           try {
+            signal.throwIfAborted();
             publish(subscription.started.snapshot);
             while (!signal.aborted) {
               const notification = await subscription.next();
+              if (signal.aborted) return;
               if (notification.kind === "changed") {
                 publish(notification.changed.snapshot);
               } else if (notification.kind === "usageChanged") {
                 if (this.providerWatch === watch) usage(notification.usageChanged.snapshot);
+              } else if (notification.kind === "nativeActivityChanged") {
+                if (this.providerWatch === watch) native(notification.nativeActivityChanged.snapshot);
               } else if (notification.kind === "reconnected") {
+                if (this.providerWatch === watch) native(null);
                 publish(notification.started.snapshot);
               } else {
                 throw new Error(`the Runtime provider stream ended: ${notification.ended.reason}`);
@@ -880,11 +947,12 @@ export class StudioRuntimeClient implements vscode.Disposable {
         } catch (error) {
           if (!signal.aborted) throw error;
         }
-      });
+      }, signal);
     } finally {
       if (this.providerWatch === watch) {
         this.providerWatch = null;
         this.providerSnapshot = null;
+        native(null);
       }
     }
   }
@@ -901,7 +969,7 @@ export class StudioRuntimeClient implements vscode.Disposable {
       snapshot(sessions);
     };
     try {
-      await this.withRuntimeLocator(async (locator) => {
+      await this.followPrimary(async (locator, signal) => {
         try {
           const subscription = await this.connector.watchSessionIndexWithReconnect(
             locator,
@@ -909,9 +977,11 @@ export class StudioRuntimeClient implements vscode.Disposable {
             { signal },
           );
           try {
+            signal.throwIfAborted();
             publish(subscription.started.snapshot);
             while (!signal.aborted) {
               const notification = await subscription.next();
+              if (signal.aborted) return;
               if (notification.kind === "changed") {
                 publish(notification.changed.snapshot);
               } else if (notification.kind === "reconnected") {
@@ -926,7 +996,7 @@ export class StudioRuntimeClient implements vscode.Disposable {
         } catch (error) {
           if (!signal.aborted) throw error;
         }
-      });
+      }, signal);
     } finally {
       if (this.sessionWatch === watch) {
         this.sessionWatch = null;
@@ -935,100 +1005,34 @@ export class StudioRuntimeClient implements vscode.Disposable {
     }
   }
 
-  /// Follow the hosted-terminal registry of every Runtime generation as one event stream.
-  ///
-  /// This is the discovery hot path for provider processes launched through a transparent terminal bridge. Process
-  /// birth and exit are structural facts and reach the sidebar without waiting for either the activity clock or
-  /// the memory sampling clock.
-  ///
-  /// The generation this window commands is the anchor: losing its stream is losing the Core, and the error says
-  /// so. Every other generation the locator lists is followed beside it, because an update leaves the old
-  /// generation draining next to the new one for as long as its conversations run, and a conversation's terminal
-  /// lives in the exact generation that opened it (`docs/terminalSurface.md`, generation continuity). A row that
-  /// cannot see that terminal cannot attach to it, and this window then took the conversation for one running
-  /// outside Runtrol (measured 2026-08-29: eight conversations in five draining generations, none openable). A
-  /// generation that cannot be followed is named in the merged snapshot's warnings and tried again later; it is
-  /// never read as the Core going away.
-  async watchTerminals(
-    snapshot: (terminals: TerminalIndexSnapshot) => void,
-    signal: AbortSignal,
-  ): Promise<void> {
+  /// One OS locator observation supplies the exact owner generations, including those still draining.
+  async watchTerminals(snapshot: (terminals: TerminalIndexSnapshot) => void, signal: AbortSignal): Promise<void> {
     const watch = Symbol("terminal watch");
     this.terminalWatch = watch;
     const fleet = new TerminalFleet();
-    const publish = (): void => {
-      if (this.terminalWatch === watch) snapshot(fleet.merged());
-    };
-    await this.withRuntimeLocator(async (anchor) => {
-      const others = new AbortController();
-      const stopOthers = (): void => others.abort();
-      signal.addEventListener("abort", stopOthers, { once: true });
-      const following = fleet.followOtherGenerations(
-        anchor.digest,
-        () => this.listedGenerations(),
-        (generation, followingSignal) => this.followGeneration(generation, fleet, publish, followingSignal),
-        publish,
-        others.signal,
+    const publish = (): void => { if (this.terminalWatch === watch) snapshot(fleet.merged()); };
+    try {
+      await fleet.followGenerations(
+        (receive, watching) => this.generationSource.follow(receive, watching),
+        (generation, receive, watching) => this.followGeneration(generation, receive, watching),
+        publish, signal,
       );
-      try {
-        // The anchor stream ending is not the Core going away: the grant generation moving (a deploy or a
-        // re-enrollment) or this generation draining ends the stream, and the window re-reads the locator and
-        // re-subscribes rather than showing an error and going unreachable (operator, 2026-08-29: "the Runtime
-        // terminal stream ended: authorityChanged" surfaced during a deploy). Only a revoked integration is a
-        // real stop, and a transport error still throws to the outer retry.
-        while (!signal.aborted) {
-          const runtime = await this.connector.connectWithRetry(anchor, this.requireOptions(), { signal });
-          let ended: TerminalStreamEnd;
-          try {
-            ended = await followTerminalIndex(runtime, anchor.digest, fleet, publish, signal);
-          } finally {
-            runtime.close();
-          }
-          if (signal.aborted || ended === null || ended === "integrationRevoked") {
-            if (ended === "integrationRevoked") throw new Error("Runtime access was revoked for this window");
-            break;
-          }
-          // authorityChanged or runtimeUnavailable: a beat, then reconnect through the locator.
-          await abortableDelay(250, signal);
-        }
-      } finally {
-        signal.removeEventListener("abort", stopOthers);
-        others.abort();
-        await following;
-        if (this.terminalWatch === watch) this.terminalWatch = null;
-      }
-    });
+    } finally {
+      if (this.terminalWatch === watch) this.terminalWatch = null;
+    }
   }
 
-  /// Read one listed generation's terminal index until that generation ends or the watch stops.
-  private async followGeneration(
-    generation: ValidatedLocator,
-    fleet: TerminalFleet,
-    publish: () => void,
-    signal: AbortSignal,
-  ): Promise<void> {
+  private async followGeneration(generation: ValidatedLocator,
+    receive: (snapshot: TerminalIndexSnapshot) => void, signal: AbortSignal): Promise<void> {
     const runtime = await this.connector.connect(generation, this.requireOptions(), signal);
     try {
+      signal.throwIfAborted();
       if (!runtime.initialization.serverCapabilities.terminalSurface) {
         throw new Error("this Runtime generation has no public terminal surface");
       }
-      await followTerminalIndex(runtime, generation.digest, fleet, publish, signal);
-    } finally {
-      runtime.close();
-    }
-  }
-
-  /// Every generation the locator lists right now, or none while the locator is being rewritten.
-  ///
-  /// A locator mid-replacement (an update publishing, a generation leaving) reads as malformed for a moment.
-  /// That moment is not a fleet of zero: the generations already followed keep streaming, and the next listing
-  /// sees the settled file. So a failed read changes nothing and the error is not raised, deliberately.
-  private async listedGenerations(): Promise<ReadonlyArray<ValidatedLocator>> {
-    try {
-      return await this.runtimeLocator().inspectAll();
-    } catch {
-      return [];
-    }
+      const ended = await followTerminalIndex(runtime, receive, signal);
+      if (ended) throw new Error("the Runtime terminal stream ended: " + ended);
+    } finally { runtime.close(); }
   }
 
   /// End the provider process behind one hosted terminal, in the exact generation that owns it.
@@ -1117,13 +1121,10 @@ export class StudioRuntimeClient implements vscode.Disposable {
     this.invalidateInventory();
     this.closeActivity();
     await this.serial(async () => {
-      this.command?.close();
-      this.command = null;
-      this.locator = null;
+      this.generationSource.reset();
       if (this.options) {
-        try {
-          await this.commandClient();
-        } catch (error) {
+        try { await this.commandClient(); }
+        catch (error) {
           if (!recoverableAuthenticationFailure(error)) throw error;
           await this.replaceIntegration();
         }
@@ -1132,8 +1133,11 @@ export class StudioRuntimeClient implements vscode.Disposable {
   }
 
   dispose(): void {
+    this.lifetime.abort();
+    this.primaryChanged.abort();
+    this.generationSource.close();
+    this.routes.close();
     this.closeActivity();
-    this.closeMirror();
     this.command?.close();
     this.command = null;
     this.controls.clear();
@@ -1142,20 +1146,20 @@ export class StudioRuntimeClient implements vscode.Disposable {
 
   private read<T>(operation: (runtime: RuntimeClient) => Promise<T>): Promise<T> {
     return this.serial(async () => {
-      const runtime = await this.commandClient();
-      try {
-        return await operation(runtime);
-      } catch (error) {
-        // An answered refusal keeps the connection: the Runtime said no to one request, and the window
-        // registration and the control this connection holds are still good. Only a failure with no Runtime
-        // answer replaces it (measured 2026-09-05: one refused window update closed the connection, the
-        // Runtime forgot the window, and the conversation tabs reopened fresh providers of their own).
-        if (errorKindOf(error) === undefined) {
-          runtime.close();
-          this.command = null;
+      await this.generationSource.snapshot(this.lifetime.signal);
+      return this.routes.run(async route => {
+        const runtime = route.command;
+        try {
+          return await operation(runtime);
+        } catch (error) {
+          // An answered refusal preserves the transport. A transport failure invalidates only its exact
+          // route, so a late old response cannot discard a committed successor.
+          if (errorKindOf(error) === undefined) {
+            this.routes.invalidate(route);
+          }
+          throw error;
         }
-        throw error;
-      }
+      });
     });
   }
 
@@ -1181,17 +1185,19 @@ export class StudioRuntimeClient implements vscode.Disposable {
   private mutate<T>(operation: (runtime: RuntimeClient) => Promise<T>): Promise<T> {
     return this.serial(async () => {
       this.sessionSnapshot = null;
-      const runtime = await this.commandClient();
-      try {
-        const result = await operation(runtime);
-        this.sessionSnapshot = null;
-        return result;
-      } catch (error) {
-        this.sessionSnapshot = null;
-        runtime.close();
-        this.command = null;
-        throw error;
-      }
+      await this.generationSource.snapshot(this.lifetime.signal);
+      return this.routes.run(async route => {
+        const runtime = route.command;
+        try {
+          const result = await operation(runtime);
+          this.sessionSnapshot = null;
+          return result;
+        } catch (error) {
+          this.sessionSnapshot = null;
+          if (errorKindOf(error) === undefined) this.routes.invalidate(route);
+          throw error;
+        }
+      });
     });
   }
 
@@ -1236,10 +1242,15 @@ export class StudioRuntimeClient implements vscode.Disposable {
   }
 
   private async commandClient(): Promise<RuntimeClient> {
-    if (this.command) return this.command;
-    const expectedInstance = this.stored?.controlState?.runtimeInstanceId;
-    let connected = await this.connectCommand();
+    await this.generationSource.snapshot(this.lifetime.signal);
+    return this.routes.run(async route => route.command);
+  }
+
+  private async prepareCommand(route: RuntimeRoute, signal: AbortSignal): Promise<RuntimeClient> {
+    const epoch = this.integrationEpoch;
+    let connected = await this.connectCommand(route.locator, signal);
     try {
+      this.assertIntegrationEpoch(epoch, signal);
       const review = this.stored;
       if (review?.grant && !review.inputPriorityReviewed
         && await readStudioInputPriorityReview(this.context.secrets, review.grant)) {
@@ -1251,76 +1262,52 @@ export class StudioRuntimeClient implements vscode.Disposable {
         async () => {
           if (!review.grant) throw new Error("Runtrol Studio has no integration grant to review");
           await persistStudioInputPriorityReview(this.context.secrets, review.grant);
+          this.assertIntegrationEpoch(epoch, signal);
           const next = { ...review, inputPriorityReviewed: true as const };
-          await this.persistIntegration(next);
+          await this.persistIntegration(next, epoch);
         },
         this.prioritizeInput,
       )) {
         connected.close();
         // Reconnect reads the committed grant, including after a running Runtime upgrade.
-        connected = await this.connectCommand();
+        connected = await this.connectCommand(route.locator, signal);
       }
+      this.assertIntegrationEpoch(epoch, signal);
     } catch (error: unknown) {
       connected.close();
       throw error;
     }
-    this.command = connected;
-    if (
-      expectedInstance
-      && expectedInstance !== connected.initialization.runtime.instanceId
-    ) {
-      this.controls.clear();
-      await this.persistControls();
-    }
-    return this.command;
+    return connected;
   }
 
   private async activityClient(): Promise<RuntimeClient> {
-    if (this.activity) return this.activity;
-    this.activity = await this.withRuntimeLocator(
-      (locator) => this.connector.connectWithRetry(locator, this.requireOptions()),
-    );
-    return this.activity;
+    while (!this.lifetime.signal.aborted) {
+      if (this.activity) return this.activity;
+      await this.generationSource.snapshot(this.lifetime.signal);
+      const acquired = await this.routes.run(async route => {
+        const changed = this.primaryChanged.signal;
+        const signal = AbortSignal.any([this.lifetime.signal, changed]);
+        let runtime: RuntimeClient | null = null;
+        try {
+          runtime = await this.connector.connectWithRetry(route.locator, this.requireOptions(), { signal });
+          signal.throwIfAborted();
+          this.activity = runtime;
+          return runtime;
+        } catch (error) {
+          runtime?.close();
+          this.lifetime.signal.throwIfAborted();
+          if (changed.aborted) return null;
+          throw error;
+        }
+      });
+      if (acquired) return acquired;
+    }
+    throw new Error("Runtime activity observation ended");
   }
 
   private closeActivity(): void {
     this.activity?.close();
     this.activity = null;
-  }
-
-  private async mirrorClient(): Promise<RuntimeClient> {
-    if (this.mirror) return this.mirror;
-    this.mirror = await this.withRuntimeLocator(
-      (locator) => this.connector.connectWithRetry(locator, this.requireOptions()),
-    );
-    return this.mirror;
-  }
-
-  /// The mirror's lane: chunks keep their order among themselves, never queue behind a person's command, and a
-  /// failure tears down only this connection. The Runtime ends the mirrors of a connection that goes away, which is
-  /// the honest outcome: the feed really has stopped.
-  private mirrorLane<T>(operation: (runtime: RuntimeClient) => Promise<T>): Promise<T> {
-    const action = async (): Promise<T> => {
-      const runtime = await this.mirrorClient();
-      try {
-        return await operation(runtime);
-      } catch (error) {
-        runtime.close();
-        if (this.mirror === runtime) this.mirror = null;
-        throw error;
-      }
-    };
-    const result = this.mirrorTail.then(action);
-    this.mirrorTail = result.then(
-      () => undefined,
-      () => undefined,
-    );
-    return result;
-  }
-
-  private closeMirror(): void {
-    this.mirror?.close();
-    this.mirror = null;
   }
 
   private async rememberControl(control: ControlLease): Promise<void> {
@@ -1350,23 +1337,28 @@ export class StudioRuntimeClient implements vscode.Disposable {
   }
 
   /// One ordered writer prevents an older lease snapshot from overwriting a grant or its review marker.
-  private persistIntegration(next: StoredIntegration): Promise<void> {
+  private persistIntegration(next: StoredIntegration, epoch = this.integrationEpoch): Promise<void> {
+    try { this.assertIntegrationEpoch(epoch); } catch (error) { return Promise.reject(error); }
     this.stored = next;
     const previous = this.integrationPersistence;
     const persistence = previous
       // A failed save is reported to its caller; later complete state can still repair the durable identity.
       .catch(() => undefined)
-      .then(() => this.context.secrets.store(SECRET_KEY, JSON.stringify(next)));
+      .then(() => {
+        this.assertIntegrationEpoch(epoch);
+        return this.context.secrets.store(SECRET_KEY, JSON.stringify(next));
+      });
     this.integrationPersistence = persistence;
     return persistence;
   }
 
-  private async connectCommand(): Promise<RuntimeClient> {
+  private async connectCommand(locator: ValidatedLocator, signal: AbortSignal): Promise<RuntimeClient> {
+    const epoch = this.integrationEpoch;
     const options = this.requireOptions();
-    const runtime = await this.withRuntimeLocator(
-      (locator) => this.connector.connectWithRetry(locator, options),
-    );
+    const runtime = await this.connector.connectWithRetry(locator, options, { signal });
     try {
+      this.assertIntegrationEpoch(epoch, signal);
+      if (this.options !== options) throw new Error("Runtime credentials changed during connection");
       const current = runtime.initialization.grant;
       const credentials = options.credentials;
       if (!current || !credentials) {
@@ -1375,7 +1367,9 @@ export class StudioRuntimeClient implements vscode.Disposable {
       if (JSON.stringify(current) !== JSON.stringify(credentials.grant)) {
         const stored = this.stored;
         if (!stored) throw new Error("Runtrol Studio has no integration identity to update");
-        await this.persistIntegration({ ...stored, grant: current });
+        await this.persistIntegration({ ...stored, grant: current }, epoch);
+        this.assertIntegrationEpoch(epoch, signal);
+        if (this.options !== options) throw new Error("Runtime credentials changed while saving the grant");
         this.options = {
           ...options,
           credentials: new IntegrationCredentials(credentials.identity, current),
@@ -1387,6 +1381,12 @@ export class StudioRuntimeClient implements vscode.Disposable {
       runtime.close();
       throw error;
     }
+  }
+
+  private assertIntegrationEpoch(epoch: number, signal?: AbortSignal): void {
+    signal?.throwIfAborted();
+    this.lifetime.signal.throwIfAborted();
+    if (this.integrationEpoch !== epoch) throw new Error("Runtime integration changed during the operation");
   }
 
   private requireOptions(): ClientOptions {
@@ -1402,18 +1402,47 @@ export class StudioRuntimeClient implements vscode.Disposable {
   private async resolveExecutable(source: () => Promise<RuntimeSource>): Promise<void> {
     const { runtimeExecutable, preferDigest } = await source();
     if (this.runtimeExecutable !== runtimeExecutable || this.preferDigest !== preferDigest) {
-      this.locator = null;
+      this.generationSource.reset();
     }
     this.runtimeExecutable = runtimeExecutable;
     this.preferDigest = preferDigest;
   }
 
-  private withRuntimeLocator<T>(operation: (locator: ValidatedLocator) => Promise<T>): Promise<T> {
-    const pending = this.locator ??= inspectRuntimeLocator(this.runtimeExecutable, this.preferDigest);
-    return pending.then(operation).catch((error: unknown) => {
-      if (this.locator === pending) this.locator = null;
-      throw error;
-    });
+  private async withRuntimeLocator<T>(operation: (locator: ValidatedLocator) => Promise<T>): Promise<T> {
+    const snapshot = await this.generationSource.snapshot(this.lifetime.signal);
+    if (snapshot.current.state === "running") return operation(snapshot.current.locator);
+    const settled = new AbortController();
+    const deadline = AbortSignal.timeout(12_000);
+    let serving: ValidatedLocator | null = null;
+    await this.generationSource.follow(next => {
+      if (next.current.state !== "running") return;
+      serving = next.current.locator;
+      settled.abort();
+    }, AbortSignal.any([this.lifetime.signal, deadline, settled.signal]));
+    this.lifetime.signal.throwIfAborted();
+    if (!serving) throw new Error("no Runtime generation became available within the initialization deadline");
+    return operation(serving);
+  }
+
+  private async followPrimary(
+    follow: (locator: ValidatedLocator, signal: AbortSignal) => Promise<void>, signal: AbortSignal,
+  ): Promise<void> {
+    while (!signal.aborted && !this.lifetime.signal.aborted) {
+      await this.generationSource.snapshot(signal);
+      let changed: AbortSignal | null = null;
+      try {
+        await this.routes.run(async route => {
+          changed = this.primaryChanged.signal;
+          const watching = AbortSignal.any([signal, this.lifetime.signal, changed]);
+          await follow(route.locator, watching);
+        });
+      } catch (error) {
+        if (signal.aborted || this.lifetime.signal.aborted) return;
+        if (!changed || !(changed as AbortSignal).aborted) throw error;
+      }
+      if (signal.aborted || this.lifetime.signal.aborted) return;
+      if (!changed || !(changed as AbortSignal).aborted) throw new Error("the Runtime index stream ended");
+    }
   }
 
   private serial<T>(action: () => Promise<T>): Promise<T> {
@@ -1449,11 +1478,13 @@ export class StudioRuntimeClient implements vscode.Disposable {
   }
 
   private async useIntegration(stored: StoredIntegration): Promise<void> {
+    const epoch = ++this.integrationEpoch;
     const identity = IntegrationIdentity.fromPkcs8(
       Buffer.from(stored.privateKeyPkcs8, "base64url"),
     );
     if (!stored.grant) this.reportInitialization("enrollment");
-    const enrolled = stored.grant ? { ...stored, grant: stored.grant } : await this.enroll(stored, identity);
+    const enrolled = stored.grant ? { ...stored, grant: stored.grant } : await this.enroll(stored, identity, epoch);
+    this.assertIntegrationEpoch(epoch);
     this.stored = enrolled;
     this.options = {
       name: "Runtrol Studio",
@@ -1461,10 +1492,11 @@ export class StudioRuntimeClient implements vscode.Disposable {
       credentials: new IntegrationCredentials(identity, enrolled.grant),
     };
     this.reportInitialization("command");
-    this.command = await this.commandClient();
+    if (this.generationSource.latest) this.routes.observe(this.generationSource.latest);
+    const command = await this.commandClient();
     const controls = restorableControls(
       this.stored?.controlState,
-      this.command.initialization.runtime.instanceId,
+      command.initialization.runtime.instanceId,
       Date.now(),
     );
     for (const lease of controls) {
@@ -1473,8 +1505,11 @@ export class StudioRuntimeClient implements vscode.Disposable {
   }
 
   private async replaceIntegration(): Promise<void> {
+    this.integrationEpoch += 1;
     this.closeActivity();
-    this.command?.close();
+    this.routes.observationFailed(new Error("Runtime integration is being replaced"));
+    this.windowPreparations.clear(new Error("Runtime integration is being replaced"));
+    this.windowGroups.clear("Runtime integration is being replaced");
     this.command = null;
     this.controls.clear();
     this.options = null;
@@ -1494,6 +1529,7 @@ export class StudioRuntimeClient implements vscode.Disposable {
   private async enroll(
     stored: StoredIntegration,
     identity: IntegrationIdentity,
+    epoch: number,
   ): Promise<StoredIntegration & { grant: IntegrationGrant }> {
     const options: ClientOptions = {
       name: "Runtrol Studio",
@@ -1545,7 +1581,8 @@ export class StudioRuntimeClient implements vscode.Disposable {
       const next = { ...stored, grant: decision.grant,
         ...(runtime.initialization.serverCapabilities.terminalInputPriority ? { inputPriorityReviewed: true as const } : {}) };
       if (next.inputPriorityReviewed) await persistStudioInputPriorityReview(this.context.secrets, next.grant);
-      await this.persistIntegration(next);
+      await this.persistIntegration(next, epoch);
+      this.assertIntegrationEpoch(epoch);
       return next;
     } finally {
       runtime.close();
@@ -1588,114 +1625,31 @@ function nativeCatalogueFailure(providerId: string, warning: string): NativeChat
 /// Why a terminal stream stopped: the reason the Runtime gave, or null when this window told it to stop.
 type TerminalStreamEnd = "integrationRevoked" | "authorityChanged" | "runtimeUnavailable" | null;
 
-/// Read one generation's terminal index into the fleet until the stream ends or the watch is stopped.
-///
-/// Returns why it ended rather than throwing on it, because most reasons are recoverable and only the caller
-/// knows what to do about them: the grant generation moving (`authorityChanged`) or the Runtime going away
-/// (`runtimeUnavailable`) mean reconnect for the anchor and stop-following for a draining peer, and neither is
-/// a fault to show a person. Only a transport error throws. The generation's fleet entry is removed when this
-/// exact stream ends, because a disconnected stream cannot keep proving that its last descriptors are alive.
-async function followTerminalIndex(
-  runtime: RuntimeClient,
-  generation: string,
-  fleet: TerminalFleet,
-  publish: () => void,
-  signal: AbortSignal,
-): Promise<TerminalStreamEnd> {
+/// The Fleet owns publication and retirement guards. This helper only reads one exact connection.
+async function followTerminalIndex(runtime: RuntimeClient,
+  receive: (snapshot: TerminalIndexSnapshot) => void, signal: AbortSignal): Promise<TerminalStreamEnd> {
   let subscription: TerminalIndexSubscription | null = null;
-  const close = (): void => subscription?.close();
+  const close = (): void => { subscription?.close(); runtime.close(); };
   signal.addEventListener("abort", close, { once: true });
   try {
+    signal.throwIfAborted();
     subscription = await runtime.terminals().watchIndex();
-    fleet.set(generation, subscription.started.snapshot);
-    publish();
+    signal.throwIfAborted();
+    receive(subscription.started.snapshot);
     while (!signal.aborted) {
       const notification = await subscription.next();
-      if (notification.kind === "changed") {
-        fleet.set(generation, notification.changed.snapshot);
-        publish();
-      } else {
-        return notification.ended.reason;
-      }
+      if (signal.aborted) return null;
+      if (notification.kind === "changed") receive(notification.changed.snapshot);
+      else return notification.ended.reason;
     }
     return null;
   } catch (error) {
-    // Told to stop: a stream failing because its socket was closed under it is the stop, not a fault.
     if (!signal.aborted) throw error;
     return null;
   } finally {
     signal.removeEventListener("abort", close);
     subscription?.close();
-    // A descriptor is proof only while this exact generation's stream is live. Keeping the last snapshot
-    // across authorityChanged or runtimeUnavailable made an exited provider process look openable until a
-    // later connection happened to replace it.
-    fleet.delete(generation);
-    publish();
   }
-}
-
-async function inspectRuntimeLocator(
-  runtimeExecutable: string | null,
-  preferDigest: string | null,
-): Promise<ValidatedLocator> {
-  const locator = RuntimeLocator.system({
-    ...(process.platform === "win32" && runtimeExecutable && isAbsolute(runtimeExecutable)
-      ? { runtimeExecutable }
-      : {}),
-    ...(preferDigest ? { preferDigest } : {}),
-  });
-  const deadline = Date.now() + RUNTIME_LOCATOR_SETTLE_MS;
-  while (true) {
-    const inspected = await locator.inspect();
-    if (inspected.state === "running") {
-      // The generation this window installed, when it is serving. Otherwise the newest one that is, which is
-      // what the locator already chose and what `runtrol endpoint` itself follows.
-      //
-      // Waiting for our own digest is right while the locator is still settling and wrong the moment it says
-      // our generation is draining: that is settled information, and it happens on every rollback to a build
-      // that is still finishing the conversations it started. Insisting then meant a window that could never
-      // attach to anything (measured 2026-08-26 by the upgrade journey, which found its own generation listed
-      // as draining beside a healthy one and gave up on both).
-      if (!preferDigest || inspected.locator.digest === preferDigest || ownGenerationIsDraining(
-        await locator.inspectAll().catch(() => []),
-        preferDigest,
-      )) {
-        return inspected.locator;
-      }
-    }
-    if (Date.now() >= deadline) {
-      // The window installed one build but a different one is serving, and the settle window passed without our
-      // own generation appearing. A running Runtime speaks the version-negotiated public protocol whichever
-      // build published it, so a healthy one that is not ours is still a Runtime this window can use: taking it
-      // is right, and refusing it stranded the sidebar at "not installed" while a healthy daemon answered
-      // (measured 2026-08-28 on the operator machine, four older generations still alive from repeated
-      // installs kept a just-installed window from ever seeing its own digest).
-      if (inspected.state === "running") {
-        return inspected.locator;
-      }
-      // Nothing is serving at all. Named, because "not installed" fits more than one situation: nothing is
-      // published, or only a draining generation is. Whoever reads this next should not have to guess which.
-      const listed = await locator.inspectAll().catch(() => []);
-      const seen = listed.map((entry) => `${entry.digest.slice(0, 16)}${entry.draining ? " draining" : ""}`);
-      throw new Error(
-        `Runtrol Runtime is not installed: ${locator.path} lists ${
-          seen.length === 0 ? "no generation" : seen.join(", ")
-        }${preferDigest ? `, and this window installed ${preferDigest.slice(0, 16)}` : ""}`,
-      );
-    }
-    await new Promise((resolve) => setTimeout(resolve, RUNTIME_LOCATOR_POLL_MS));
-  }
-}
-
-/// Whether the build this window installed is listed and draining, which settles the wait for it.
-///
-/// Absent is not draining: a generation that has not been published yet is still on its way, and that is exactly
-/// the case the settle loop exists for.
-function ownGenerationIsDraining(
-  listed: ReadonlyArray<{ digest: string; draining: boolean }>,
-  preferDigest: string,
-): boolean {
-  return listed.some((entry) => entry.digest === preferDigest && entry.draining);
 }
 
 function extensionVersion(context: vscode.ExtensionContext): string {
@@ -1805,4 +1759,8 @@ async function waitForIdleSession(
     }
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
+}
+
+function grantRevision(grant: IntegrationGrant): string {
+  return JSON.stringify([grant.integrationId, grant.keyGeneration, grant.grantGeneration]);
 }

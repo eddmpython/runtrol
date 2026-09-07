@@ -178,6 +178,7 @@ test("hostile Runtime results are rejected by the generated public schema", () =
       "0".repeat(64),
       false,
       "fixture-control",
+      "fixture-revision",
     ),
     /not validated by this SDK/,
   );

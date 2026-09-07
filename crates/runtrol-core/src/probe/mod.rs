@@ -42,7 +42,7 @@
 pub mod cache;
 mod inspection;
 
-pub use inspection::{ProgramFacts, inspect_program};
+pub use inspection::{ProgramFacts, inspect_manifest, inspect_program};
 
 use core::time::Duration;
 
@@ -223,7 +223,7 @@ pub async fn probe_program(
     cache: &mut ProbeCache,
     contained_by: &Containment,
 ) -> Result<ProbedProgram, ProbeError> {
-    let (program, facts) = inspection::inspect(manifest).await?;
+    let (program, facts) = inspect_manifest(manifest).await?;
     let facts = std::sync::Arc::new(facts);
     let bin = &facts.binary;
 

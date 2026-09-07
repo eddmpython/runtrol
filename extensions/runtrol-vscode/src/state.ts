@@ -68,6 +68,7 @@ export class RuntimeState implements vscode.Disposable {
   private memoryByNative: ReadonlyMap<string, number> = new Map();
   /// Conversations the service is writing to right now that Runtrol does not host, by native identity.
   private activeNative: ReadonlySet<string> = new Set();
+  private unknownNativeActivity: ReadonlySet<string> = new Set();
   /// Conversations owned by a provider process that Runtrol observed but did not create or attach.
   private observedNative: ReadonlySet<string> = new Set();
   /// Live provider owners with an exact route into their terminal surface.
@@ -176,6 +177,7 @@ export class RuntimeState implements vscode.Disposable {
       this.unconfirmedNative,
       this.attachableNative,
       this.focusableNative,
+      this.unknownNativeActivity,
     );
     return this.conversationRows;
   }
@@ -244,6 +246,14 @@ export class RuntimeState implements vscode.Disposable {
   setUnconfirmedNative(identities: ReadonlySet<string>): void {
     if (sameMembers(identities, this.unconfirmedNative)) return;
     this.unconfirmedNative = identities;
+    this.conversationRows = null;
+    this.changedEmitter.fire("rows");
+  }
+
+  /// Model proof is independent of a live process's ownership and terminal permissions.
+  setUnknownNativeActivity(identities: ReadonlySet<string>): void {
+    if (sameMembers(identities, this.unknownNativeActivity)) return;
+    this.unknownNativeActivity = identities;
     this.conversationRows = null;
     this.changedEmitter.fire("rows");
   }

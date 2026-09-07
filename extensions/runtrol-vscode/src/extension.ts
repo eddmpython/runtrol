@@ -777,13 +777,6 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     });
     context.subscriptions.push(windowRegistry);
     windowRegistry.start();
-    // Another window's click on one of this window's terminals arrives here; the terminal is shown as if its
-    // tab were clicked, and the Runtime brings this window forward itself.
-    const reveals = new AbortController();
-    context.subscriptions.push({ dispose: () => reveals.abort() });
-    void runtime.watchWindowReveals(vscode.env.sessionId, (terminalKey) => {
-      windowRegistry?.showTerminal(terminalKey);
-    }, reveals.signal);
     // These follow the first successful initialization, including an explicit retry after initial failure.
     void run(async () => { await configureRemoteConnection(client); });
     void run(async () => {

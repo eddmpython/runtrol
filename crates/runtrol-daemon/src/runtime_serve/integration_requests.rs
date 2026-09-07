@@ -94,8 +94,10 @@ pub(super) async fn initialize(
             build_digest: crate::build_identity::build_digest().map(str::to_owned),
         },
         server_capabilities: RuntimeCapabilities {
+            window_workspace_folders_update: true,
             integration_enrollment: true,
             provider_inventory: true,
+            provider_native_activity_watch: true,
             managed_session_list: true,
             model_discovery: true,
             native_session_catalogue: true,

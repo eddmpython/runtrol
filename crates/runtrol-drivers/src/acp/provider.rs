@@ -200,6 +200,18 @@ impl Provider for AcpProvider {
         }
     }
 
+    async fn watch_native_activity(
+        &self,
+    ) -> Result<Option<Box<dyn runtrol_provider::NativeActivityWatch>>, ProviderError> {
+        // Without a live declaration this prepared instance always observes nothing. Inventory
+        // replacement still installs a new driver; a compatibility clock cannot discover new evidence.
+        if self.sessions.live.is_none() {
+            Ok(Some(Box::new(crate::native_watch::Unchanging)))
+        } else {
+            Ok(None)
+        }
+    }
+
     async fn delete_native_session(
         &self,
         deletion: NativeSessionDeletion,
@@ -379,6 +391,74 @@ mod tests {
         assert_eq!(
             aliases,
             vec![Box::<str>::from("fast"), Box::<str>::from("deep")]
+        );
+    }
+
+    #[tokio::test]
+    async fn absent_native_source_waits_without_polling_and_preserves_empty_observation() {
+        let provider = AcpProvider::new(
+            ProviderId::parse("example-acp").expect("valid provider id"),
+            program(),
+            Arc::new(Containment::without_any()),
+            ModelAliases::default(),
+            StoreSpec::default(),
+            Vec::new(),
+            None,
+        );
+        let mut source = provider
+            .watch_native_activity()
+            .await
+            .expect("a constant observation has a source")
+            .expect("no compatibility timer is needed");
+        let initial = provider
+            .native_observation()
+            .await
+            .expect("initial observation");
+        assert_eq!(initial.activity, crate::acp::live::nothing());
+        assert_eq!(initial.catalogue_revision, None);
+        assert!(initial.unknown_activity.is_empty());
+        for _ in 0..2 {
+            let mut changed = source.changed();
+            std::future::poll_fn(|context| {
+                assert!(changed.as_mut().poll(context).is_pending());
+                std::task::Poll::Ready(())
+            })
+            .await;
+            // Cancellation has no registration, timer or task to retain; a new wait stays pending.
+        }
+        assert_eq!(
+            provider
+                .native_observation()
+                .await
+                .expect("later observation"),
+            initial
+        );
+    }
+
+    #[tokio::test]
+    async fn declared_native_source_preserves_compatibility_observation() {
+        let provider = AcpProvider::new(
+            ProviderId::parse("example-acp").expect("valid provider id"),
+            program(),
+            Arc::new(Containment::without_any()),
+            ModelAliases::default(),
+            StoreSpec {
+                live: Some(runtrol_provider::LiveSessionSpec {
+                    root: vec!["fixture/sessions".into()],
+                    grouped_by_workspace: false,
+                    held: "owner.lock".into(),
+                }),
+                ..StoreSpec::default()
+            },
+            Vec::new(),
+            None,
+        );
+        assert!(
+            provider
+                .watch_native_activity()
+                .await
+                .expect("watch contract")
+                .is_none()
         );
     }
 }

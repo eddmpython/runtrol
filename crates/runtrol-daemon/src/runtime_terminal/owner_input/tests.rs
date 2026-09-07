@@ -23,6 +23,7 @@ struct InputFixture {
 
 fn observed(execution: &str) -> WindowUpdateParams {
     WindowUpdateParams {
+        workspace_folders: None,
         terminals: vec![ObservedTerminal {
             terminal_key: "input-terminal".into(),
             name: "Input fixture".into(),
@@ -447,6 +448,74 @@ async fn cancelling_the_caller_prevents_claim_and_preserves_unknown_without_repl
             .unwrap_err()
             .kind,
         RuntimeErrorKind::OutcomeUnknown
+    );
+    fixture.close().await;
+}
+
+#[tokio::test]
+async fn folder_only_update_keeps_the_existing_mirror_owner_input_proof_current() {
+    let mut fixture = InputFixture::new().await;
+    let before = fixture.base.composed.windows.snapshot().await;
+    let mut updated = observed("execution-1");
+    updated.workspace_folders = Some(vec!["D:/updated-folder".into()]);
+    fixture
+        .base
+        .composed
+        .windows
+        .update(fixture.registration, updated)
+        .await
+        .unwrap();
+    let after = fixture.base.composed.windows.snapshot().await;
+    assert_eq!(
+        before
+            .windows
+            .first()
+            .expect("registered window")
+            .registration_generation,
+        after
+            .windows
+            .first()
+            .expect("updated window")
+            .registration_generation
+    );
+    assert_eq!(
+        after
+            .windows
+            .first()
+            .expect("updated window")
+            .workspace_folders,
+        vec!["D:/updated-folder"]
+    );
+    assert!(
+        fixture
+            .base
+            .composed
+            .windows
+            .input_is_current(&fixture.receiver)
+            .await
+    );
+    let params = fixture.params();
+    let (mut offer, task) = fixture.offer(params.clone()).await;
+    let claimed = offer
+        .claim(&fixture.base.composed, &fixture.receiver.subscription_id)
+        .await
+        .unwrap();
+    assert_eq!(claimed.text, params.text);
+    let sequence = offer.sequence;
+    offer
+        .finish(
+            &fixture.base.composed,
+            &WindowInputReceiptParams {
+                subscription_id: fixture.receiver.subscription_id.clone(),
+                sequence,
+                outcome: WindowInputOutcome::OwnerExtensionAccepted,
+                reason: None,
+            },
+        )
+        .await;
+    assert_eq!(
+        task.await.unwrap().unwrap().outcome,
+        runtrol_runtime_protocol::TerminalTextOutcome::OwnerExtensionAccepted
     );
     fixture.close().await;
 }

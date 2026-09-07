@@ -407,7 +407,37 @@ test("session index reconnect publishes the replacement authorized snapshot", as
   subscription.close();
 });
 
-function framesForInitialization(instanceId: string): unknown[] {
+test("native provider opt-in follows each replacement Runtime capability without losing the request", async () => {
+  const instanceId = `rtm_${"e".repeat(32)}`;
+  const transports = [false, true, false].map((supported, index) => new DisconnectingTransport([
+    ...framesForInitialization(instanceId, supported),
+    { jsonrpc: "2.0", id: 2, result: { subscriptionId: `providers_${index}`, snapshot: { providers: [] } } },
+  ]));
+  let connected = 0;
+  const connector = new RuntimeConnector(async () => {
+    const transport = transports[connected++];
+    if (!transport) throw new RuntimeTransportError("fixture transports exhausted");
+    return transport;
+  });
+  const subscription = await connector.watchProvidersWithReconnect(
+    validatedLocator(instanceId, "fixture", "0.1.1"),
+    { name: "fixture", version: "1.0.0" },
+    { initialDelayMs: 1, maximumDelayMs: 2, deadlineMs: 1_000 },
+    { nativeActivity: true },
+  );
+  assert.equal(subscription.nativeActivity, false);
+  assert.equal((await subscription.next()).kind, "reconnected");
+  assert.equal(subscription.nativeActivity, true);
+  assert.equal((await subscription.next()).kind, "reconnected");
+  assert.equal(subscription.nativeActivity, false);
+  assert.deepEqual(transports.map((transport) => {
+    const request = JSON.parse(new TextDecoder().decode(transport.sent[2])) as { params: unknown };
+    return request.params;
+  }), [{}, { nativeActivity: true }, {}]);
+  subscription.close();
+});
+
+function framesForInitialization(instanceId: string, nativeActivity = false): unknown[] {
   return [
     {
       jsonrpc: "2.0",
@@ -426,6 +456,7 @@ function framesForInitialization(instanceId: string): unknown[] {
         selectedRevision: FINALIZED_REVISIONS[0],
         runtime: { instanceId, version: "0.1.1", platform: "fixture" },
         serverCapabilities: {
+          ...(nativeActivity ? { providerNativeActivityWatch: true } : {}),
           integrationEnrollment: true,
           providerInventory: true,
           managedSessionList: true,

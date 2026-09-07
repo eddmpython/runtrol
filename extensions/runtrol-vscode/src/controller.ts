@@ -1,7 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 
-import { PUBLIC_LIMITS, type NativeActivity, type PublicInputBlock } from "@runtrol/runtime-client";
+import { PUBLIC_LIMITS, type NativeActivity, type NativeActivityObservation, type PublicInputBlock } from "@runtrol/runtime-client";
 import type { TerminalIndexSnapshot, WindowRevealResult } from "@runtrol/runtime-client";
 import * as vscode from "vscode";
 
@@ -130,6 +130,9 @@ export class Controller implements vscode.Disposable {
   private nativeAttachableByProvider = new Map<string, ReadonlySet<string>>();
   private nativeActiveByProvider = new Map<string, ReadonlySet<string>>();
   private nativeUnconfirmedByProvider = new Map<string, ReadonlySet<string>>();
+  private nativeRevisions = new Map<string, string>();
+  private nativeWatching = false;
+  private resumeNativeCompatibility: (() => void) | null = null;
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -660,7 +663,7 @@ export class Controller implements vscode.Disposable {
       const owner = target.hostedTerminal?.ownerWindowSessionId ?? null;
       const ownerKey = target.hostedTerminal?.ownerTerminalKey ?? null;
       if (owner !== null && ownerKey !== null && owner !== vscode.env.sessionId) {
-        const outcome = await this.runtime.revealAtOwner({ windowSessionId: owner, terminalKey: ownerKey });
+        const outcome = await this.runtime.revealAtOwner({ windowSessionId: owner, terminalKey: ownerKey }, target.hostedTerminal?.runtimeGeneration);
         this.lastReveal = outcome;
         this.say(
           outcome.delivered
@@ -1630,6 +1633,7 @@ export class Controller implements vscode.Disposable {
             },
             watching,
             (usage) => this.state.replaceUsage(usage.providers),
+            (snapshot) => this.applyNativeObservation(snapshot),
           ),
           this.runtime.watchTerminals(
             (terminals) => this.applyTerminalIndex(terminals),
@@ -1662,8 +1666,21 @@ export class Controller implements vscode.Disposable {
   /// publish into the daemon registry itself.
   private async nativeActivityLoop(signal: AbortSignal): Promise<void> {
     while (!signal.aborted && !this.disposed) {
+      if (this.nativeWatching) {
+        await new Promise<void>((resolve) => {
+          const resume = (): void => {
+            signal.removeEventListener("abort", resume);
+            this.resumeNativeCompatibility = null;
+            resolve();
+          };
+          this.resumeNativeCompatibility = resume;
+          signal.addEventListener("abort", resume, { once: true });
+          if (signal.aborted || !this.nativeWatching) resume();
+        });
+        continue;
+      }
       await abortableDelay(NATIVE_ACTIVITY_POLL_MS, signal);
-      if (signal.aborted || this.state.coreReach !== "reached" || this.nativeDiscoveryPauseDepth > 0) continue;
+      if (signal.aborted || this.nativeWatching || this.state.coreReach !== "reached" || this.nativeDiscoveryPauseDepth > 0) continue;
       try {
         await this.pollNativeActivity(signal);
       } catch (error) {
@@ -1807,7 +1824,7 @@ export class Controller implements vscode.Disposable {
         return [provider.providerId, null];
       }
     }));
-    if (signal.aborted || this.disposed) return;
+    if (signal.aborted || this.disposed || this.nativeWatching) return;
     const projected = projectNativeActivity(
       answers,
       this.nativeActivityByProvider,
@@ -1847,12 +1864,29 @@ export class Controller implements vscode.Disposable {
     }
   }
 
+  private applyNativeObservation(snapshot: readonly NativeActivityObservation[] | null): void {
+    this.nativeWatching = snapshot !== null;
+    if (snapshot === null) {
+      this.resumeNativeCompatibility?.();
+      this.revokeNativeActivityProofs();
+      return;
+    }
+    const answers = snapshot.map((entry) => entry.state === "observed"
+      ? [entry.activity.providerId, entry.activity, entry.unknownActivity, entry.catalogueRevision ?? undefined] as const
+      : [entry.providerId, null] as const);
+    const projected = projectNativeActivity(answers, this.nativeActivityByProvider,
+      this.nativeUnconfirmedByProvider, this.nativeActiveByProvider, this.nativeRevisions);
+    this.nativeRevisions = new Map(projected.revisions);
+    this.applyNativeActivityProjection(projected);
+  }
+
   private applyNativeActivityProjection(projected: NativeActivityProjection): void {
     this.nativeActivityByProvider = new Map(projected.liveByProvider);
     this.nativeAttachableByProvider = new Map(projected.attachableByProvider);
     this.nativeActiveByProvider = new Map(projected.activeByProvider);
     this.nativeUnconfirmedByProvider = new Map(projected.unconfirmedByProvider);
     this.state.setNativeActivity(projected.active);
+    this.state.setUnknownNativeActivity(projected.unknownActivity);
     this.state.setObservedNative(projected.live);
     this.state.setAttachableNative(projected.attachable);
     this.state.setFocusableNative(projected.focusable);
@@ -1880,6 +1914,8 @@ export class Controller implements vscode.Disposable {
     this.nativeAttachableByProvider.clear();
     this.nativeActiveByProvider.clear();
     this.nativeUnconfirmedByProvider.clear();
+    this.nativeRevisions.clear();
+    this.state.setUnknownNativeActivity(new Set());
     this.state.setNativeActivity(new Set());
     this.state.setObservedNative(new Set());
     this.state.setAttachableNative(new Set());

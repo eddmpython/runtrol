@@ -42,6 +42,8 @@ import type {
   ProviderUsageList,
   ProviderWatchEndedNotification,
   ProvidersChangedNotification,
+  ProvidersNativeActivityChangedNotification,
+  WatchProvidersParams,
   ProvidersUsageChangedNotification,
   RequestEnrollmentParams,
   RespondApprovalParams,
@@ -311,12 +313,14 @@ export class RuntimeConnector {
     locator: ValidatedLocator,
     options: ClientOptions,
     policy: ReconnectPolicy = {},
+    params: WatchProvidersParams = {},
   ): Promise<ReconnectingProviderSubscription> {
     const subscription = new ReconnectingProviderSubscription(
       this,
       locator,
       options,
       policy,
+      params,
     );
     await subscription.initialize();
     return subscription;
@@ -325,8 +329,9 @@ export class RuntimeConnector {
   public async watchProvidersWithReconnectSystem(
     options: ClientOptions,
     policy: ReconnectPolicy = {},
+    params: WatchProvidersParams = {},
   ): Promise<ReconnectingProviderSubscription> {
-    const subscription = new ReconnectingProviderSubscription(this, null, options, policy);
+    const subscription = new ReconnectingProviderSubscription(this, null, options, policy, params);
     await subscription.initialize();
     return subscription;
   }
@@ -484,14 +489,16 @@ export class ProviderClient {
     return callRuntime(this.runtime, "providers/usage", {}, "ProviderUsageList");
   }
 
-  public async watch(): Promise<ProviderSubscription> {
+  public async watch(params: WatchProvidersParams = {}): Promise<ProviderSubscription> {
+    const nativeActivity = params.nativeActivity === true
+      && this.runtime.initialization.serverCapabilities.providerNativeActivityWatch === true;
     const started = await callRuntime<WatchProvidersResult>(
       this.runtime,
       "providers/watch",
-      {},
+      nativeActivity ? { nativeActivity: true } : {},
       "WatchProvidersResult",
     );
-    return new ProviderSubscription(beginStream(this.runtime), started);
+    return new ProviderSubscription(beginStream(this.runtime), started, nativeActivity);
   }
 
   public getCapabilities(providerId: ProviderId): Promise<RuntimeProviderCapabilities> {
@@ -518,12 +525,9 @@ export class ProviderClient {
     );
   }
 
-  /// Which of this provider's conversations were written in the last few seconds.
-  ///
-  /// The cheap question, meant to be asked often: the Runtime walks the provider's own store for names and
-  /// times and opens nothing, where a catalogue reads every transcript's head. A conversation being written is
-  /// one whose model is answering, which is how a caller can show a turn running in a conversation the Runtime
-  /// did not start.
+  /// Provider-proven live owners and model turn state, including supported attachment and focus routes.
+  /// Terminal output and recent file writes do not prove an active model turn. Native activity subscriptions
+  /// share the Runtime producer; this request remains available for an explicit observation.
   public nativeActivity(providerId: ProviderId): Promise<NativeActivity> {
     const params: NativeActivityParams = { providerId };
     return callRuntime(this.runtime, "providers/nativeActivity", params, "NativeActivity");
@@ -537,6 +541,7 @@ export class ProviderClient {
 export type ProviderNotification =
   | { readonly kind: "changed"; readonly changed: ProvidersChangedNotification }
   | { readonly kind: "usageChanged"; readonly usageChanged: ProvidersUsageChangedNotification }
+  | { readonly kind: "nativeActivityChanged"; readonly nativeActivityChanged: ProvidersNativeActivityChangedNotification }
   | { readonly kind: "ended"; readonly ended: ProviderWatchEndedNotification };
 
 export type ReconnectingProviderNotification =
@@ -547,6 +552,7 @@ export class ProviderSubscription {
   public constructor(
     private readonly transport: RuntimeTransport,
     public readonly started: WatchProvidersResult,
+    public readonly nativeActivity = false,
   ) {}
 
   public async next(): Promise<ProviderNotification> {
@@ -570,6 +576,14 @@ export class ProviderSubscription {
       );
       this.validateTarget(usageChanged.subscriptionId);
       return { kind: "usageChanged", usageChanged };
+    }
+    if (notification.method === "providers/nativeActivityChanged") {
+      if (!this.nativeActivity) throw new RuntimeProtocolError("native activity was not requested on this provider watch");
+      const nativeActivityChanged = validatePublic<ProvidersNativeActivityChangedNotification>(
+        "ProvidersNativeActivityChangedNotification", notification.params,
+      );
+      this.validateTarget(nativeActivityChanged.subscriptionId);
+      return { kind: "nativeActivityChanged", nativeActivityChanged };
     }
     if (notification.method === "providers/watchEnded") {
       const ended = validatePublic<ProviderWatchEndedNotification>(
@@ -605,6 +619,7 @@ export class ReconnectingProviderSubscription {
     private readonly locator: ValidatedLocator | null,
     private readonly options: ClientOptions,
     policy: ReconnectPolicy,
+    private readonly params: WatchProvidersParams = {},
   ) {
     this.#policy = activeStreamPolicy(policy, this.#abort.signal, () => this.#closeCurrent());
   }
@@ -612,6 +627,8 @@ export class ReconnectingProviderSubscription {
   public async initialize(): Promise<void> {
     await this.#open();
   }
+
+  public get nativeActivity(): boolean { return this.#current?.subscription.nativeActivity ?? false; }
 
   public get started(): WatchProvidersResult {
     if (!this.#started) throw new RuntimeProtocolError("provider stream is not initialized");
@@ -648,7 +665,7 @@ export class ReconnectingProviderSubscription {
     const opened = await retryConnection(
       (signal) => openRuntimeSubscription(
         () => connectSelected(this.connector, this.locator, this.options, signal),
-        (runtime) => runtime.providers().watch(),
+        (runtime) => runtime.providers().watch(this.params),
         signal,
       ),
       this.#policy,

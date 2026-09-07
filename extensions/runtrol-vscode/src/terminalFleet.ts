@@ -1,8 +1,6 @@
 import type { TerminalDescriptor, TerminalIndexSnapshot } from "./runtimeTypes";
-import { abortableDelay } from "./abortableDelay";
+import type { RuntimeGenerationSnapshot, ValidatedLocator } from "@runtrol/runtime-client";
 
-// Listing verifies the locator through the Core on Windows, so both clocks remain slow.
-const FLEET_RELIST_MS = 60_000;
 const FLEET_RETRY_MS = 15_000;
 
 /// The hosted terminals of every Runtime generation, read as one list.
@@ -18,51 +16,114 @@ export class TerminalFleet {
   private readonly byGeneration = new Map<string, TerminalIndexSnapshot>();
   private readonly unreachable = new Map<string, string>();
 
-  /// Follow listed generations beside the anchor until its watch stops. Locator validation can finish
-  /// after cancellation, so its completion never authorizes a fresh stream or another relist delay.
-  async followOtherGenerations<T extends { readonly digest: string }>(
-    anchor: string,
-    listedGenerations: () => Promise<readonly T[]>,
-    followGeneration: (generation: T, signal: AbortSignal) => Promise<void>,
+  /// One validated source drives every generation. Retiring streams retain their admission slot
+  /// until cancellation completes; a burst replaces only the latest desired snapshot.
+  async followGenerations(
+    followListed: (
+      receive: (snapshot: RuntimeGenerationSnapshot) => void,
+      signal: AbortSignal,
+    ) => Promise<void>,
+    followGeneration: (
+      generation: ValidatedLocator,
+      receive: (snapshot: TerminalIndexSnapshot) => void,
+      signal: AbortSignal,
+    ) => Promise<void>,
     publish: () => void,
     signal: AbortSignal,
   ): Promise<void> {
-    const following = new Map<string, Promise<void>>();
-    const retryAt = new Map<string, number>();
-    let relist = new AbortController();
-    while (!signal.aborted) {
-      const listed = await listedGenerations();
-      if (signal.aborted) break;
-      const wanted = new Set(listed.map((generation) => generation.digest));
-      for (const digest of [...retryAt.keys()]) {
-        if (!wanted.has(digest)) {
-          retryAt.delete(digest);
-          this.delete(digest);
-          publish();
+    if (signal.aborted) return;
+    type Worker = {
+      generation: ValidatedLocator;
+      abort: AbortController;
+      run: Promise<void> | null;
+      retryAt: number;
+    };
+    const following = new Map<string, Worker>();
+    const lifetime = new AbortController();
+    const sourceState: { latest: RuntimeGenerationSnapshot | null } = { latest: null };
+    let wake = () => {};
+    let sourceError: unknown;
+    let sourceFailed = false;
+    const stop = () => { lifetime.abort(); wake(); };
+    const fail = (error: unknown) => {
+      if (lifetime.signal.aborted) return;
+      sourceFailed = true;
+      sourceError = error;
+      stop();
+    };
+    signal.addEventListener("abort", stop, { once: true });
+    const wanted = (worker: Worker) => sourceState.latest?.generations.some(
+      (entry) => entry.digest === worker.generation.digest && entry.revision === worker.generation.revision,
+    ) ?? false;
+    const owns = (worker: Worker) => !lifetime.signal.aborted && !worker.abort.signal.aborted
+      && following.get(worker.generation.digest) === worker && wanted(worker);
+    const source = Promise.resolve().then(async () => {
+      if (lifetime.signal.aborted) return;
+      await followListed((snapshot) => {
+        if (lifetime.signal.aborted) return;
+        sourceState.latest = snapshot;
+        wake();
+      }, lifetime.signal);
+      if (!lifetime.signal.aborted) throw new Error("Runtime generation observation stopped unexpectedly");
+    }).catch(fail);
+    try {
+      while (!lifetime.signal.aborted) {
+        const now = Date.now();
+        const ready = new Promise<void>((resolve) => { wake = resolve; });
+        let changed = false;
+        for (const [digest, worker] of following) {
+          if (wanted(worker) && !worker.abort.signal.aborted) continue;
+          if (!worker.abort.signal.aborted) {
+            worker.abort.abort();
+            this.delete(digest);
+            changed = true;
+          }
+          if (!worker.run) following.delete(digest);
         }
-      }
-      for (const generation of listed) {
-        const digest = generation.digest;
-        if (digest === anchor || following.has(digest) || (retryAt.get(digest) ?? 0) > Date.now()) continue;
-        const run = followGeneration(generation, signal).then(
-          () => {
-            retryAt.delete(digest);
-          },
-          (error: unknown) => {
-            this.markUnreachable(digest, error instanceof Error ? error.message : String(error));
+        if (changed) publish();
+        let running = [...following.values()].filter((worker) => worker.run !== null).length;
+        for (const generation of sourceState.latest?.generations ?? []) {
+          let worker = following.get(generation.digest);
+          if (worker?.run || worker?.abort.signal.aborted || (worker?.retryAt ?? 0) > now) continue;
+          if (running >= (sourceState.latest?.generations.length ?? 0)) break;
+          worker = { generation, abort: new AbortController(), run: null, retryAt: 0 };
+          following.set(generation.digest, worker);
+          const current = worker;
+          running += 1;
+          current.run = Promise.resolve().then(async () => {
+            if (!owns(current)) return;
+            await followGeneration(generation, (snapshot) => {
+              if (!owns(current)) return;
+              this.set(generation.digest, snapshot);
+              publish();
+            }, current.abort.signal);
+            if (owns(current)) throw new Error("Runtime terminal observation stopped unexpectedly");
+          }).catch((error: unknown) => {
+            if (!owns(current)) return;
+            this.markUnreachable(generation.digest, error instanceof Error ? error.message : String(error));
+            current.retryAt = Date.now() + FLEET_RETRY_MS;
             publish();
-            retryAt.set(digest, Date.now() + FLEET_RETRY_MS);
-          },
-        ).finally(() => {
-          following.delete(digest);
-          relist.abort();
-        });
-        following.set(digest, run);
+          }).finally(() => {
+            current.run = null;
+            wake();
+          }).catch(fail);
+        }
+        const retries = [...following.values()].filter((worker) =>
+          !worker.run && !worker.abort.signal.aborted && wanted(worker) && worker.retryAt > now,
+        );
+        const retry = retries.length ? setTimeout(() => wake(),
+          Math.max(0, Math.min(...retries.map((worker) => worker.retryAt)) - Date.now())) : undefined;
+        try { await ready; } finally { clearTimeout(retry); }
       }
-      relist = new AbortController();
-      await abortableDelay(FLEET_RELIST_MS, AbortSignal.any([signal, relist.signal]));
+    } finally {
+      stop();
+      signal.removeEventListener("abort", stop);
+      for (const worker of following.values()) worker.abort.abort();
+      await Promise.all([source, ...[...following.values()].map((worker) => worker.run)]);
+      for (const digest of following.keys()) this.delete(digest);
+      if (following.size) publish();
     }
-    await Promise.all(following.values());
+    if (sourceFailed) throw sourceError;
   }
 
   /// The latest snapshot one generation pushed.

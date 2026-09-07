@@ -21,7 +21,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use runtrol_provider::{
-    LiveSessionSpec, NativeProcessActivity, NativeProcessBinding, NativeSessionId,
+    LiveSessionSpec, NativeProcessActivity, NativeProcessBinding, NativeSessionId, ProcessIdentity,
 };
 
 /// How many workspace groups one look walks, newest first. A conversation a live process holds was written to
@@ -90,14 +90,17 @@ pub(super) fn held_conversations(home: &Path, spec: &LiveSessionSpec) -> Vec<Liv
 pub(super) fn activity(
     home: &Path,
     spec: &LiveSessionSpec,
-    ask: fn(&Path) -> Option<u32>,
+    ask: fn(&Path) -> Option<ProcessIdentity>,
 ) -> NativeProcessActivity {
     let mut live = Vec::new();
     let mut processes = Vec::new();
     for held in held_conversations(home, spec) {
-        if let Some(pid) = ask(&held.held) {
+        if let Some(identity) = ask(&held.held)
+            && runtrol_childproc::alive(identity.pid())
+            && runtrol_childproc::process_identity(identity.pid()) == Some(identity)
+        {
             processes.push(NativeProcessBinding {
-                pid,
+                pid: identity.pid(),
                 native: held.native.clone(),
                 cwd: held.workspace.clone(),
                 // Whether that process draws a screen another window can join is a separate question this
@@ -286,12 +289,13 @@ mod tests {
         use std::fs::OpenOptions;
         use std::os::windows::fs::OpenOptionsExt as _;
 
-        #[expect(
-            clippy::unnecessary_wraps,
-            reason = "the driver's holder question may answer nobody; this fixture always knows"
-        )]
-        fn holder_pid(_held: &Path) -> Option<u32> {
-            Some(4242)
+        fn holder_identity(_held: &Path) -> Option<ProcessIdentity> {
+            runtrol_childproc::process_identity(std::process::id())
+        }
+
+        fn stale_holder(_held: &Path) -> Option<ProcessIdentity> {
+            let current = runtrol_childproc::process_identity(std::process::id())?;
+            ProcessIdentity::new(current.pid(), current.started() - 1)
         }
 
         let home = scratch();
@@ -302,12 +306,19 @@ mod tests {
             .open(open.join("events.jsonl"))
             .expect("this process takes the file");
 
-        let answer = activity(&home, &spec(true), holder_pid);
+        let refused = activity(&home, &spec(true), stale_holder);
+        assert_eq!(refused.live.len(), 1, "the file remains held");
+        assert!(
+            refused.processes.is_empty(),
+            "an old birth cannot bind the current PID"
+        );
+
+        let answer = activity(&home, &spec(true), holder_identity);
         let live: Vec<&str> = answer.live.iter().map(NativeSessionId::as_str).collect();
         assert_eq!(live, vec![OPEN], "the held conversation is live");
         assert_eq!(
             answer.processes.first().map(|process| process.pid),
-            Some(4242),
+            Some(std::process::id()),
             "and bound to the process holding its file"
         );
         assert!(

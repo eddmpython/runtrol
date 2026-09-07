@@ -126,8 +126,11 @@ async fn provider_watch_checks_authority_before_its_initial_usage() {
         ProviderList {
             providers: Vec::new(),
         },
-        updates,
-        usage,
+        ProviderStreams {
+            updates,
+            usage,
+            native: None,
+        },
         fixture.authority.clone(),
     );
     let ((), notification) = tokio::join!(relay, next(&mut client));
@@ -168,8 +171,11 @@ async fn revoked_watch(publish_usage: Option<bool>) {
             ProviderList {
                 providers: Vec::new(),
             },
-            updates,
-            usage,
+            ProviderStreams {
+                updates,
+                usage,
+                native: None,
+            },
             authority,
         )
         .await;
@@ -214,7 +220,7 @@ fn provider_watch_retains_adjacent_authority_widening_witnesses() {
             .integration_authority
             .publish_committed(fixture.authority.key, fixture.row.clone())
             .unwrap();
-        refresh_provider_authority(&fixture.composed, &mut fixture.authority).unwrap();
+        refresh_provider_authority(&fixture.composed, &mut fixture.authority, false).unwrap();
         assert_eq!(
             fixture.authority.grant.grant_generation,
             fixture.row.grant_generation
@@ -231,7 +237,7 @@ fn provider_watch_retains_adjacent_authority_widening_witnesses() {
         .publish_committed(fixture.authority.key, fixture.row.clone())
         .unwrap();
     assert_eq!(
-        refresh_provider_authority(&fixture.composed, &mut fixture.authority),
+        refresh_provider_authority(&fixture.composed, &mut fixture.authority, false),
         Err(ProviderWatchEndReason::AuthorityChanged)
     );
     fixture.close();
@@ -256,7 +262,7 @@ async fn native_activity_rechecks_authority_after_observation_waits() {
         .integration_authority
         .publish_committed(fixture.authority.key, fixture.row.clone())
         .unwrap();
-    refresh_provider_authority(&fixture.composed, &mut fixture.authority).unwrap();
+    refresh_provider_authority(&fixture.composed, &mut fixture.authority, false).unwrap();
     let mut state = PublicState::Ready {
         context: crate::runtime_auth::ClientContext {
             challenge: crate::runtime_auth::challenge("native-activity-fixture").unwrap(),
@@ -272,7 +278,10 @@ async fn native_activity_rechecks_authority_after_observation_waits() {
         token: crate::window_registry::ConnectionToken::next(),
     };
     let provider = runtrol_provider::ProviderId::parse("native-read-fixture").unwrap();
-    let discovering = crate::serve::DiscoveryGates::new(&fixture.composed.registry);
+    let mut discovering = crate::serve::DiscoveryGates::new(&fixture.composed.registry);
+    // This test owns a synthetic observation source. It must not inspect an installed CLI even if
+    // the cache setup fails, and the bounded projection normally retains only registered providers.
+    discovering.native_observations = crate::native_activity::NativeObservations::new(&[provider]);
     let lane = discovering.lane(provider).await.lock_owned().await;
     let mut request = Box::pin(super::super::provider_requests::native_activity(
         &mut state,
@@ -295,13 +304,165 @@ async fn native_activity_rechecks_authority_after_observation_waits() {
     assert!(
         !discovering
             .remember_native_activity(provider, runtrol_provider::NativeProcessActivity::default())
-            .await
     );
+    assert!(discovering.cached_native_activity(provider).is_some());
     drop(lane);
     let answered = request.await;
     assert!(
         matches!(answered.response, JsonRpcResponse::Error(error) if error.error.code == RuntimeErrorKind::IntegrationRevoked)
     );
     drop(discovering);
+    fixture.close();
+}
+
+fn native_fixture() -> (Fixture, crate::native_activity::NativeObservations) {
+    let mut fixture = Fixture::new();
+    fixture.row.grant_generation += 1;
+    fixture
+        .row
+        .scopes
+        .push(AppScope::SessionNativeDiscover.as_str().into());
+    fixture
+        .composed
+        .integration_authority
+        .publish_committed(fixture.authority.key, fixture.row.clone())
+        .unwrap();
+    refresh_provider_authority(&fixture.composed, &mut fixture.authority, true).unwrap();
+    let provider = runtrol_provider::ProviderId::parse("fixture").unwrap();
+    let observations = crate::native_activity::NativeObservations::new(&[provider]);
+    observations.record(
+        provider,
+        runtrol_provider::NativeProcessObservation::default(),
+        None,
+    );
+    (fixture, observations)
+}
+
+#[tokio::test]
+async fn native_watch_requires_discovery_scope_before_any_initial_frame() {
+    let fixture = Fixture::new();
+    let observations = crate::native_activity::NativeObservations::new(&[]);
+    let (mut server, mut client) = fixture.pair().await;
+    let (_, updates) = watch::channel(Arc::new(ProviderList {
+        providers: Vec::new(),
+    }));
+    let (_, usage) = watch::channel(Arc::new(ProviderUsageList::default()));
+    let relay = relay_providers(
+        &mut server,
+        &fixture.composed,
+        "watch".into(),
+        ProviderList {
+            providers: Vec::new(),
+        },
+        ProviderStreams {
+            updates,
+            usage,
+            native: Some(observations.subscribe()),
+        },
+        fixture.authority.clone(),
+    );
+    let ((), notification) = tokio::join!(relay, next(&mut client));
+    assert_eq!(
+        notification.method,
+        RuntimeMethod::ProvidersWatchEnded.to_string()
+    );
+    let ended: ProviderWatchEndedNotification =
+        serde_json::from_value(notification.params).unwrap();
+    assert_eq!(ended.reason, ProviderWatchEndReason::AuthorityChanged);
+    drop(server);
+    drop(client);
+    fixture.close();
+}
+
+#[tokio::test]
+async fn native_watch_rechecks_authority_after_awaited_focus_projection() {
+    let (fixture, observations) = native_fixture();
+    let held = fixture.composed.focus_targets.lock().await;
+    let (mut server, mut client) = fixture.pair().await;
+    let (_publishing, updates) = watch::channel(Arc::new(ProviderList {
+        providers: Vec::new(),
+    }));
+    let (_usage_publishing, usage) = watch::channel(Arc::new(ProviderUsageList::default()));
+    let native = observations.subscribe();
+    let composed = Arc::clone(&fixture.composed);
+    let authority = fixture.authority.clone();
+    let relay = tokio::spawn(async move {
+        relay_providers(
+            &mut server,
+            &composed,
+            "watch".into(),
+            ProviderList {
+                providers: Vec::new(),
+            },
+            ProviderStreams {
+                updates,
+                usage,
+                native: Some(native),
+            },
+            authority,
+        )
+        .await;
+    });
+    assert_eq!(
+        next(&mut client).await.method,
+        RuntimeMethod::ProvidersUsageChanged.to_string()
+    );
+    fixture.revoke();
+    drop(held);
+    assert_revoked(next(&mut client).await);
+    relay.await.unwrap();
+    drop(client);
+    fixture.close();
+}
+
+#[tokio::test]
+async fn native_watch_revocation_wins_over_a_ready_native_revision() {
+    let (fixture, observations) = native_fixture();
+    let (mut server, mut client) = fixture.pair().await;
+    let (_publishing, updates) = watch::channel(Arc::new(ProviderList {
+        providers: Vec::new(),
+    }));
+    let (_usage_publishing, usage) = watch::channel(Arc::new(ProviderUsageList::default()));
+    let native = observations.subscribe();
+    let composed = Arc::clone(&fixture.composed);
+    let authority = fixture.authority.clone();
+    let relay = tokio::spawn(async move {
+        relay_providers(
+            &mut server,
+            &composed,
+            "watch".into(),
+            ProviderList {
+                providers: Vec::new(),
+            },
+            ProviderStreams {
+                updates,
+                usage,
+                native: Some(native),
+            },
+            authority,
+        )
+        .await;
+    });
+    assert_eq!(
+        next(&mut client).await.method,
+        RuntimeMethod::ProvidersUsageChanged.to_string()
+    );
+    assert_eq!(
+        next(&mut client).await.method,
+        RuntimeMethod::ProvidersNativeActivityChanged.to_string()
+    );
+    // Both sources become ready without yielding to the relay. Authority must win its biased selection.
+    observations.record(
+        runtrol_provider::ProviderId::parse("fixture").unwrap(),
+        runtrol_provider::NativeProcessObservation {
+            catalogue_revision: Some(2),
+            ..Default::default()
+        },
+        None,
+    );
+    fixture.revoke();
+    assert_revoked(next(&mut client).await);
+    relay.await.unwrap();
+    drop(client);
     fixture.close();
 }

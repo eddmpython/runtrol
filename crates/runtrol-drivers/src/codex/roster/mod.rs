@@ -39,20 +39,26 @@
 
 use std::collections::HashMap;
 use std::fs;
-use std::io::{Read as _, Seek as _, SeekFrom};
+use std::io::{BufRead as _, BufReader, Read as _, Seek as _, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use crate::native_watch::NativeSource;
+use sha2::{Digest as _, Sha256};
 use tokio::sync::Mutex;
 
 use runtrol_provider::{
-    NativeProcessActivity, NativeProcessBinding, NativeSessionId, ProcessIdentity, ProviderError,
-    ProviderId, WallMs,
+    NativeProcessActivity, NativeProcessBinding, NativeProcessObservation, NativeSessionId,
+    ProcessIdentity, ProviderError, ProviderId, WallMs,
 };
 
+use crate::native_turn::NativeTurn as TurnBoundary;
+#[cfg(test)]
+use crate::native_turn::owner_started_at;
 use crate::operator::{HomeProblem, provider_home};
 
+mod locks;
 mod missing;
 use missing::MissingLogs;
 
@@ -67,6 +73,7 @@ const LOCKS_DIRECTORY: &str = "thread-writer-locks";
 
 /// Where the per-conversation event logs live, under `<year>/<month>/<day>`.
 const SESSIONS_DIRECTORY: &str = "sessions";
+const CATALOGUE_INDEX: &str = "session_index.jsonl";
 
 /// The extension of a lock file. The directory also holds a coordination lock, which is not a conversation.
 const LOCK_EXTENSION: &str = "lock";
@@ -130,42 +137,14 @@ struct Followed {
     log: PathBuf,
     /// How far the log had been read.
     read_to: u64,
+    stamp: (Option<std::time::SystemTime>, Option<std::time::SystemTime>),
     /// The last structural boundary, kept independently of whichever process currently holds the lock.
     boundary: Option<TurnBoundary>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct TurnBoundary {
-    answering: bool,
-    at: Option<WallMs>,
-}
-
-impl TurnBoundary {
-    fn answers_for(self, owner: ProcessIdentity) -> bool {
-        self.answering
-            && self
-                .at
-                .zip(owner_started_at(owner))
-                .is_some_and(|(opened, born)| opened >= born)
-    }
-}
-
-/// Windows publishes an absolute FILETIME birth stamp. Other platforms use different identity units, including
-/// boot-relative ticks, so they cannot prove this comparison through the current holder surface.
-fn owner_started_at(owner: ProcessIdentity) -> Option<WallMs> {
-    #[cfg(windows)]
-    {
-        const FILETIME_TICKS_PER_MILLISECOND: u64 = 10_000;
-        const WINDOWS_TO_UNIX_EPOCH_MS: u64 = 11_644_473_600_000;
-        let millis = (owner.started() / FILETIME_TICKS_PER_MILLISECOND)
-            .checked_sub(WINDOWS_TO_UNIX_EPOCH_MS)?;
-        Some(WallMs::from_millis(millis))
-    }
-    #[cfg(not(windows))]
-    {
-        let _unavailable = owner;
-        None
-    }
+    unavailable: bool,
+    /// The opening record's folder, including an observed absence, at the retained file stamp.
+    cwd: Option<String>,
+    #[cfg(test)]
+    head_reads: usize,
 }
 
 fn live_identity(pid: u32) -> Option<ProcessIdentity> {
@@ -176,7 +155,7 @@ fn live_identity(pid: u32) -> Option<ProcessIdentity> {
     runtrol_childproc::process_identity(pid)
 }
 
-/// The process a conversation's lock named, and where that conversation works.
+/// The exact process incarnation a conversation's lock named.
 ///
 /// Kept because asking the operating system who holds a file opens a short Restart Manager session, which is
 /// far more than the four-times-a-second observation clock should pay per conversation. The answer only
@@ -184,7 +163,6 @@ fn live_identity(pid: u32) -> Option<ProcessIdentity> {
 #[derive(Clone, Debug)]
 struct Bound {
     identity: ProcessIdentity,
-    cwd: Option<String>,
 }
 
 /// Which conversations were held, and when that was asked.
@@ -198,6 +176,8 @@ struct Ownership {
 #[derive(Clone, Debug)]
 pub(super) struct CodexRoster {
     home: Result<PathBuf, HomeProblem>,
+    source: NativeSource,
+    lock_changes: Arc<Mutex<Option<runtrol_childproc::watch::DirectoryNames>>>,
     /// The last answer about which conversations a live process holds, reused for [`Self::owned_for`].
     owned: Arc<Mutex<Option<Ownership>>>,
     /// How long that answer is reused. [`OWNERSHIP_FOR`] in the product; nothing in tests, which assert on
@@ -212,32 +192,61 @@ pub(super) struct CodexRoster {
     /// How the holder of a lock is asked for. The product asks through a short-lived helper, which keeps the
     /// cost of that machinery out of the Runtime; a test asks in its own process, because a test binary is not
     /// a helper this executable knows how to be.
-    ask_holder: fn(&Path) -> Option<u32>,
+    ask_holder: fn(&Path) -> Option<ProcessIdentity>,
     /// Exact live incarnation lookup, replaceable by deterministic identities in the roster fixtures.
     identify: fn(u32) -> Option<ProcessIdentity>,
 }
 
 /// What this machine has been told about its own conversations, kept for the life of the process.
 ///
-/// A driver is built afresh for every observation (`provider_prepare::prepare_driver`), so a cache owned by a
-/// driver instance is an empty cache. The facts below are about the machine and not about any one instance:
+/// Independent preparations can build new drivers, so a driver-local invalidation cursor cannot own a
+/// cache that survives those preparations. The facts below are about the machine and not about any one instance:
 /// which conversations a live process holds, how far each log has been read, and which process holds which
 /// lock. Asking the operating system who holds a file loads its Restart Manager, which measured 2026-08-30 as
 /// two megabytes at rest and nearly five more under load when it was asked again on every observation, over a
 /// budget of five for eight live sessions. Asked once per conversation, it is paid once.
+#[derive(Clone, Default)]
 struct MachineFacts {
+    lock_changes: Arc<Mutex<Option<runtrol_childproc::watch::DirectoryNames>>>,
     owned: Arc<Mutex<Option<Ownership>>>,
     followed: Arc<Mutex<HashMap<Box<str>, Followed>>>,
     missing: Arc<Mutex<MissingLogs>>,
     bound: Arc<Mutex<HashMap<Box<str>, Bound>>>,
 }
 
-static MACHINE: std::sync::LazyLock<MachineFacts> = std::sync::LazyLock::new(|| MachineFacts {
-    owned: Arc::new(Mutex::new(None)),
-    followed: Arc::new(Mutex::new(HashMap::new())),
-    missing: Arc::new(Mutex::new(MissingLogs::default())),
-    bound: Arc::new(Mutex::new(HashMap::new())),
-});
+/// One current home is retained. Drivers for a previous home keep only their own facts alive.
+#[derive(Default)]
+#[expect(
+    clippy::disallowed_types,
+    reason = "synchronous construction shares one bounded cache entry without holding it across I/O or an await"
+)]
+struct Machine {
+    facts: std::sync::Mutex<Option<(PathBuf, MachineFacts)>>,
+}
+
+impl Machine {
+    fn at(&self, home: &Result<PathBuf, HomeProblem>) -> MachineFacts {
+        let Ok(home) = home else {
+            return MachineFacts::default();
+        };
+        let Ok(mut cached) = self.facts.lock() else {
+            // A poisoned cache supplies no reusable ownership proof. Isolated facts remain safe.
+            return MachineFacts::default();
+        };
+        if let Some((known, facts)) = cached.as_ref()
+            && known == home
+        {
+            return facts.clone();
+        }
+        let facts = MachineFacts::default();
+        let retired = cached.replace((home.clone(), facts.clone()));
+        drop(cached);
+        drop(retired);
+        facts
+    }
+}
+
+static MACHINE: std::sync::LazyLock<Machine> = std::sync::LazyLock::new(Machine::default);
 
 impl CodexRoster {
     /// Locate the CLI's home from the environment it inherits. Opens nothing.
@@ -256,13 +265,24 @@ impl CodexRoster {
 
     /// The product's roster, sharing what this process has already learned about the machine.
     fn holding(home: Result<PathBuf, HomeProblem>, owned_for: Duration) -> Self {
+        Self::holding_in(home, owned_for, &MACHINE)
+    }
+
+    fn holding_in(
+        home: Result<PathBuf, HomeProblem>,
+        owned_for: Duration,
+        machine: &Machine,
+    ) -> Self {
+        let facts = machine.at(&home);
         Self {
             home,
-            owned: Arc::clone(&MACHINE.owned),
+            source: NativeSource::default(),
+            lock_changes: facts.lock_changes,
+            owned: facts.owned,
             owned_for,
-            followed: Arc::clone(&MACHINE.followed),
-            missing: Arc::clone(&MACHINE.missing),
-            bound: Arc::clone(&MACHINE.bound),
+            followed: facts.followed,
+            missing: facts.missing,
+            bound: facts.bound,
             ask_holder: runtrol_childproc::holder_of,
             identify: live_identity,
         }
@@ -274,6 +294,8 @@ impl CodexRoster {
     fn alone(home: Result<PathBuf, HomeProblem>, owned_for: Duration) -> Self {
         Self {
             home,
+            source: NativeSource::default(),
+            lock_changes: Arc::new(Mutex::new(None)),
             owned: Arc::new(Mutex::new(None)),
             owned_for,
             followed: Arc::new(Mutex::new(HashMap::new())),
@@ -288,6 +310,7 @@ impl CodexRoster {
     fn rooted(home: PathBuf) -> Self {
         let mut roster = Self::alone(Ok(home), Duration::ZERO);
         roster.identify = tests::fixture_identity;
+        roster.ask_holder = tests::fixture_holder;
         roster
     }
 
@@ -298,6 +321,112 @@ impl CodexRoster {
             Ok(home) => Some(home.join(LOCKS_DIRECTORY)),
             Err(_) => None,
         }
+    }
+
+    pub(super) fn watch(
+        &self,
+        provider: ProviderId,
+        scan: &'static crate::roster_scan::RosterScan,
+    ) -> Result<Box<dyn runtrol_provider::NativeActivityWatch>, ProviderError> {
+        let home = self
+            .home
+            .as_ref()
+            .map_err(|error| ProviderError::Protocol {
+                provider,
+                doing: "locating native structural observation sources",
+                detail: error.to_string(),
+            })?;
+        let source = self.source.watch(
+            provider,
+            home,
+            scan,
+            &[LOCKS_DIRECTORY, SESSIONS_DIRECTORY, CATALOGUE_INDEX],
+        )?;
+        Ok(Box::new(locks::LockWatch::new(
+            provider,
+            source,
+            Arc::clone(&self.lock_changes),
+        )))
+    }
+
+    pub(super) fn observation(
+        &self,
+        provider: ProviderId,
+    ) -> Result<NativeProcessObservation, ProviderError> {
+        let activity = self.activity(provider)?;
+        if activity.processes.len() != activity.live.len() {
+            // Without every exact holder, there is no process completion event to wake this source.
+            // Keep that failed observation recoverable instead of publishing permanent live proof.
+            return Err(ProviderError::Protocol {
+                provider,
+                doing: "retaining current native process ownership",
+                detail: "a live conversation's exact process owner is temporarily unavailable"
+                    .into(),
+            });
+        }
+        let followed = self.followed.blocking_lock();
+        if followed.values().any(|known| known.unavailable) {
+            return Err(ProviderError::Protocol {
+                provider,
+                doing: "reading current native structural metadata",
+                detail: "the original session metadata is temporarily unavailable".into(),
+            });
+        }
+        let bound = self.bound.blocking_lock();
+        let mut signature = Sha256::new();
+        let mut identities = Vec::new();
+        let mut unknown_activity = Vec::new();
+        for native in &activity.live {
+            let bytes = native.as_str().as_bytes();
+            signature.update((bytes.len() as u64).to_le_bytes());
+            signature.update(bytes);
+            let binding = bound.get(native.as_str());
+            if let Some(binding) = binding {
+                identities.push(binding.identity);
+                signature.update(binding.identity.pid().to_le_bytes());
+                signature.update(binding.identity.started().to_le_bytes());
+                let folder = followed
+                    .get(native.as_str())
+                    .and_then(|known| known.cwd.as_deref())
+                    .unwrap_or_default()
+                    .as_bytes();
+                signature.update((folder.len() as u64).to_le_bytes());
+                signature.update(folder);
+            }
+            let boundary = followed
+                .get(native.as_str())
+                .and_then(|known| known.boundary);
+            if let Some(boundary) = boundary {
+                signature.update([u8::from(boundary.answering)]);
+                signature.update(boundary.at.map_or(0, WallMs::as_millis).to_le_bytes());
+            }
+            if !binding.zip(boundary).is_some_and(|(binding, boundary)| {
+                boundary.state_for(Some(binding.identity)).is_some()
+            }) {
+                unknown_activity.push(native.clone());
+            }
+        }
+        // The provider's metadata-only index is append/replacement notification for names. It contains
+        // no conversation body; its filesystem revision invalidates the authoritative catalogue once.
+        if let Ok(home) = &self.home {
+            signature.update(
+                crate::native_watch::catalogue_stamp(&home.join(CATALOGUE_INDEX)).map_err(
+                    |error| ProviderError::Protocol {
+                        provider,
+                        doing: "observing provider catalogue metadata",
+                        detail: error.to_string(),
+                    },
+                )?,
+            );
+        }
+        let revision = self
+            .source
+            .record(provider, signature.finalize().into(), identities)?;
+        Ok(NativeProcessObservation {
+            activity,
+            catalogue_revision: Some(revision),
+            unknown_activity,
+        })
     }
 
     /// The conversations this CLI has open, and the subset with a model answering.
@@ -311,6 +440,7 @@ impl CodexRoster {
         &self,
         provider: ProviderId,
     ) -> Result<NativeProcessActivity, ProviderError> {
+        self.refresh_ownership();
         let Ok(home) = &self.home else {
             return Ok(NativeProcessActivity::default());
         };
@@ -350,7 +480,6 @@ impl CodexRoster {
                 self.ask_holder,
                 self.identify,
                 &locks,
-                home,
                 &mut bound,
                 thread.as_str(),
             ) {
@@ -366,7 +495,9 @@ impl CodexRoster {
                 processes.push(NativeProcessBinding {
                     pid: binding.identity.pid(),
                     native: thread.clone(),
-                    cwd: binding.cwd.clone(),
+                    cwd: followed
+                        .get(thread.as_str())
+                        .and_then(|known| known.cwd.clone()),
                     // Whether that process draws a screen another window can join is a separate question
                     // this cannot answer yet. Both surfaces of this CLI (its terminal interface and the
                     // editor extension's app server) are the same executable, so the two were told apart on
@@ -387,9 +518,9 @@ impl CodexRoster {
     }
 }
 
-/// The process holding one conversation's lock, and that conversation's folder, asked once and kept.
+/// The exact process holding one conversation's lock, asked once and kept.
 ///
-/// The operating system names the holder of a lock file (`runtrol_childproc::holder_of`), which is what turns
+/// The operating system names the user of a lock file (`runtrol_childproc::holder_of`), which is what turns
 /// this CLI's per-conversation lock into a binding between a conversation and a live process. Without it a
 /// terminal this Runtime started stays unbound to the conversation the person then opened inside it, and its
 /// row reads as running somewhere else (operator, 2026-08-30, a conversation this Runtime was itself hosting).
@@ -397,24 +528,23 @@ impl CodexRoster {
 /// A kept answer is reused while its process is still alive, so the Restart Manager session is opened once per
 /// conversation rather than on every observation.
 fn holder(
-    ask: fn(&Path) -> Option<u32>,
+    ask: fn(&Path) -> Option<ProcessIdentity>,
     identify: fn(u32) -> Option<ProcessIdentity>,
     locks: &Path,
-    home: &Path,
     bound: &mut HashMap<Box<str>, Bound>,
     thread: &str,
 ) -> Option<Bound> {
-    if let Some(known) = bound.get(thread)
+    if let Some(known) = bound.get_mut(thread)
         && identify(known.identity.pid()) == Some(known.identity)
     {
         return Some(known.clone());
     }
     bound.remove(thread);
-    let pid = ask(&locks.join(format!("{thread}.{LOCK_EXTENSION}")))?;
-    let fresh = Bound {
-        identity: identify(pid)?,
-        cwd: workspace_of(home, thread),
-    };
+    let reply = ask(&locks.join(format!("{thread}.{LOCK_EXTENSION}")))?;
+    if identify(reply.pid()) != Some(reply) {
+        return None;
+    }
+    let fresh = Bound { identity: reply };
     bound.insert(thread.into(), fresh.clone());
     Some(fresh)
 }
@@ -424,24 +554,28 @@ fn holder(
 /// The CLI writes that record when it creates the conversation and never rewrites it, so one bounded read of
 /// the head answers for the life of the conversation. Only the folder is taken: a structural key found as
 /// bytes, with no message decoded and no copy kept.
-fn workspace_of(home: &Path, thread: &str) -> Option<String> {
+fn workspace_of(log: &Path) -> Option<String> {
     const MAX_HEAD_BYTES: usize = 64 * 1024;
 
-    let log = locate_log(home, thread)?;
     // A log that cannot be opened or read names no folder, which is the same answer a log with no folder
     // record gives: the conversation is bound to its process without one rather than filed under a guess.
     let Ok(file) = fs::File::open(log) else {
         return None;
     };
-    let mut head = String::new();
-    if file
-        .take(MAX_HEAD_BYTES as u64)
-        .read_to_string(&mut head)
+    let mut head = Vec::new();
+    if BufReader::new(file)
+        .take(MAX_HEAD_BYTES as u64 + 1)
+        .read_until(b'\n', &mut head)
         .is_err()
+        || head.len() > MAX_HEAD_BYTES
     {
         return None;
     }
-    folder_in_head(head.lines().next()?)
+    // Later records need not be valid UTF-8 at this read boundary. Only the opening record names the folder.
+    let Ok(head) = std::str::from_utf8(&head) else {
+        return None;
+    };
+    folder_in_head(head)
 }
 
 /// The folder named by one opening record, found as bytes.
@@ -481,15 +615,8 @@ fn owned_threads(
         }
         let entry = entry.map_err(read_failure)?;
         let path = entry.path();
-        if path.extension().and_then(|extension| extension.to_str()) != Some(LOCK_EXTENSION) {
-            continue;
-        }
-        let Some(name) = path.file_stem().and_then(|stem| stem.to_str()) else {
-            continue;
-        };
-        let Ok(thread) = NativeSessionId::new(name) else {
-            // The coordination lock beside them is not a conversation, and neither is anything else the
-            // CLI puts here that its own identity rules would refuse.
+        let Some(thread) = locks::lock_name(&entry.file_name()) else {
+            // The provider's writer identities are UUIDs. Its coordination lock is not a session.
             continue;
         };
         if runtrol_childproc::write_locked(&path) {
@@ -509,24 +636,40 @@ fn answering(
     missing: &mut MissingLogs,
 ) -> bool {
     if let Some(known) = followed.get_mut(thread) {
-        let Ok(size) = fs::metadata(&known.log).map(|metadata| metadata.len()) else {
-            // The log went away underneath a live process: nothing can be said about a turn, and saying
-            // "answering" about a conversation with no log is the one answer that would be wrong.
+        let Ok(metadata) = fs::metadata(&known.log) else {
+            known.boundary = None;
+            known.unavailable = true;
+            known.read_to = 0;
+            known.cwd = None;
             return false;
         };
-        if size == known.read_to {
+        let size = metadata.len();
+        // File identity and write stamps invalidate metadata reads only, never model state.
+        let stamp = crate::native_watch::source_times(&metadata);
+        let replaced = stamp.0 != known.stamp.0 || (size == known.read_to && stamp != known.stamp);
+        if size == known.read_to && !replaced && !known.unavailable {
             return known
                 .boundary
                 .is_some_and(|boundary| boundary.answers_for(owner));
         }
-        if size < known.read_to || size - known.read_to > MAX_FOLLOW_BYTES {
+        // Location discovery and header reads share this source's stamp. A missing cwd is a
+        // cached header fact, not permission to repeat a directory walk on every owner-cache hit.
+        known.cwd = workspace_of(&known.log);
+        #[cfg(test)]
+        {
+            known.head_reads += 1;
+        }
+        if replaced || size < known.read_to || size - known.read_to > MAX_FOLLOW_BYTES {
             // Truncated, replaced, or grown further than one look may read. Ask the file again from the
             // end rather than trusting an offset into a file that is no longer the same one.
             let Some(fresh) = last_boundary(&known.log) else {
-                return known
-                    .boundary
-                    .is_some_and(|boundary| boundary.answers_for(owner));
+                known.boundary = None;
+                known.unavailable = true;
+                known.read_to = 0;
+                return false;
             };
+            known.stamp = stamp;
+            known.unavailable = false;
             known.read_to = fresh.0;
             known.boundary = fresh.1;
             return known
@@ -537,9 +680,18 @@ fn answering(
         // that neither look sees is a turn that never starts or never ends until the next one.
         let straddle = MAX_BOUNDARY_PREFIX_BYTES as u64;
         let from = known.read_to.saturating_sub(straddle);
-        if let Some(state) = boundary_in_range(&known.log, from, size) {
-            known.boundary = Some(state);
+        match checked_boundary_in_range(&known.log, from, size) {
+            Ok(Some(state)) => known.boundary = Some(state),
+            Ok(None) => {}
+            Err(()) => {
+                known.boundary = None;
+                known.unavailable = true;
+                known.read_to = 0;
+                return false;
+            }
         }
+        known.stamp = stamp;
+        known.unavailable = false;
         known.read_to = size;
         return known
             .boundary
@@ -548,15 +700,28 @@ fn answering(
     let Some(log) = missing.locate(home, thread) else {
         return false;
     };
-    let Some((read_to, boundary)) = last_boundary(&log) else {
-        return false;
+    let (read_to, boundary, unavailable) = match last_boundary(&log) {
+        Some((read_to, boundary)) => (read_to, boundary, false),
+        None => (0, None, true),
     };
+    let metadata = fs::metadata(&log);
+    let unavailable = unavailable || metadata.is_err();
+    // Preserve the located path on failure so the producer retries it without another directory walk.
+    let stamp = metadata.map_or((None, None), |metadata| {
+        crate::native_watch::source_times(&metadata)
+    });
+    let boundary = if unavailable { None } else { boundary };
     followed.insert(
         thread.into(),
         Followed {
+            cwd: workspace_of(&log),
+            #[cfg(test)]
+            head_reads: 1,
             log,
             read_to,
+            stamp,
             boundary,
+            unavailable,
         },
     );
     boundary.is_some_and(|boundary| boundary.answers_for(owner))
@@ -567,6 +732,7 @@ fn answering(
 /// The CLI names it `rollout-<timestamp>-<thread>.jsonl` under a day directory, so the search is for a
 /// suffix rather than a guess at the timestamp. Bounded, and done once per conversation: the answer is kept
 /// for as long as a live process owns it.
+#[cfg(test)]
 fn locate_log(home: &Path, thread: &str) -> Option<PathBuf> {
     search_log(home, thread).0
 }
@@ -676,12 +842,15 @@ fn last_boundary(log: &Path) -> Option<(u64, Option<TurnBoundary>)> {
 }
 
 /// The state of the last boundary inside one range of the log, or `None` when the range holds none.
+#[cfg(test)]
 fn boundary_in_range(log: &Path, from: u64, to: u64) -> Option<TurnBoundary> {
-    let Ok(mut file) = fs::File::open(log) else {
-        return None;
-    };
-    let bytes = read_range(&mut file, from.saturating_sub(1), to)?;
-    boundary_in_read_range(&bytes, from == 0)
+    checked_boundary_in_range(log, from, to).unwrap_or_default()
+}
+
+fn checked_boundary_in_range(log: &Path, from: u64, to: u64) -> Result<Option<TurnBoundary>, ()> {
+    let mut file = fs::File::open(log).map_err(|_| ())?;
+    let bytes = read_range(&mut file, from.saturating_sub(1), to).ok_or(())?;
+    Ok(boundary_in_read_range(&bytes, from == 0))
 }
 
 /// A nonzero read starts one byte before the requested range. Its first complete line begins after the first LF:
@@ -895,6 +1064,38 @@ mod tests {
 
     const TURN_AT: &str = "2026-08-29T00:00:01.000Z";
 
+    #[test]
+    fn a_recycled_pid_in_the_holder_reply_cannot_create_a_binding() {
+        let mut bound = HashMap::new();
+        let result = holder(
+            |_| ProcessIdentity::new(42, 100),
+            |pid| ProcessIdentity::new(pid, 200),
+            Path::new("unused-locks"),
+            &mut bound,
+            OPEN_THREAD,
+        );
+        assert!(
+            result.is_none(),
+            "the queried holder was an older incarnation of this PID"
+        );
+        assert!(
+            bound.is_empty(),
+            "the replacement must not inherit the old file ownership"
+        );
+    }
+
+    pub(super) fn fixture_holder(path: &Path) -> Option<ProcessIdentity> {
+        // Only test turn timestamps are synthetic; the operating system must still name this fixture's holder.
+        runtrol_childproc::holder_of_here(path)
+            .and_then(|identity| fixture_identity(identity.pid()))
+    }
+
+    #[cfg(windows)]
+    fn resumed_holder(path: &Path) -> Option<ProcessIdentity> {
+        runtrol_childproc::holder_of_here(path)
+            .and_then(|identity| resumed_identity(identity.pid()))
+    }
+
     pub(super) fn fixture_identity(pid: u32) -> Option<ProcessIdentity> {
         // Fixed FILETIME for 2026-08-29T00:00:00Z. The synthetic turn begins one second later.
         ProcessIdentity::new(pid, 134_324_352_000_000_000)
@@ -1028,6 +1229,7 @@ mod tests {
         assert_eq!(first.active.len(), 1, "the original owner opened this turn");
 
         roster.identify = resumed_identity;
+        roster.ask_holder = resumed_holder;
         let second = roster.activity(codex()).expect("the home is readable");
         assert_eq!(second.live.len(), 1, "the replacement holder stays live");
         assert!(
@@ -1358,6 +1560,7 @@ mod tests {
         let mut warm = CodexRoster::rooted(root.clone());
         assert_eq!(warm.activity(codex()).expect("readable").active.len(), 1);
         warm.identify = resumed_identity;
+        warm.ask_holder = resumed_holder;
         assert!(warm.activity(codex()).expect("readable").active.is_empty());
         let log = locate_log(&root, OPEN_THREAD).expect("the fixture log exists");
         let next = concat!(
@@ -1373,6 +1576,7 @@ mod tests {
         assert_eq!(warm.activity(codex()).expect("readable").active.len(), 1);
         let mut cold = CodexRoster::rooted(root);
         cold.identify = resumed_identity;
+        cold.ask_holder = resumed_holder;
         assert_eq!(cold.activity(codex()).expect("readable").active.len(), 1);
     }
 
@@ -1612,5 +1816,233 @@ mod tests {
         // guessing: an unknown folder files a conversation nowhere, a wrong one files it under the wrong project.
         assert_eq!(folder_in_head(r#"{"payload":{"id":"a"}}"#), None);
         assert_eq!(folder_in_head(r#"{"cwd":"unterminated"#), None);
+    }
+
+    #[test]
+    fn later_multibyte_record_boundaries_cannot_hide_the_opening_folder() {
+        let (_kept, root) = home(&[]);
+        let log = root.join("synthetic.jsonl");
+        let mut bytes =
+            b"{\"type\":\"session_meta\",\"payload\":{\"cwd\":\"/work/app\"}}\n".to_vec();
+        bytes.resize(64 * 1024 - 1, b' ');
+        bytes.extend_from_slice("한".as_bytes());
+        let original_window = bytes
+            .get(..64 * 1024)
+            .expect("the synthetic boundary exists");
+        assert!(std::str::from_utf8(original_window).is_err());
+        fs::write(&log, bytes).expect("synthetic multibyte boundary");
+        assert_eq!(workspace_of(&log).as_deref(), Some("/work/app"));
+
+        let mut oversized = vec![b' '; 64 * 1024];
+        oversized.extend_from_slice(b"{\"cwd\":\"/wrong\"}\n");
+        fs::write(&log, oversized).expect("oversized opening record");
+        assert_eq!(workspace_of(&log), None);
+        fs::write(&log, b"\xff{\"cwd\":\"/wrong\"}\n").expect("invalid opening record");
+        assert_eq!(workspace_of(&log), None);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_temporarily_unreadable_source_requires_recovery_and_does_not_keep_turn_proof() {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        let (_kept, root) = home(&[(OPEN_THREAD, opened("turn"))]);
+        let _held = hold(&root, OPEN_THREAD);
+        let roster = CodexRoster::rooted(root);
+        assert_eq!(
+            roster
+                .observation(codex())
+                .expect("first complete observation")
+                .activity
+                .active
+                .len(),
+            1
+        );
+        let log = roster
+            .followed
+            .blocking_lock()
+            .get(OPEN_THREAD)
+            .expect("followed source")
+            .log
+            .clone();
+        let mut denied = OpenOptions::new()
+            .read(true)
+            .append(true)
+            .share_mode(0)
+            .open(&log)
+            .expect("exclusive synthetic writer");
+        std::io::Write::write_all(&mut denied, chatter().as_bytes())
+            .expect("new bytes demand a current read");
+        assert!(
+            roster.observation(codex()).is_err(),
+            "I/O failure requests bounded recovery instead of sleeping forever"
+        );
+        assert!(
+            roster
+                .followed
+                .blocking_lock()
+                .get(OPEN_THREAD)
+                .expect("followed source")
+                .boundary
+                .is_none()
+        );
+        drop(denied);
+        assert_eq!(
+            roster
+                .observation(codex())
+                .expect("source becomes readable")
+                .activity
+                .active
+                .len(),
+            1
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn an_unresolved_holder_requires_recovery_before_an_event_driven_observation() {
+        let (_kept, root) = home(&[(OPEN_THREAD, opened("turn"))]);
+        let _held = hold(&root, OPEN_THREAD);
+        let mut roster = CodexRoster::rooted(root);
+        roster.ask_holder = |_| None;
+        assert!(roster.observation(codex()).is_err());
+        roster.ask_holder = fixture_holder;
+        let recovered = roster
+            .observation(codex())
+            .expect("exact owner becomes available");
+        assert_eq!(recovered.activity.live.len(), 1);
+        assert_eq!(recovered.activity.processes.len(), 1);
+        assert_eq!(recovered.activity.active.len(), 1);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn new_preparations_share_the_same_home_ownership_cursor_and_preserve_bindings() {
+        let (_kept, root) = home(&[(OPEN_THREAD, String::new())]);
+        let _held = hold(&root, OPEN_THREAD);
+        let machine = Machine::default();
+        let mut first = CodexRoster::holding_in(Ok(root.clone()), Duration::ZERO, &machine);
+        first.ask_holder = fixture_holder;
+        first.identify = fixture_identity;
+        let observed = first.activity(codex()).expect("initial owner");
+        assert_eq!(observed.processes.len(), 1);
+        let mut second = CodexRoster::holding_in(Ok(root), Duration::ZERO, &machine);
+        second.identify = fixture_identity;
+        second.ask_holder = |_| panic!("a new preparation must retain the same exact owner");
+        assert!(Arc::ptr_eq(&first.lock_changes, &second.lock_changes));
+        assert_eq!(
+            second
+                .activity(codex())
+                .expect("shared owner")
+                .processes
+                .len(),
+            1
+        );
+
+        let (_other_kept, other_root) = home(&[(OPEN_THREAD, String::new())]);
+        let other = CodexRoster::holding_in(Ok(other_root), Duration::ZERO, &machine);
+        assert!(!Arc::ptr_eq(&first.lock_changes, &other.lock_changes));
+        assert!(other.bound.blocking_lock().is_empty());
+        assert!(!first.bound.blocking_lock().is_empty());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn absent_locations_and_headers_are_reused_until_their_source_changes() {
+        let (_kept, root) = home(&[(OPEN_THREAD, String::new())]);
+        let log = locate_log(&root, OPEN_THREAD).expect("empty fixture log");
+        fs::remove_file(&log).expect("writer can precede its log");
+        let _held = hold(&root, OPEN_THREAD);
+        let roster = CodexRoster::rooted(root.clone());
+        roster.activity(codex()).expect("initial missing location");
+        let searches = roster.missing.blocking_lock().searches();
+        for _ in 0..20 {
+            roster
+                .activity(codex())
+                .expect("unchanged missing location");
+        }
+        assert_eq!(roster.missing.blocking_lock().searches(), searches);
+
+        fs::write(&log, b"").expect("provider publishes a log before its opening record");
+        roster.activity(codex()).expect("created empty log");
+        for _ in 0..20 {
+            roster.activity(codex()).expect("unchanged empty header");
+        }
+        assert_eq!(
+            roster
+                .followed
+                .blocking_lock()
+                .get(OPEN_THREAD)
+                .expect("followed log")
+                .head_reads,
+            1,
+            "an absent field at an unchanged stamp must not reread the header"
+        );
+        fs::write(
+            &log,
+            b"{\"type\":\"session_meta\",\"payload\":{\"cwd\":\"C:/late-folder\"}}\n",
+        )
+        .expect("provider publishes the original folder");
+        let changed = roster.activity(codex()).expect("changed header");
+        assert_eq!(
+            changed
+                .processes
+                .first()
+                .expect("exact owner")
+                .cwd
+                .as_deref(),
+            Some("C:/late-folder")
+        );
+        assert_eq!(
+            roster
+                .followed
+                .blocking_lock()
+                .get(OPEN_THREAD)
+                .expect("followed log")
+                .head_reads,
+            2
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_retained_holder_accepts_its_later_folder_without_another_process_lookup() {
+        let (_kept, root) = home(&[(OPEN_THREAD, String::new())]);
+        let _held = hold(&root, OPEN_THREAD);
+        let mut roster = CodexRoster::rooted(root.clone());
+        let first = roster
+            .observation(codex())
+            .expect("the writer precedes its metadata");
+        assert_eq!(
+            first
+                .activity
+                .processes
+                .first()
+                .expect("retained holder")
+                .cwd,
+            None
+        );
+        roster.ask_holder = |_| panic!("the exact live owner was already retained");
+        let log = locate_log(&root, OPEN_THREAD).expect("the empty source exists");
+        fs::write(
+            log,
+            b"{\"type\":\"session_meta\",\"payload\":{\"cwd\":\"C:/fixture\"}}\n",
+        )
+        .expect("the provider publishes its original folder");
+        let second = roster
+            .observation(codex())
+            .expect("the new source metadata is visible");
+        assert_eq!(
+            second
+                .activity
+                .processes
+                .first()
+                .expect("retained holder")
+                .cwd
+                .as_deref(),
+            Some("C:/fixture")
+        );
+        assert_ne!(first.catalogue_revision, second.catalogue_revision);
+        assert!(second.activity.active.is_empty());
+        assert_eq!(second.unknown_activity.len(), 1);
     }
 }

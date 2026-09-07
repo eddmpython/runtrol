@@ -43,7 +43,8 @@ pub use account::{
     account_token,
 };
 pub use agent::{
-    Agent, NativeProcessActivity, NativeProcessBinding, NativeTerminalAccess, Provider,
+    Agent, NativeActivityWatch, NativeProcessActivity, NativeProcessBinding,
+    NativeProcessObservation, NativeTerminalAccess, Provider,
 };
 pub use capability::{
     ProviderCapabilities, ProviderCapability, ProviderCapabilitySource, ProviderCapabilityState,

@@ -97,3 +97,39 @@ test("an attachment route is accepted only for a currently live identity", () =>
 
   assert.deepEqual([...projected.attachable], ["claude:live"]);
 });
+
+{
+const idle = { providerId: "fixture", live: ["native"], active: [], attachable: [] };
+const live = new Map([["fixture", new Set(["native"])]]);
+
+test("fast turns and late title metadata invalidate once even while both observed states are idle", () => {
+  const first = projectNativeActivity([["fixture", idle, [], "source:1"]], live);
+  const same = projectNativeActivity([["fixture", idle, [], "source:1"]], live, new Map(), new Map(), first.revisions);
+  assert.equal(same.refreshProviders.size, 0);
+  const turn = projectNativeActivity([["fixture", idle, [], "source:2"]], live, new Map(), new Map(), same.revisions);
+  assert.deepEqual([...turn.refreshProviders], ["fixture"]);
+  const title = projectNativeActivity([["fixture", idle, [], "source:3"]], live, new Map(), new Map(), turn.revisions);
+  assert.deepEqual([...title.refreshProviders], ["fixture"]);
+});
+
+test("unknown model activity preserves the proven owner without inventing a completed turn", () => {
+  const unknown = projectNativeActivity([["fixture", idle, ["native"], "source:1"]], live,
+    new Map(), live, new Map([["fixture", "source:1"]]));
+  assert.deepEqual([...unknown.live], ["fixture:native"]);
+  assert.deepEqual([...unknown.unknownActivity], ["fixture:native"]);
+  assert.equal(unknown.unconfirmed.size, 0);
+  assert.equal(unknown.active.size, 0);
+  assert.equal(unknown.refreshProviders.size, 0);
+});
+
+test("lost proof retains its revision and returns as the same source without unnecessary catalogue work", () => {
+  const missing = projectNativeActivity([["fixture", null]], live,
+    new Map(), new Map(), new Map([["fixture", "source:5"]]));
+  assert.deepEqual([...missing.unknownActivity], ["fixture:native"]);
+  const restored = projectNativeActivity([["fixture", idle, [], "source:5"]], missing.liveByProvider,
+    missing.unconfirmedByProvider, new Map(), missing.revisions);
+  assert.equal(restored.refreshProviders.size, 0);
+  assert.equal(restored.unconfirmed.size, 0);
+});
+
+}

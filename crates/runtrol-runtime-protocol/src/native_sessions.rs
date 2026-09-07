@@ -214,3 +214,36 @@ pub struct NativeFocusResult {
     /// What became of the owner's window on the desktop.
     pub foreground: crate::WindowForeground,
 }
+
+/// One provider's structural activity proof, carried only by an opted-in provider watch.
+#[derive(Clone, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "camelCase", deny_unknown_fields)]
+pub enum NativeActivityObservation {
+    /// A complete bounded observation in the existing folderless native discovery scope.
+    #[serde(rename_all = "camelCase")]
+    Observed {
+        /// Process ownership and positively observed model activity.
+        activity: NativeActivity,
+        /// Opaque source-scoped catalogue invalidation token. It carries no provider file metadata.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        catalogue_revision: Option<String>,
+        /// Live identities for which model activity is unknown, distinct from completed turns.
+        unknown_activity: Vec<String>,
+    },
+    /// Failure to obtain current proof. An earlier live identity must not become resumable from this.
+    #[serde(rename_all = "camelCase")]
+    Unavailable {
+        /// Provider whose current observation is unavailable.
+        provider_id: ProviderId,
+    },
+}
+
+/// Complete bounded native activity snapshot delivered on the existing provider watch.
+#[derive(Clone, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProvidersNativeActivityChangedNotification {
+    /// The connection-local provider watch identity.
+    pub subscription_id: String,
+    /// Latest observation for every registered usable provider, including unavailable proof.
+    pub snapshot: Vec<NativeActivityObservation>,
+}

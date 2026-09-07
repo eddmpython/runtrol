@@ -12,14 +12,15 @@ use runtrol_runtime_protocol::{
     ListPendingApprovalsParams, ManagedSessionList, MutationRequestId, NativeActivity,
     NativeActivityParams, NativeSessionCatalogue, PendingApprovalList, PendingEnrollmentId,
     ProviderId, ProviderList, ProviderUsageList, ProviderWatchEndedNotification,
-    ProvidersChangedNotification, ProvidersUsageChangedNotification, RequestEnrollmentParams,
-    RespondApprovalParams, ResumeSessionParams, RotateIntegrationKeyParams, RuntimeError,
-    RuntimeErrorKind, RuntimeEventNotification, RuntimeMethod, RuntimeModelCatalog,
-    RuntimeProviderCapabilities, RuntimeSessionId, ServerChallenge, SessionDescriptor,
-    SessionIndexChangedNotification, SessionIndexEndedNotification, SessionOpenResult,
-    SetModeParams, SetModelParams, StartSessionParams, SubmitBlocksParams, SubmitInputParams,
-    SuccessResponse, WatchEnrollmentParams, WatchEventsParams, WatchEventsResult,
-    WatchProvidersParams, WatchProvidersResult, WatchSessionIndexParams, WatchSessionIndexResult,
+    ProvidersChangedNotification, ProvidersNativeActivityChangedNotification,
+    ProvidersUsageChangedNotification, RequestEnrollmentParams, RespondApprovalParams,
+    ResumeSessionParams, RotateIntegrationKeyParams, RuntimeError, RuntimeErrorKind,
+    RuntimeEventNotification, RuntimeMethod, RuntimeModelCatalog, RuntimeProviderCapabilities,
+    RuntimeSessionId, ServerChallenge, SessionDescriptor, SessionIndexChangedNotification,
+    SessionIndexEndedNotification, SessionOpenResult, SetModeParams, SetModelParams,
+    StartSessionParams, SubmitBlocksParams, SubmitInputParams, SuccessResponse,
+    WatchEnrollmentParams, WatchEventsParams, WatchEventsResult, WatchProvidersParams,
+    WatchProvidersResult, WatchSessionIndexParams, WatchSessionIndexResult,
     enrollment_signing_payload, initialization_signing_payload, key_rotation_signing_payload,
 };
 use serde::Serialize;
@@ -229,7 +230,21 @@ impl RuntimeLocator {
         options: ClientOptions,
         policy: ReconnectPolicy,
     ) -> Result<ReconnectingProviderSubscription, ClientError> {
-        ReconnectingProviderSubscription::open(self.clone(), options, policy).await
+        self.watch_providers_with_reconnect_params(options, WatchProvidersParams::default(), policy)
+            .await
+    }
+
+    /// Open a reconnecting provider stream with optional native observations.
+    ///
+    /// # Errors
+    /// Connection, authentication, scope, or subscription admission failure.
+    pub async fn watch_providers_with_reconnect_params(
+        &self,
+        options: ClientOptions,
+        params: WatchProvidersParams,
+        policy: ReconnectPolicy,
+    ) -> Result<ReconnectingProviderSubscription, ClientError> {
+        ReconnectingProviderSubscription::open(self.clone(), options, params, policy).await
     }
 
     /// Open a managed-session snapshot stream that replaces a lost read-only connection.
@@ -916,14 +931,24 @@ impl ProviderClient<'_> {
     ///
     /// Public client and Runtime failures, including missing provider read scope.
     pub async fn watch(&mut self) -> Result<ProviderSubscription<'_>, ClientError> {
+        self.watch_with(WatchProvidersParams::default()).await
+    }
+
+    /// Opt into additional structural observations while keeping the older empty request unchanged.
+    ///
+    /// # Errors
+    /// Public scope, capability, transport and protocol failures.
+    pub async fn watch_with(
+        &mut self,
+        params: WatchProvidersParams,
+    ) -> Result<ProviderSubscription<'_>, ClientError> {
+        let params = negotiated_provider_watch(self.runtime, &params);
         let started: WatchProvidersResult = self
             .runtime
-            .call(
-                RuntimeMethod::ProvidersWatch,
-                &WatchProvidersParams::default(),
-            )
+            .call(RuntimeMethod::ProvidersWatch, &params)
             .await?;
         Ok(ProviderSubscription {
+            native_activity: params.native_activity,
             runtime: self.runtime,
             subscription_id: started.subscription_id.clone(),
             started,
@@ -1000,18 +1025,27 @@ pub enum ProviderNotification {
     Changed(ProvidersChangedNotification),
     /// The complete account usage snapshot changed (sent once right after the subscription starts).
     UsageChanged(ProvidersUsageChangedNotification),
+    /// Native process/turn metadata on an opted-in provider stream.
+    NativeActivityChanged(ProvidersNativeActivityChangedNotification),
     /// The subscription ended with a typed authority or Runtime reason.
     Ended(ProviderWatchEndedNotification),
 }
 
 /// One dedicated provider inventory stream borrowed from an initialized Runtime connection.
 pub struct ProviderSubscription<'client> {
+    native_activity: bool,
     runtime: &'client mut RuntimeClient,
     subscription_id: String,
     started: WatchProvidersResult,
 }
 
 impl ProviderSubscription<'_> {
+    /// Whether this connection negotiated native observations.
+    #[must_use]
+    pub const fn native_activity(&self) -> bool {
+        self.native_activity
+    }
+
     /// Initial provider snapshot acknowledged before notifications begin.
     #[must_use]
     pub const fn started(&self) -> &WatchProvidersResult {
@@ -1024,13 +1058,15 @@ impl ProviderSubscription<'_> {
     ///
     /// Transport failure or a notification that violates the selected public revision.
     pub async fn next(&mut self) -> Result<ProviderNotification, ClientError> {
-        receive_provider_notification(self.runtime, &self.subscription_id).await
+        receive_provider_notification(self.runtime, &self.subscription_id, self.native_activity)
+            .await
     }
 }
 
 async fn receive_provider_notification(
     runtime: &mut RuntimeClient,
     subscription_id: &str,
+    native_activity: bool,
 ) -> Result<ProviderNotification, ClientError> {
     let payload = runtime.connection.receive().await?;
     let notification: JsonRpcNotification = serde_json::from_slice(&payload).map_err(|error| {
@@ -1076,6 +1112,25 @@ async fn receive_provider_notification(
             )?;
             Ok(ProviderNotification::UsageChanged(changed))
         }
+        RuntimeMethod::ProvidersNativeActivityChanged => {
+            if !native_activity {
+                return Err(ClientError::Protocol(
+                    "native activity was not requested on this provider stream".to_owned(),
+                ));
+            }
+            let changed: ProvidersNativeActivityChangedNotification =
+                serde_json::from_value(notification.params).map_err(|error| {
+                    ClientError::Protocol(format!(
+                        "native activity notification has the wrong shape: {error}"
+                    ))
+                })?;
+            validate_subscription(
+                subscription_id,
+                &changed.subscription_id,
+                "provider notification target does not match its subscription",
+            )?;
+            Ok(ProviderNotification::NativeActivityChanged(changed))
+        }
         RuntimeMethod::ProvidersWatchEnded => {
             let ended: ProviderWatchEndedNotification = serde_json::from_value(notification.params)
                 .map_err(|error| {
@@ -1103,6 +1158,8 @@ pub enum ReconnectingProviderNotification {
     Changed(ProvidersChangedNotification),
     /// The complete account usage snapshot changed.
     UsageChanged(ProvidersUsageChangedNotification),
+    /// Native process/turn metadata on an opted-in provider stream.
+    NativeActivityChanged(ProvidersNativeActivityChangedNotification),
     /// Runtime ended the subscription for a typed authority or lifecycle reason.
     Ended(ProviderWatchEndedNotification),
     /// A replacement connection installed a new complete snapshot.
@@ -1111,6 +1168,8 @@ pub enum ReconnectingProviderNotification {
 
 /// A provider snapshot stream that owns and replaces its read-only Runtime connection.
 pub struct ReconnectingProviderSubscription {
+    params: WatchProvidersParams,
+    native_activity: bool,
     locator: RuntimeLocator,
     options: ClientOptions,
     policy: ReconnectPolicy,
@@ -1124,10 +1183,14 @@ impl ReconnectingProviderSubscription {
     async fn open(
         locator: RuntimeLocator,
         options: ClientOptions,
+        params: WatchProvidersParams,
         policy: ReconnectPolicy,
     ) -> Result<Self, ClientError> {
-        let (runtime, started) = open_provider_stream(&locator, &options, policy).await?;
+        let (runtime, started) = open_provider_stream(&locator, &options, &params, policy).await?;
+        let native_activity = negotiated_provider_watch(&runtime, &params).native_activity;
         Ok(Self {
+            params,
+            native_activity,
             locator,
             options,
             policy,
@@ -1136,6 +1199,12 @@ impl ReconnectingProviderSubscription {
             started,
             terminal: false,
         })
+    }
+
+    /// Whether the currently connected Runtime negotiated native observations.
+    #[must_use]
+    pub const fn native_activity(&self) -> bool {
+        self.native_activity
     }
 
     /// Initial complete provider snapshot.
@@ -1159,13 +1228,18 @@ impl ReconnectingProviderSubscription {
             let started = self.reconnect().await?;
             return Ok(ReconnectingProviderNotification::Reconnected(started));
         };
-        match receive_provider_notification(runtime, &self.subscription_id).await {
+        match receive_provider_notification(runtime, &self.subscription_id, self.native_activity)
+            .await
+        {
             Ok(ProviderNotification::Changed(changed)) => {
                 Ok(ReconnectingProviderNotification::Changed(changed))
             }
             Ok(ProviderNotification::UsageChanged(changed)) => {
                 Ok(ReconnectingProviderNotification::UsageChanged(changed))
             }
+            Ok(ProviderNotification::NativeActivityChanged(changed)) => Ok(
+                ReconnectingProviderNotification::NativeActivityChanged(changed),
+            ),
             Ok(ProviderNotification::Ended(ended)) => {
                 self.runtime = None;
                 self.terminal = true;
@@ -1182,7 +1256,8 @@ impl ReconnectingProviderSubscription {
 
     async fn reconnect(&mut self) -> Result<WatchProvidersResult, ClientError> {
         let (runtime, started) =
-            open_provider_stream(&self.locator, &self.options, self.policy).await?;
+            open_provider_stream(&self.locator, &self.options, &self.params, self.policy).await?;
+        self.native_activity = negotiated_provider_watch(&runtime, &self.params).native_activity;
         self.subscription_id.clone_from(&started.subscription_id);
         self.started = started.clone();
         self.runtime = Some(runtime);
@@ -1990,19 +2065,29 @@ async fn open_event_stream(
     .await
 }
 
+fn negotiated_provider_watch(
+    runtime: &RuntimeClient,
+    requested: &WatchProvidersParams,
+) -> WatchProvidersParams {
+    WatchProvidersParams {
+        native_activity: requested.native_activity
+            && runtime
+                .initialization()
+                .server_capabilities
+                .provider_native_activity_watch,
+    }
+}
+
 async fn open_provider_stream(
     locator: &RuntimeLocator,
     options: &ClientOptions,
+    params: &WatchProvidersParams,
     policy: ReconnectPolicy,
 ) -> Result<(RuntimeClient, WatchProvidersResult), ClientError> {
     open_read_stream(locator, options, policy, || {
         async move |runtime: &mut RuntimeClient| {
-            runtime
-                .call(
-                    RuntimeMethod::ProvidersWatch,
-                    &WatchProvidersParams::default(),
-                )
-                .await
+            let params = negotiated_provider_watch(runtime, params);
+            runtime.call(RuntimeMethod::ProvidersWatch, &params).await
         }
     })
     .await
@@ -2223,6 +2308,7 @@ mod tests {
         let initialize: JsonRpcRequest =
             serde_json::from_slice(&receive_test_frame(&mut stream).await)
                 .expect("decode initialize request");
+        assert_eq!(initialize.method, RuntimeMethod::Initialize.to_string());
         let initialized = InitializeResult {
             selected_revision: runtrol_runtime_protocol::REVISION_2026_08_13,
             runtime: runtrol_runtime_protocol::RuntimeInstance {
@@ -2232,8 +2318,10 @@ mod tests {
                 build_digest: None,
             },
             server_capabilities: runtrol_runtime_protocol::RuntimeCapabilities {
+                window_workspace_folders_update: true,
                 integration_enrollment: true,
                 provider_inventory: true,
+                provider_native_activity_watch: false,
                 managed_session_list: true,
                 model_discovery: true,
                 native_session_catalogue: true,
@@ -2266,7 +2354,7 @@ mod tests {
     }
 
     async fn serve_reconnect_fixture(
-        mut stream: fake_transport::Stream,
+        stream: fake_transport::Stream,
         instance_id: &str,
         expected_after: EventCursor,
         next_expected: EventCursor,
@@ -2274,67 +2362,7 @@ mod tests {
         subscription_id: &str,
         send_event: bool,
     ) -> WatchEventsParams {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("test clock follows Unix epoch");
-        let challenge = JsonRpcNotification {
-            jsonrpc: "2.0".to_owned(),
-            method: RuntimeMethod::Challenge.to_string(),
-            params: serde_json::to_value(ServerChallenge {
-                instance_id: instance_id.to_owned(),
-                nonce_id: "nonce_0123456789abcdef0123456789abcdef".to_owned(),
-                nonce: Base64UrlUnpadded::encode_string(&[3; 32]),
-                expires_at_ms: u64::try_from(now.as_millis())
-                    .expect("test milliseconds fit u64")
-                    .saturating_add(1_000),
-            })
-            .expect("encode challenge"),
-        };
-        send_test_json(&mut stream, &challenge).await;
-
-        let initialize: JsonRpcRequest =
-            serde_json::from_slice(&receive_test_frame(&mut stream).await)
-                .expect("decode initialize request");
-        assert_eq!(initialize.method, RuntimeMethod::Initialize.to_string());
-        let initialized = runtrol_runtime_protocol::InitializeResult {
-            selected_revision: runtrol_runtime_protocol::REVISION_2026_08_13,
-            runtime: runtrol_runtime_protocol::RuntimeInstance {
-                instance_id: instance_id.to_owned(),
-                version: "0.1.1".to_owned(),
-                platform: "test".to_owned(),
-                build_digest: None,
-            },
-            server_capabilities: runtrol_runtime_protocol::RuntimeCapabilities {
-                integration_enrollment: true,
-                provider_inventory: true,
-                managed_session_list: true,
-                model_discovery: true,
-                native_session_catalogue: true,
-                session_control: true,
-                session_events: true,
-                terminal_surface: false,
-                terminal_input_priority: false,
-                grant_scope_projection: false,
-            },
-            limits: runtrol_runtime_protocol::RuntimeLimits::default(),
-            grant: None,
-        };
-        send_test_json(
-            &mut stream,
-            &JsonRpcResponse::Success(SuccessResponse {
-                jsonrpc: "2.0".to_owned(),
-                id: initialize.id,
-                result: serde_json::to_value(initialized).expect("encode initialization result"),
-            }),
-        )
-        .await;
-
-        let initialized: JsonRpcNotification =
-            serde_json::from_slice(&receive_test_frame(&mut stream).await)
-                .expect("decode initialized notification");
-        assert_eq!(initialized.method, RuntimeMethod::Initialized.to_string());
-        let watch: JsonRpcRequest = serde_json::from_slice(&receive_test_frame(&mut stream).await)
-            .expect("decode watch request");
+        let (mut stream, watch) = serve_request_fixture(stream, instance_id).await;
         assert_eq!(watch.method, RuntimeMethod::SessionsWatchEvents.to_string());
         let params: WatchEventsParams =
             serde_json::from_value(watch.params).expect("decode watch parameters");

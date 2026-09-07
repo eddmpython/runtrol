@@ -406,8 +406,8 @@ fn verify_exit_status(directory: &str) -> Result<(), String> {
             "the keeper returned the wrong provider status: {status}"
         ));
     }
-    guard
-        .complete()
+    runtime
+        .block_on(guard.complete())
         .map_err(|error| format!("could not complete the natural exit guard: {error}"))?;
     verify_no_guard_records(directory)
 }
@@ -558,8 +558,8 @@ fn verify_update_rename(directory: &str) -> Result<(), String> {
         if status.code() != Some(0) {
             return Err(format!("the {label} session ended with {status}"));
         }
-        guard
-            .complete()
+        runtime
+            .block_on(guard.complete())
             .map_err(|error| format!("could not complete the {label} session guard: {error}"))
     };
 

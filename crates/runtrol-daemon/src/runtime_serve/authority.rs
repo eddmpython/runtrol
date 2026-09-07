@@ -236,6 +236,7 @@ pub(super) fn required_scope(method: RuntimeMethod) -> Option<AppScope> {
         | RuntimeMethod::ProvidersChanged
         | RuntimeMethod::ProvidersWatchEnded
         | RuntimeMethod::ProvidersUsageChanged
+        | RuntimeMethod::ProvidersNativeActivityChanged
         | RuntimeMethod::SessionsEvent
         | RuntimeMethod::SessionsLagged
         | RuntimeMethod::SessionsIndexChanged

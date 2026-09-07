@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Provider watches can opt into native activity and catalogue revisions when the connected Runtime advertises
+  support. The subscription exposes whether negotiation succeeded so older Runtime observation remains explicit.
+- Observe validated Runtime generation changes through one cancellable directory watch. Incarnation revisions
+  distinguish same-build restarts, and cancellation joins pending verification before observation ends.
+- Supporting Runtimes accept workspace-folder updates without replacing window registration or input proof.
 - Add `session.input.priority` and `terminalInputPriority` capability discovery for owner-approved terminal
   input precedence. Earlier Runtime generations retain their original control policy.
 - Terminal control acquisition can require that no unexpired holder exists through `onlyIfFree`.

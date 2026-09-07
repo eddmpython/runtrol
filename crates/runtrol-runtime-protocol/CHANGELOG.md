@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Advertise optional native activity on provider subscriptions. Explicit opt-in requires native-discovery authority;
+  existing provider watches keep their notification vocabulary.
+- Advertise optional workspace-folder updates that preserve window registration and owner input authority.
+  Older peers omit the new capability and retain terminal-only updates.
 - Advertise owner-approved terminal input precedence and negotiate grant scope projection for older clients.
   Missing capability fields retain the previous initialization and input behavior.
 - Terminal control acquisition accepts `onlyIfFree` to atomically refuse replacing an unexpired holder.

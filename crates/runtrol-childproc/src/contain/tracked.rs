@@ -709,16 +709,19 @@ impl ChildGuard {
     ///
     /// [`SpawnError::Containment`] when residual descendants cannot be stopped or the durable record cannot be
     /// removed.
-    pub fn complete(&mut self) -> Result<(), SpawnError> {
+    #[cfg_attr(
+        not(windows),
+        expect(
+            clippy::unused_async,
+            reason = "Windows completion awaits its exact private Job proof"
+        )
+    )]
+    pub async fn complete(&mut self) -> Result<(), SpawnError> {
         #[cfg(windows)]
         if let Some(job) = &self.command_job {
-            job.request_stop()?;
-            if !job.is_empty()? {
-                return Err(SpawnError::Containment {
-                    doing: "completing a command Job",
-                    detail: "command descendants have not stopped".to_owned(),
-                });
-            }
+            // A natural root exit does not complete the keeper's independent descendant proof.
+            // Keep ownership through failed or cancelled waits; only confirmed completion retires it.
+            job.stop().await?;
             self.command_job.take();
         }
         #[cfg(unix)]
@@ -727,22 +730,6 @@ impl ChildGuard {
             tracked.finished = true;
         }
         Ok(())
-    }
-
-    #[cfg_attr(
-        not(windows),
-        expect(
-            clippy::unused_async,
-            reason = "Windows capture waits asynchronously for its private Job"
-        )
-    )]
-    pub(crate) async fn complete_capture(&mut self) -> Result<(), SpawnError> {
-        #[cfg(windows)]
-        if let Some(job) = &self.command_job {
-            job.stop().await?;
-            self.command_job.take();
-        }
-        self.complete()
     }
 
     /// Close the exact keeper's private control channel, reap it, and remove the durable record after no group member

@@ -250,6 +250,35 @@ impl Provider for CodexProvider {
         }
     }
 
+    async fn native_observation(
+        &self,
+    ) -> Result<runtrol_provider::NativeProcessObservation, ProviderError> {
+        let roster = self.roster.clone();
+        let provider = self.id;
+        ROSTER_SCAN
+            .run(
+                provider,
+                "observing native structural metadata",
+                move || roster.observation(provider),
+            )
+            .await
+    }
+
+    async fn watch_native_activity(
+        &self,
+    ) -> Result<Option<Box<dyn runtrol_provider::NativeActivityWatch>>, ProviderError> {
+        if !cfg!(windows) {
+            return Ok(None);
+        }
+        let roster = self.roster.clone();
+        let provider = self.id;
+        ROSTER_SCAN
+            .run(provider, "watching native structural sources", move || {
+                roster.watch(provider, &ROSTER_SCAN).map(Some)
+            })
+            .await
+    }
+
     async fn delete_native_session(
         &self,
         deletion: NativeSessionDeletion,

@@ -48,6 +48,7 @@ pub mod local_terminal;
 pub mod os_window;
 #[cfg(windows)]
 mod process_attributes;
+pub mod process_exit;
 pub mod process_tree;
 pub mod pty;
 pub mod resolve;
@@ -75,6 +76,7 @@ pub use footprint::resident_bytes;
 pub use handoff::keep_handles_to_ourselves;
 pub use held::{holder_of, holder_of_here, write_locked};
 pub use local_terminal::{LocalTerminal, LocalTerminalSize};
+pub use process_exit::ProcessExit;
 pub use process_tree::{ProcessTree, ProcessTreeError, process_identity};
 #[cfg(windows)]
 pub use pty::PtyResume;

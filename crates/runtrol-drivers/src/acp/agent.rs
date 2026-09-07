@@ -758,6 +758,7 @@ impl Agent for AcpAgent {
                     return self
                         .child_guard
                         .complete()
+                        .await
                         .map_err(|error| ProviderError::Io {
                             provider: self.provider,
                             doing: "completing ACP process containment",

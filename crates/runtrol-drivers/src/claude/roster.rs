@@ -30,10 +30,13 @@ use std::fs;
 use std::path::PathBuf;
 
 use runtrol_provider::{
-    NativeProcessActivity, NativeProcessBinding, NativeSessionId, NativeTerminalAccess,
-    NativeTerminalTarget, ProviderError, ProviderId,
+    NativeProcessActivity, NativeProcessBinding, NativeProcessObservation, NativeSessionId,
+    NativeTerminalAccess, NativeTerminalTarget, ProviderError, ProviderId,
 };
 use serde::Deserialize;
+use sha2::{Digest as _, Sha256};
+
+use crate::native_watch::NativeSource;
 
 use crate::claude::activity::TranscriptActivity;
 use crate::claude::home::{HomeProblem, config_directory};
@@ -86,6 +89,16 @@ struct Record {
     /// Opaque background job identity accepted by the provider's `attach` and `stop` commands.
     #[serde(default)]
     job_id: Option<String>,
+    /// The provider's nameplate and its revision markers, never a transcript field.
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    name_since: Option<Box<serde_json::value::RawValue>>,
+    #[serde(default)]
+    name_source: Option<String>,
+    /// Detects a completed turn even when both observations see the same idle state.
+    #[serde(default)]
+    status_updated_at: Option<Box<serde_json::value::RawValue>>,
 }
 
 /// The one honest route into a live terminal session: the provider's own attachment command.
@@ -116,6 +129,7 @@ pub(super) struct ClaudeRoster {
     /// Whether an editor-panel session is answering, read from its transcript because such a session writes no
     /// status into the roster. Cheap and cached: an unchanged transcript is one `stat`.
     transcript: TranscriptActivity,
+    source: NativeSource,
 }
 
 impl ClaudeRoster {
@@ -130,6 +144,7 @@ impl ClaudeRoster {
         Self {
             sessions: config.map(|directory| directory.join(SESSIONS_DIRECTORY)),
             transcript: TranscriptActivity::new(projects),
+            source: NativeSource::default(),
         }
     }
 
@@ -138,6 +153,7 @@ impl ClaudeRoster {
         Self {
             sessions: Ok(sessions),
             transcript: TranscriptActivity::new(None),
+            source: NativeSource::default(),
         }
     }
 
@@ -171,7 +187,48 @@ impl ClaudeRoster {
         &self,
         provider: ProviderId,
     ) -> Result<NativeProcessActivity, ProviderError> {
-        let records = self.live_records(provider)?;
+        Ok(self.observation(provider)?.activity)
+    }
+
+    pub(super) fn watch(
+        &self,
+        provider: ProviderId,
+        scan: &'static crate::roster_scan::RosterScan,
+    ) -> Result<Box<dyn runtrol_provider::NativeActivityWatch>, ProviderError> {
+        let home = self
+            .sessions
+            .as_ref()
+            .map_or(None, |path| path.parent())
+            .ok_or_else(|| ProviderError::Protocol {
+                provider,
+                doing: "locating native structural observation sources",
+                detail: "the provider configuration directory is unavailable".to_owned(),
+            })?;
+        self.source.watch(
+            provider,
+            home,
+            scan,
+            &[
+                SESSIONS_DIRECTORY,
+                super::store::PROJECTS_DIRECTORY,
+                super::store::HISTORY_FILE,
+            ],
+        )
+    }
+
+    pub(super) fn observation(
+        &self,
+        provider: ProviderId,
+    ) -> Result<NativeProcessObservation, ProviderError> {
+        let mut records = self.live_records(provider)?;
+        records.sort_by(|left, right| {
+            left.session_id
+                .cmp(&right.session_id)
+                .then(left.pid.cmp(&right.pid))
+        });
+        let mut signature = Sha256::new();
+        let mut identities = Vec::new();
+        let mut unknown = BTreeSet::new();
         // A conversation continued in a second process is named by two records, so each answer is a set.
         let mut live = BTreeSet::new();
         let mut active = BTreeSet::new();
@@ -185,13 +242,59 @@ impl ClaudeRoster {
             live.insert(native.clone());
             // A record with a status says whether it is answering; a panel session writes none, so its turn
             // is read from its transcript instead. Only a session with no status pays that read.
-            let is_answering = match entry.status.as_deref() {
-                Some(status) => status == BUSY,
-                None => self.transcript.answering(entry.session_id.as_str()),
-            };
-            if is_answering {
-                active.insert(native.clone());
+            let identity = runtrol_childproc::process_identity(entry.pid);
+            let metadata = self.transcript.observation(
+                entry.session_id.as_str(),
+                identity,
+                entry.status.is_none(),
+            );
+            if metadata.unavailable {
+                return Err(ProviderError::Protocol {
+                    provider,
+                    doing: "reading current native structural metadata",
+                    detail: "the original session metadata is temporarily unavailable".into(),
+                });
             }
+            let model = match entry.status.as_deref() {
+                Some(BUSY) => Some(true),
+                Some("idle" | "waiting") => Some(false),
+                Some(_) => None,
+                None => metadata.model,
+            };
+            signature.update(metadata.revision);
+            match model {
+                Some(true) => {
+                    active.insert(native.clone());
+                }
+                None => {
+                    unknown.insert(native.clone());
+                }
+                Some(false) => {}
+            }
+            if let Some(identity) = identity {
+                identities.push(identity);
+                signature.update(identity.started().to_le_bytes());
+            }
+            // Length-delimited fields avoid concatenation aliases. No nameplate leaves the driver here.
+            for value in [
+                Some(entry.session_id.as_str()),
+                entry.cwd.as_deref(),
+                entry.name.as_deref(),
+                entry
+                    .name_since
+                    .as_deref()
+                    .map(serde_json::value::RawValue::get),
+                entry.name_source.as_deref(),
+                entry
+                    .status_updated_at
+                    .as_deref()
+                    .map(serde_json::value::RawValue::get),
+            ] {
+                let bytes = value.unwrap_or_default().as_bytes();
+                signature.update((bytes.len() as u64).to_le_bytes());
+                signature.update(bytes);
+            }
+            signature.update(entry.pid.to_le_bytes());
             processes.push(NativeProcessBinding {
                 pid: entry.pid,
                 native,
@@ -199,11 +302,42 @@ impl ClaudeRoster {
                 terminal_access: terminal_access(&entry),
             });
         }
-        Ok(NativeProcessActivity {
-            live: live.into_iter().collect(),
-            active: active.into_iter().collect(),
-            processes,
+        self.transcript.retain(&live);
+        if let Some(stamp) = self.catalogue_stamp(provider)? {
+            signature.update(stamp);
+        }
+        // A second live writer proving activity is stronger than another writer's unavailable proof.
+        unknown.retain(|native| !active.contains(native));
+        let revision = self
+            .source
+            .record(provider, signature.finalize().into(), identities)?;
+        Ok(NativeProcessObservation {
+            activity: NativeProcessActivity {
+                live: live.into_iter().collect(),
+                active: active.into_iter().collect(),
+                processes,
+            },
+            catalogue_revision: Some(revision),
+            unknown_activity: unknown.into_iter().collect(),
         })
+    }
+
+    fn catalogue_stamp(&self, provider: ProviderId) -> Result<Option<[u8; 32]>, ProviderError> {
+        let Ok(sessions) = &self.sessions else {
+            return Ok(None);
+        };
+        let Some(home) = sessions.parent() else {
+            return Ok(None);
+        };
+        // This is the catalogue's existing fallback name index. Late publication invalidates names
+        // without reading a display value here or implying that the model is working.
+        crate::native_watch::catalogue_stamp(&home.join(super::store::HISTORY_FILE))
+            .map(Some)
+            .map_err(|error| ProviderError::Protocol {
+                provider,
+                doing: "observing provider catalogue metadata",
+                detail: error.to_string(),
+            })
     }
 
     /// Whether any still-live process of this CLI owns the selected conversation, regardless of turn state.
@@ -246,25 +380,37 @@ impl ClaudeRoster {
             if path.extension().and_then(|extension| extension.to_str()) != Some(RECORD_EXTENSION) {
                 continue;
             }
-            let Ok(metadata) = record.metadata() else {
-                // Gone between being listed and being asked about: a process that ended while this ran is not
-                // one this answer is about.
-                continue;
+            // A provider can rewrite a live process record in place. Its filename proves a live
+            // writer can still be publishing, so an incomplete read is unavailable, never an exit.
+            let writer_alive = path
+                .file_stem()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.parse::<u32>().is_ok_and(runtrol_childproc::alive));
+            let unreadable = || {
+                read_failure(std::io::Error::other(
+                    "a live process roster record is not completely readable",
+                ))
+            };
+            let metadata = match record.metadata() {
+                Ok(metadata) => metadata,
+                Err(_) if writer_alive => return Err(unreadable()),
+                Err(_) => continue,
             };
             if !metadata.is_file() || metadata.len() > MAX_RECORD_BYTES {
+                if writer_alive {
+                    return Err(unreadable());
+                }
                 continue;
             }
-            let Ok(text) = fs::read_to_string(&path) else {
-                // The provider replaces and rewrites these small records. A path may disappear or become
-                // temporarily unreadable between metadata and read; the next 250 ms observation retries it.
-                // Treating the entire roster as absent would hide every other live conversation.
-                continue;
+            let text = match fs::read_to_string(&path) {
+                Ok(text) => text,
+                Err(_) if writer_alive => return Err(unreadable()),
+                Err(_) => continue,
             };
-            let Ok(entry) = serde_json::from_str::<Record>(&text) else {
-                // The CLI owns this file and rewrites it whenever a status changes, so a read can land on a
-                // half-written one. Stepping over it costs one round: the next poll reads the finished file.
-                // Reporting it would turn the CLI's own write into an error about the panel.
-                continue;
+            let entry = match serde_json::from_str::<Record>(&text) {
+                Ok(entry) => entry,
+                Err(_) if writer_alive => return Err(unreadable()),
+                Err(_) => continue,
             };
             let alive = match entry.proc_start.as_deref() {
                 Some(start) => start
@@ -544,5 +690,44 @@ mod tests {
             .running(claude())
             .expect("a missing roster is not a failure");
         assert!(running.is_empty());
+    }
+
+    #[test]
+    fn an_incomplete_live_writer_record_is_unavailable_instead_of_an_exit() {
+        let name = format!("{}.json", std::process::id());
+        let (_kept, roster) = roster(&[(&name, "{\"pid\":".to_owned())]);
+        assert!(roster.observation(claude()).is_err());
+    }
+
+    #[test]
+    fn a_late_fallback_title_index_invalidates_catalogue_without_changing_activity() {
+        let (kept, _unused) = roster(&[]);
+        let sessions = kept.0.join(SESSIONS_DIRECTORY);
+        fs::create_dir(&sessions).expect("isolated provider roster");
+        fs::write(
+            sessions.join("owner.json"),
+            record(
+                std::process::id(),
+                "dddddddd-0000-4000-8000-000000000001",
+                "idle",
+            ),
+        )
+        .expect("provider owns an idle conversation");
+        let roster = ClaudeRoster::at(sessions);
+        let first = roster
+            .observation(claude())
+            .expect("no published title index");
+        fs::write(kept.0.join(super::super::store::HISTORY_FILE), b"{}\n")
+            .expect("provider creates its metadata index");
+        let second = roster.observation(claude()).expect("index appears");
+        assert_ne!(first.catalogue_revision, second.catalogue_revision);
+        assert_eq!(first.activity, second.activity);
+        assert_eq!(
+            second.catalogue_revision,
+            roster
+                .observation(claude())
+                .expect("unchanged index")
+                .catalogue_revision
+        );
     }
 }

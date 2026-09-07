@@ -83,6 +83,20 @@ fn an_older_hello_does_not_claim_terminal_input_priority() {
 }
 
 #[test]
+fn an_older_hello_does_not_claim_native_activity_watch() {
+    for (_, mut fixture) in corpus() {
+        fixture
+            .get_mut("serverCapabilities")
+            .expect("capability field")
+            .as_object_mut()
+            .expect("capability object")
+            .remove("providerNativeActivityWatch");
+        let parsed: InitializeResult = serde_json::from_value(fixture).expect("older hello shape");
+        assert!(!parsed.server_capabilities.provider_native_activity_watch);
+    }
+}
+
+#[test]
 fn the_current_hello_shape_is_in_the_corpus() {
     let current = InitializeResult {
         selected_revision: REVISION_2026_08_27,
@@ -93,8 +107,10 @@ fn the_current_hello_shape_is_in_the_corpus() {
             build_digest: Some("0".repeat(64)),
         },
         server_capabilities: RuntimeCapabilities {
+            window_workspace_folders_update: true,
             integration_enrollment: true,
             provider_inventory: true,
+            provider_native_activity_watch: false,
             managed_session_list: true,
             model_discovery: true,
             native_session_catalogue: true,
@@ -126,4 +142,18 @@ fn the_current_hello_shape_is_in_the_corpus() {
         "the current hello shape is not in the corpus (checked {shapes:?}). Add a fixture for it \
          to hello_corpus/ so future clients are forced to keep reading this exact shape.",
     );
+}
+
+#[test]
+fn an_older_hello_does_not_claim_workspace_folder_updates() {
+    for (_, mut fixture) in corpus() {
+        fixture
+            .get_mut("serverCapabilities")
+            .expect("hello capabilities")
+            .as_object_mut()
+            .unwrap()
+            .remove("windowWorkspaceFoldersUpdate");
+        let parsed: InitializeResult = serde_json::from_value(fixture).unwrap();
+        assert!(!parsed.server_capabilities.window_workspace_folders_update);
+    }
 }

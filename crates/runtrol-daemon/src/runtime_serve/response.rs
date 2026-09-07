@@ -123,6 +123,7 @@ impl Answer {
         result: &WatchProvidersResult,
         updates: watch::Receiver<Arc<ProviderList>>,
         usage: watch::Receiver<Arc<ProviderUsageList>>,
+        native: Option<watch::Receiver<Arc<crate::native_activity::NativeSnapshot>>>,
         authority: AuthorizedIntegration,
     ) -> Self {
         Self {
@@ -133,6 +134,7 @@ impl Answer {
                 last: result.snapshot.clone(),
                 updates,
                 usage,
+                native,
                 authority,
             }),
         }

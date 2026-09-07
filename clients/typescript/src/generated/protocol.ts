@@ -175,6 +175,9 @@ export type MutationRequestId = string;
 /** The conversations of one provider owned by live processes and the subset answering right now. */
 export interface NativeActivity { readonly active: ReadonlyArray<string>; readonly attachable?: ReadonlyArray<string>; readonly focusable?: ReadonlyArray<string>; readonly live?: ReadonlyArray<string>; readonly providerId: ProviderId; }
 
+/** One provider's structural activity proof, carried only by an opted-in provider watch. */
+export type NativeActivityObservation = { readonly activity: NativeActivity; readonly catalogueRevision?: string | null; readonly state: "observed"; readonly unknownActivity: ReadonlyArray<string>; } | { readonly providerId: ProviderId; readonly state: "unavailable"; };
+
 /** Ask which of one provider's conversations have a model answering right now.
 
 Separate from the catalogue because it is asked often and the catalogue is not cheap: on the machine this
@@ -293,6 +296,9 @@ export interface ProviderWatchEndedNotification { readonly reason: ProviderWatch
 /** A changed complete provider inventory snapshot. */
 export interface ProvidersChangedNotification { readonly snapshot: ProviderList; readonly subscriptionId: string; }
 
+/** Complete bounded native activity snapshot delivered on the existing provider watch. */
+export interface ProvidersNativeActivityChangedNotification { readonly snapshot: ReadonlyArray<NativeActivityObservation>; readonly subscriptionId: string; }
+
 /** A changed account usage snapshot, delivered on the provider inventory subscription.
 
 Usage moves with every turn and every probe; a subscriber draws it the moment it changes instead of
@@ -332,7 +338,7 @@ export type RuntimeApprovalOptionKind = "allowOnce" | "allowAlways" | "rejectOnc
 export type RuntimeApprovalRisk = "low" | "high";
 
 /** Public product capabilities for the selected revision. */
-export interface RuntimeCapabilities { readonly grantScopeProjection?: boolean; readonly integrationEnrollment: boolean; readonly managedSessionList: boolean; readonly modelDiscovery: boolean; readonly nativeSessionCatalogue: boolean; readonly providerInventory: boolean; readonly sessionControl: boolean; readonly sessionEvents: boolean; readonly terminalInputPriority?: boolean; readonly terminalSurface?: boolean; }
+export interface RuntimeCapabilities { readonly grantScopeProjection?: boolean; readonly integrationEnrollment: boolean; readonly managedSessionList: boolean; readonly modelDiscovery: boolean; readonly nativeSessionCatalogue: boolean; readonly providerInventory: boolean; readonly providerNativeActivityWatch?: boolean; readonly sessionControl: boolean; readonly sessionEvents: boolean; readonly terminalInputPriority?: boolean; readonly terminalSurface?: boolean; readonly windowWorkspaceFoldersUpdate?: boolean; }
 
 /** Local transport kind named by the platform locator. */
 export type RuntimeEndpointKind = "namedPipe" | "unixSocket";
@@ -359,7 +365,7 @@ export interface RuntimeLimits { readonly challengeLifetimeMs: number; readonly 
 export interface RuntimeLocatorRecord { readonly generations: ReadonlyArray<RuntimeGeneration>; readonly instanceId: string; readonly schema: number; }
 
 /** A public Runtime method implemented by the initial read-only boundary. */
-export type RuntimeMethod = "runtime/initialize" | "runtime/initialized" | "runtime/challenge" | "integrations/requestEnrollment" | "integrations/watchEnrollment" | "integrations/getGrant" | "integrations/rotateKey" | "providers/usage" | "providers/list" | "providers/watch" | "providers/getCapabilities" | "providers/listModels" | "providers/listNativeSessions" | "providers/nativeActivity" | "providers/focusNative" | "sessions/list" | "sessions/watchIndex" | "sessions/get" | "sessions/start" | "sessions/adoptNative" | "sessions/resume" | "sessions/acquireControl" | "sessions/renewControl" | "sessions/releaseControl" | "sessions/submitInput" | "sessions/submitBlocks" | "sessions/setModel" | "sessions/setMode" | "sessions/watchEvents" | "sessions/interrupt" | "sessions/cool" | "sessions/forget" | "sessions/deleteNative" | "sessions/archiveNative" | "terminals/list" | "terminals/watchIndex" | "terminals/open" | "terminals/attach" | "terminals/acquireControl" | "terminals/renewControl" | "terminals/releaseControl" | "terminals/write" | "windows/inputEnded" | "windows/inputOffered" | "windows/inputReceipt" | "windows/claimInput" | "windows/watchInput" | "terminals/sendText" | "terminals/resize" | "terminals/detach" | "terminals/stop" | "terminals/setDialogue" | "windows/register" | "windows/update" | "windows/list" | "windows/watchIndex" | "windows/mirrorOpen" | "windows/mirrorOutput" | "windows/mirrorEnd" | "windows/reveal" | "windows/watchReveals" | "approvals/listPending" | "approvals/respond" | "sessions/indexChanged" | "sessions/indexEnded" | "providers/changed" | "providers/watchEnded" | "providers/usageChanged" | "sessions/event" | "sessions/lagged" | "terminals/indexChanged" | "terminals/indexEnded" | "terminals/output" | "terminals/lagged" | "terminals/exited" | "windows/indexChanged" | "windows/indexEnded" | "windows/revealRequested" | "windows/revealsEnded" | "runtime/panicStop";
+export type RuntimeMethod = "runtime/initialize" | "runtime/initialized" | "runtime/challenge" | "integrations/requestEnrollment" | "integrations/watchEnrollment" | "integrations/getGrant" | "integrations/rotateKey" | "providers/usage" | "providers/list" | "providers/watch" | "providers/getCapabilities" | "providers/listModels" | "providers/listNativeSessions" | "providers/nativeActivity" | "providers/focusNative" | "sessions/list" | "sessions/watchIndex" | "sessions/get" | "sessions/start" | "sessions/adoptNative" | "sessions/resume" | "sessions/acquireControl" | "sessions/renewControl" | "sessions/releaseControl" | "sessions/submitInput" | "sessions/submitBlocks" | "sessions/setModel" | "sessions/setMode" | "sessions/watchEvents" | "sessions/interrupt" | "sessions/cool" | "sessions/forget" | "sessions/deleteNative" | "sessions/archiveNative" | "terminals/list" | "terminals/watchIndex" | "terminals/open" | "terminals/attach" | "terminals/acquireControl" | "terminals/renewControl" | "terminals/releaseControl" | "terminals/write" | "windows/inputEnded" | "windows/inputOffered" | "windows/inputReceipt" | "windows/claimInput" | "windows/watchInput" | "terminals/sendText" | "terminals/resize" | "terminals/detach" | "terminals/stop" | "terminals/setDialogue" | "windows/register" | "windows/update" | "windows/list" | "windows/watchIndex" | "windows/mirrorOpen" | "windows/mirrorOutput" | "windows/mirrorEnd" | "windows/reveal" | "windows/watchReveals" | "approvals/listPending" | "approvals/respond" | "sessions/indexChanged" | "sessions/indexEnded" | "providers/changed" | "providers/watchEnded" | "providers/usageChanged" | "ProvidersNativeActivityChanged" | "sessions/event" | "sessions/lagged" | "terminals/indexChanged" | "terminals/indexEnded" | "terminals/output" | "terminals/lagged" | "terminals/exited" | "windows/indexChanged" | "windows/indexEnded" | "windows/revealRequested" | "windows/revealsEnded" | "runtime/panicStop";
 
 /** The current model information Runtime can truthfully expose. */
 export type RuntimeModelCatalog = { readonly coverage: "known"; readonly models: ReadonlyArray<RuntimeModelChoice>; } | { readonly aliases: ReadonlyArray<string>; readonly coverage: "aliases"; readonly reasoningEfforts: ReadonlyArray<RuntimeReasoningChoice>; readonly why: string; } | { readonly aliases: ReadonlyArray<string>; readonly coverage: "partial"; readonly models: ReadonlyArray<RuntimeModelChoice>; readonly reasoningEfforts: ReadonlyArray<RuntimeReasoningChoice>; readonly why: string; } | { readonly coverage: "unknown"; readonly why: string; } | { readonly coverage: "unsupported"; readonly why: string; };
@@ -529,7 +535,7 @@ export interface WatchEventsParams { readonly after?: EventCursor | null; readon
 export interface WatchEventsResult { readonly gap?: EventGap | null; readonly liveAt: EventCursor; readonly sessionId: RuntimeSessionId; readonly startsAt: EventCursor; readonly subscriptionId: string; }
 
 /** Install one dedicated provider inventory subscription. */
-export type WatchProvidersParams = Readonly<Record<string, never>>;
+export interface WatchProvidersParams { readonly nativeActivity?: boolean; }
 
 /** Initial provider snapshot and connection-local subscription identity. */
 export interface WatchProvidersResult { readonly snapshot: ProviderList; readonly subscriptionId: string; }
@@ -638,4 +644,4 @@ export interface WindowRevealResult { readonly delivered: boolean; readonly fore
 export interface WindowRevealsEndedNotification { readonly reason: WindowIndexEndReason; readonly subscriptionId: string; }
 
 /** A window publishing the terminals it observes: the whole set, every time something changed. */
-export interface WindowUpdateParams { readonly terminals: ReadonlyArray<ObservedTerminal>; }
+export interface WindowUpdateParams { readonly terminals: ReadonlyArray<ObservedTerminal>; readonly workspaceFolders?: ReadonlyArray<string> | null; }

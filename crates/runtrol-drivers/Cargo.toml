@@ -30,6 +30,8 @@ tokio = { workspace = true, features = ["io-util", "sync", "process", "time", "r
 # The behavioural contract has async methods and is held as `dyn`.
 async-trait = { workspace = true }
 sha2 = { workspace = true }
+# Writer-lock filenames use the provider's UUID identity grammar.
+uuid = { workspace = true }
 
 # The built-in manifests are compiled in as text and read by the same parser an operator file goes through, so the
 # tests that hold them to the schema need it here too.

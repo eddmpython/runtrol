@@ -65,8 +65,11 @@ and refactoring that no user can observe do not belong here.
 
 ### Changed
 
+- New conversations follow the replacement Runtime while existing terminals retain their input, output, and
+  owner-window reveal connections. A late response from an earlier connection cannot replace the current one.
 - Background provider observation reuses verified installation metadata and avoids repeatedly searching for
-  conversation files that have not appeared yet. Canceled discovery cannot accumulate blocking roster scans.
+  conversation files that have not appeared yet. Unrelated provider cache writes no longer request a full native
+  observation. Canceled discovery cannot accumulate blocking roster scans.
 - Project change counts recover after a Git timeout, repository initialization, or first commit without reloading
   the window. Failed reads show a reason, and Look again retries them. Concurrent changes share one read per project.
 
@@ -89,7 +92,10 @@ and refactoring that no user can observe do not belong here.
 
 ### Fixed
 
+- Narrow project headings wrap repository details so large addition and deletion counts remain visible.
 - Account status changes update usage and recovery actions even when the installed CLI has not changed.
+- A failed terminal screen snapshot no longer prevents the next view from recovering the screen. Existing input
+  and live output remain available throughout the snapshot failure.
 - Resizing a quiet terminal can regain expired control without taking input or geometry authority from another window.
 - Provider-owned conversation titles refresh after an observed native turn ends, even when the conversation
   was already listed before its title appeared.

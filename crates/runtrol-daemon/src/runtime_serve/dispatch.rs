@@ -84,7 +84,16 @@ pub(super) async fn dispatch_public(
                 providers_usage(state, composed, usage, id, params).await
             }
             RuntimeMethod::ProvidersWatch => {
-                providers_watch(state, composed, provider_updates, usage_updates, id, params).await
+                providers_watch(
+                    state,
+                    composed,
+                    discovering,
+                    provider_updates,
+                    usage_updates,
+                    id,
+                    params,
+                )
+                .await
             }
             RuntimeMethod::ProvidersGetCapabilities => {
                 get_provider_capabilities(state, composed, discovering, id, params).await
@@ -199,6 +208,7 @@ pub(super) async fn dispatch_public(
             | RuntimeMethod::ProvidersChanged
             | RuntimeMethod::ProvidersWatchEnded
             | RuntimeMethod::ProvidersUsageChanged
+            | RuntimeMethod::ProvidersNativeActivityChanged
             | RuntimeMethod::SessionsEvent
             | RuntimeMethod::SessionsLagged
             | RuntimeMethod::SessionsIndexChanged

@@ -206,7 +206,7 @@ test("the service choice withdraws on a click elsewhere, on Escape, and when foc
 test("a conversation the Runtime is stopping says so, and is neither running elsewhere nor unavailable", () => {
   const html = sidebarHtml(model({
     projects: [project({
-      rows: [conversation({ key: "claude:stopping", live: true, canOpen: false, canStop: false, stopping: true, blocked: "waiting for the process to exit", spawnedBy: "lead-one" })],
+      rows: [conversation({ key: "claude:stopping", live: true, canOpen: false, canStop: false, stopping: true, activity: "unknown", blocked: "waiting for the process to exit", spawnedBy: "lead-one" })],
     })],
     loose: [],
   }), assets);

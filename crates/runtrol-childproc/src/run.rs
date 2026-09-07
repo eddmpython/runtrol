@@ -271,7 +271,7 @@ async fn collect(
         })?;
         // A descendant can retain a duplicate of a capture pipe even after replacing its stdio.
         // Stop the command scope when its root ends, before waiting for those pipes to reach EOF.
-        child_guard.complete_capture().await?;
+        child_guard.complete().await?;
         Ok::<_, SpawnError>(status)
     };
     let (status, _written, stdout, stderr) = tokio::join!(

@@ -446,19 +446,17 @@ impl TerminalRuntimeAdapter {
                     // `None` is a service that could not be asked, which proves nothing either way. It is
                     // told apart from a service that answered with no live conversation, because the second
                     // is proof that this conversation is free and the first is not.
-                    let answered = match discovering.cached_native_activity(provider).await {
-                        Some(activity) => Some(activity),
-                        None => match prepared.driver.native_process_activity().await {
-                            Ok(activity) => {
-                                discovering
-                                    .remember_native_activity(provider, activity.clone())
-                                    .await;
-                                Some(activity)
-                            }
-                            // A provider that cannot answer about its processes cannot block an open: the
-                            // conversation may simply be stored, which is the common case.
-                            Err(_) => None,
-                        },
+                    let answered = match crate::runtime_serve::observe_native_activity(
+                        composed,
+                        discovering,
+                        provider,
+                    )
+                    .await
+                    {
+                        Ok(Ok(activity)) => Some(activity),
+                        // A failed observation supplies no new ownership proof. The adoption and claim
+                        // checks below retain their existing authority and deny-only guards.
+                        Ok(Err(())) | Err(_) => None,
                     };
                     if let Some(activity) = answered.as_ref() {
                         if resume_would_fork(&activity.live, native_session_id.as_str()) {

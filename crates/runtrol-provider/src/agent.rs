@@ -87,6 +87,46 @@ pub struct NativeProcessActivity {
     pub processes: Vec<NativeProcessBinding>,
 }
 
+/// One content-free observation and the proof its structural metadata can provide.
+///
+/// The catalogue revision is comparable only for the lifetime of this prepared driver. A new driver
+/// starts a new observation source; Runtime must not compare its revision with its predecessor's.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct NativeProcessObservation {
+    /// Current process ownership and positively observed model activity.
+    pub activity: NativeProcessActivity,
+    /// Provider-owned metadata revision. Changed identities, turn boundaries or title metadata can
+    /// advance it; output volume, recency and arbitrary body appends cannot.
+    pub catalogue_revision: Option<u64>,
+    /// Live identities whose current model activity could not be proved. This does not revoke their
+    /// process ownership and must not be interpreted as a completed turn.
+    pub unknown_activity: Vec<NativeSessionId>,
+}
+
+impl From<NativeProcessActivity> for NativeProcessObservation {
+    fn from(activity: NativeProcessActivity) -> Self {
+        Self {
+            activity,
+            catalogue_revision: None,
+            unknown_activity: Vec::new(),
+        }
+    }
+}
+
+/// One provider-owned invalidation source, with no runtime or operating-system type in the SPI.
+///
+/// The owner installs this before its initial observation. A wake asks it to observe again and never
+/// asserts activity by itself. Dropping the watcher ends every resource it owns; dropping an individual
+/// wait must preserve changes for its next waiter.
+#[async_trait]
+pub trait NativeActivityWatch: Send {
+    /// Await an invalidation of the provider's structural observation.
+    ///
+    /// # Errors
+    /// Reports lost or unavailable source proof so Runtime can publish an unavailable observation.
+    async fn changed(&mut self) -> Result<(), ProviderError>;
+}
+
 /// One coding CLI, as runtrol talks to it.
 ///
 /// Stateless and built once per provider at boot, so constructing one must not spawn anything or ask anything.
@@ -226,6 +266,30 @@ pub trait Provider: Send + Sync + 'static {
             active,
             processes: Vec::new(),
         })
+    }
+
+    /// Observe native ownership with provider-owned metadata invalidation and unknown activity proof.
+    ///
+    /// The default adapts the established activity SPI. It does not invent catalogue invalidations
+    /// for a driver that has not measured a structural metadata source.
+    ///
+    /// # Errors
+    /// Any failure of the provider's own bounded read-only observation.
+    async fn native_observation(&self) -> Result<NativeProcessObservation, ProviderError> {
+        self.native_process_activity().await.map(Into::into)
+    }
+
+    /// Install an owned structural change source before the initial native observation.
+    ///
+    /// `None` explicitly means this provider cannot be waited on through its registered surface.
+    /// No transcript is retained, and no provider program is started to create a watcher.
+    ///
+    /// # Errors
+    /// Reports unavailable source proof. Dropping the future begins cleanup of everything it created.
+    async fn watch_native_activity(
+        &self,
+    ) -> Result<Option<Box<dyn NativeActivityWatch>>, ProviderError> {
+        Ok(None)
     }
 
     /// Whether [`Self::native_sessions`] answers a query with no folder by naming every

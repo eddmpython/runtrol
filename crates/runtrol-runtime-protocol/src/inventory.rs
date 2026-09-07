@@ -328,7 +328,12 @@ pub struct ProviderUsageWindow {
 /// Install one dedicated provider inventory subscription.
 #[derive(Clone, Debug, Default, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct WatchProvidersParams {}
+pub struct WatchProvidersParams {
+    /// Opt into native structural observations on this subscription. Requires `SessionNativeDiscover`
+    /// in addition to `ProviderRead`. Omitted by older clients and never enabled on their behalf.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub native_activity: bool,
+}
 
 /// Initial provider snapshot and connection-local subscription identity.
 #[derive(Clone, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]

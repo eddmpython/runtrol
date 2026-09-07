@@ -14,6 +14,8 @@
 
 use std::path::Path;
 
+use runtrol_provider::ProcessIdentity;
+
 /// Whether a live process holds this path in a way that excludes another writer.
 ///
 /// `false` for a path that does not exist, cannot be opened, or is held by nobody. A caller that needs to
@@ -29,19 +31,16 @@ pub const HOLDER_SUBCOMMAND: &str = "who-holds";
 
 /// Print the process holding one path, for a caller that spawned this executable to ask.
 ///
-/// Prints the process identifier alone, or nothing when nobody holds it. The exit code is the answer's
+/// Prints the PID and kernel start stamp, or nothing when nobody holds it. The exit code is the answer's
 /// presence so a caller that cannot read output still learns something.
 #[must_use]
 pub fn run_who_holds(path: &Path) -> bool {
     match platform::holder_of(path) {
-        Some(pid) => {
+        Some(identity) => {
             // A helper whose one line cannot be written has failed to answer, which the exit code then says.
             std::io::Write::write_fmt(
                 &mut std::io::stdout().lock(),
-                format_args!(
-                    "{pid}
-"
-                ),
+                format_args!("{} {}\n", identity.pid(), identity.started()),
             )
             .is_ok()
         }
@@ -54,11 +53,11 @@ pub fn run_who_holds(path: &Path) -> bool {
 /// Costs this process the machinery named there, for the life of the process. It exists for the helper itself
 /// and for tests, which are measuring the answer rather than paying for a Runtime.
 #[must_use]
-pub fn holder_of_here(path: &Path) -> Option<u32> {
+pub fn holder_of_here(path: &Path) -> Option<ProcessIdentity> {
     platform::holder_of(path)
 }
 
-/// Which live process holds this path, when the operating system will say.
+/// Which exact process incarnation holds this path, when the operating system will say.
 ///
 /// [`write_locked`] answers "is somebody holding it"; this answers "who". A CLI that keeps one lock file per
 /// conversation therefore names, for free, the exact process that owns each conversation, which is what binds
@@ -69,12 +68,8 @@ pub fn holder_of_here(path: &Path) -> Option<u32> {
 ///
 /// Measured 2026-08-30 on the operator's machine: asking this of one live `thread-writer-locks/<id>.lock`
 /// returned exactly one holder, `codex.exe` pid 20404, which was the process running that conversation.
-#[expect(
-    clippy::result_map_or_into_option,
-    reason = "this workspace refuses Result::ok because it discards a cause; a helper that printed something other than a process identifier has no cause to keep"
-)]
 #[must_use]
-pub fn holder_of(path: &Path) -> Option<u32> {
+pub fn holder_of(path: &Path) -> Option<ProcessIdentity> {
     // Asked in a helper of its own, not here. Windows answers this through its Restart Manager, and loading
     // that machinery costs the asking process 5.3 MiB of resident memory for the life of the process
     // (measured 2026-08-30: 10.3 MiB before the first ask, 15.6 after it, 15.8 after twenty more). A Runtime
@@ -92,15 +87,37 @@ pub fn holder_of(path: &Path) -> Option<u32> {
     let Ok(answer) = asked else {
         return None;
     };
-    let printed = String::from_utf8_lossy(&answer.stdout);
-    printed.trim().parse().map_or(None, Some)
+    if !answer.status.success() {
+        return None;
+    }
+    parse_holder(&answer.stdout)
+}
+
+#[expect(
+    clippy::result_map_or_into_option,
+    reason = "this workspace refuses Result::ok because it discards a cause; a helper that printed something other than a process identifier has no cause to keep"
+)]
+fn parse_holder(bytes: &[u8]) -> Option<ProcessIdentity> {
+    let text = std::str::from_utf8(bytes).map_or(None, Some)?;
+    let mut fields = text.split_ascii_whitespace();
+    let pid = fields.next()?.parse().map_or(None, Some)?;
+    let started = fields.next()?.parse().map_or(None, Some)?;
+    if fields.next().is_some() {
+        return None;
+    }
+    ProcessIdentity::new(pid, started)
 }
 
 #[cfg(windows)]
 mod platform {
+    use windows_sys::Win32::Foundation::ERROR_SUCCESS;
+    use windows_sys::Win32::System::RestartManager::RM_PROCESS_INFO;
+
     use std::fs::OpenOptions;
     use std::os::windows::fs::OpenOptionsExt as _;
     use std::path::Path;
+
+    use runtrol_provider::ProcessIdentity;
 
     /// Deny every other handle for the length of this open. A writer that already has the file open makes
     /// this fail with a sharing violation, which is the answer.
@@ -128,19 +145,18 @@ mod platform {
         unsafe_code,
         reason = "the Restart Manager is a C API with no safe wrapper; each call is documented at its site"
     )]
-    pub(super) fn holder_of(path: &Path) -> Option<u32> {
+    pub(super) fn holder_of(path: &Path) -> Option<ProcessIdentity> {
         use std::os::windows::ffi::OsStrExt as _;
 
         use windows_sys::Win32::System::RestartManager::{
-            RM_PROCESS_INFO, RmEndSession, RmGetList, RmRegisterResources, RmStartSession,
+            RmEndSession, RmGetList, RmRegisterResources, RmStartSession,
         };
 
         /// The session key buffer the API fills, sized by its own documented maximum plus the terminator.
         const SESSION_KEY_LEN: usize = 33;
-        /// One lock file has one holder; a handful of slots covers a surprise without a second call.
+        /// Bound the resource-user snapshot; multiple users cannot identify the locking writer.
         const MAX_HOLDERS: u32 = 8;
         const MAX_HOLDER_SLOTS: usize = MAX_HOLDERS as usize;
-        const SUCCESS: u32 = 0;
 
         if !path.exists() {
             return None;
@@ -154,7 +170,7 @@ mod platform {
         let mut key = [0_u16; SESSION_KEY_LEN];
         // SAFETY: both pointers address local buffers of the sizes this API documents.
         let started = unsafe { RmStartSession(&raw mut session, 0, key.as_mut_ptr()) };
-        if started != SUCCESS {
+        if started != ERROR_SUCCESS {
             return None;
         }
         let files = [wide.as_ptr()];
@@ -171,11 +187,10 @@ mod platform {
             )
         };
         let mut holder = None;
-        if registered == SUCCESS {
+        if registered == ERROR_SUCCESS {
             let mut needed: u32 = 0;
             let mut count: u32 = MAX_HOLDERS;
-            let mut infos =
-                [const { std::mem::MaybeUninit::<RM_PROCESS_INFO>::zeroed() }; MAX_HOLDER_SLOTS];
+            let mut infos = [RM_PROCESS_INFO::default(); MAX_HOLDER_SLOTS];
             let mut reason: u32 = 0;
             // SAFETY: `count` states the slots available and the API writes no more than that; every
             // pointer addresses a local of the declared size.
@@ -184,21 +199,75 @@ mod platform {
                     session,
                     &raw mut needed,
                     &raw mut count,
-                    infos.as_mut_ptr().cast::<RM_PROCESS_INFO>(),
+                    infos.as_mut_ptr(),
                     &raw mut reason,
                 )
             };
-            // More holders than slots still fills the slots, and one of them is the answer wanted.
-            let filled = (listed == SUCCESS || needed > count) && count > 0;
-            if filled && let Some(first) = infos.first() {
-                // SAFETY: the call above initialised at least one entry.
-                let info = unsafe { first.assume_init_ref() };
-                holder = Some(info.Process.dwProcessId);
+            holder = sole_process(listed, count, &infos);
+        }
+        // SAFETY: the session started above receives exactly one close attempt.
+        let closed = unsafe { RmEndSession(session) };
+        if closed != ERROR_SUCCESS {
+            eprintln!("Restart Manager session close failed with OS code {closed}");
+            return None;
+        }
+        holder
+    }
+
+    // Restart Manager lists users, not which user holds a byte-range lock. An incomplete or
+    // ambiguous snapshot proves no unique candidate, even if its first entry looks usable.
+    fn sole_process(status: u32, count: u32, infos: &[RM_PROCESS_INFO]) -> Option<ProcessIdentity> {
+        if status != ERROR_SUCCESS || count != 1 {
+            return None;
+        }
+        let process = &infos.first()?.Process;
+        let started = (u64::from(process.ProcessStartTime.dwHighDateTime) << 32)
+            | u64::from(process.ProcessStartTime.dwLowDateTime);
+        ProcessIdentity::new(process.dwProcessId, started)
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use windows_sys::Win32::Foundation::{ERROR_ACCESS_DENIED, ERROR_MORE_DATA, FILETIME};
+        use windows_sys::Win32::System::RestartManager::RM_UNIQUE_PROCESS;
+
+        use super::*;
+
+        fn user(pid: u32, low: u32, high: u32) -> RM_PROCESS_INFO {
+            RM_PROCESS_INFO {
+                Process: RM_UNIQUE_PROCESS {
+                    dwProcessId: pid,
+                    ProcessStartTime: FILETIME {
+                        dwLowDateTime: low,
+                        dwHighDateTime: high,
+                    },
+                },
+                ..RM_PROCESS_INFO::default()
             }
         }
-        // SAFETY: the session started above is closed exactly once.
-        unsafe { RmEndSession(session) };
-        holder
+
+        #[test]
+        fn only_a_complete_single_user_snapshot_can_name_a_candidate() {
+            let users = [user(42, 100, 1), user(43, 200, 1)];
+            let expected =
+                ProcessIdentity::new(42, (1_u64 << 32) | 0x0064).expect("synthetic birth");
+            assert_eq!(sole_process(ERROR_SUCCESS, 1, &users), Some(expected));
+            assert_eq!(sole_process(ERROR_SUCCESS, 0, &users), None);
+            assert_eq!(sole_process(ERROR_SUCCESS, 2, &users), None);
+            assert_eq!(sole_process(ERROR_SUCCESS, 1, &[]), None);
+            assert_eq!(sole_process(ERROR_SUCCESS, 1, &[user(42, 0, 0)]), None);
+            assert_eq!(sole_process(ERROR_SUCCESS, 1, &[user(0, 100, 1)]), None);
+        }
+
+        #[test]
+        fn partial_and_failed_lists_never_promote_their_first_user() {
+            let users = [user(42, 100, 1), user(43, 200, 1)];
+            for status in [ERROR_MORE_DATA, ERROR_ACCESS_DENIED] {
+                for count in [0, 1, 2, 8, 9] {
+                    assert_eq!(sole_process(status, count, &users), None);
+                }
+            }
+        }
     }
 }
 
@@ -208,10 +277,12 @@ mod platform {
     use std::os::fd::AsRawFd as _;
     use std::path::Path;
 
+    use runtrol_provider::ProcessIdentity;
+
     /// Unix has no portable "who holds this advisory lock" call. `fcntl(F_GETLK)` names a holder for record
     /// locks but not for `flock`, and walking `/proc/*/fd` is Linux only and costs a scan of every process.
     /// Answering `None` keeps the caller honest (no binding known) until a unix user needs one measured here.
-    pub(super) const fn holder_of(_path: &Path) -> Option<u32> {
+    pub(super) const fn holder_of(_path: &Path) -> Option<ProcessIdentity> {
         None
     }
 
@@ -245,6 +316,24 @@ mod tests {
     use super::*;
 
     static NEXT: AtomicUsize = AtomicUsize::new(0);
+
+    #[test]
+    fn helper_reply_preserves_birth_and_refuses_pid_only_or_malformed_answers() {
+        assert_eq!(
+            parse_holder(b"42 134324352000000000\n"),
+            ProcessIdentity::new(42, 134_324_352_000_000_000)
+        );
+        for reply in [
+            b"42".as_slice(),
+            b"42 0",
+            b"0 1",
+            b"42 1 extra",
+            b"42 nope",
+            b"\xff",
+        ] {
+            assert_eq!(parse_holder(reply), None);
+        }
+    }
 
     fn scratch(name: &str) -> std::path::PathBuf {
         let serial = NEXT.fetch_add(1, Ordering::Relaxed);
@@ -294,7 +383,13 @@ mod tests {
             .share_mode(0)
             .open(&path)
             .expect("this process takes the file");
-        assert_eq!(platform::holder_of(&path), Some(std::process::id()));
+        assert_eq!(
+            platform::holder_of(&path),
+            Some(
+                crate::process_identity(std::process::id())
+                    .expect("the fixture has a kernel birth")
+            )
+        );
         drop(holder);
         drop(fs::remove_file(&path));
     }
@@ -317,7 +412,13 @@ mod tests {
             .open(&path)
             .expect("this process takes the file");
         let before = crate::footprint::resident_bytes(std::process::id());
-        assert_eq!(platform::holder_of(&path), Some(std::process::id()));
+        assert_eq!(
+            platform::holder_of(&path),
+            Some(
+                crate::process_identity(std::process::id())
+                    .expect("the fixture has a kernel birth")
+            )
+        );
         let once = crate::footprint::resident_bytes(std::process::id());
         for _ in 0..20 {
             let _asked = platform::holder_of(&path);

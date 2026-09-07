@@ -80,6 +80,8 @@ The page has three zones with visible edges, in this order:
   its deepest registered project's accent in both its tab and its open sidebar row. Rows have no left colour bar.
   Closed rows keep their muted provider icon; project headings and conversation titles remain readable without colour,
   following [W3C's use-of-colour guidance](https://www.w3.org/WAI/WCAG22/Understanding/use-of-color.html).
+  Project identity and repository details wrap according to their content width, keeping large formatted addition
+  and deletion counts visible in a narrow sidebar. Conversation titles remain one line.
 - **Conversations**: the conversations that belong to no project, as plain rows.
 - **Usage**: one chip per installed service, its icon inside a ring gauge with the seven-day percentage; see below.
 
@@ -88,12 +90,11 @@ action state, and the memory the provider process holds right now from the Runti
 refresh cadence is executable in [`controller.ts`](../extensions/runtrol-vscode/src/controller.ts). Only a provider-proven
 open model turn spins the provider glyph. Opening a tab applies its project accent but does not start animation. A live
 or paused TUI stays static even when it repaints its prompt, menu, or cursor. `Needs you` and `Error` remain static
-worded states. Only a state that changes what the operator can do
-spends width: `Needs you`, `Sign in`, `Limit`, `Error`,
-`Focus owner`, `Observed only`, or `Unavailable`. The last three used to be one word, and one word for three
-different truths is how a row ends up promising what it cannot do: `Focus owner` means a registered window is proved
-to own the terminal this conversation runs in and clicking shows it there; `Observed only` means the process is
-live and nothing here can reach it; `Unavailable` means there is no live process at all. On hover the row shows its actions: pin, rename, stop when running, archive and delete
+worded states. The presentation in [`sidebarPage.ts`](../extensions/runtrol-vscode/src/sidebarPage.ts) distinguishes
+actions and missing evidence. `Focus owner` means a registered window is proved to own the terminal and clicking
+shows it there; `Observed only` means a process is live but this window has no attachment route. `Unavailable` does
+not prove process exit: it can represent an unconfirmed owner while resumption remains refused. `Activity unknown`
+reports missing turn-state evidence without denying a separately verified live process. On hover the row shows its actions: pin, rename, stop when running, archive and delete
 when the service reports those surfaces, allow and decline when a turn waits for the person. Rows are reached with
 Tab and the arrow keys; Enter opens the conversation's terminal tab.
 
@@ -212,10 +213,9 @@ descriptor is valid only while its exact generation stream remains connected. St
 Runtime marks the row openable only when the provider publishes an official live target; the first click allocates
 the one shared attachment renderer, and observation alone allocates none. A row whose terminal a registered window is
 proved to own says `Focus owner`, and a live row nothing can reach says `Observed only`. VS Code
-windows are independent viewers, not process owners or operating-system capture boundaries. The extension polling interval in
-[`controller.ts`](../extensions/runtrol-vscode/src/controller.ts) and Runtime cache window in
-[`serve.rs`](../crates/runtrol-daemon/src/serve.rs) are deliberately paired, so adding windows does not multiply
-roster filesystem scans.
+windows are independent viewers, not process owners or operating-system capture boundaries. Shared Runtime producers
+publish native changes to all watching windows. Source lifetime and the explicit compatibility polling boundary
+follow [native observation](providerDiscovery.md#native-observation).
 
 No published Studio version before this public terminal contract persisted a private terminal attachment identity,
 so there is no discoverable legacy tab to migrate. Runtime's native claim registry and `legacyGenerationBusy` error
@@ -230,10 +230,12 @@ every ordinary terminal it observes with the shell process id, whether shell int
 directory, and the command generation shell integration reported as running. Nothing is polled: a terminal opened
 or closed, shell integration attaching, a command starting or ending, and a folder change each publish the whole
 set once, with one publish in flight and the latest state sent after it. A terminal's name is read again at publish
-time because VS Code names it after the shell starts and raises no event for that. The registration lives on the
-persistent command connection; a fresh connection registers again before it updates, and the Runtime drops an entry
-the moment its connection ends, so a restarted host replaces its window's entry with a higher registration
-generation and no duplicate. `tooling/window-registry-eye.mjs` proves this on two isolated windows and a third,
+time because VS Code names it after the shell starts and raises no event for that. Each validated Runtime generation
+has a dedicated registration connection, retained while that exact generation remains present. Replacing the generic
+command connection does not discard another generation's registration. A failed registration connection invalidates
+its group, and a restarted host registers with a higher registration generation and no duplicate. Retained-generation
+lifetime follows [Runtime operations](runtimeOperations.md#update-and-rollback).
+`tooling/window-registry-eye.mjs` proves registration on two isolated windows and a third,
 development-mode window restarted by keys.
 
 ### Observed mirror
@@ -247,7 +249,7 @@ opens a mirror through `windows/mirrorOpen`, feeds every captured chunk in order
 KiB per call, base64 of the exact UTF-8 bytes VS Code delivered), and ends it through `windows/mirrorEnd` with the
 exit code when the command ends or the terminal closes. The feed has its own connection, and the open names the owner
 window by its session identity rather than being inferred from the connection: chunks then never queue behind a
-person's click, and a chunk the Runtime refuses closes only the feed, never the command connection that holds this
+person's click, and a chunk the Runtime refuses closes only the feed, never the dedicated connection that holds this
 window's registration in the registry. The Runtime hosts the mirror as a terminal whose child is
 the feed (`runtrol-core::terminal::fed`): viewers, the raw lane, the checkpoint and the sidebar row apply
 unchanged; the descriptor says `origin: observedMirror` with the owner window's session identity and terminal key.
@@ -402,14 +404,14 @@ manifest, and CI installs the same required build tool before invoking the exten
 | `vscodeHostPerformance` | real release-load Extension Host responsiveness against the shared budget catalogue |
 | `vscodeMultiWindowTerminal` | deterministic two-window identity, first-use dispatch, warm input and fan-out, handoff, and cleanup |
 | `vscodeRealProviderJourney` | installed provider discovery and complete real CLI control journey |
-| `node tooling/real-window-eye.mjs` | isolated real VS Code visual journey and screenshots |
-| `node tooling/drag-select-eye.mjs` | a real pointer drag selects text in a Runtrol tab whose provider switched mouse reporting on, with screenshots and a public-wire screen comparison |
-| `node tooling/window-registry-eye.mjs` | two isolated windows and a development-mode third register with one Runtime, follow terminal open, command, and close, and survive an Extension Host restart as one entry each, read through the public wire |
-| `node tooling/provider-account-eye.mjs` | real Windows task completion refreshes the account once, an unrelated task does not, and the native task terminal is photographed without executing authentication |
+| `node extensions/runtrol-vscode/tooling/real-window-eye.mjs` | isolated real VS Code visual journey and screenshots |
+| `node extensions/runtrol-vscode/tooling/drag-select-eye.mjs` | a real pointer drag selects text in a Runtrol tab whose provider switched mouse reporting on, with screenshots and a public-wire screen comparison |
+| `node extensions/runtrol-vscode/tooling/window-registry-eye.mjs` | two isolated windows and a development-mode third register with one Runtime, follow terminal open, command, and close, and survive an Extension Host restart as one entry each, read through the public wire |
+| `node extensions/runtrol-vscode/tooling/provider-account-eye.mjs` | real Windows task completion refreshes the account once, an unrelated task does not, and the native task terminal is photographed without executing authentication |
 | `vscodePackage` | complete target SSOT, exact archive contents, Runtime bytes, workflow, README, and brand metadata |
 | `crossPlatformMatrix` | exact VSIX installation and first-run action on native Windows, macOS, and Linux |
 | `vscodeUpgradeRollback` | active-session continuity across official VSIX upgrade and rollback |
-| `node tooling/installed-package.mjs --marketplace` | public Marketplace download, activation, bundled Runtime, view, and first-run command |
+| `node extensions/runtrol-vscode/tooling/installed-package.mjs --marketplace` | public Marketplace download, activation, bundled Runtime, view, and first-run command |
 
 The Windows-only `tooling/inspect-vscode.mjs` development helper can list, capture, type into, or click a real VS Code
 window after foreground verification. It is excluded from the VSIX and is not a product surface.

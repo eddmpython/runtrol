@@ -195,7 +195,7 @@ const model = {
         conversation({ title: "/model" }),
         conversation({ title: "터미널 탭이 열릴 때 서비스가 처음 그릴 때까지 마크가 도는지", pinned: true }),
         conversation({ title: "A live conversation with no terminal route", live: true, canOpen: false, blocked: "Live terminal unavailable." }),
-        conversation({ title: "A conversation the Runtime is stopping", live: true, canOpen: false, canStop: false, stopping: true, blocked: "Runtrol asked this conversation's process to stop and is waiting for it to exit." }),
+        conversation({ title: "A conversation the Runtime is stopping", activity: "unknown", live: true, canOpen: false, canStop: false, stopping: true, blocked: "Runtrol asked this conversation's process to stop and is waiting for it to exit." }),
         conversation({ title: "Owner awaiting a fresh process roster", canOpen: false, blocked: "Process status unavailable." }),
       ],
     },
@@ -284,6 +284,17 @@ if (projectActions) {
   Object.assign(model.projects[0], { name: "alphaWork", attention: 2, live: 1,
     changes: { added: 1600, removed: 1300, untracked: 0, ahead: 0 } });
 }
+if (process.env.RUNTROL_EYE_PROJECT_CHANGES === "1") {
+  const names = ["Alpha", "Beta", "Gamma", "Delta", "EnglishProjectWithALongName", "긴프로젝트이름에서대화제목과작업공간을구분하는프로젝트"];
+  model.projects = names.map((name, index) => ({
+    ...model.projects[0], key: `project:changes-${index}`, name, current: false,
+    attention: index === 0 ? 2 : 0, live: 1, hidden: 0,
+    branch: index === 0 ? "feature/sidebar-layout" : "main",
+    changes: { added: 1600, removed: 1300, untracked: 0, ahead: 0 },
+    rows: [conversation({ title: name, open: true })],
+  }));
+  model.loose = [];
+}
 const ownerInput = process.env.RUNTROL_EYE_OWNER_INPUT === "1";
 if (ownerInput) {
   model.projects[0].rows = [
@@ -364,7 +375,7 @@ html = html.replace("</head>", `<script nonce="${assets.nonce}">
 html = html.replace("</body>", `<script nonce="${assets.nonce}">
   window.addEventListener("load", function () {
     var chip = document.querySelectorAll(".chip")[0];
-    if (chip && ${!sixProjects && !ownerInput && !projectActions}) chip.${unreadUsage ? "focus" : "click"}();
+    if (chip && ${!sixProjects && !ownerInput && !projectActions && process.env.RUNTROL_EYE_PROJECT_CHANGES !== "1"}) chip.${unreadUsage ? "focus" : "click"}();
     if (${projectActions}) {
       document.querySelector('.project-row')?.focus();
       document.querySelector('.project-row .act')?.focus();

@@ -63,7 +63,13 @@ fn resolved_facts(program: &Program) -> Result<ProgramFacts, ProbeError> {
     Ok(before)
 }
 
-pub(super) async fn inspect(manifest: &Manifest) -> Result<(Program, ProgramFacts), ProbeError> {
+/// Resolve a manifest and verify its program identity within the shared filesystem admission.
+///
+/// This performs no provider launch and grants no permission to reuse a previous preparation.
+///
+/// # Errors
+/// Returns a discovery or identity error when the registered program cannot be proved.
+pub async fn inspect_manifest(manifest: &Manifest) -> Result<(Program, ProgramFacts), ProbeError> {
     let manifest = manifest.clone();
     run(Arc::clone(&SLOTS), move || {
         let program = locate(&manifest)?;

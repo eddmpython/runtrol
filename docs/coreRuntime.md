@@ -70,11 +70,9 @@ completion keeper share the existing RSS and idle CPU budgets. Provider fixtures
 | Residual increase after each live journey | 4 MiB | 6 MiB | 4 MiB |
 | Idle process CPU during a 10 second window | 100 ms | 100 ms | 100 ms |
 
-Native session discovery reacts immediately to each provider's directory notification. A single provider-neutral
-recovery clock also requests one scan every 15 seconds, rotating across the installed providers, solely to repair a
-lost operating-system notification. Independent provider clocks are deliberately absent: they clustered full roster
-scans inside one CPU-budget window. With two installed providers each still receives one recovery scan every 30
-seconds, while normal session creation and activity changes do not wait for that clock.
+Native observation shares one producer per provider across viewers. Healthy waitable sources have no periodic scan;
+source failure and drivers without a change source follow the explicit recovery and compatibility paths described
+in [providerDiscovery.md](providerDiscovery.md#native-observation).
 
 Account status and usage work is demand-driven. Daemon startup launches no account reader while there is no provider
 subscriber and no provider activity. The first provider watch requests every installed account immediately; later
@@ -198,7 +196,9 @@ and removes it at exit; an entry whose process no longer answers is dropped by t
 `runtrol status` prints the list and probes each entry. The locator admits at most sixteen simultaneous live
 generations. A seventeenth publish fails closed instead of creating an unbounded upgrade chain.
 
-Installing an update writes a new content-named executable and no file is ever written over. The new generation
+Studio materializes each bundled Runtime as a content-named executable without overwriting its predecessor.
+The standalone install uses the versioned layout in [Runtime operations](runtimeOperations.md#install-and-start);
+generation identity comes from executable content independently of that installation pathname. The new generation
 starts beside the running one and sends `drain` on the older generation's private endpoint. Drain is never refused:
 the older daemon releases the durable store at once (the newer one is retrying its open and succeeds the moment the
 file is free), stops taking new conversations, marks itself draining, and keeps serving its existing owners.
@@ -232,12 +232,13 @@ described above.
 | Gate | What it establishes |
 |---|---|
 | `noTranscriptCopy` | The storage crate cannot name any event type capable of carrying conversation payload |
-| `egressContract` | Production drivers and storage contain no vendor session-path discovery surface |
+| `egressContract` | Socket egress is restricted to its policy; source checks reject specific embedded transcript-path literals, not metadata discovery itself |
 | `memoryBudget` | Platform and profile-specific idle daemon RSS ceilings |
 | `liveMemoryBudget` | Real ACP event delivery, explicit oversize lag, peak and residual RSS ceilings |
 | `idleFootprintRatchet` | The idle RSS source of truth plus at most 100 ms process CPU per 10 seconds |
 | `resilienceFaultInjection` | Exact bounded local replay, hard restart gap, and provider-native resume |
 | `orphanReaping` | Pending and active Unix crash windows, keeper control EOF, and real process-group removal |
 
+Permitted provider-owned metadata discovery follows the [session ownership boundary](providerArchitecture.md#session-ownership).
 The claim registry and hosted runner coverage are maintained in
 [northStarEvidence.md](northStarEvidence.md).

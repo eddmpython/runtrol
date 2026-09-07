@@ -2,7 +2,7 @@ import type { NativeActivity } from "@runtrol/runtime-client";
 
 import { nativeProcessKey } from "./conversationList";
 
-export type NativeActivityAnswer = readonly [providerId: string, activity: NativeActivity | null];
+export type NativeActivityAnswer = readonly [providerId: string, activity: NativeActivity | null, unknownActivity?: readonly string[], catalogueRevision?: string];
 
 export type NativeActivityProjection = {
   readonly live: ReadonlySet<string>;
@@ -10,6 +10,8 @@ export type NativeActivityProjection = {
   /// Live conversations a registered VS Code window can show and be brought forward for.
   readonly focusable: ReadonlySet<string>;
   readonly active: ReadonlySet<string>;
+  readonly unknownActivity: ReadonlySet<string>;
+  readonly revisions: ReadonlyMap<string, string>;
   readonly unconfirmed: ReadonlySet<string>;
   readonly liveByProvider: ReadonlyMap<string, ReadonlySet<string>>;
   readonly attachableByProvider: ReadonlyMap<string, ReadonlySet<string>>;
@@ -52,11 +54,14 @@ export function projectNativeActivity(
   previousLive: ReadonlyMap<string, ReadonlySet<string>>,
   previousUnconfirmed: ReadonlyMap<string, ReadonlySet<string>> = new Map(),
   previousActive: ReadonlyMap<string, ReadonlySet<string>> = new Map(),
+  previousRevisions: ReadonlyMap<string, string> = new Map(),
 ): NativeActivityProjection {
   const live = new Set<string>();
   const attachable = new Set<string>();
   const focusable = new Set<string>();
   const active = new Set<string>();
+  const unknownActivity = new Set<string>();
+  const revisions = new Map<string, string>();
   const unconfirmed = new Set<string>();
   const liveByProvider = new Map<string, ReadonlySet<string>>();
   const attachableByProvider = new Map<string, ReadonlySet<string>>();
@@ -64,7 +69,7 @@ export function projectNativeActivity(
   const activeByProvider = new Map<string, ReadonlySet<string>>();
   const unconfirmedByProvider = new Map<string, ReadonlySet<string>>();
   const refreshProviders = new Set<string>();
-  for (const [providerId, activity] of answers) {
+  for (const [providerId, activity, unknown, revision] of answers) {
     const prior = new Set([
       ...(previousLive.get(providerId) ?? []),
       ...(previousUnconfirmed.get(providerId) ?? []),
@@ -77,6 +82,13 @@ export function projectNativeActivity(
       (activity?.focusable ?? []).filter((nativeId) => providerLive.has(nativeId)),
     );
     const providerActive = new Set(activity?.active ?? []);
+    const providerUnknown = activity === null ? prior
+      : new Set((unknown ?? []).filter((native) => providerLive.has(native) && !providerActive.has(native)));
+    const priorRevision = previousRevisions.get(providerId);
+    if (revision !== undefined) {
+      revisions.set(providerId, revision);
+      if (revision !== priorRevision) refreshProviders.add(providerId);
+    } else if (priorRevision !== undefined) revisions.set(providerId, priorRevision);
     const providerUnconfirmed = activity === null ? prior : new Set<string>();
     liveByProvider.set(providerId, providerLive);
     attachableByProvider.set(providerId, providerAttachable);
@@ -90,10 +102,11 @@ export function projectNativeActivity(
     // A listed identity can gain its first title after its turn. Failed proof is not completion; no timer
     // or output heuristic invents an edge when the source did not expose one.
     if ([...previousActive.get(providerId) ?? []].some((nativeId) =>
-      !providerActive.has(nativeId) && !providerUnconfirmed.has(nativeId))) refreshProviders.add(providerId);
+      !providerActive.has(nativeId) && !providerUnconfirmed.has(nativeId) && !providerUnknown.has(nativeId))) refreshProviders.add(providerId);
     for (const nativeId of providerAttachable) attachable.add(nativeProcessKey(providerId, nativeId));
     for (const nativeId of providerFocusable) focusable.add(nativeProcessKey(providerId, nativeId));
     for (const nativeId of providerActive) active.add(nativeProcessKey(providerId, nativeId));
+    for (const nativeId of providerUnknown) unknownActivity.add(nativeProcessKey(providerId, nativeId));
     for (const nativeId of providerUnconfirmed) unconfirmed.add(nativeProcessKey(providerId, nativeId));
   }
   return {
@@ -101,6 +114,8 @@ export function projectNativeActivity(
     attachable,
     focusable,
     active,
+    unknownActivity,
+    revisions,
     unconfirmed,
     liveByProvider,
     attachableByProvider,

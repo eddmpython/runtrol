@@ -64,7 +64,7 @@ fn parent(words: &[String]) -> Result<()> {
     )?;
     announce(&owner)?;
     let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_time()
+        .enable_all()
         .build()?;
     let program = runtrol_childproc::resolve(
         std::env::current_exe()?
@@ -72,6 +72,7 @@ fn parent(words: &[String]) -> Result<()> {
             .ok_or("fixture image is not UTF-8")?,
     )?;
     let cwd = AbsPath::canonicalize(directory.to_str().ok_or("fixture path is not UTF-8")?)?;
+    runtime.block_on(natural_commands(&owner))?;
     let mut children = Vec::new();
     for index in 0..8 {
         let child_path = directory.join(format!("terminal-{index}"));
@@ -147,6 +148,26 @@ fn parent(words: &[String]) -> Result<()> {
         runtime.block_on(child.wait())?;
         child.finish();
         drain.join().map_err(|_| "fixture output reader failed")??;
+    }
+    Ok(())
+}
+
+async fn natural_commands(owner: &Containment) -> Result<()> {
+    // Exercise the same natural-exit guard completion used by structured provider cooling.
+    // Completing eight roots sequentially also proves that the bounded command slots are reusable.
+    for _ in 0..8 {
+        let mut command = runtrol_childproc::TrackedCommand::new(std::env::current_exe()?);
+        command.args(["--exit-with", "0"]);
+        command.stdin(std::process::Stdio::null());
+        command.stdout(std::process::Stdio::null());
+        command.stderr(std::process::Stdio::null());
+        command.kill_on_drop(true);
+        let (mut child, mut guard) = command.spawn(owner).await?;
+        let status = tokio::time::timeout(Duration::from_secs(10), child.wait()).await??;
+        if !status.success() {
+            return Err("the natural-exit fixture failed".into());
+        }
+        tokio::time::timeout(Duration::from_secs(10), guard.complete()).await??;
     }
     Ok(())
 }

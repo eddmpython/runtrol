@@ -52,7 +52,9 @@ transport or Studio navigation.
   request identity is answered from the record without a second write.
 - The raw lane publishes each chunk unchanged before projection. The single terminal authority consumes every byte
   in order. Publication waits only before overwriting its oldest unapplied chunk in the existing bounded ring;
-  slow viewers do not participate in that bound. A checkpoint serialization failure makes that snapshot unavailable.
+  slow viewers do not participate in that bound. A checkpoint serialization failure makes only that attachment's
+  snapshot unavailable. The authoritative screen remains valid, so the next attachment retries serialization without
+  requiring a resize; both attachments retain their exact live-output boundaries.
   Losing authoritative parser state closes input and the exact terminal generation, because resetting the cursor
   and continuing to answer would invent terminal state. Process exit or control failure releases publication
   backpressure so final raw output can drain. Attachment is atomic at one sequence: a complete checkpoint is the
@@ -80,10 +82,12 @@ presentation filters; it does not choose a replacement provider palette. If a TU
 icons retain their colours, inspect the environment that launched its Runtime before changing terminal rendering.
 The PTY inherits that environment except for the manifest's declared additions and removals. In particular,
 [`NO_COLOR`](https://no-color.org/) can ask the provider to omit colour even when the manifest advertises a
-colour-capable terminal. Changing a launching shell's environment does not change an already-running CLI.
+colour-capable terminal. An ordinary terminal can likewise inherit `TERM=dumb` and suppress provider colour despite
+supporting colour itself. Changing a launching shell's environment does not change an already-running CLI.
 
-Native GUI verification removes the command tool's inherited `NO_COLOR` through the existing isolated-host
-environment builder in `extensions/runtrol-vscode/tooling/isolated-vscode.mjs`. Ordinary product launches retain
+Native GUI verification removes the command tool's inherited `NO_COLOR` and `TERM` through the existing isolated-host
+environment builder in `extensions/runtrol-vscode/tooling/isolated-vscode.mjs`; the new emulator owns its terminal
+capabilities. Ordinary product launches retain
 explicit user environment preferences. Compare the same Runtime image, provider build and terminal settings before
 and after a launch-environment change; a plain screenshot alone cannot distinguish suppressed provider output from
 a rendering defect.
@@ -135,6 +139,23 @@ owner binds a dedicated `windows/watchInput` connection using that proof. Offers
 registration, shell PID birth and execution before moving the transient text out of its one pending slot. The owner
 checks its exact local terminal and execution again before calling the public input API. Neither a saved window
 identifier nor a replacement Extension Host can claim an earlier registration's text.
+
+Studio keeps a separate registration connection for each validated Runtime incarnation it uses. A primary change
+prepares the successor's command and window registration before admitting new work there. Existing terminal views,
+mirror feeders, input receivers, and reveal subscriptions retain their exact owner connections. A mirror captures its
+route at admission; later output and end operations never look up the current primary. Retained groups receive current
+ordinary-terminal updates and close when their incarnation disappears, authority changes, or the window ends.
+[`runtimeRoutes.ts`](../extensions/runtrol-vscode/src/runtimeRoutes.ts) owns command admission and
+[`windowConnections.ts`](../extensions/runtrol-vscode/src/windowConnections.ts) owns retained window connections.
+An uncertain mutation is never replayed on the successor, and replacing a lost registration or feeder does not migrate
+an existing mirror's ownership proof.
+
+Supporting Runtimes also accept workspace-folder metadata updates on the existing registration. Omitting the optional
+folders preserves the previous metadata; an explicit empty list clears it. Folder-only updates keep the registration,
+shell incarnation proof, input receiver, and reveal subscription intact. Consumers must check the exact connection's
+advertised support before sending the field. The wire contract is
+[`WindowUpdateParams`](../crates/runtrol-runtime-protocol/src/windows.rs), and the shared validation and update rules
+belong to [`window_registry`](../crates/runtrol-daemon/src/window_registry/mod.rs).
 
 The caller succeeds only after `windows/inputReceipt` confirms `ownerExtensionAccepted`. This means one public
 owner-extension input call, not exact stdin bytes, shell processing or completed model work. The public API may
@@ -439,5 +460,6 @@ Runtime never scrapes the screen, infers a reply, wakes an idle model through hi
 
 ## Deliberately absent
 
-There is no transcript storage, screen interpretation, prompt rewrite, semantic routing, hidden model call, or API
-key relay. Runtime carries bytes, authority, geometry, bounded replay, and process lifetime only.
+There is no transcript storage, interpretation of conversation meaning, prompt rewrite, semantic routing, hidden
+model call, or API key relay. Mechanical VT processing follows the [host contract](#host). Runtime carries bytes,
+authority, geometry, bounded replay, and process lifetime only.

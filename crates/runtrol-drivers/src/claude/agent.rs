@@ -1094,6 +1094,7 @@ impl Agent for ClaudeAgent {
                     return self
                         .child_guard
                         .complete()
+                        .await
                         .map_err(|error| ProviderError::Io {
                             provider: self.provider,
                             doing: "completing session process containment",

@@ -74,17 +74,23 @@ pub(super) async fn providers_usage(
 pub(super) async fn providers_watch(
     state: &mut PublicState,
     composed: &Composed,
+    discovering: &crate::serve::DiscoveryGates,
     updates: &watch::Sender<Arc<ProviderList>>,
     usage: &watch::Receiver<Arc<ProviderUsageList>>,
     id: JsonRpcId,
     params: serde_json::Value,
 ) -> Answer {
-    if serde_json::from_value::<WatchProvidersParams>(params).is_err() {
+    let Ok(params) = serde_json::from_value::<WatchProvidersParams>(params) else {
         return Answer::plain(
             id,
             RuntimeErrorKind::InvalidRequest,
             "provider watch parameters are invalid",
         );
+    };
+    if params.native_activity
+        && let Err(failure) = authorized(state, composed, Some(AppScope::SessionNativeDiscover))
+    {
+        return Answer::failure(id, failure);
     }
     let authority = match authorized(state, composed, Some(AppScope::ProviderRead)) {
         Ok(authority) => authority.clone(),
@@ -111,6 +117,9 @@ pub(super) async fn providers_watch(
         },
         provider_updates,
         usage.clone(),
+        params
+            .native_activity
+            .then(|| discovering.native_observations.subscribe()),
         authority,
     )
 }
@@ -547,18 +556,16 @@ pub(crate) async fn observe_native_activity(
         Duration::from_millis(crate::serve::MODEL_PREPARATION_BUDGET_MS),
         async {
             let _lane = discovering.lane(provider).await.lock_owned().await;
-            if let Some(activity) = discovering.cached_native_activity(provider).await {
+            if let Some(activity) = discovering.cached_native_activity(provider) {
                 return Ok(activity);
             }
             let prepared = discovering.native_driver(composed, provider).await?;
-            let activity = prepared
-                .driver
-                .native_process_activity()
-                .await
-                .map_err(|_| ())?;
-            let turn_ended = discovering
-                .remember_native_activity(provider, activity.clone())
-                .await;
+            let observed = prepared.driver.native_observation().await.map_err(|_| ())?;
+            let activity = observed.activity.clone();
+            let turn_ended =
+                discovering
+                    .native_observations
+                    .record(provider, observed, Some(&prepared));
             if turn_ended {
                 composed.account_probe_wake.provider(provider).await;
             }
@@ -770,12 +777,12 @@ pub(super) async fn native_activity(
         Ok(Err(())) => Answer::plain(
             id,
             RuntimeErrorKind::ProviderUnavailable,
-            "the selected provider could not say what it wrote lately",
+            "the selected provider could not confirm its current native activity",
         ),
         Err(_) => Answer::plain(
             id,
             RuntimeErrorKind::RuntimeUnavailable,
-            "naming what was written lately exceeded its bounded deadline",
+            "observing current native activity exceeded its bounded deadline",
         ),
     }
 }
@@ -875,8 +882,8 @@ pub(super) async fn focus_native(
 /// This is a separate answer from `attachable`, and deliberately so: a window can show a terminal it observes
 /// whether or not anything can be mirrored or attached from it, and a row that says so is telling the truth about
 /// the one thing Runtrol can actually do for it.
-async fn focusable_native_sessions(
-    composed: &Arc<Composed>,
+pub(super) async fn focusable_native_sessions(
+    composed: &Composed,
     provider: runtrol_provider::ProviderId,
 ) -> Vec<String> {
     composed

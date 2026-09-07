@@ -42,6 +42,34 @@ Native roster scans keep their admission slot inside the filesystem worker until
 caller or a replaced driver cannot admit another blocked worker for the same driver kind. Independent kinds retain
 separate slots. [`roster_scan.rs`](../crates/runtrol-drivers/src/roster_scan.rs) owns this cancellation boundary.
 
+### Native observation
+
+[`native_producer.rs`](../crates/runtrol-daemon/src/native_producer.rs) owns one structural observation producer per
+provider across all viewers. The driver installs its change source before the first observation, so changes during
+that initial read remain pending. A notification requests another bounded observation; it is never evidence of model
+work by itself. Window ownership changes update the routing projection without rescanning the provider catalogue.
+
+On Windows, [`native_watch.rs`](../crates/runtrol-drivers/src/native_watch.rs) filters bounded directory-name
+notifications against the driver's existing structural source paths before requesting an observation. Writes to
+unrelated caches return to the operating-system wait. Incomplete notifications, unresolved names and replaced roots
+retain full invalidation. Notification consumption uses the existing bounded filesystem worker; a consumed relevant
+change remains pending if its caller is canceled.
+
+The provider SPI in [`agent.rs`](../crates/runtrol-provider/src/agent.rs) owns source lifetime and cancellation.
+Canceling one wait preserves pending changes; dropping the source releases its process and directory observations.
+An installation change replaces the prepared driver and its source. Failed proof publishes unavailable observation
+and starts bounded recovery. Healthy waitable sources do not run a periodic scan. A driver that explicitly has no
+waitable source retains the compatibility observer; its schedule and recovery timing are owned by the producer.
+A declared surface that cannot report any live session instead waits on a constant empty observation, without
+repeated compatibility work.
+
+Catalogue revisions belong to one prepared driver. They change only with the structural facts that the driver can
+prove, including native identity, turn boundaries and explicit title metadata. Terminal output volume and arbitrary
+body appends do not advance that revision. Unknown model activity remains unknown while proved process ownership
+stays visible. The public client subscription is described in [runtimeProtocol.md](runtimeProtocol.md).
+
+### Program identity
+
 The cache is keyed by provider identifier and the complete resolved program identity: executable path, size, modification time, launcher-resolved leading arguments, and the same file facts for any leading argument that names an absolute regular file. This makes an interpreted package entry point part of the identity instead of trusting the unchanged interpreter. The reported version and the exact driver-owned flag question are stored observations. A hit is valid only when both the program identity and question surface still match. There is no time-based TTL.
 
 The cache is opened lazily from `RUNTROL_HOME/probe.json`, written through a flushed sibling file, and atomically replaced. Only driver discovery is serialized around that single file. Provider discovery, model lookup, process open, command writes, and cleanup are awaited in tasks rather than in the daemon's sole session owner. The owner therefore remains eligible to pump events and handle requests whose preparation has completed. This is an ownership guarantee, not an end-to-end latency bound. An unreadable or future-schema cache is treated as absent because every value can be asked again. A write failure is returned to the caller because repeated cold probes are user-visible latency.

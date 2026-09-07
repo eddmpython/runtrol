@@ -115,15 +115,7 @@ impl WindowRegistry {
         bounded_text(&params.window_session_id, "the window session identity")?;
         bounded_text(&params.host_generation, "the host generation")?;
         bounded_text(&params.vscode_version, "the VS Code version")?;
-        if params.workspace_folders.len() > MAX_WINDOW_FOLDERS {
-            return Err(refused(
-                RuntimeErrorKind::ResourceExhausted,
-                "the window publishes more workspace folders than the registry keeps",
-            ));
-        }
-        for folder in &params.workspace_folders {
-            bounded_label(folder, "a workspace folder")?;
-        }
+        bounded_folders(&params.workspace_folders)?;
         let mut capability = [0_u8; 32];
         getrandom::fill(&mut capability).map_err(|_| {
             refused(
@@ -205,6 +197,9 @@ impl WindowRegistry {
         connection: ConnectionToken,
         params: WindowUpdateParams,
     ) -> Result<(), WindowRegistryFailure> {
+        if let Some(folders) = &params.workspace_folders {
+            bounded_folders(folders)?;
+        }
         if params.terminals.len() > MAX_OBSERVED_TERMINALS {
             return Err(refused(
                 RuntimeErrorKind::ResourceExhausted,
@@ -225,18 +220,28 @@ impl WindowRegistry {
                 "this connection registered no window",
             ));
         };
-        if entry.descriptor.terminals == params.terminals {
+        let terminals_changed = entry.descriptor.terminals != params.terminals;
+        let folders_changed = params
+            .workspace_folders
+            .as_ref()
+            .is_some_and(|folders| *folders != entry.descriptor.workspace_folders);
+        if !terminals_changed && !folders_changed {
             return Ok(());
         }
-        entry.shells = params
-            .terminals
-            .iter()
-            .filter_map(|terminal| {
-                let identity = runtrol_childproc::process_identity(terminal.process_id?)?;
-                Some((terminal.terminal_key.clone(), identity))
-            })
-            .collect();
-        entry.descriptor.terminals = params.terminals;
+        if terminals_changed {
+            entry.shells = params
+                .terminals
+                .iter()
+                .filter_map(|terminal| {
+                    let identity = runtrol_childproc::process_identity(terminal.process_id?)?;
+                    Some((terminal.terminal_key.clone(), identity))
+                })
+                .collect();
+            entry.descriptor.terminals = params.terminals;
+        }
+        if let Some(folders) = params.workspace_folders {
+            entry.descriptor.workspace_folders = folders;
+        }
         drop(state);
         self.publish();
         Ok(())
@@ -401,6 +406,19 @@ fn bounded_label(text: &str, what: &'static str) -> Result<(), WindowRegistryFai
     Ok(())
 }
 
+fn bounded_folders(folders: &[String]) -> Result<(), WindowRegistryFailure> {
+    if folders.len() > MAX_WINDOW_FOLDERS {
+        return Err(refused(
+            RuntimeErrorKind::ResourceExhausted,
+            "the window publishes more workspace folders than the registry keeps",
+        ));
+    }
+    for folder in folders {
+        bounded_label(folder, "a workspace folder")?;
+    }
+    Ok(())
+}
+
 fn bounded_terminal(terminal: &ObservedTerminal) -> Result<(), WindowRegistryFailure> {
     bounded_text(&terminal.terminal_key, "a terminal key is too long")?;
     bounded_label(&terminal.name, "a terminal name is too long")?;
@@ -502,6 +520,7 @@ mod tests {
             .update(
                 first,
                 WindowUpdateParams {
+                    workspace_folders: None,
                     terminals: vec![terminal("t1", Some("claude"))],
                 },
             )
@@ -539,7 +558,13 @@ mod tests {
         let registry = WindowRegistry::default();
         let stranger = ConnectionToken::next();
         let refused = registry
-            .update(stranger, WindowUpdateParams { terminals: vec![] })
+            .update(
+                stranger,
+                WindowUpdateParams {
+                    workspace_folders: None,
+                    terminals: vec![],
+                },
+            )
             .await
             .expect_err("a connection that registered nothing cannot update");
         assert_eq!(refused.kind, RuntimeErrorKind::InvalidRequest);
@@ -555,6 +580,7 @@ mod tests {
             .update(
                 connection,
                 WindowUpdateParams {
+                    workspace_folders: None,
                     terminals: terminals.clone(),
                 },
             )
@@ -563,7 +589,13 @@ mod tests {
         assert!(changes.has_changed().expect("the watch lives"));
         drop(changes.borrow_and_update());
         registry
-            .update(connection, WindowUpdateParams { terminals })
+            .update(
+                connection,
+                WindowUpdateParams {
+                    workspace_folders: None,
+                    terminals,
+                },
+            )
             .await
             .expect("same update");
         assert!(
@@ -602,6 +634,7 @@ mod tests {
             .await
             .expect("a known window still registers when the registry is full");
         let too_many = WindowUpdateParams {
+            workspace_folders: None,
             terminals: (0..=MAX_OBSERVED_TERMINALS)
                 .map(|index| terminal(&format!("t{index}"), None))
                 .collect(),
@@ -614,5 +647,170 @@ mod tests {
                 .kind,
             RuntimeErrorKind::ResourceExhausted
         );
+    }
+
+    #[tokio::test]
+    async fn folder_only_updates_publish_without_replacing_registration_or_shell_proof() {
+        let registry = WindowRegistry::default();
+        let connection = ConnectionToken::next();
+        let registration = registry
+            .register(connection, window("folders", "host"))
+            .await
+            .unwrap();
+        let terminals = vec![terminal("t1", Some("fixture"))];
+        registry
+            .update(
+                connection,
+                WindowUpdateParams {
+                    terminals: terminals.clone(),
+                    workspace_folders: None,
+                },
+            )
+            .await
+            .unwrap();
+        // A synthetic recorded incarnation makes an accidental folder-only process recapture observable.
+        let sentinel = runtrol_provider::ProcessIdentity::new(4242, 1).unwrap();
+        registry
+            .state
+            .lock()
+            .await
+            .windows
+            .get_mut("folders")
+            .unwrap()
+            .shells
+            .insert("t1".into(), sentinel);
+        let mut reveals = registry.watch_reveals("folders").await.unwrap();
+        let mut changes = registry.changes();
+        drop(changes.borrow_and_update());
+        registry
+            .update(
+                connection,
+                WindowUpdateParams {
+                    terminals: terminals.clone(),
+                    workspace_folders: Some(vec!["D:/next".into()]),
+                },
+            )
+            .await
+            .unwrap();
+        assert!(changes.has_changed().unwrap());
+        {
+            let state = registry.state.lock().await;
+            let entry = state.windows.get("folders").unwrap();
+            assert_eq!(
+                entry.descriptor.registration_generation,
+                registration.registration_generation
+            );
+            assert_eq!(entry.owner_token, registration.owner_token);
+            assert_eq!(entry.shells.get("t1"), Some(&sentinel));
+        }
+        let target = registry.reveal("folders", "t1", None).await.unwrap();
+        assert_eq!(target.workspace_folders, vec!["D:/next"]);
+        assert_eq!(reveals.try_recv().unwrap().terminal_key, "t1");
+        drop(changes.borrow_and_update());
+        registry
+            .update(
+                connection,
+                WindowUpdateParams {
+                    terminals: terminals.clone(),
+                    workspace_folders: None,
+                },
+            )
+            .await
+            .unwrap();
+        assert!(!changes.has_changed().unwrap());
+        assert_eq!(
+            registry
+                .snapshot()
+                .await
+                .windows
+                .first()
+                .expect("registered window")
+                .workspace_folders,
+            vec!["D:/next"]
+        );
+        registry
+            .update(
+                connection,
+                WindowUpdateParams {
+                    terminals,
+                    workspace_folders: Some(Vec::new()),
+                },
+            )
+            .await
+            .unwrap();
+        assert!(changes.has_changed().unwrap());
+        assert!(
+            registry
+                .snapshot()
+                .await
+                .windows
+                .first()
+                .expect("registered window")
+                .workspace_folders
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn folder_updates_reuse_registration_bounds_and_reject_before_any_mutation() {
+        let registry = WindowRegistry::default();
+        let connection = ConnectionToken::next();
+        registry
+            .register(connection, window("folders", "host"))
+            .await
+            .unwrap();
+        let before = registry.snapshot().await;
+        let cases = [
+            (
+                vec!["C:/x".into(); MAX_WINDOW_FOLDERS + 1],
+                RuntimeErrorKind::ResourceExhausted,
+            ),
+            (
+                vec!["x".repeat(MAX_WINDOW_TEXT_CHARS + 1)],
+                RuntimeErrorKind::InvalidRequest,
+            ),
+        ];
+        for (folders, expected) in cases {
+            let mut registration = window("invalid", "host");
+            registration.workspace_folders = folders.clone();
+            assert_eq!(
+                registry
+                    .register(ConnectionToken::next(), registration)
+                    .await
+                    .unwrap_err()
+                    .kind,
+                expected
+            );
+            assert_eq!(
+                registry
+                    .update(
+                        connection,
+                        WindowUpdateParams {
+                            terminals: vec![terminal("new", None)],
+                            workspace_folders: Some(folders),
+                        }
+                    )
+                    .await
+                    .unwrap_err()
+                    .kind,
+                expected
+            );
+            assert_eq!(registry.snapshot().await, before);
+        }
+        assert_eq!(
+            registry
+                .update(
+                    ConnectionToken::next(),
+                    WindowUpdateParams {
+                        terminals: Vec::new(),
+                        workspace_folders: Some(vec!["D:/stranger".into()]),
+                    }
+                )
+                .await
+                .unwrap_err()
+                .kind,
+            RuntimeErrorKind::InvalidRequest
+        );
+        assert_eq!(registry.snapshot().await, before);
     }
 }

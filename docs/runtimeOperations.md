@@ -90,9 +90,21 @@ for the exact Runtime process and its process-completion keeper. A closed connec
 insufficient. Use it only after reviewing active work, because an active turn is interrupted.
 
 Rollback by running the installer from the earlier attested target archive. Verify that its protocol revision
-inventory overlaps every installed consumer and that its `rollbackSafeStoreSchema` accepts the current state. Release
-0.1.1 uses store rollback floor 1. If either check fails, do not activate the old binary. SDKs reconnect through the
-new locator and must not resubmit ambiguous mutations or reacquire control silently.
+inventory overlaps every installed consumer, its `rollbackSafeStoreSchema` accepts the current state, and it can
+validate every retained integration grant. The store floor covers the persisted layout; a matching floor does not
+prove that an older authority implementation understands newer scope names. A cold rollback to a Runtime predating
+`session.input.priority` can start and serve ordinary grants while refusing authentication for a grant containing
+that scope. Preserve the grant and use a Runtime that understands it; deleting authority or silently removing scopes
+is not a rollback repair. Release 0.1.1 uses store rollback floor 1. If any compatibility check fails, do not activate
+the old binary. SDKs reconnect through the new locator and must not resubmit ambiguous mutations or reacquire control
+silently. A live handoff test does not replace cold-start authentication verification.
+
+Studio follows the validated primary for new conversations while existing terminal tabs continue using their owning
+generation. An existing observed terminal also keeps its original window registration, input route, and owner-reveal
+route while those connections remain valid. If preparing the successor fails, resolve the reported connection or
+authority error and retry the explicit new action. Closing an old tab or restarting its provider is not part of normal
+Runtime handoff. A lost mirror feeder or replaced authority ends that binding; it is not silently rebound to the new
+generation. The [window ownership contract](terminalSurface.md) defines those separate lifetimes.
 
 The worktree ownership registry has a separate compatibility boundary from the metadata store floor. Follow
 [isolated-worker recovery and rollback](sessionDialogue.md#isolated-workers) when a newer Runtime has migrated it.

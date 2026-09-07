@@ -69,6 +69,7 @@ pub(super) enum Watching {
         last: ProviderList,
         updates: watch::Receiver<Arc<ProviderList>>,
         usage: watch::Receiver<Arc<ProviderUsageList>>,
+        native: Option<watch::Receiver<Arc<crate::native_activity::NativeSnapshot>>>,
         authority: AuthorizedIntegration,
     },
     Terminal(Box<TerminalView>),

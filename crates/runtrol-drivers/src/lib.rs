@@ -25,6 +25,8 @@ pub mod codex;
 pub mod framing;
 pub mod kinds;
 pub mod legacy_mcp;
+mod native_turn;
+mod native_watch;
 mod operator;
 mod roster_scan;
 mod shipped;

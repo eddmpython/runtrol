@@ -63,6 +63,18 @@ record and endpoint, and requires every security field to equal that native obse
 Rust and Python use the same native owner validation. Unix requires the platform-standard owner and restrictive mode.
 No client installs or starts Runtime during locator validation.
 
+TypeScript consumers can share `RuntimeLocator.watchGenerations` to observe validated primary and peer changes.
+The SDK watches the locator directory and its parent entry, handles atomic file replacement, and coalesces pending
+changes while validation or a consumer callback is running. An unchanged routing hint suppresses redundant native
+verification; it never grants trust to new locator content. Watch errors end observation and invalidate cached route
+selection. The consumer owns recovery and the separate lifetime of already attached terminal views.
+
+`ValidatedLocator.revision` distinguishes verified process incarnations, including a restart of the same build.
+Draining state and live-work counts do not change that identity. The opaque token is for routing equality, not process
+termination authority. Cancellation closes observation handles immediately and joins pending validation and callback
+work before the watch promise settles. The implementation and snapshot type are owned by
+[`locator.ts`](../clients/typescript/src/locator.ts).
+
 ## Scope selection
 
 Start read-only integrations with `provider.read` and `session.list`. Add `model.read` only when the product displays

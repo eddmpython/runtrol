@@ -1,8 +1,12 @@
 import { execFile } from "node:child_process";
-import { lstat, readFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { lstatSync, watch } from "node:fs";
+import { watchValidatedGenerations } from "./generationWatch.js";
+import { lstat, open, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join } from "node:path";
 import { promisify } from "node:util";
+import { setTimeout as delay } from "node:timers/promises";
 
 import type { RuntimeGeneration, RuntimeLocatorRecord } from "./generated/protocol.js";
 import { RuntimeLocatorError } from "./errors.js";
@@ -23,6 +27,13 @@ const executeFile = promisify(execFile);
 export type LocatorState =
   | { readonly state: "notInstalled" }
   | { readonly state: "running"; readonly locator: ValidatedLocator };
+
+export type RuntimeGenerationSnapshot = {
+  readonly current: LocatorState;
+  /** Opaque equality token for the selected verified route incarnation. Not process-control authority. */
+  readonly currentRevision: string | null;
+  readonly generations: readonly ValidatedLocator[];
+};
 
 export type RuntimeLocatorOptions = {
   /** Exact Runtime executable used for native Windows owner and DACL validation. It is never PATH-resolved. */
@@ -48,6 +59,8 @@ export class ValidatedLocator {
     public readonly draining: boolean,
     /** Where the same generation answers its owner's administration protocol. Not a Runtime endpoint. */
     public readonly controlEndpoint: string,
+    /** Opaque incarnation equality only. Not a credential, PID, or OS process-control authority. */
+    public readonly revision: string,
   ) {
     if (token !== validatedLocatorToken) {
       throw new RuntimeLocatorError("unsafe", "Runtime locator was not validated by this SDK");
@@ -87,6 +100,11 @@ export class RuntimeLocator {
 
   /** The chosen generation, or not installed when nothing is listed to connect to. */
   public async inspect(): Promise<LocatorState> {
+    return (await this.inspectSnapshot()).value.current;
+  }
+
+  /** One verified read supplies both the selected route and the complete generation fleet. */
+  private async inspectSnapshot(signal?: AbortSignal): Promise<{ value: RuntimeGenerationSnapshot; fingerprint: string }> {
     // Validate and read again when the two disagree. What that disagreement means is that the file moved between
     // the two, and a daemon publishing its own generation is the ordinary reason for it: on a home whose first
     // daemon is starting, that write lands exactly here (measured 2026-08-26, a new home could never finish
@@ -96,9 +114,10 @@ export class RuntimeLocator {
     // is accepted, so a swap between the two is still refused. What changes is that a moving file is given a few
     // more chances to hold still instead of being called an attack.
     for (let attempt = 0; ; attempt += 1) {
+      signal?.throwIfAborted();
       let read;
       try {
-        read = await this.read();
+        read = await this.read(signal);
       } catch (error) {
         // A locator mid-replace: four coexisting generations rewrite the file often, and an ACL or native
         // verification probe that lands inside the atomic rename window fails with a command error, not a
@@ -110,27 +129,89 @@ export class RuntimeLocator {
           && error instanceof RuntimeLocatorError
           && String(error.message).includes("could not verify Runtime locator")
         ) {
-          await new Promise((resolve) => setTimeout(resolve, 120));
+          await delay(120, undefined, { signal });
           continue;
         }
         throw error;
       }
-      if (!read) return { state: "notInstalled" };
+      if (!read) return { value: { current: { state: "notInstalled" }, currentRevision: null, generations: [] }, fingerprint: "absent" };
       const chosen = chooseGeneration(read.record, this.preferDigest);
-      if (!chosen) return { state: "notInstalled" };
+      if (!chosen) return { value: { current: { state: "notInstalled" }, currentRevision: null, generations: read.record.generations.map(generation => validated(read.record, generation)) }, fingerprint: routingFingerprint(read.record) };
       if (!read.verified || (
         read.verified.instanceId === read.record.instanceId
         && read.verified.endpoint === chosen.endpoint
         && read.verified.runtimeVersion === chosen.runtimeVersion
         && read.verified.digest === chosen.digest
       )) {
-        return { state: "running", locator: validated(read.record, chosen) };
+        const current = validated(read.record, chosen);
+        return { value: { current: { state: "running", locator: current }, currentRevision: current.revision, generations: read.record.generations.map(generation => validated(read.record, generation)) }, fingerprint: routingFingerprint(read.record) };
       }
       if (attempt >= LOCATOR_SETTLE_ATTEMPTS) {
         throw new RuntimeLocatorError("unsafe", "Runtime locator changed after native validation");
       }
-      await new Promise((resolve) => setTimeout(resolve, LOCATOR_SETTLE_DELAY_MS));
+      await delay(LOCATOR_SETTLE_DELAY_MS, undefined, { signal });
     }
+  }
+
+  /**
+   * Publish verified routing changes without polling. Callback work is awaited; intermediate changes coalesce.
+   * Filesystem or validation failure ends this watch. Existing views remain owned by their callers.
+   * Cancellation closes watcher handles immediately and suppresses pending inspection delivery.
+   */
+  public watchGenerations(
+    publish: (snapshot: RuntimeGenerationSnapshot) => void | Promise<void>,
+    options: { readonly signal?: AbortSignal } = {},
+  ): Promise<void> {
+    const parent = dirname(this.path);
+    let parentIdentity: { dev: number; ino: number } | null = null;
+    const ensureParent = async (): Promise<void> => {
+      const current = await lstat(parent);
+      if (!current.isDirectory() || (parentIdentity !== null
+        && (current.dev !== parentIdentity.dev || current.ino !== parentIdentity.ino))) {
+        throw new RuntimeLocatorError("io", "Runtime home directory was replaced");
+      }
+    };
+    return watchValidatedGenerations(
+      (changed, failed) => {
+        const handles: ReturnType<typeof watch>[] = [];
+        let closing = false;
+        const close = (): void => { closing = true; for (const handle of handles) handle.close(); };
+        try {
+          parentIdentity = lstatSync(parent);
+          const contents = watch(parent, (event, filename) => {
+            if (filename === null || filename.toString() === basename(this.path)) changed();
+          });
+          handles.push(contents);
+          // Watching the parent's entry also catches a Runtime home rename, even if its old handle stays alive.
+          const home = watch(dirname(parent), (_event, filename) => {
+            if (filename === null || filename.toString() === basename(parent)) {
+              // The same bounded pump validates parent identity before hints and full inspection.
+              changed();
+            }
+          });
+          handles.push(home);
+          for (const handle of handles) {
+            handle.on("error", failed);
+            handle.on("close", () => { if (!closing) failed(new RuntimeLocatorError("io", "Runtime locator watcher closed")); });
+          }
+          return close;
+        } catch (error) { close(); throw error; }
+      },
+      async (signal) => {
+        signal.throwIfAborted();
+        await ensureParent();
+        let metadata;
+        try { metadata = await lstat(this.path); }
+        catch (error) { if (isNodeError(error) && error.code === "ENOENT") return "absent"; throw error; }
+        if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.size > MAX_LOCATOR_BYTES) {
+          throw new RuntimeLocatorError("unsafe", "Runtime locator hint is not a bounded regular file");
+        }
+        return routingFingerprint(await this.#readRecord());
+      },
+      async (signal) => { await ensureParent(); return this.inspectSnapshot(signal); },
+      publish,
+      options.signal,
+    );
   }
 
   /** Every listed generation, oldest start first. Empty when nothing is installed. */
@@ -143,7 +224,7 @@ export class RuntimeLocator {
   async #readRecord(): Promise<RuntimeLocatorRecord> {
     let decoded: unknown;
     try {
-      decoded = JSON.parse(await readFile(this.path, "utf8"));
+      decoded = JSON.parse(await boundedLocatorText(this.path));
     } catch (error) {
       throw new RuntimeLocatorError("malformed", `Runtime locator is not valid JSON: ${String(error)}`);
     }
@@ -159,7 +240,7 @@ export class RuntimeLocator {
     return record;
   }
 
-  private async read(): Promise<{ record: RuntimeLocatorRecord; verified: NativeLocatorObservation | null } | null> {
+  private async read(signal?: AbortSignal): Promise<{ record: RuntimeLocatorRecord; verified: NativeLocatorObservation | null } | null> {
     let metadata;
     try {
       metadata = await lstat(this.path);
@@ -185,13 +266,15 @@ export class RuntimeLocator {
     let verified: NativeLocatorObservation | null = null;
     if (this.runtimeExecutable) {
       try {
-        verified = await validateWindowsSecurityWithRuntime(this.runtimeExecutable, this.preferDigest);
+        verified = await validateWindowsSecurityWithRuntime(this.runtimeExecutable, this.preferDigest, signal);
       } catch {
-        await validateWindowsSecurity(this.path);
+        signal?.throwIfAborted();
+        await validateWindowsSecurity(this.path, signal);
       }
     } else {
-      await validateWindowsSecurity(this.path);
+      await validateWindowsSecurity(this.path, signal);
     }
+    signal?.throwIfAborted();
     return { record: await this.#readRecord(), verified };
   }
 }
@@ -226,6 +309,7 @@ function validated(record: RuntimeLocatorRecord, generation: RuntimeGeneration):
     generation.digest,
     generation.draining,
     generation.controlEndpoint,
+    incarnationRevision(record, generation),
   );
 }
 
@@ -249,7 +333,18 @@ interface WindowsSecurityObservation {
   }>;
 }
 
-async function validateWindowsSecurity(path: string): Promise<void> {
+// Abort can reject execFile before its close event. Retain admission until the native child and stdio end.
+async function executeVerifier(executable: string, args: string[], signal?: AbortSignal): Promise<{ stdout: string; stderr: string }> {
+  signal?.throwIfAborted();
+  const result = executeFile(executable, args, {
+    encoding: "utf8", maxBuffer: MAX_SECURITY_OUTPUT_BYTES, timeout: 5_000, windowsHide: true,
+    ...(signal ? { signal } : {}),
+  });
+  const closed = new Promise<void>((resolve) => result.child.once("close", () => resolve()));
+  try { return await result; } finally { await closed; }
+}
+
+async function validateWindowsSecurity(path: string, signal?: AbortSignal): Promise<void> {
   const systemRoot = process.env.SystemRoot;
   if (!systemRoot || !isAbsolute(systemRoot)) {
     throw new RuntimeLocatorError("environment", "SystemRoot is unavailable or not absolute");
@@ -275,13 +370,14 @@ async function validateWindowsSecurity(path: string): Promise<void> {
   ].join(";");
   let decoded: WindowsSecurityObservation;
   try {
-    const result = await executeFile(
+    const result = await executeVerifier(
       powershell,
       ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script, path],
-      { encoding: "utf8", maxBuffer: MAX_SECURITY_OUTPUT_BYTES, timeout: 5_000, windowsHide: true },
+      signal,
     );
     decoded = JSON.parse(result.stdout) as WindowsSecurityObservation;
   } catch (error) {
+    signal?.throwIfAborted();
     throw new RuntimeLocatorError("unsafe", `could not verify Runtime locator ACL: ${String(error)}`);
   }
   const rule = Array.isArray(decoded.rules) && decoded.rules.length === 1
@@ -301,18 +397,20 @@ async function validateWindowsSecurity(path: string): Promise<void> {
 async function validateWindowsSecurityWithRuntime(
   executable: string,
   preferDigest: string | undefined,
+  signal?: AbortSignal,
 ): Promise<NativeLocatorObservation> {
   const arguments_ = ["runtime-locator"];
   if (preferDigest) arguments_.push("--prefer", preferDigest);
   let decoded: unknown;
   try {
-    const result = await executeFile(
+    const result = await executeVerifier(
       executable,
       arguments_,
-      { encoding: "utf8", maxBuffer: MAX_SECURITY_OUTPUT_BYTES, timeout: 5_000, windowsHide: true },
+      signal,
     );
     decoded = JSON.parse(result.stdout);
   } catch (error) {
+    signal?.throwIfAborted();
     throw new RuntimeLocatorError("unsafe", `could not verify Runtime locator natively: ${String(error)}`);
   }
   if (!decoded || typeof decoded !== "object" || Array.isArray(decoded)) {
@@ -342,6 +440,7 @@ export function validatedLocatorForTesting(
   digest: string = "0".repeat(64),
   draining: boolean = false,
   controlEndpoint: string = `${endpoint}-control`,
+  revision: string = createHash("sha256").update(JSON.stringify([instanceId, endpoint, runtimeVersion, digest, controlEndpoint])).digest("hex"),
 ): ValidatedLocator {
   return new ValidatedLocator(
     validatedLocatorToken,
@@ -351,6 +450,7 @@ export function validatedLocatorForTesting(
     digest,
     draining,
     controlEndpoint,
+    revision,
   );
 }
 
@@ -488,4 +588,37 @@ function absoluteEnvironment(name: string): string {
 
 function isNodeError(error: unknown): error is NodeJS.ErrnoException {
   return error instanceof Error && "code" in error;
+}
+
+/** Observation hint only: equality may suppress redundant inspection but grants no Runtime authority. */
+function routingFingerprint(record: RuntimeLocatorRecord): string {
+  return JSON.stringify({ schema: record.schema, instanceId: record.instanceId,
+    generations: record.generations.map(routingEntry) });
+}
+
+function routingEntry({ liveSessions: _liveSessions, ...routing }: RuntimeGeneration): object {
+  return Object.fromEntries(Object.entries(routing).sort(([a], [b]) => a.localeCompare(b)));
+}
+
+/** Only compare for equality. This token is neither a credential nor an OS process identity. */
+function incarnationRevision(record: RuntimeLocatorRecord, generation: RuntimeGeneration): string {
+  // Draining changes selection, not process incarnation. Retained mirrors must survive that role change.
+  const { liveSessions: _liveSessions, draining: _draining, ...incarnation } = generation;
+  return createHash("sha256").update(JSON.stringify({ schema: record.schema, instanceId: record.instanceId,
+    incarnation: Object.fromEntries(Object.entries(incarnation).sort(([a], [b]) => a.localeCompare(b))) })).digest("hex");
+}
+
+async function boundedLocatorText(path: string): Promise<string> {
+  const file = await open(path, "r");
+  try {
+    const buffer = Buffer.alloc(MAX_LOCATOR_BYTES + 1);
+    let used = 0;
+    while (used < buffer.length) {
+      const { bytesRead } = await file.read(buffer, used, buffer.length - used, used);
+      if (bytesRead === 0) break;
+      used += bytesRead;
+    }
+    if (used > MAX_LOCATOR_BYTES) throw new RuntimeLocatorError("unsafe", "Runtime locator exceeds its byte limit");
+    return buffer.toString("utf8", 0, used);
+  } finally { await file.close(); }
 }

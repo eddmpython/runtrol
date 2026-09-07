@@ -1180,6 +1180,64 @@
       ],
       "type": "object"
     },
+    "NativeActivityObservation": {
+      "description": "One provider's structural activity proof, carried only by an opted-in provider watch.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "A complete bounded observation in the existing folderless native discovery scope.",
+          "properties": {
+            "activity": {
+              "$ref": "#/$defs/NativeActivity",
+              "description": "Process ownership and positively observed model activity."
+            },
+            "catalogueRevision": {
+              "description": "Opaque source-scoped catalogue invalidation token. It carries no provider file metadata.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "state": {
+              "const": "observed",
+              "type": "string"
+            },
+            "unknownActivity": {
+              "description": "Live identities for which model activity is unknown, distinct from completed turns.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "state",
+            "activity",
+            "unknownActivity"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Failure to obtain current proof. An earlier live identity must not become resumable from this.",
+          "properties": {
+            "providerId": {
+              "$ref": "#/$defs/ProviderId",
+              "description": "Provider whose current observation is unavailable."
+            },
+            "state": {
+              "const": "unavailable",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state",
+            "providerId"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "NativeActivityParams": {
       "additionalProperties": false,
       "description": "Ask which of one provider's conversations have a model answering right now.\n\nSeparate from the catalogue because it is asked often and the catalogue is not cheap: on the machine this\nwas measured, naming every stored conversation costs 121 ms. How a provider knows is its own business, and\na driver that cannot tell says nothing rather than guessing; what the answer means is the same for every\nprovider, and it is how the panel shows a turn running in a conversation Runtrol did not start.",
@@ -2029,6 +2087,28 @@
       ],
       "type": "object"
     },
+    "ProvidersNativeActivityChangedNotification": {
+      "additionalProperties": false,
+      "description": "Complete bounded native activity snapshot delivered on the existing provider watch.",
+      "properties": {
+        "snapshot": {
+          "description": "Latest observation for every registered usable provider, including unavailable proof.",
+          "items": {
+            "$ref": "#/$defs/NativeActivityObservation"
+          },
+          "type": "array"
+        },
+        "subscriptionId": {
+          "description": "The connection-local provider watch identity.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "subscriptionId",
+        "snapshot"
+      ],
+      "type": "object"
+    },
     "ProvidersUsageChangedNotification": {
       "additionalProperties": false,
       "description": "A changed account usage snapshot, delivered on the provider inventory subscription.\n\nUsage moves with every turn and every probe; a subscriber draws it the moment it changes instead of\nasking `providers/usage` on a clock. Sent once right after the subscription is installed, so a\nsubscriber never needs the request at all.",
@@ -2393,6 +2473,11 @@
           "description": "Fast provider inventory method is implemented.",
           "type": "boolean"
         },
+        "providerNativeActivityWatch": {
+          "default": false,
+          "description": "Opted-in provider streams publish native process and turn observations.",
+          "type": "boolean"
+        },
         "sessionControl": {
           "description": "Renewable single-writer session control is implemented.",
           "type": "boolean"
@@ -2409,6 +2494,11 @@
         "terminalSurface": {
           "default": false,
           "description": "Provider-faithful public terminal sessions are implemented for this generation.",
+          "type": "boolean"
+        },
+        "windowWorkspaceFoldersUpdate": {
+          "default": false,
+          "description": "Window updates accept workspace folders without replacing registration or input ownership.",
           "type": "boolean"
         }
       },
@@ -3356,6 +3446,11 @@
         {
           "const": "providers/usageChanged",
           "description": "One changed account usage snapshot, on the same provider subscription.",
+          "type": "string"
+        },
+        {
+          "const": "ProvidersNativeActivityChanged",
+          "description": "Native structural observation on an opted-in provider subscription.",
           "type": "string"
         },
         {
@@ -5135,6 +5230,12 @@
     "WatchProvidersParams": {
       "additionalProperties": false,
       "description": "Install one dedicated provider inventory subscription.",
+      "properties": {
+        "nativeActivity": {
+          "description": "Opt into native structural observations on this subscription. Requires `SessionNativeDiscover`\nin addition to `ProviderRead`. Omitted by older clients and never enabled on their behalf.",
+          "type": "boolean"
+        }
+      },
       "type": "object"
     },
     "WatchProvidersResult": {
@@ -5954,6 +6055,16 @@
             "$ref": "#/$defs/ObservedTerminal"
           },
           "type": "array"
+        },
+        "workspaceFolders": {
+          "description": "Replace the registered workspace folders without changing ownership; absent keeps them.\nSend only when the Runtime advertises `windowWorkspaceFoldersUpdate`.",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
         }
       },
       "required": [
@@ -6108,6 +6219,9 @@
     },
     "providers_changed": {
       "$ref": "#/$defs/ProvidersChangedNotification"
+    },
+    "providers_native_activity_changed": {
+      "$ref": "#/$defs/ProvidersNativeActivityChangedNotification"
     },
     "providers_usage_changed": {
       "$ref": "#/$defs/ProvidersUsageChangedNotification"
@@ -6375,6 +6489,7 @@
     "watch_providers_result",
     "providers_changed",
     "providers_usage_changed",
+    "providers_native_activity_changed",
     "provider_watch_ended",
     "runtime_terminal_id",
     "runtime_terminal_view_id",

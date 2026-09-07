@@ -214,6 +214,8 @@ pub enum RuntimeMethod {
     /// One changed account usage snapshot, on the same provider subscription.
     #[serde(rename = "providers/usageChanged")]
     ProvidersUsageChanged,
+    /// Native structural observation on an opted-in provider subscription.
+    ProvidersNativeActivityChanged,
     /// One normalized event notification.
     #[serde(rename = "sessions/event")]
     SessionsEvent,
@@ -325,6 +327,7 @@ impl RuntimeMethod {
             Self::ProvidersChanged => "providers/changed",
             Self::ProvidersWatchEnded => "providers/watchEnded",
             Self::ProvidersUsageChanged => "providers/usageChanged",
+            Self::ProvidersNativeActivityChanged => "providers/nativeActivityChanged",
             Self::SessionsEvent => "sessions/event",
             Self::SessionsLagged => "sessions/lagged",
             Self::TerminalsIndexChanged => "terminals/indexChanged",
@@ -420,6 +423,7 @@ impl FromStr for RuntimeMethod {
             "providers/changed" => Ok(Self::ProvidersChanged),
             "providers/watchEnded" => Ok(Self::ProvidersWatchEnded),
             "providers/usageChanged" => Ok(Self::ProvidersUsageChanged),
+            "providers/nativeActivityChanged" => Ok(Self::ProvidersNativeActivityChanged),
             "sessions/event" => Ok(Self::SessionsEvent),
             "sessions/lagged" => Ok(Self::SessionsLagged),
             "terminals/indexChanged" => Ok(Self::TerminalsIndexChanged),
@@ -516,6 +520,7 @@ mod tests {
             RuntimeMethod::ProvidersChanged,
             RuntimeMethod::ProvidersWatchEnded,
             RuntimeMethod::ProvidersUsageChanged,
+            RuntimeMethod::ProvidersNativeActivityChanged,
             RuntimeMethod::SessionsEvent,
             RuntimeMethod::SessionsLagged,
             RuntimeMethod::TerminalsIndexChanged,

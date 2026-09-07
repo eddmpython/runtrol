@@ -128,10 +128,7 @@ pub(crate) struct DiscoveryGates {
     /// The one lane for identities outside the registry, so an unknown provider still has exactly one.
     unknown: Arc<tokio::sync::Mutex<()>>,
     pub(crate) listing: Arc<tokio::sync::Semaphore>,
-    /// Latest content-free provider process roster, shared by every local window.
-    native_activity: tokio::sync::Mutex<
-        BTreeMap<ProviderId, (std::time::Instant, runtrol_provider::NativeProcessActivity)>,
-    >,
+    pub(crate) native_observations: crate::native_activity::NativeObservations,
 }
 
 impl DiscoveryGates {
@@ -141,12 +138,13 @@ impl DiscoveryGates {
             .map(runtrol_core::registry::Provider::id)
             .collect::<Vec<_>>();
         known.sort_unstable();
+        let native_observations = crate::native_activity::NativeObservations::new(&known);
         Self {
             known: known.into_boxed_slice(),
             lanes: tokio::sync::Mutex::new(BTreeMap::new()),
             unknown: Arc::new(tokio::sync::Mutex::new(())),
             listing: Arc::new(tokio::sync::Semaphore::new(NATIVE_LISTING_SLOTS)),
-            native_activity: tokio::sync::Mutex::new(BTreeMap::new()),
+            native_observations,
         }
     }
 
@@ -182,28 +180,23 @@ impl DiscoveryGates {
     }
 
     /// One still-fresh process roster previously measured for this provider.
-    pub(crate) async fn cached_native_activity(
+    pub(crate) fn cached_native_activity(
         &self,
         provider: ProviderId,
     ) -> Option<runtrol_provider::NativeProcessActivity> {
-        let cache = self.native_activity.lock().await;
-        let (measured_at, activity) = cache.get(&provider)?;
-        (measured_at.elapsed() < Duration::from_millis(NATIVE_ACTIVITY_CACHE_MS))
-            .then(|| activity.clone())
+        self.native_observations
+            .cached(provider, Duration::from_millis(NATIVE_ACTIVITY_CACHE_MS))
     }
 
-    /// Publish one provider roster for all windows after its provider lane measured it.
-    pub(crate) async fn remember_native_activity(
+    /// Seed a legacy observation through the same projection used by the structural source producer.
+    #[cfg(test)]
+    pub(crate) fn remember_native_activity(
         &self,
         provider: ProviderId,
         activity: runtrol_provider::NativeProcessActivity,
     ) -> bool {
-        let mut cache = self.native_activity.lock().await;
-        let turn_ended = cache
-            .get(&provider)
-            .is_some_and(|(_, previous)| !previous.active.is_empty() && activity.active.is_empty());
-        cache.insert(provider, (std::time::Instant::now(), activity));
-        turn_ended
+        self.native_observations
+            .record(provider, activity.into(), None)
     }
 }
 
@@ -226,9 +219,38 @@ async fn prewarm_providers(composed: Arc<Composed>, discovering: Arc<DiscoveryGa
     // first request arrives, making that request slower than the cold it hides. A racing real request
     // still wins overall: it queues on its provider's lane and rides the same preparation.
     let gentle = Arc::new(tokio::sync::Semaphore::new(2));
-    let providers = providers_to_prewarm(&composed.registry, |manifest| {
-        runtrol_core::locate(manifest).is_ok()
-    });
+    let Ok(permit) = Arc::clone(&gentle).acquire_owned().await else {
+        // This private admission is never closed. Skipping optional warm-up would still leave
+        // request-driven discovery available if its lifetime changes.
+        return;
+    };
+    let scanning = Arc::clone(&composed);
+    let providers = match tokio::task::spawn_blocking(move || {
+        // This single startup scan shares the warm-up admission. Cancellation cannot detach its
+        // filesystem work from the permit; it ends before any preparation task requests a slot.
+        let _permit = permit;
+        providers_to_prewarm(&scanning.registry, |manifest| {
+            runtrol_core::locate(manifest).is_ok()
+        })
+    })
+    .await
+    {
+        Ok(providers) => providers,
+        Err(error) => {
+            #[expect(
+                clippy::print_stderr,
+                reason = "a failed optional startup worker must remain visible without its panic payload"
+            )]
+            {
+                eprintln!(
+                    "runtrol: provider warm-up discovery failed (panic: {}, cancelled: {})",
+                    error.is_panic(),
+                    error.is_cancelled()
+                );
+            }
+            return;
+        }
+    };
     let mut meetings = JoinSet::new();
     for provider in providers {
         let composed = Arc::clone(&composed);
@@ -252,149 +274,6 @@ async fn prewarm_providers(composed: Arc<Composed>, discovering: Arc<DiscoveryGa
     // evicting the live code this warm-up intentionally touched.
     #[cfg(not(windows))]
     runtrol_childproc::footprint::release_unused_memory();
-}
-
-/// Minimum distance between two provider recovery scans on an idle machine.
-///
-/// Operating-system notifications remain immediate. This clock only repairs a notification that was lost, and
-/// one provider-neutral round robin owns it so independently started watchers cannot put several directory scans
-/// into the same CPU-budget window. With the two shipped providers each one is still checked every 30 seconds.
-const RECOVERY_SCAN_SPACING: Duration = Duration::from_secs(15);
-
-/// How long a provider whose directory cannot be watched waits before trying to watch it again.
-///
-/// A CLI that has never run on this machine has no directory yet, and the person installing it should not have
-/// to restart the Runtime for their first session to appear.
-const RETRY_WATCH_AFTER: Duration = Duration::from_mins(1);
-
-/// Find, bind and mirror provider sessions with no window involved.
-///
-/// Discovery used to happen only inside a window's activity question: the only callers of a provider's process
-/// roster were one request handler and one open guard (measured 2026-08-30). A machine with no window open
-/// therefore found nothing at all, and a window that had just opened watched its own list fill in. Each
-/// provider is now waited on rather than asked, so a session started anywhere is bound and mirrored at once
-/// and the first window to open finds the work already done.
-async fn watch_native_sessions(composed: Arc<Composed>, discovering: Arc<DiscoveryGates>) {
-    let providers = providers_to_prewarm(&composed.registry, |manifest| {
-        runtrol_core::locate(manifest).is_ok()
-    });
-    let mut watching = JoinSet::new();
-    let mut recoveries = Vec::with_capacity(providers.len());
-    for provider in providers {
-        let (request_recovery, recovery_requested) = mpsc::channel(1);
-        recoveries.push(request_recovery);
-        watching.spawn(watch_one_provider(
-            Arc::clone(&composed),
-            Arc::clone(&discovering),
-            provider,
-            recovery_requested,
-        ));
-    }
-    if !recoveries.is_empty() {
-        watching.spawn(schedule_native_recovery(Arc::clone(&composed), recoveries));
-    }
-    while watching.join_next().await.is_some() {}
-}
-
-/// Ask one installed provider at a time to repair a possibly missed directory notification.
-async fn schedule_native_recovery(composed: Arc<Composed>, providers: Vec<mpsc::Sender<()>>) {
-    if providers.is_empty() {
-        return;
-    }
-    let mut next = 0;
-    loop {
-        tokio::time::sleep(RECOVERY_SCAN_SPACING).await;
-        if composed.draining.load(Ordering::Acquire) {
-            return;
-        }
-        // Capacity one coalesces a pulse with one already waiting behind that provider's current observation.
-        if let Some(request) = providers.get(next) {
-            match request.try_send(()) {
-                Ok(())
-                | Err(
-                    mpsc::error::TrySendError::Full(()) | mpsc::error::TrySendError::Closed(()),
-                ) => {}
-            }
-        }
-        next = (next + 1) % providers.len();
-    }
-}
-
-/// Wait on one provider's own statement that its open conversations changed, and act on each one.
-async fn watch_one_provider(
-    composed: Arc<Composed>,
-    discovering: Arc<DiscoveryGates>,
-    provider: ProviderId,
-    mut recovery_requested: mpsc::Receiver<()>,
-) {
-    loop {
-        // A draining generation is on its way out and opens nothing new; its successor is doing this now.
-        if composed.draining.load(std::sync::atomic::Ordering::Acquire) {
-            return;
-        }
-        let Some(mut changes) = watch_of(&composed, provider).await else {
-            // A CLI whose directory does not exist yet still gets an initial observation. A recovery pulse both
-            // observes it again and returns here to install the watch as soon as its first session creates it.
-            look_again(&composed, &discovering, provider).await;
-            tokio::select! {
-                () = tokio::time::sleep(RETRY_WATCH_AFTER) => {}
-                requested = recovery_requested.recv() => {
-                    if requested.is_none() {
-                        return;
-                    }
-                }
-            }
-            continue;
-        };
-        // Install the watch before the initial observation. Sessions already open at Runtime start are found by
-        // this scan, and a session arriving during it leaves a notification for the receiver below.
-        look_again(&composed, &discovering, provider).await;
-        loop {
-            tokio::select! {
-                notice = changes.recv() => match notice {
-                    Some(()) => look_again(&composed, &discovering, provider).await,
-                    // The watch ended. Ask for a new one rather than going blind.
-                    None => break,
-                },
-                requested = recovery_requested.recv() => match requested {
-                    Some(()) => look_again(&composed, &discovering, provider).await,
-                    None => return,
-                },
-            }
-            if composed.draining.load(std::sync::atomic::Ordering::Acquire) {
-                return;
-            }
-        }
-    }
-}
-
-/// A watch on the directory this provider says names its open conversations, or nothing when it has none.
-async fn watch_of(
-    composed: &Arc<Composed>,
-    provider: ProviderId,
-) -> Option<tokio::sync::mpsc::Receiver<()>> {
-    // A CLI that is absent or mid-update has nothing to watch yet, which the retry above tries again.
-    let Ok(prepared) = crate::provider_prepare::prepared_driver(composed, provider).await else {
-        return None;
-    };
-    let directory = prepared.driver.session_directory()?;
-    runtrol_childproc::watch_directory(&directory)
-}
-
-/// Ask this provider what it has open and act on the answer.
-async fn look_again(
-    composed: &Arc<Composed>,
-    discovering: &Arc<DiscoveryGates>,
-    provider: ProviderId,
-) {
-    // A provider that cannot be prepared or will not answer leaves the last answer standing. Nothing is
-    // reported here: this watch has no request waiting on it, and every failure it could meet is one a real
-    // request meets again and reports to the person who asked.
-    if let Ok(Ok(activity)) =
-        crate::runtime_serve::observe_native_activity(composed, discovering, provider).await
-    {
-        crate::runtime_serve::reconcile_native_activity(composed, provider, &activity).await;
-    }
 }
 
 /// Select only services with an executable on this machine for startup preparation.
@@ -1187,9 +1066,10 @@ async fn serve_surfaces(
     )));
     // The Runtime's own eyes. Without this, a conversation opened in a terminal is invisible until some window
     // asks, and the mirror a person expects to click is built only after they look.
-    background.push(connections.spawn(watch_native_sessions(
+    background.push(connections.spawn(crate::native_producer::run(
         Arc::clone(&composed),
         Arc::clone(&discovering),
+        runtime_providers.subscribe(),
     )));
     background.push(connections.spawn(automatic_provider_updates(
         Arc::clone(&composed),
@@ -3983,15 +3863,13 @@ mod tests {
             processes: Vec::new(),
         };
 
-        assert!(!gates.remember_native_activity(provider, active).await);
+        assert!(!gates.remember_native_activity(provider, active));
         assert!(
-            gates
-                .remember_native_activity(provider, quiet.clone())
-                .await,
+            gates.remember_native_activity(provider, quiet.clone()),
             "the busy-to-quiet edge is the provider-neutral external turn boundary"
         );
         assert!(
-            !gates.remember_native_activity(provider, quiet).await,
+            !gates.remember_native_activity(provider, quiet),
             "re-reading the same quiet roster must not start another usage probe"
         );
 

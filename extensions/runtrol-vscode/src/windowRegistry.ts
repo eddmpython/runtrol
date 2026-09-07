@@ -21,13 +21,28 @@ import { OwnerText } from "./ownerText";
 import { abortableDelay } from "./abortableDelay";
 
 /// Where the window's record and its observed mirrors go.
+export type BoundMirrorHandle = {
+  readonly terminalId: string;
+  readonly closed: boolean;
+  output(bytesBase64: string): Promise<void>;
+  end(exitCode?: number): Promise<void>;
+};
+export type WindowGroupHandle = {
+  readonly registration: WindowRegistration;
+  readonly signal: AbortSignal;
+  openMirror(params: Omit<WindowMirrorOpenParams, "registrationGeneration" | "ownerToken">): Promise<BoundMirrorHandle>;
+};
+export type WindowSnapshot = { readonly register: WindowRegisterParams; readonly update: WindowUpdateParams };
+export type WindowOwner = {
+  state(): WindowSnapshot;
+  reveal(group: WindowGroupHandle, terminalKey: string): boolean;
+  input(group: WindowGroupHandle, subscription: WindowInputSubscription): Promise<void>;
+  failed(group: WindowGroupHandle, lane: string, error: unknown): void;
+};
 export type WindowPublisher = {
-  publishWindow(register: WindowRegisterParams, update: WindowUpdateParams): Promise<WindowRegistration>;
-  withWindowInput(params: WatchWindowInputParams, run: (subscription: WindowInputSubscription) => Promise<void>, signal: AbortSignal): Promise<void>;
+  setWindowOwner(owner: WindowOwner): { dispose(): void };
+  publishWindow(state: WindowSnapshot): Promise<WindowGroupHandle>;
   providerCommandNames(): Promise<ReadonlyMap<string, string>>;
-  mirrorOpen(params: WindowMirrorOpenParams): Promise<WindowMirrorOpened>;
-  mirrorOutput(params: WindowMirrorOutputParams): Promise<void>;
-  mirrorEnd(params: WindowMirrorEndParams): Promise<void>;
 };
 
 /// What this window fed into one observed mirror, for the journey to hold against the Runtime's own view.
@@ -56,6 +71,8 @@ type Mirror = {
   readonly providerId: string;
   readonly commandLine: string;
   terminalId: string | null;
+  group: WindowGroupHandle | null;
+  handle: BoundMirrorHandle | null;
   refusal: string | null;
   bytes: number;
   chunks: number;
@@ -85,18 +102,19 @@ export class WindowRegistry implements vscode.Disposable {
   private readonly mirrors = new Map<vscode.Terminal, Mirror>();
   private readonly executions = new WeakMap<vscode.TerminalShellExecution, string>();
   private readonly history: Mirror[] = [];
-  private inFlight: Promise<WindowRegistration> | null = null;
+  private inFlight: Promise<WindowGroupHandle> | null = null;
   private dirty = false;
   private disposed = false;
   private lastReported: string | null = null;
   private commandNames: ReadonlyMap<string, string> | null = null;
   private commandNamesReady: Promise<ReadonlyMap<string, string> | null> = Promise.resolve(null);
-  private owner: { registration: WindowRegistration; abort: AbortController; dispatcher: OwnerText } | null = null;
+  private readonly owners = new Map<WindowGroupHandle, { dispatcher: OwnerText; close(): void }>();
   private readonly lifetime = new AbortController();
 
   constructor(
     private readonly publisher: WindowPublisher,
     private readonly report: (message: string) => void,
+    private readonly updated: (snapshot: WindowSnapshot) => void = () => undefined,
   ) {
     this.state = new WindowRegistryState(
       {
@@ -119,6 +137,14 @@ export class WindowRegistry implements vscode.Disposable {
 
   /// Register now, with every terminal the window already holds, and follow the events from here on.
   start(): void {
+    // Initialization may finish before the ordinary window registry exists. Attaching these callbacks is
+    // synchronous; the first publish below asks the caller's router to prepare the initial ownership group.
+    this.subscriptions.push(this.publisher.setWindowOwner({
+      state: () => this.currentState(),
+      reveal: (group, key) => this.revealFromGroup(group, key),
+      input: (group, subscription) => this.serveGroupInput(group, subscription),
+      failed: (_group, _lane, error) => this.reportOnce(error),
+    }));
     for (const terminal of vscode.window.terminals) this.track(terminal);
     this.subscriptions.push(
       vscode.window.onDidOpenTerminal((terminal) => {
@@ -246,9 +272,8 @@ export class WindowRegistry implements vscode.Disposable {
   dispose(): void {
     this.disposed = true;
     this.lifetime.abort();
-    this.owner?.dispatcher.close();
-    this.owner?.abort.abort();
-    this.owner = null;
+    for (const owner of [...this.owners.values()]) owner.close();
+    this.owners.clear();
     for (const subscription of this.subscriptions) subscription.dispose();
     this.subscriptions.length = 0;
   }
@@ -299,6 +324,8 @@ export class WindowRegistry implements vscode.Disposable {
       providerId,
       commandLine: open.commandLine,
       terminalId: null,
+      group: null,
+      handle: null,
       refusal: null,
       bytes: 0,
       chunks: 0,
@@ -320,14 +347,14 @@ export class WindowRegistry implements vscode.Disposable {
         if (terminalKey === "") throw new Error("the terminal is not in this window's registry");
         if (cwd === null) throw new Error("shell integration reported no working directory for the terminal");
         if (processId === null) throw new Error("the terminal shell process is not known yet");
-        const registration = await this.publishCurrent();
-        if (!registration.ownerToken) throw new Error("This Runtime cannot authorize an observed terminal. Reconnect to the current Runtime.");
+        const group = await this.publishCurrent();
+        if (!group.registration.ownerToken) throw new Error("This Runtime cannot authorize an observed terminal. Reconnect to the current Runtime.");
         if (this.disposed || this.state.executionIdOf(terminal) !== executionId) {
           throw new Error("the shell execution ended before its mirror opened");
         }
-        terminalId = (await this.publisher.mirrorOpen({
-          ...open, cwd, registrationGeneration: registration.registrationGeneration, ownerToken: registration.ownerToken,
-        })).terminalId;
+        mirror.group = group;
+        mirror.handle = await group.openMirror({ ...open, cwd });
+        terminalId = mirror.handle.terminalId;
       } catch (error) {
         // The Runtime declined this mirror: the shell is brokered already, or the mirror table is full. The
         // stream is drained so VS Code does not hold it, and the refusal is evidence, not a warning.
@@ -348,7 +375,7 @@ export class WindowRegistry implements vscode.Disposable {
             mirror.bytes += chunk.length;
             mirror.chunks += 1;
             mirror.firstChunkAtMs ??= Date.now();
-            await this.publisher.mirrorOutput({ terminalId, bytesBase64 });
+            await mirror.handle!.output(bytesBase64);
           }
         }
       } catch (error) {
@@ -357,10 +384,7 @@ export class WindowRegistry implements vscode.Disposable {
       if (mirror.endSent) return;
       mirror.endSent = true;
       try {
-        await this.publisher.mirrorEnd({
-          terminalId,
-          ...(mirror.exitCode === null ? {} : { exitCode: mirror.exitCode }),
-        });
+        await mirror.handle!.end(mirror.exitCode ?? undefined);
       } catch (error) {
         this.reportMirrorEnd(error);
       }
@@ -376,13 +400,23 @@ export class WindowRegistry implements vscode.Disposable {
     this.mirrors.delete(terminal);
     if (closed && mirror.terminalId !== null) {
       mirror.endSent = true;
-      void this.publisher.mirrorEnd({ terminalId: mirror.terminalId }).catch((error: unknown) => this.reportMirrorEnd(error));
+      void mirror.handle?.end().catch((error: unknown) => this.reportMirrorEnd(error));
     }
   }
 
   /// The last refusal the Runtime gave this window's publish, for the eye passes; null while every publish held.
   lastPublishFailure(): string | null {
     return this.lastReported;
+  }
+
+  /** A synchronous latest-state accessor for route preparation; it performs no connection work. */
+  currentState(): WindowSnapshot {
+    return { register: this.state.register(), update: this.state.update() };
+  }
+
+  /** Called from this exact ownership group's reveal hook. No global window subscription is created here. */
+  revealFromGroup(group: WindowGroupHandle, terminalKey: string): boolean {
+    return !this.disposed && !group.signal.aborted && this.showTerminal(terminalKey);
   }
 
   /// Exactly what the next publish would send, for the eye passes to hold against a refusal.
@@ -406,10 +440,11 @@ export class WindowRegistry implements vscode.Disposable {
 
   private schedule(): void {
     if (this.disposed) return;
+    this.updated(this.currentState());
     void this.publishCurrent().catch((error: unknown) => this.reportOnce(error));
   }
 
-  private publishCurrent(): Promise<WindowRegistration> {
+  private publishCurrent(): Promise<WindowGroupHandle> {
     if (this.disposed) return Promise.reject(new Error("the window registry is closed"));
     if (this.inFlight) {
       this.dirty = true;
@@ -425,15 +460,14 @@ export class WindowRegistry implements vscode.Disposable {
       let backoffMs = PUBLISH_RETRY_FIRST_MS;
       for (let attempt = 0; !this.disposed; attempt += 1) {
         try {
-          let registration: WindowRegistration;
+          let group: WindowGroupHandle;
           do {
             this.dirty = false;
             // Names settle after the shell starts and VS Code raises no event for that; read them at publish time.
             for (const terminal of vscode.window.terminals) this.state.renamed(terminal, terminal.name);
-            registration = await this.publisher.publishWindow(this.state.register(), this.state.update());
-            this.followInput(registration);
+            group = await this.publisher.publishWindow(this.currentState());
           } while (this.dirty && !this.disposed);
-          return registration;
+          return group;
         } catch (error) {
           // Nothing here may throw into a VS Code event handler, and the same failure is reported once, not on
           // every attempt. After the last attempt the next VS Code event is what tries again.
@@ -452,53 +486,49 @@ export class WindowRegistry implements vscode.Disposable {
     return publishing;
   }
 
-  private followInput(registration: WindowRegistration): void {
-    if (this.disposed || this.owner?.registration === registration) return;
-    this.owner?.dispatcher.close();
-    this.owner?.abort.abort();
-    this.owner = null;
-    const ownerToken = registration.ownerToken;
-    if (!ownerToken) return;
-    const abort = new AbortController();
-    let channel: WindowInputSubscription | null = null;
+  /** One owner dispatcher per exact registration group. The group owns subscription creation and recovery. */
+  async serveGroupInput(group: WindowGroupHandle, channel: WindowInputSubscription): Promise<void> {
+    if (this.disposed || group.signal.aborted) { channel.close(); return; }
+    if (this.owners.has(group)) { channel.close(); throw new Error("this window group already has an input receiver"); }
+    const registration = group.registration;
+    let active = true;
     const dispatcher = new OwnerText({
       current: (binding) => {
-        if (abort.signal.aborted || binding.registrationGeneration !== registration.registrationGeneration) return null;
+        if (!active || group.signal.aborted || binding.registrationGeneration !== registration.registrationGeneration) return null;
         const handle = this.state.inputTarget(binding) as vscode.Terminal | null;
         const mirror = handle === null ? undefined : this.mirrors.get(handle);
-        return mirror && !mirror.ended && mirror.terminalId === binding.terminalId ? handle : null;
+        return mirror && !mirror.ended && mirror.group === group && mirror.handle?.closed === false
+          && mirror.terminalId === binding.terminalId ? handle : null;
       },
       authorize: (sequence) => {
-        if (!channel) return Promise.reject(new Error("the owner input connection is closed"));
+        if (!active || group.signal.aborted) return Promise.reject(new Error("the exact owner group ended"));
         return channel.claimInput(sequence);
       },
       complete: (receipt) => {
-        if (!channel) return Promise.reject(new Error("the owner input connection is closed"));
+        if (!active || group.signal.aborted) return Promise.reject(new Error("the exact owner group ended"));
         return channel.inputReceipt(receipt);
       },
     });
-    this.owner = { registration, abort, dispatcher };
-    void (async () => {
-      while (!abort.signal.aborted) {
-        try {
-          await this.publisher.withWindowInput({
-            windowSessionId: vscode.env.sessionId, registrationGeneration: registration.registrationGeneration, ownerToken,
-          }, async (subscription) => {
-            channel = subscription;
-            while (!abort.signal.aborted) {
-              const notification = await subscription.next();
-              if (notification.kind === "ended") return;
-              await dispatcher.receive(notification.offered);
-            }
-          }, abort.signal);
-        } catch (error) {
-          if (!abort.signal.aborted) this.reportOnce(error);
-        } finally {
-          channel = null;
-        }
-        if (!abort.signal.aborted) await abortableDelay(PUBLISH_RETRY_MAX_MS, abort.signal);
+    const close = (): void => {
+      if (!active) return;
+      active = false;
+      dispatcher.close();
+      channel.close();
+      group.signal.removeEventListener("abort", close);
+      this.lifetime.signal.removeEventListener("abort", close);
+      if (this.owners.get(group)?.close === close) this.owners.delete(group);
+    };
+    this.owners.set(group, { dispatcher, close });
+    group.signal.addEventListener("abort", close, { once: true });
+    this.lifetime.signal.addEventListener("abort", close, { once: true });
+    try {
+      while (active) {
+        const notification = await channel.next();
+        if (!active) return;
+        if (notification.kind === "ended") return;
+        await dispatcher.receive(notification.offered);
       }
-    })();
+    } finally { close(); }
   }
 }
 
@@ -521,6 +551,8 @@ function failedMirror(terminalKey: string, executionId: string, providerId: stri
     providerId,
     commandLine: commandLine.slice(0, 1024),
     terminalId: null,
+    group: null,
+    handle: null,
     refusal: error instanceof Error ? error.message : String(error),
     bytes: 0,
     chunks: 0,

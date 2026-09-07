@@ -52,11 +52,11 @@ use crate::claude::deletion;
 use crate::claude::home::{HomeProblem, config_directory};
 
 /// Where the CLI keeps one directory per folder it has run in.
-const PROJECTS_DIRECTORY: &str = "projects";
+pub(super) const PROJECTS_DIRECTORY: &str = "projects";
 
 /// The CLI's structured prompt-history list. Its `display` field is the same human-facing preview the CLI owns;
 /// it is used only when a conversation has no explicit `aiTitle` record.
-const HISTORY_FILE: &str = "history.jsonl";
+pub(super) const HISTORY_FILE: &str = "history.jsonl";
 
 /// The extension of a stored conversation. Everything else in a project directory is the CLI's own business.
 const CONVERSATION_EXTENSION: &str = "jsonl";

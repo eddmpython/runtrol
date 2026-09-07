@@ -51,3 +51,34 @@ test("a usage notification for another subscription is refused", async () => {
   const subscription = new ProviderSubscription(transport, started);
   await assert.rejects(() => subscription.next(), RuntimeProtocolError);
 });
+
+test("native structural snapshots preserve unknown proof and require explicit opt-in", async () => {
+  const frame = {
+    jsonrpc: "2.0",
+    method: "providers/nativeActivityChanged",
+    params: {
+      subscriptionId: "sub_fixture",
+      snapshot: [
+        {
+          state: "observed",
+          activity: { providerId: "fixture", live: ["native_fixture"], active: [], attachable: [], focusable: [] },
+          catalogueRevision: "opaque:2",
+          unknownActivity: ["native_fixture"],
+        },
+        { state: "unavailable", providerId: "other" },
+      ],
+    },
+  };
+  const opted = new ProviderSubscription(new ScriptedRuntimeTransport([frame]), started, true);
+  const notification = await opted.next();
+  assert.equal(notification.kind, "nativeActivityChanged");
+  if (notification.kind === "nativeActivityChanged") {
+    assert.deepEqual(notification.nativeActivityChanged.snapshot, frame.params.snapshot);
+  }
+  const legacy = new ProviderSubscription(new ScriptedRuntimeTransport([frame]), started);
+  await assert.rejects(() => legacy.next(), /native activity was not requested/);
+  const foreign = new ProviderSubscription(new ScriptedRuntimeTransport([
+    { ...frame, params: { ...frame.params, subscriptionId: "sub_other" } },
+  ]), started, true);
+  await assert.rejects(() => foreign.next(), RuntimeProtocolError);
+});

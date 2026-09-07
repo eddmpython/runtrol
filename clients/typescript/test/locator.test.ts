@@ -1,16 +1,14 @@
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { join } from "node:path";
 import { test } from "node:test";
-import { promisify } from "node:util";
 
 import { RuntimeLocator, RuntimeLocatorError } from "../src/index.js";
 import { LEGACY_DIGEST } from "../src/locator.js";
 import { runtimeLocatorAt } from "../src/testing.js";
 
-const executeFile = promisify(execFile);
+import { makeOwnerOnly } from "./locatorFixture.js";
 
 test("a native locator verifier must be one exact absolute executable", () => {
   assert.throws(
@@ -94,37 +92,6 @@ test("a locator from before generations is read as one digestless generation, ne
   }
 });
 
-async function makeOwnerOnly(path: string): Promise<void> {
-  if (process.platform !== "win32") {
-    await chmod(path, 0o600);
-    return;
-  }
-  const systemRoot = process.env.SystemRoot;
-  assert.ok(systemRoot && isAbsolute(systemRoot));
-  const powershell = join(
-    systemRoot,
-    "System32",
-    "WindowsPowerShell",
-    "v1.0",
-    "powershell.exe",
-  );
-  const script = [
-    "& { param([string]$TargetPath)",
-    "$ErrorActionPreference='Stop'",
-    "$acl=[System.IO.File]::GetAccessControl($TargetPath)",
-    "$acl.SetAccessRuleProtection($true,$false)",
-    "$identity=[Security.Principal.WindowsIdentity]::GetCurrent().User",
-    "$rule=New-Object Security.AccessControl.FileSystemAccessRule($identity,'FullControl','Allow')",
-    "$acl.SetAccessRule($rule)",
-    "[System.IO.File]::SetAccessControl($TargetPath,$acl)",
-    "}",
-  ].join(";");
-  await executeFile(
-    powershell,
-    ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script, path],
-    { windowsHide: true },
-  );
-}
 
 test("the system locator reads the home the operator chose, the way the Core does", async () => {
   // The defect this exists for: the Core resolved `RUNTROL_HOME` and this SDK resolved only the platform

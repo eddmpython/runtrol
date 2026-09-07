@@ -1085,6 +1085,7 @@ fn parse_session_operation(
         | RuntimeMethod::ProvidersChanged
         | RuntimeMethod::ProvidersWatchEnded
         | RuntimeMethod::ProvidersUsageChanged
+        | RuntimeMethod::ProvidersNativeActivityChanged
         | RuntimeMethod::ProvidersGetCapabilities
         | RuntimeMethod::ProvidersListModels
         | RuntimeMethod::ProvidersListNativeSessions

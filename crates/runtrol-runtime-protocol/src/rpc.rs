@@ -170,10 +170,16 @@ pub struct RuntimeInstance {
 #[derive(Clone, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeCapabilities {
+    /// Window updates accept workspace folders without replacing registration or input ownership.
+    #[serde(default)]
+    pub window_workspace_folders_update: bool,
     /// Local integration enrollment is implemented.
     pub integration_enrollment: bool,
     /// Fast provider inventory method is implemented.
     pub provider_inventory: bool,
+    /// Opted-in provider streams publish native process and turn observations.
+    #[serde(default)]
+    pub provider_native_activity_watch: bool,
     /// Fast managed session snapshot is implemented.
     pub managed_session_list: bool,
     /// Explicit provider model discovery is implemented.

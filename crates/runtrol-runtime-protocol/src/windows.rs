@@ -92,6 +92,10 @@ pub struct ObservedTerminal {
 #[derive(Clone, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WindowUpdateParams {
+    /// Replace the registered workspace folders without changing ownership; absent keeps them.
+    /// Send only when the Runtime advertises `windowWorkspaceFoldersUpdate`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_folders: Option<Vec<String>>,
     /// Every terminal the window observes right now.
     pub terminals: Vec<ObservedTerminal>,
 }
@@ -434,4 +438,21 @@ pub struct WindowInputEndedNotification {
     pub subscription_id: String,
     /// Structural reason for retirement.
     pub reason: WindowIndexEndReason,
+}
+
+#[cfg(test)]
+mod workspace_folder_update_tests {
+    use super::*;
+
+    #[test]
+    fn workspace_folder_update_preserves_omission_and_explicit_empty() {
+        let old = serde_json::json!({"terminals": []});
+        let absent: WindowUpdateParams = serde_json::from_value(old.clone()).unwrap();
+        assert_eq!(absent.workspace_folders, None);
+        assert_eq!(serde_json::to_value(absent).unwrap(), old);
+        let clear = serde_json::json!({"terminals": [], "workspaceFolders": []});
+        let empty: WindowUpdateParams = serde_json::from_value(clear.clone()).unwrap();
+        assert_eq!(empty.workspace_folders, Some(Vec::new()));
+        assert_eq!(serde_json::to_value(empty).unwrap(), clear);
+    }
 }

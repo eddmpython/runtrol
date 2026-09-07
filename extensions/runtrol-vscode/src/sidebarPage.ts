@@ -210,6 +210,8 @@ function projectHtml(project: SidebarProjectRow, assets: SidebarAssets): string 
   const badges = [
     project.attention > 0 ? `<span class="badge attention" title="${project.attention} waiting for you">${project.attention}</span>` : "",
     project.live > 0 ? `<span class="badge live" title="${project.live} running">${project.live}</span>` : "",
+  ].join("");
+  const repository = [
     project.branch ? `<span class="badge branch" title="On branch ${escapeHtml(project.branch)}"><i class="ci ci-git-branch" aria-hidden="true"></i><span class="what">${escapeHtml(project.branch)}</span></span>` : "",
     changesMarkup(project.changes, project.changesError),
   ].join("");
@@ -224,10 +226,13 @@ ${action("runtrol.removeProject", "Remove from the sidebar (the folder stays)", 
     : `<span class="actions">${action("runtrol.newConversationInProject", "New conversation here", "add")}${action("runtrol.createProjectHere", "Keep this folder as a project", "folder-library")}</span>`;
   return `<div class="project${project.collapsed ? " collapsed" : ""}" data-project="${escapeHtml(project.key)}"${project.kind === "created" ? ' draggable="true"' : ""}>
 <div class="row project-row${project.current ? " current" : ""}" role="button" tabindex="0" data-kind="project" data-key="${escapeHtml(project.key)}" aria-expanded="${project.collapsed ? "false" : "true"}" title="${escapeHtml(project.workspace)}">
+<span class="project-heading">
 <span class="chevron" aria-hidden="true"></span>
 <span class="name">${escapeHtml(project.name)}</span>
 <span class="count">${count}</span>
 ${badges}
+</span>
+${repository ? `<span class="project-repository">${repository}</span>` : ""}
 ${actions}
 </div>
 <div class="rows">${project.rows.map((row) => conversationHtml(row, assets)).join("")}${moreHtml(project)}</div>
@@ -320,9 +325,11 @@ function conversationStateHtml(row: SidebarConversationRow): string {
           : row.stopping
             // A stop the Runtime accepted and is waiting out is neither running elsewhere nor unavailable.
             ? { label: "Stopping", tone: "muted" }
+          : row.activity === "unknown"
+            ? { label: "Activity unknown", tone: "muted" }
           : !row.canOpen
             // Three different truths used to share one word. A row that can be shown where it runs says so, a live
-            // row that cannot says only that much, and a row with no live process is unavailable.
+            // row that cannot says only that much, and unavailable does not claim a proven live process.
             ? {
               label: row.canFocus ? "Focus owner" : row.live ? "Observed only" : "Unavailable",
               tone: "muted",
@@ -359,7 +366,7 @@ function firstRunHtml(): string {
 // icon font, and an <img> would not follow the theme colour. Each is the codicon outline in a 16-unit box.
 // The body owns the sidebar background and full height; #page preserves its flex column across repaint.
 // Only the conversation list scrolls. Its right padding leaves the scrollbar on the panel edge.
-// Project names keep a minimum width; metadata and branch labels yield while their icons keep their size.
+// Project headings and repository details wrap together when their contents no longer fit one line.
 // Native titles stay on one line. Working rotates only the provider glyph; status words describe actions.
 // Row actions overlay the memory figure without relayout and paint an opaque base under theme hover colors.
 // Blocked rows reserve a status slot beside their actions. Git numbers use the editor theme colors.
@@ -397,12 +404,15 @@ button { font: inherit; color: inherit; }
 .row { position: relative; display: flex; align-items: center; gap: 6px; min-height: 24px; padding: 2px 4px; border-radius: 4px; cursor: pointer; outline: none; }
 .row:hover { background: var(--vscode-list-hoverBackground); }
 .row:focus-visible { box-shadow: inset 0 0 0 1px var(--vscode-focusBorder); }
-.project-row { font-weight: 600; }
+.project-row { font-weight: 600; flex-wrap: wrap; }
+.project-heading, .project-repository { display: flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; }
+.project-heading { flex: 1 1 auto; }
+.project-repository { flex: 0 1 auto; flex-wrap: wrap; }
 .project-row .chevron { flex: none; width: 10px; height: 10px; margin-right: -2px; background: currentColor; opacity: 0.6; -webkit-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M5 3l6 5-6 5z'/></svg>") center / contain no-repeat; mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M5 3l6 5-6 5z'/></svg>") center / contain no-repeat; transform: rotate(90deg); transition: transform 80ms; }
 .project.collapsed .project-row .chevron { transform: rotate(0deg); }
 .project.collapsed .rows { display: none; }
 
-.project-row .name { flex: 0 1 auto; min-width: 3.5em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.project-row .name { flex: 0 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .project-row .count { flex: none; }
 .project-row .count { font-weight: 400; opacity: 0.55; font-size: 11px; }
 .project-row.current .name::after { content: " · here"; font-weight: 400; opacity: 0.6; font-size: 11px; }
@@ -414,7 +424,7 @@ button { font: inherit; color: inherit; }
 .badge.branch .ci { flex: none; width: 11px; height: 11px; }
 .badge.branch .what { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-.badge.changes { flex: none; background: transparent; font-weight: 500; display: inline-flex; align-items: center; gap: 4px; padding: 0 2px; font-variant-numeric: tabular-nums; }
+.badge.changes { flex: 0 1 auto; min-width: 0; flex-wrap: wrap; background: transparent; font-weight: 500; display: inline-flex; align-items: center; gap: 4px; padding: 0 2px; font-variant-numeric: tabular-nums; }
 .badge.changes .add { color: var(--vscode-gitDecoration-addedResourceForeground); }
 .badge.changes .del { color: var(--vscode-gitDecoration-deletedResourceForeground); }
 .badge.changes .new { color: var(--vscode-gitDecoration-untrackedResourceForeground); }
@@ -445,8 +455,7 @@ button { font: inherit; color: inherit; }
 .row:hover .actions, .row:focus-within .actions { visibility: visible; }
 .project-row .actions { position: static; display: none; flex: none; margin-left: auto; padding-left: 0; }
 .project-row:is(:hover, :focus-within) .actions { display: inline-flex; }
-.project-row:is(:hover, :focus-within) :is(.branch, .changes) { display: none; }
-.project-row:is(:hover, :focus-within) .name { min-width: 0; }
+.project-row:is(:hover, :focus-within) .project-repository { display: none; }
 .row:hover .memory, .row:focus-within .memory { visibility: hidden; }
 
 .conv.stateful:hover .conv-state, .conv.stateful:focus-within .conv-state { position: absolute; right: 4px; z-index: 2; box-sizing: border-box; width: 82px; text-align: center; }
