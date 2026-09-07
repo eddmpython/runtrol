@@ -311,3 +311,88 @@ async fn exit_cancels_a_query_waiting_for_an_input_operation() {
     );
     assert!(written.try_recv().is_err());
 }
+
+#[tokio::test]
+async fn a_snapshot_serializer_failure_preserves_authority_and_the_atomic_live_boundary() {
+    let (terminal, mut written) = host_recorder();
+    let mut viewer = terminal.attach().await;
+    publish_raw(&terminal, &mut viewer, b"abc").await;
+    let calls = std::cell::Cell::new(0);
+    let mut failed = terminal
+        .shared
+        .checkpoint_with_serializer(|screen| {
+            calls.set(calls.get() + 1);
+            assert_eq!(screen.cursor_position(), (0, 3));
+            panic!("fixture snapshot serialization failure");
+        })
+        .await;
+    assert_eq!(calls.get(), 1);
+    assert!(!failed.checkpoint_available && failed.snapshot.is_empty());
+    assert!(
+        written.try_recv().is_err(),
+        "a failed checkpoint writes no query reply"
+    );
+    assert_eq!(
+        terminal
+            .shared
+            .projector
+            .lock()
+            .await
+            .screen
+            .screen()
+            .cursor_position(),
+        (0, 3)
+    );
+
+    publish_raw(&terminal, &mut viewer, b"xy").await;
+    let raw = failed
+        .live
+        .recv()
+        .await
+        .expect("failed attachment retains its exact receiver");
+    assert_eq!(raw.sequence, 2);
+    assert_eq!(raw.bytes.as_ref(), b"xy");
+    assert!(
+        failed.live.try_recv().is_err(),
+        "no duplicate or pre-boundary output"
+    );
+    let mut recovered = terminal.attach().await;
+    assert!(
+        recovered.checkpoint_available,
+        "a normal request recovers without resizing or resetting authority"
+    );
+    assert!(String::from_utf8_lossy(&recovered.snapshot).contains("abcxy"));
+    assert!(
+        written.try_recv().is_err(),
+        "a successful checkpoint also writes no reply"
+    );
+    publish_raw(&terminal, &mut viewer, b"\x1b[6n").await;
+    for attachment in [&mut failed, &mut recovered] {
+        let raw = attachment
+            .live
+            .recv()
+            .await
+            .expect("both receivers remain live");
+        assert_eq!(raw.sequence, 3);
+        assert_eq!(raw.bytes.as_ref(), b"\x1b[6n");
+    }
+    let answer = tokio::time::timeout(Duration::from_secs(2), written.recv())
+        .await
+        .expect("the authority still answers")
+        .expect("one cursor answer");
+    assert_eq!(
+        answer, b"\x1b[1;6R",
+        "the cursor survives both snapshot requests"
+    );
+    terminal
+        .input(b"fixture-input")
+        .await
+        .expect("the same writer remains available");
+    assert_eq!(
+        written.recv().await.expect("one user input"),
+        b"fixture-input"
+    );
+    finish(&terminal).await;
+    assert!(written.try_recv().is_err(), "no duplicate reply or input");
+    assert_eq!(terminal.exited().borrow().failure, None);
+}

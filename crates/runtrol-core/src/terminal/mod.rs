@@ -872,16 +872,16 @@ fn mutate_screen_or_reset(
     }
 }
 
-fn screen_snapshot(projector: &mut Projector) -> Vec<u8> {
-    if let Ok(snapshot) = catch_unwind(AssertUnwindSafe(|| {
-        projector.screen.screen().state_formatted()
-    })) {
-        snapshot
+fn screen_snapshot(
+    projector: &Projector,
+    serialize: impl FnOnce(&vt100::Screen) -> Vec<u8>,
+) -> Option<Vec<u8>> {
+    if let Ok(snapshot) = catch_unwind(AssertUnwindSafe(|| serialize(projector.screen.screen()))) {
+        Some(snapshot)
     } else {
         report_screen_reset("snapshot");
-        // Serialization never mutated the authoritative parser. Only this checkpoint becomes unavailable.
-        projector.available = false;
-        Vec::new()
+        // Only this attachment failed. The unchanged authority remains valid for the next snapshot request.
+        None
     }
 }
 
@@ -1096,24 +1096,33 @@ impl Shared {
 
     /// A checkpoint never advances the authority. It waits for an exact boundary or its caller's deadline.
     async fn checkpoint(&self) -> Attachment {
+        self.checkpoint_with_serializer(vt100::Screen::state_formatted)
+            .await
+    }
+
+    async fn checkpoint_with_serializer(
+        &self,
+        serialize: impl FnOnce(&vt100::Screen) -> Vec<u8>,
+    ) -> Attachment {
         let mut projected = self.projected.subscribe();
         loop {
-            let mut projector = self.projector.lock().await;
+            let projector = self.projector.lock().await;
             let (live, boundary) = self.subscribe().await;
             let progress = *projected.borrow_and_update();
             if !projector.available || progress.through.saturating_add(1) == boundary {
                 let snapshot = if projector.available {
-                    screen_snapshot(&mut projector)
+                    screen_snapshot(&projector, serialize)
                 } else {
-                    Vec::new()
+                    None
                 };
+                let checkpoint_available = snapshot.is_some();
                 #[cfg(feature = "test-support")]
                 if let Some(trace) = &self.trace {
                     trace.attached(boundary);
                 }
                 return Attachment {
-                    snapshot: Bytes::from(snapshot),
-                    checkpoint_available: projector.available,
+                    snapshot: Bytes::from(snapshot.unwrap_or_default()),
+                    checkpoint_available,
                     live,
                     exited: self.exited.subscribe(),
                 };
@@ -1765,6 +1774,60 @@ mod tests {
             "once released, the projector catches up on the ring it never delayed"
         );
         assert!(String::from_utf8_lossy(&recovered.snapshot).contains("reply-hello"));
+    }
+
+    #[tokio::test]
+    async fn a_snapshot_serializer_failure_keeps_the_native_cli_live_and_recovers_on_attach() {
+        struct Cleanup(Terminal);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                if self.0.exit().is_none()
+                    && let Err(error) = self.0.kill()
+                {
+                    report_lifetime_failure("cleaning the snapshot failure fixture", &error);
+                }
+            }
+        }
+
+        let (terminal, line_end) = echo_fixture();
+        let _cleanup = Cleanup(terminal.clone());
+        let mut viewer = terminal.attach().await;
+        let failed = tokio::time::timeout(
+            CHECKPOINT_WAIT * 4,
+            terminal.shared.checkpoint_with_serializer(|_| {
+                panic!("fixture snapshot serialization failure");
+            }),
+        )
+        .await
+        .expect("the actual checkpoint path contains serializer failure");
+        assert!(!failed.checkpoint_available && failed.snapshot.is_empty());
+        assert_eq!(terminal.exit(), None, "serialization never stops the child");
+        assert!(terminal.shared.projector.lock().await.available);
+        let recovered = terminal.attach().await;
+        assert!(
+            recovered.checkpoint_available,
+            "a normal attach retries serialization without resize"
+        );
+        assert_eq!(terminal.exited().borrow().failure, None);
+
+        terminal
+            .input(format!("snapshot-live{line_end}").as_bytes())
+            .await
+            .expect("the same native writer accepts input after snapshot failure");
+        let echoed = live_until(&mut viewer, "reply-snapshot-live", Duration::from_secs(10)).await;
+        assert!(
+            echoed.contains("reply-snapshot-live"),
+            "the actual child answers through the unchanged raw lane"
+        );
+        let mut exited = terminal.exited();
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while exited.borrow().exit_code.is_none() {
+                exited.changed().await.expect("the owned fixture ends");
+            }
+        })
+        .await
+        .expect("the exact native fixture completes before test cleanup");
+        assert_eq!(exited.borrow().failure, None);
     }
 
     #[tokio::test]
