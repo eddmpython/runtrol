@@ -86,8 +86,9 @@ function namesTheLaunchingAgent(name) {
 
 function omitFromIsolatedHost(name) {
   // A native GUI baseline owns its display environment. Command tools commonly disable ANSI colours for their
-  // captured output; inheriting that setting made the real provider TUIs monochrome in otherwise colour-capable PTYs.
-  return namesTheOuterHost(name) || namesTheLaunchingAgent(name) || name === "NO_COLOR";
+  // captured output. NO_COLOR and TERM=dumb both made real provider TUIs monochrome in colour-capable PTYs.
+  // The new terminal emulator owns TERM, rather than the command tool that launched its GUI.
+  return namesTheOuterHost(name) || namesTheLaunchingAgent(name) || name === "NO_COLOR" || name === "TERM";
 }
 
 /// An independent native GUI environment, without the outer host identity or the command tool's display mode.
