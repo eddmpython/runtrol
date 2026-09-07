@@ -18,10 +18,14 @@ use crate::runtime_auth::AuthorizedIntegration;
 use crate::runtime_control::cursor_to_public;
 use crate::runtime_inventory::{RuntimeInventoryFailure, RuntimeSessionCatalogue};
 
-use super::authority::refresh_current;
+use super::authority::{refresh_current, refresh_current_in_place};
 use super::connection_state::{RelayOutcome, Watching};
 use super::response::send_notification;
 use super::terminal_stream::{relay_terminal, relay_terminal_index};
+
+#[cfg(test)]
+#[path = "tests/provider_watch.rs"]
+mod provider_watch_tests;
 
 pub(super) async fn relay_watch(
     connection: &mut Connection,
@@ -134,8 +138,15 @@ async fn relay_providers(
     mut last: ProviderList,
     mut updates: watch::Receiver<Arc<ProviderList>>,
     mut usage: watch::Receiver<Arc<ProviderUsageList>>,
-    authority: AuthorizedIntegration,
+    mut authority: AuthorizedIntegration,
 ) {
+    let mut primary_authority_updates = composed.integration_authority.subscribe();
+    let mut draining_authority_updates = composed.generation_authority.subscribe();
+    // Subscribe before reading so a mutation between admission and the first usage frame is covered.
+    if let Err(reason) = refresh_provider_authority(composed, &mut authority) {
+        send_provider_watch_end(connection, subscription_id, reason).await;
+        return;
+    }
     // The usage a subscriber would otherwise have to ask for: sent first, then on every change, so a
     // surface draws the account's position the moment a turn or a probe moves it and never polls.
     let mut last_usage = usage.borrow_and_update().as_ref().clone();
@@ -152,23 +163,44 @@ async fn relay_providers(
     {
         return;
     }
+    let mut authority_tick = tokio::time::interval(std::time::Duration::from_millis(500));
+    authority_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
-        let changed = tokio::select! {
+        enum Wake {
+            Authority,
+            Inventory,
+            Usage,
+        }
+        let wake = tokio::select! {
+            biased;
+            changed = primary_authority_updates.changed() => changed.map(|()| Wake::Authority),
+            changed = draining_authority_updates.changed() => changed.map(|()| Wake::Authority),
+            _ = authority_tick.tick(), if composed.draining.load(std::sync::atomic::Ordering::Acquire) => Ok(Wake::Authority),
             peer = connection.recv() => {
                 drop(peer);
                 return;
             }
-            changed = updates.changed() => changed,
-            usage_changed = usage.changed() => {
-                if usage_changed.is_err() {
-                    send_provider_watch_end(
-                        connection,
-                        subscription_id,
-                        ProviderWatchEndReason::RuntimeUnavailable,
-                    )
-                    .await;
-                    return;
-                }
+            changed = updates.changed() => changed.map(|()| Wake::Inventory),
+            changed = usage.changed() => changed.map(|()| Wake::Usage),
+        };
+        let Ok(wake) = wake else {
+            send_provider_watch_end(
+                connection,
+                subscription_id,
+                ProviderWatchEndReason::RuntimeUnavailable,
+            )
+            .await;
+            return;
+        };
+        // Usage and inventory share the same current authority witness. Adjacent approved widenings must
+        // advance it, while revocation, key replacement and scope/root shrink retire the subscription.
+        if let Err(reason) = refresh_provider_authority(composed, &mut authority) {
+            send_provider_watch_end(connection, subscription_id, reason).await;
+            return;
+        }
+        match wake {
+            Wake::Authority => continue,
+            Wake::Usage => {
                 let snapshot = usage.borrow_and_update().as_ref().clone();
                 if snapshot == last_usage {
                     continue;
@@ -178,44 +210,19 @@ async fn relay_providers(
                     subscription_id: subscription_id.clone(),
                     snapshot,
                 };
-                if send_notification(connection, RuntimeMethod::ProvidersUsageChanged, &notification)
-                    .await
-                    .is_err()
+                if send_notification(
+                    connection,
+                    RuntimeMethod::ProvidersUsageChanged,
+                    &notification,
+                )
+                .await
+                .is_err()
                 {
                     return;
                 }
                 continue;
             }
-        };
-        if changed.is_err() {
-            send_provider_watch_end(
-                connection,
-                subscription_id,
-                ProviderWatchEndReason::RuntimeUnavailable,
-            )
-            .await;
-            return;
-        }
-        match refresh_current(composed, &authority) {
-            Ok(current) if current.grant.scopes.contains(&AppScope::ProviderRead) => {}
-            Ok(_) => {
-                send_provider_watch_end(
-                    connection,
-                    subscription_id,
-                    ProviderWatchEndReason::AuthorityChanged,
-                )
-                .await;
-                return;
-            }
-            Err(failure) => {
-                let reason = if failure.kind == RuntimeErrorKind::IntegrationRevoked {
-                    ProviderWatchEndReason::IntegrationRevoked
-                } else {
-                    ProviderWatchEndReason::AuthorityChanged
-                };
-                send_provider_watch_end(connection, subscription_id, reason).await;
-                return;
-            }
+            Wake::Inventory => {}
         }
         let snapshot = Arc::clone(&updates.borrow_and_update());
         if snapshot.as_ref() == &last {
@@ -233,6 +240,21 @@ async fn relay_providers(
             return;
         }
     }
+}
+
+fn refresh_provider_authority(
+    composed: &Composed,
+    authority: &mut AuthorizedIntegration,
+) -> Result<(), ProviderWatchEndReason> {
+    refresh_current_in_place(composed, authority).map_err(|failure| match failure.kind {
+        RuntimeErrorKind::IntegrationRevoked => ProviderWatchEndReason::IntegrationRevoked,
+        RuntimeErrorKind::RuntimeUnavailable => ProviderWatchEndReason::RuntimeUnavailable,
+        _ => ProviderWatchEndReason::AuthorityChanged,
+    })?;
+    if !authority.grant.scopes.contains(&AppScope::ProviderRead) {
+        return Err(ProviderWatchEndReason::AuthorityChanged);
+    }
+    Ok(())
 }
 
 async fn send_provider_watch_end(

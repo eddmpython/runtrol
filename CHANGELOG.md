@@ -87,6 +87,8 @@ and refactoring that no user can observe do not belong here.
 
 ### Fixed
 
+- Provider and usage subscriptions stop when their current permission is withdrawn, including while the data is
+  unchanged. An old subscription cannot send its first usage snapshot after revocation.
 - Restarting extensions from the sidebar closes Runtrol's conversation tabs before the host restarts, including
   retained failed tabs. Canceling keeps them open, and other terminals and running provider processes are preserved.
 - Crash reports stay within their file-size limit even when panic details or backtraces are oversized. Truncated

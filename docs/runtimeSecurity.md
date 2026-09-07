@@ -102,6 +102,12 @@ Grant changes are generation-based. Narrowing and revocation apply before the ne
 retire active subscriptions. Widening requires a new local decision. Key rotation proves the old and replacement keys
 and also requires exact local confirmation.
 
+The [provider watch relay](../crates/runtrol-daemon/src/runtime_serve/watch_relay.rs) validates its current authority
+before the initial usage notification and every later inventory or usage update. Commit-coupled permission changes
+wake the relay even when provider data is unchanged. Approved adjacent widenings advance its authority witness;
+revocation, key replacement and narrowing end the subscription. A draining generation also checks the freshness of
+its successor's authority relay. The primary generation adds no polling clock for this check.
+
 Project authorization uses canonical filesystem and worktree identity. It rejects traversal, links, junction escapes,
 case aliases, root replacement, and display-path authority. Exclusive workspace admission prevents two incompatible
 writers even when callers use different subdirectories of one worktree.
