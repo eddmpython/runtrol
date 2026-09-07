@@ -694,12 +694,8 @@ export class RuntimeTerminal implements vscode.Pseudoterminal {
   private fail(error: unknown): void {
     if (this.closed) return;
     const message = error instanceof Error ? error.message : String(error);
-    // The output pump owns recoverable transport breaks. Reaching here means opening or exact reattachment
-    // failed. Withdraw the dead route quietly; the index watch already reports Runtime reachability.
-    if (error instanceof RuntimeTransportError) {
-      this.detach(false, `Runtime terminal lost its transport: ${message}`);
-      return;
-    }
+    // Successful exact reattachment stays quiet. A failed view must report its own failure even when the
+    // separate Runtime index watch is healthy.
     this.presentation.failed(message);
     this.detach(false, `Runtime terminal failed: ${message}`);
   }

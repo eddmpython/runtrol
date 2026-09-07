@@ -383,7 +383,8 @@ test("reconnecting input keeps byte and action bounds and a failed reattach ends
         const input = assert.rejects(pty.handleMeasuredInput("unsent"), /closed before measured input dispatch/u);
         replacement.reject(new RuntimeTransportError("exact generation is unavailable"));
         await input;
-        assert.deepEqual(shown, ["opening"], "reachability remains the index watch's message");
+        assert.deepEqual(shown, ["opening", "failed output connection ended; exact reattachment failed: exact generation is unavailable"],
+          "a dedicated view failure is reported independently of the index watch");
         assert.match(disconnected[0] ?? "", /output connection ended; exact reattachment failed: exact generation is unavailable/u,
           "a failed reconnect must not erase the original transport break");
       }
@@ -497,22 +498,58 @@ test("opening settles while a connected provider remains alive and keeps deliver
   pty.close();
 });
 
-test("a failed open writes nothing into the pane and is told to the workbench", async () => {
-  const { pty, written, shown } = harness([async () => { throw new Error("no provider called nothing"); }]);
-  pty.open(undefined);
-  await settle();
-  assert.deepEqual(written, []);
-  assert.deepEqual(shown, ["opening", "failed no provider called nothing"]);
+test("a failed open writes nothing into the pane and reports both request and transport failures", async () => {
+  for (const error of [new Error("no provider called nothing"), new RuntimeTransportError("view authorization relay ended")]) {
+    const { pty, written, shown, disconnected } = harness([async () => { throw error; }]);
+    pty.open(undefined);
+    await settle();
+    assert.deepEqual(written, []);
+    assert.deepEqual(shown, ["opening", `failed ${error.message}`]);
+    assert.equal(disconnected.length, 1);
+    pty.close();
+    assert.equal(disconnected.length, 1, "closing the retained failed tab does not retire the view twice");
+  }
+});
+
+test("a failed exact view reconnect preserves its last screen and leaves another healthy view usable", async () => {
+  const writes: Uint8Array[] = [];
+  const healthy = harness([async () => fakeView("healthy screen", [{ kind: "hang" }], writes)]);
+  const failed = harness([
+    async () => fakeView("last failed screen", [{ kind: "break" }]),
+    async () => { throw new RuntimeTransportError("view authorization relay ended"); },
+  ]);
+  try {
+    healthy.pty.open(undefined);
+    failed.pty.open(undefined);
+    await settle();
+    assert.deepEqual(failed.attachments, [{ generation: "gen-1", terminal: "term-1" }]);
+    assert.deepEqual(failed.shown, ["opening", "failed connection ended; exact reattachment failed: view authorization relay ended"]);
+    assert.deepEqual(failed.written, ["last failed screen"]);
+    assert.deepEqual(failed.closed, [], "the final provider screen remains available for diagnosis");
+    assert.equal(failed.disconnected.length, 1);
+    assert.equal(failed.pty.descriptor(), null);
+    healthy.pty.handleInput("still usable");
+    await settle();
+    assert.deepEqual(writes.map((bytes) => new TextDecoder().decode(bytes)), ["still usable"]);
+    assert.deepEqual(healthy.shown, ["opening"]);
+    assert.deepEqual(healthy.disconnected, []);
+    assert.notEqual(healthy.pty.descriptor(), null);
+  } finally {
+    healthy.pty.close();
+    failed.pty.close();
+  }
 });
 
 test("a lag replacement and a reconnect write the Runtime's checkpoint bytes only, with no clear of Studio's own", async () => {
-  const { pty, written } = harness([
+  const { pty, written, shown, disconnected } = harness([
     async () => fakeView("\x1b[H\x1b[Jfirst", [{ kind: "lagged", screen: "\x1b[H\x1b[Jreplaced" }, { kind: "break" }]),
     async () => fakeView("\x1b[H\x1b[Jreattached", [{ kind: "hang" }]),
   ]);
   pty.open(undefined);
   await settle();
   assert.deepEqual(written, ["\x1b[H\x1b[Jfirst", "\x1b[H\x1b[Jreplaced", "\x1b[H\x1b[Jreattached"]);
+  assert.deepEqual(shown, ["opening"], "successful exact reattachment needs no failure notification");
+  assert.deepEqual(disconnected, []);
   pty.close();
 });
 

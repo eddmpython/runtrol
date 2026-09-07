@@ -147,7 +147,7 @@ export class TerminalTabs implements vscode.Disposable {
         const terminal = terminalOf();
         const host = terminal ? this.hosts.get(terminal) : undefined;
         if (terminal && host) host.setName(`${terminal.name} · failed`);
-        void vscode.window.showErrorMessage(message);
+        void vscode.window.showErrorMessage(`${terminal?.name ?? "Conversation"}: ${message} Reopen the conversation from the Runtrol sidebar to reconnect.`);
       },
     };
   }

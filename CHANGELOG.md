@@ -85,6 +85,9 @@ and refactoring that no user can observe do not belong here.
 
 ### Fixed
 
+- A terminal that cannot reconnect now keeps its last screen, marks its tab as failed, and reports the connection
+  error even when the sidebar can still reach Runtime. The message explains how to reopen the conversation.
+
 - Usage figures disappear when a successful provider report no longer publishes them. Expired windows and their
   previous blocking verdict no longer survive a reset. Sign-in and sign-out commands refresh the actual account
   after their own terminal task completes, and sign-out is offered only for a confirmed signed-in account.

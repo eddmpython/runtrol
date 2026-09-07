@@ -336,6 +336,9 @@ resize, stop, control acquisition, and approval mutations are never retried afte
 Studio's output pump owns reattachment for its exact broken view. A delayed control failure or lease response from
 that view cannot close the replacement or change its lease. The failed mutation keeps its original outcome; later
 unsent input waits within the existing bounded input queue until reattachment settles.
+If exact reattachment fails, Studio marks that tab as failed, preserves its last screen, and reports the original
+connection failure together with the reattachment failure. The notification directs the person to reopen the
+conversation from the sidebar. A healthy index connection cannot hide a failed terminal connection.
 
 One atomic live-admission registry prevents a native conversation from having both a structured owner and a terminal
 surface, including during generation handover. Runtime-owned TUI processes and official attachment renderers
