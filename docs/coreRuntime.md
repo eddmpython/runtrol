@@ -162,8 +162,9 @@ recovery.
 
 Containment is established before provider discovery or process launch.
 
-On Windows, all supervised descendants join a job object configured to terminate them when its last handle closes.
-The kernel therefore removes them when the daemon exits normally, panics, or is killed without cleanup.
+On Windows, the independent keeper retains the Runtime's Job scopes and exact process objects across daemon exit.
+The [exact Windows lifetime contract](terminalSurface.md#exact-windows-lifetime) owns containment, completion proof
+and recovery; daemon exit alone is not proof that every supervised descendant has stopped.
 
 On Unix, a small stable keeper leads one process group and starts the provider as its child. Before the provider is
 reported ready, the keeper durably activates a bounded guard containing its PID, kernel start identity, and boot
@@ -181,7 +182,7 @@ reaps the keeper and removes the durable guard only after no group member can ex
 A replacement daemon holds the exclusive store lock before it examines crash records. It never signals a recorded
 numeric process or group identifier. It revalidates the keeper PID, kernel start identity, and executable, waits only
 for non-zombie members to disappear, and refuses an ambiguous live group. No process-name or environment scan is
-used. Windows provides the corresponding kernel-owned cleanup through the job object.
+used. Windows follows the keeper and Job completion contract linked above.
 
 ## Generations: a running Runtime and the build that replaces it
 
@@ -192,7 +193,7 @@ the endpoint named by that executable's own digest, starting that build when not
 therefore never contend for a name, and a client never talks past the hello to a build other than its own.
 
 The home's `runtime.locator.json` lists every generation currently serving (digest, both endpoints, version, process
-id, start time, running turns, draining flag). Each daemon writes only its own entry, under the home's advisory lock,
+id, start time, live work count, draining flag). Each daemon writes only its own entry, under the home's advisory lock,
 and removes it at exit; an entry whose process no longer answers is dropped by the next generation that publishes.
 `runtrol status` prints the list and probes each entry. The locator admits at most sixteen simultaneous live
 generations. A seventeenth publish fails closed instead of creating an unbounded upgrade chain.
@@ -200,10 +201,12 @@ generations. A seventeenth publish fails closed instead of creating an unbounded
 Installing an update writes a new content-named executable and no file is ever written over. The new generation
 starts beside the running one and sends `drain` on the older generation's private endpoint. Drain is never refused:
 the older daemon releases the durable store at once (the newer one is retrying its open and succeeds the moment the
-file is free), stops taking new conversations, marks itself draining, and keeps serving the turns already running.
-It exits by itself once no turn is running; idle processes end with it and reopen from the provider's own store under
-the successor. Nothing is killed, nothing waits for an idle machine, and there is no gap between one daemon leaving
-and the next arriving.
+file is free), stops taking new conversations, marks itself draining, and keeps serving its existing owners.
+Its live work count includes supervised sessions, hosted terminals and pending ownership operations, not just active
+model turns. It exits after those owners and operations have ended and final output and audit work have drained.
+An idle prompt or a closed viewer does not retire a managed owner. Terminal retirement follows
+[the terminal lifetime contract](terminalSurface.md#lifetime), and
+[Runtime operations](runtimeOperations.md#update-and-rollback) owns the update and shutdown procedure.
 
 `drain` is permanently local. It carries `LocalScope::RuntimeDrain`, which no grant can hold, because choosing which
 binary answers every later request is executable authority in the same sense as installing a provider.

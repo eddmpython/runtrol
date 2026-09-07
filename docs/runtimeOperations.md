@@ -94,6 +94,12 @@ inventory overlaps every installed consumer and that its `rollbackSafeStoreSchem
 0.1.1 uses store rollback floor 1. If either check fails, do not activate the old binary. SDKs reconnect through the
 new locator and must not resubmit ambiguous mutations or reacquire control silently.
 
+The worktree ownership registry has a separate compatibility boundary from the metadata store floor. Follow
+[isolated-worker recovery and rollback](sessionDialogue.md#isolated-workers) when a newer Runtime has migrated it.
+Preserve the upgraded registry container and retained worktrees; an older executable's inability to read that
+ownership is not permission to delete or reconstruct it. Resume and cleanup require a Runtime that can validate
+the recorded format and exact owner.
+
 ## Uninstall
 
 First review managed sessions and integrations in VS Code. Revoke consumers that should no longer authenticate.

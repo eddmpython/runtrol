@@ -80,12 +80,23 @@ the executable and validates any requested model. The final launch checks the or
 project identity and deadline again before process creation. A disabled, revoked or expired request cannot acquire
 authority by waiting for Git or provider discovery.
 
-The new worker begins with dialogue disabled. Its optional initial task remains in the courier's bounded memory
-until the person enables dialogue and the worker explicitly consumes it. Studio's ordinary visible instruction
-names that initial receipt. It does not insert the task into terminal input. The public
+The new worker begins with dialogue disabled. Its optional initial task remains in bounded courier memory only until
+consumption, cancellation or its deadline. That deadline starts when spawn reserves the task, before provider
+preparation and worktree creation; startup and provider-owned folder trust questions consume the same lifetime.
+Complete those questions in the worker's ordinary terminal, then enable dialogue and have the worker consume the
+task before its deadline. The [spawn parser](../crates/runtrol-cli/src/courier/spawn.rs) owns the timeout option.
+An expired task is not replayed, and its expiry does not stop an already launched worker. Studio's ordinary visible
+instruction names the initial receipt but does not insert the task into terminal input. The public
 [`TerminalDescriptor`](../crates/runtrol-runtime-protocol/src/terminal.rs) carries lineage and project ownership;
 Studio orders related live rows together and identifies their lead in the tooltip. Ending the lead leaves its live
 workers running and visible.
+
+A lost spawn response does not prove that launch failed. A worker already committed by
+[spawn dispatch](../crates/runtrol-daemon/src/courier_gate/spawn_command.rs) remains live and observable after its
+caller disconnects. Before issuing another spawn, inspect the original Runtime generation's terminal index and
+compare the lead's lineage, worker identities and workspaces with the workers already known to the caller. Reuse an
+identified live worker through the ordinary activation and courier path. If the outcome cannot be established, keep
+it ambiguous; repeating spawn is a new launch, not an idempotent recovery of the missing receipt.
 
 The [worktree controller](../crates/runtrol-daemon/src/isolated_workspace/mod.rs) owns the sole durable record of
 reservation, process and filesystem identities. Its short transactions preserve other Runtime generations' rows.
@@ -122,6 +133,17 @@ overwrite the new document. Old rows remain readable, but automatic mutation pre
 did not record operation and process identities. An older Runtime cannot read the migrated container; code rollback
 must preserve that container and its unreconciled worktrees. The
 [migration owner](../crates/runtrol-daemon/src/isolated_workspace/registry/migration.rs) implements this boundary.
+
+### Reviewing worker results
+
+Use the spawn receipt's exact workspace and base commit to review the worker's changes in VS Code or ordinary Git.
+The provider may report a result through the courier, but that reply is not a Git verification or permission to merge.
+Commit the intended result in the worker worktree before stopping it if the work must be retained. After confirmed
+worker exit, inspect the retained worktree's status and exact commit difference from its recorded base, run the
+project's checks there, and integrate the reviewed commits through ordinary Git into the chosen checkout. When the
+source checkout must stay untouched, use a retained worktree for integration and compare the source's HEAD, index
+and files before and after the mission. Runtime neither merges nor discards retained work; unknown ownership keeps
+the directory preserved under the recovery rules above.
 
 ## Authority and lifetime
 

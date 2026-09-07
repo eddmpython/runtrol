@@ -392,10 +392,11 @@ observable rather than being restarted, migrated, or silently resumed.
 
 ## Human and machine surfaces
 
-The TUI is the human surface. Future CLI-to-CLI work must use a provider's official structured machine channel, such
-as MCP, ACP, or a documented queue, under the same native identity and lifecycle when the provider supports it. It
-must not scrape the screen or type prompts blindly into the TUI. A provider without a measured same-session machine
-channel cannot be advertised as one, and Runtrol does not create an automatic recursive agent loop.
+The TUI is the human surface. Managed processes exchange explicit opaque messages through
+[the session courier](sessionDialogue.md), which the provider invokes through its ordinary shell tool after visible
+activation. That process-scoped channel does not require a provider tool registration and does not claim a
+provider-native conversation identity. The dialogue contract owns activation, delivery, replies and isolated workers.
+Runtime never scrapes the screen, infers a reply, wakes an idle model through hidden input, or runs an agent loop.
 
 ## Deliberately absent
 
