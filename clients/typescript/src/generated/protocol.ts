@@ -424,7 +424,7 @@ export interface SubmitInputParams { readonly input: string; readonly leaseGener
 export interface SuccessResponse { readonly id: JsonRpcId; readonly jsonrpc: string; readonly result: unknown; }
 
 /** Acquire control only from one exact observed live incarnation. */
-export interface TerminalAcquireControlParams { readonly expectedTerminalGeneration: number; readonly requestId: MutationRequestId; readonly terminalId: RuntimeTerminalId; }
+export interface TerminalAcquireControlParams { readonly expectedTerminalGeneration: number; readonly onlyIfFree?: boolean; readonly requestId: MutationRequestId; readonly terminalId: RuntimeTerminalId; }
 
 /** Attach one new view at the terminal's current shared geometry. */
 export interface TerminalAttachParams { readonly terminalId: RuntimeTerminalId; }

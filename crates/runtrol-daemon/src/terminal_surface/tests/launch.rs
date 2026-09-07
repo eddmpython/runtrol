@@ -572,6 +572,7 @@ async fn another_terminal_accepts_input_before_failed_launch_cleanup_is_released
                 request_id: MutationRequestId::now(),
                 terminal_id: other.id.to_string().parse().unwrap(),
                 expected_terminal_generation: other.generation,
+                only_if_free: false,
             },
         )
         .await

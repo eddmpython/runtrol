@@ -219,8 +219,10 @@ transfers it: the earlier holder's next write or resize is refused with `control
 type asks again, which is a visible, ordered transfer rather than a race. The descriptor carries `controlGeneration`,
 a per-terminal count that climbs on every transfer and renewal, and `controlHeld`; the terminal index publishes a
 change on every transfer and release, so every window sees who leads in order. Geometry follows the holder: a
-follower window renders the canonical geometry and never resizes the shared process, and a window that takes control
-by typing sends its own size once. Writes are serialized through the one PTY writer, so every viewer observes one
+follower cannot resize the process under another unexpired lease. A resize can acquire an unheld or expired lease
+with `onlyIfFree`; the same Runtime lock checks the condition and grants control, so concurrent followers cannot
+both win. A Runtime generation that does not support this condition refuses it without an unconditional retry.
+A window that takes control by typing sends its own size once. Writes are serialized through the one PTY writer, so every viewer observes one
 input order and one resulting output stream, and a refused write is never applied twice.
 
 `vscodeMultiWindowTerminal` is the direct product proof. It runs two simultaneous real VS Code Extension Hosts with

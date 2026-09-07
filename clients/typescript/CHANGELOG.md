@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Terminal control acquisition can require that no unexpired holder exists through `onlyIfFree`.
 - Add observed-terminal text receipts and a bounded, serial owner input subscription with explicit claim and receipt.
 - Preserve unknown outcomes without replay and validate receipt identities and negotiated offer bounds.
 

@@ -362,6 +362,9 @@ pub struct TerminalAcquireControlParams {
     pub terminal_id: RuntimeTerminalId,
     /// Process incarnation visible when the user chose the action.
     pub expected_terminal_generation: u64,
+    /// Refuse to replace an unexpired holder. Omission preserves explicit control takeover.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub only_if_free: bool,
 }
 
 /// Renew or release one exact terminal control lease generation.

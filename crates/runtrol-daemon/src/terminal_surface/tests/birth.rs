@@ -176,6 +176,7 @@ async fn suspended_birth_allows_existing_input_and_courier_before_release() {
                 request_id: MutationRequestId::now(),
                 terminal_id: other.id.to_string().parse().unwrap(),
                 expected_terminal_generation: other.generation,
+                only_if_free: false,
             },
         )
         .await

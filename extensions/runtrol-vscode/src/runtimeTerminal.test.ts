@@ -595,8 +595,10 @@ test("a follower's pane resize never takes control; typing does, and the pane's 
   const view = fakeView("", [{ kind: "hang" }]);
   const traced = Object.assign(view, {
     async write() { calls.push("write"); },
-    async acquireControl() {
-      calls.push("acquire");
+    async acquireControl(params: { onlyIfFree?: boolean }) {
+      calls.push(params.onlyIfFree ? "acquire-if-free" : "acquire");
+      if (params.onlyIfFree) throw new RuntimeRequestError({ code: "controlConflict", correlationId: newMutationRequestId(),
+        message: "another view holds control of this terminal", retryable: false });
       return { leaseId: "lease-2", leaseGeneration: 2, expiresAtMs: Date.now() + 60_000 } as unknown as TerminalControlLease;
     },
     async resize() {
@@ -619,14 +621,115 @@ test("a follower's pane resize never takes control; typing does, and the pane's 
   await settle();
   assert.deepEqual(calls, ["resize"], "a holder-turned-follower is refused once and asks for nothing");
   calls.length = 0;
-  // Now a follower: a further pane change sends nothing at all.
+  // Now a follower: the Runtime atomically refuses passive acquisition while the other holder remains.
   pty.setDimensions({ columns: 80, rows: 20 });
   await settle();
-  assert.deepEqual(calls, [], "a follower never resizes the shared process");
+  assert.deepEqual(calls, ["acquire-if-free"], "a follower never resizes the shared process");
+  calls.length = 0;
   // Typing takes control, writes once, and only then sends this pane's size.
   pty.handleInput("k");
   await settle(80);
   assert.deepEqual(calls, ["acquire", "write", "resize"]);
+  pty.close();
+});
+
+test("a quiet pane reclaims only a free expired lease and sends the latest resize without input", async () => {
+  const view = fakeView("", [{ kind: "hang" }]);
+  const pending = deferred<TerminalControlLease>();
+  const acquires: Parameters<TerminalView["acquireControl"]>[0][] = [];
+  const sizes: Array<{ columns: number; rows: number }> = [];
+  let writes = 0;
+  Object.assign(view, {
+    acquireControl: (params: Parameters<TerminalView["acquireControl"]>[0]) => { acquires.push(params); return pending.promise; },
+    resize: async (params: Parameters<TerminalView["resize"]>[0]) => { sizes.push(params.geometry); },
+    write: async () => { writes += 1; },
+  });
+  const { pty, openings, shown } = harness([async () => view]);
+  pty.open({ columns: 66, rows: 22 });
+  await openings[0];
+  Object.assign(view.opened.controlLease!, { expiresAtMs: Date.now() - 1 });
+  pty.setDimensions({ columns: 100, rows: 30 });
+  await continuations();
+  pty.setDimensions({ columns: 137, rows: 47 });
+  assert.equal(acquires.length, 1);
+  assert.equal(acquires[0]!.onlyIfFree, true);
+  pending.resolve({ ...view.opened.controlLease!, leaseGeneration: 2, expiresAtMs: Date.now() + 60_000 });
+  await continuations();
+  assert.deepEqual(sizes, [{ columns: 137, rows: 47 }]);
+  assert.equal(writes, 0);
+  assert.deepEqual(shown, ["opening"]);
+  pty.close();
+});
+
+test("passive resize retries a server expiry once and yields to a holder that wins during dispatch", async () => {
+  for (const refusal of ["leaseExpired", "controlConflict"] as const) {
+    const view = fakeView("", [{ kind: "hang" }]);
+    const calls: string[] = [];
+    Object.assign(view, {
+      acquireControl: async (params: { onlyIfFree?: boolean }) => {
+        assert.equal(params.onlyIfFree, true);
+        calls.push("acquire-if-free");
+        return { ...view.opened.controlLease!, expiresAtMs: Date.now() + 60_000 };
+      },
+      resize: async () => {
+        calls.push("resize");
+        throw new RuntimeRequestError({ code: refusal, correlationId: newMutationRequestId(), message: "lease changed", retryable: false });
+      },
+    });
+    const { pty, openings, shown } = harness([async () => view]);
+    pty.open({ columns: 66, rows: 22 });
+    await openings[0];
+    Object.assign(view.opened.controlLease!, { expiresAtMs: Date.now() - 1 });
+    pty.setDimensions({ columns: 137, rows: 47 });
+    await continuations();
+    assert.deepEqual(calls, refusal === "leaseExpired"
+      ? ["acquire-if-free", "resize", "acquire-if-free", "resize"]
+      : ["acquire-if-free", "resize"]);
+    assert.deepEqual(shown, ["opening"], "a holder race cannot fail the output view");
+    pty.close();
+  }
+});
+
+test("an older Runtime rejecting conditional acquisition keeps its view and ordinary typing usable", async () => {
+  const view = fakeView("", [{ kind: "hang" }]);
+  const calls: string[] = [];
+  Object.assign(view, {
+    acquireControl: async (params: { onlyIfFree?: boolean }) => {
+      calls.push(params.onlyIfFree ? "acquire-if-free" : "acquire");
+      if (params.onlyIfFree) throw new RuntimeRequestError({ code: "invalidRequest", correlationId: newMutationRequestId(),
+        message: "unknown field onlyIfFree", retryable: false });
+      return { ...view.opened.controlLease!, expiresAtMs: Date.now() + 60_000 };
+    },
+    resize: async () => { calls.push("resize"); },
+    write: async () => { calls.push("write"); },
+  });
+  const { pty, openings, shown } = harness([async () => view]);
+  pty.open({ columns: 66, rows: 22 });
+  await openings[0];
+  Object.assign(view.opened.controlLease!, { expiresAtMs: Date.now() - 1 });
+  pty.setDimensions({ columns: 137, rows: 47 });
+  await continuations();
+  assert.deepEqual(calls, ["acquire-if-free"]);
+  assert.deepEqual(shown, ["opening"]);
+  pty.handleInput("k");
+  await continuations();
+  assert.deepEqual(calls, ["acquire-if-free", "acquire", "write", "resize"]);
+  pty.close();
+});
+
+test("a genuine resize parameter refusal is still reported on the current view", async () => {
+  const view = Object.assign(fakeView("", [{ kind: "hang" }]), {
+    resize: async () => {
+      throw new RuntimeRequestError({ code: "invalidRequest", correlationId: newMutationRequestId(), message: "invalid geometry", retryable: false });
+    },
+  });
+  const { pty, openings, shown } = harness([async () => view]);
+  pty.open({ columns: 66, rows: 22 });
+  await openings[0];
+  pty.setDimensions({ columns: 137, rows: 47 });
+  await continuations();
+  assert.equal(shown.length, 2);
+  assert.match(shown[1]!, /^failed .*invalid geometry/u);
   pty.close();
 });
 

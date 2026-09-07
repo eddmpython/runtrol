@@ -132,6 +132,7 @@ impl Fixture {
             request_id: MutationRequestId::now(),
             terminal_id: self.view.opened.terminal.terminal_id.clone(),
             expected_terminal_generation: self.view.hosted.generation,
+            only_if_free: false,
         }
     }
 
@@ -229,6 +230,81 @@ fn renewal(lease: &TerminalControlLease) -> TerminalControlParams {
         lease_id: lease.lease_id.clone(),
         lease_generation: lease.lease_generation,
     }
+}
+
+#[tokio::test]
+async fn conditional_control_cannot_replace_a_holder_and_can_claim_an_expired_lease() {
+    for dedicated in [false, true] {
+        let fixture = Fixture::new().await;
+        let first = fixture.acquire(&fixture.acquire_params()).await.unwrap();
+        let mut request = fixture.acquire_params();
+        request.only_if_free = true;
+        let acquire = || async {
+            if dedicated {
+                fixture.acquire(&request).await
+            } else {
+                fixture
+                    .composed
+                    .runtime_terminals
+                    .acquire(&fixture.composed, &fixture.view.authority, &request)
+                    .await
+            }
+        };
+        assert_eq!(
+            acquire().await.unwrap_err().kind,
+            RuntimeErrorKind::ControlConflict
+        );
+        let renewed = fixture
+            .composed
+            .runtime_terminals
+            .renew_view(&fixture.composed, &fixture.view, &renewal(&first))
+            .await
+            .expect("conditional refusal preserves the current holder");
+        assert_eq!(renewed.lease_id, first.lease_id);
+        fixture
+            .composed
+            .runtime_terminals
+            .state
+            .lock()
+            .await
+            .leases
+            .get_mut(&fixture.view.hosted.id)
+            .unwrap()
+            .expires_at_ms = 0;
+        let next = acquire()
+            .await
+            .expect("expired control does not prevent resize acquisition");
+        assert_ne!(next.lease_id, first.lease_id);
+        assert_eq!(
+            acquire().await.unwrap(),
+            next,
+            "the exact completed request replays its receipt"
+        );
+        fixture.close().await;
+    }
+}
+
+#[tokio::test]
+async fn simultaneous_conditional_control_requests_have_exactly_one_winner() {
+    let fixture = Fixture::new().await;
+    let mut first = fixture.acquire_params();
+    first.only_if_free = true;
+    let mut second = fixture.acquire_params();
+    second.only_if_free = true;
+    let (one, two) = tokio::join!(fixture.acquire(&first), fixture.acquire(&second));
+    let winner = match (one, two) {
+        (Ok(lease), Err(error)) | (Err(error), Ok(lease)) => {
+            assert_eq!(error.kind, RuntimeErrorKind::ControlConflict);
+            lease
+        }
+        other => panic!("conditional contenders require exactly one winner: {other:?}"),
+    };
+    let explicit = fixture
+        .acquire(&fixture.acquire_params())
+        .await
+        .expect("explicit input can still transfer control");
+    assert_ne!(explicit.lease_id, winner.lease_id);
+    fixture.close().await;
 }
 
 fn input_params(lease: &TerminalControlLease) -> TerminalWriteParams {
@@ -651,6 +727,7 @@ async fn a_changed_grant_gets_a_new_os_completion_and_a_denial_reaches_other_vie
                 request_id: MutationRequestId::now(),
                 terminal_id: other.opened.terminal.terminal_id.clone(),
                 expected_terminal_generation: other.hosted.generation,
+                only_if_free: false,
             },
         )
         .await;

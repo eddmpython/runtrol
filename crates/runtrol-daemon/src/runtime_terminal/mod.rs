@@ -831,6 +831,12 @@ impl TerminalRuntimeAdapter {
         }
         prune_mutations(&mut state, now);
         prune_expired_leases(&mut state, now);
+        if params.only_if_free && state.leases.contains_key(&terminal_id) {
+            return Err(TerminalRuntimeFailure::new(
+                RuntimeErrorKind::ControlConflict,
+                "another terminal control lease is still held",
+            ));
+        }
         ensure_lease_capacity(&state)?;
         ensure_mutation_capacity(&state)?;
         let lease_generation = next_control_generation(&mut state, terminal_id);

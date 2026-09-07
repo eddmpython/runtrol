@@ -87,6 +87,7 @@ and refactoring that no user can observe do not belong here.
 
 ### Fixed
 
+- Resizing a quiet terminal can regain expired control without taking input or geometry authority from another window.
 - Provider-owned conversation titles refresh after an observed native turn ends, even when the conversation
   was already listed before its title appeared.
 - Provider and usage subscriptions stop when their current permission is withdrawn, including while the data is

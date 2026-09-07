@@ -132,7 +132,7 @@ const STALE_PROOF = "native catalogue observation expired";
 ///
 /// Each terminal has one active lease; this view may hold an expired or superseded generation. Only the
 /// Runtime's structured refusal code permits asking again. An error message cannot authorize a retry.
-function leaseLost(error: unknown): boolean {
+function leaseLost(error: unknown): error is RuntimeRequestError {
   return error instanceof RuntimeRequestError
     && (error.failure.code === "leaseExpired" || error.failure.code === "controlConflict");
 }
@@ -468,8 +468,8 @@ export class RuntimeTerminal implements vscode.Pseudoterminal {
       this.lastResize = geometry;
     }, () => {
       this.resizeScheduled = false;
-      // A follower keeps its pending size for the moment it types and takes control; nothing to repeat now.
-      if (this.holdsControl()) this.scheduleResize();
+      // A refused follower keeps its pending size without polling the holder.
+      if (this.lease && this.lease.expiresAtMs > Date.now()) this.scheduleResize();
     }, false);
   }
 
@@ -591,8 +591,8 @@ export class RuntimeTerminal implements vscode.Pseudoterminal {
   /// Exactly one view holds input and resize authority (docs/terminalSurface.md, input and geometry). Typing
   /// takes it: a lease lost to another window, or expired after a quiet thirty seconds, is acquired again and the
   /// action runs once under the new lease (the Runtime refused the first attempt, so nothing was applied twice).
-  /// A resize only follows: with `takeOver` false the action runs solely while this view already holds control,
-  /// so a follower window never resizes the shared process from under the window that is typing.
+  /// A resize may reclaim an expired, free lease, but never takes authority from another holder. The Runtime
+  /// checks that condition atomically; a local expiry or catalogue observation cannot authorize a transfer.
   private queueControl(
     action: (view: TerminalView, lease: TerminalControlLease) => Promise<void>,
     settled: (error?: unknown) => void = () => undefined,
@@ -606,22 +606,20 @@ export class RuntimeTerminal implements vscode.Pseudoterminal {
       const view = this.view;
       if (!view) throw new Error("The public Runtime terminal is not connected.");
       commandView = view;
-      if (!takeOver && !this.holdsControl()) return;
-      try {
-        const lease = await this.ensureControl(view);
-        this.requireCurrentView(view);
-        await action(view, lease);
-      } catch (error: unknown) {
-        // The lease lives thirty seconds and is renewed when something is sent, so a conversation nobody typed
-        // into for longer answers the next keystroke with `leaseExpired`. That is recoverable and used to reach
-        // the person as a red line in their conversation instead (operator, 2026-08-28, with a picture). Another
-        // window may also have taken control since, and asking again is the exact, visible transfer back.
-        if (!leaseLost(error) || this.closed || this.view !== view) throw error;
-        this.lease = null;
-        if (!takeOver) return;
-        const lease = await this.ensureControl(view);
-        this.requireCurrentView(view);
-        await action(view, lease);
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+          const lease = await this.ensureControl(view, takeOver);
+          this.requireCurrentView(view);
+          if (lease) await action(view, lease);
+          return;
+        } catch (error: unknown) {
+          // A structured refusal proves the action was not applied. Retry expiry once; a passive resize
+          // remains a follower if another view holds control, including a transfer during this request.
+          if (!leaseLost(error) || this.closed || this.view !== view) throw error;
+          this.lease = null;
+          if (!takeOver && (error.failure.code === "controlConflict" || attempt === 1)) return;
+          if (attempt === 1) throw error;
+        }
       }
     });
     const finish = (error?: unknown): void => {
@@ -647,36 +645,40 @@ export class RuntimeTerminal implements vscode.Pseudoterminal {
     );
   }
 
-  private async ensureControl(view: TerminalView): Promise<TerminalControlLease> {
-    this.requireCurrentView(view);
+  private async ensureControl(view: TerminalView, takeOver: boolean): Promise<TerminalControlLease | null> {
     const lease = this.lease;
-    if (lease && lease.expiresAtMs > Date.now() + 5_000) return lease;
+    const now = Date.now();
+    if (lease && lease.expiresAtMs > now + 5_000) return lease;
     // A lease whose time is already up cannot be renewed: the Runtime retires it before answering, so asking
     // to renew is a round trip that fails by construction. Past that moment the only move is to ask for
     // control again, which is what a person typing after a quiet minute is entitled to.
-    const renewable = lease !== null && lease.expiresAtMs > Date.now();
-    if (renewable && lease) {
-      const renewed = await view.renewControl({
-        requestId: newMutationRequestId(),
-        terminalId: view.opened.terminal.terminalId,
+    const renewable = lease && lease.expiresAtMs > now;
+    const control = { requestId: newMutationRequestId(), terminalId: view.opened.terminal.terminalId };
+    const acquired = renewable
+      ? await view.renewControl({
+        ...control,
         leaseId: lease.leaseId,
         leaseGeneration: lease.leaseGeneration,
+      })
+      : await view.acquireControl({
+        ...control,
+        expectedTerminalGeneration: view.opened.terminal.terminalGeneration,
+        ...(!takeOver ? { onlyIfFree: true } : {}),
+      }).catch((error: unknown) => {
+        // Older Runtime generations reject the new condition. Keep their view usable without ever
+        // falling back to an unconditional passive acquisition.
+        if (!takeOver && error instanceof RuntimeRequestError && error.failure.code === "invalidRequest") return null;
+        throw error;
       });
-      this.requireCurrentView(view);
-      this.lease = renewed;
-      return renewed;
-    }
-    const acquired = await view.acquireControl({
-      requestId: newMutationRequestId(),
-      terminalId: view.opened.terminal.terminalId,
-      expectedTerminalGeneration: view.opened.terminal.terminalGeneration,
-    });
     this.requireCurrentView(view);
+    if (!acquired) return null;
     this.lease = acquired;
     // Geometry follows the lease holder: the process was sized for whoever held control before, so this view's
-    // own size is sent once, after this action, now that it is the one typing.
-    this.lastResize = { columns: 0, rows: 0 };
-    this.scheduleResize();
+    // own size is sent once after gaining authority, whether by typing or by reclaiming a free lease.
+    if (!renewable) {
+      this.lastResize = { columns: 0, rows: 0 };
+      this.scheduleResize();
+    }
     return acquired;
   }
 
@@ -684,11 +686,6 @@ export class RuntimeTerminal implements vscode.Pseudoterminal {
     if (this.closed || this.view !== view) {
       throw new RuntimeTransportError("the Runtime terminal view changed before control dispatch");
     }
-  }
-
-  /// Whether this view holds a control lease that has not run out.
-  private holdsControl(): boolean {
-    return this.lease !== null && this.lease.expiresAtMs > Date.now();
   }
 
   private fail(error: unknown): void {

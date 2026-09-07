@@ -4155,6 +4155,10 @@
           "minimum": 0,
           "type": "integer"
         },
+        "onlyIfFree": {
+          "description": "Refuse to replace an unexpired holder. Omission preserves explicit control takeover.",
+          "type": "boolean"
+        },
         "requestId": {
           "$ref": "#/$defs/MutationRequestId",
           "description": "Caller-minted mutation identity."

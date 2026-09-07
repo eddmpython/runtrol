@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Terminal control acquisition can require that no unexpired holder exists through `onlyIfFree`.
 - Add synchronous and asynchronous observed-terminal text input and typed owner window registration and duplex APIs.
 - Keep owner operations serial and bounded, close cancelled receivers, and never replay an unknown input outcome.
 

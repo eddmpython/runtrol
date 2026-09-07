@@ -109,6 +109,7 @@ impl InputFixture {
                     request_id: MutationRequestId::now(),
                     terminal_id: view.opened.terminal.terminal_id.clone(),
                     expected_terminal_generation: view.hosted.generation,
+                    only_if_free: false,
                 },
             )
             .await

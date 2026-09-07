@@ -939,6 +939,7 @@ async fn write_twice(
             request_id: MutationRequestId::now(),
             terminal_id: terminal_id.clone(),
             expected_terminal_generation: view.opened().terminal.terminal_generation,
+            only_if_free: false,
         })
         .await
         .map_err(|error| format!("acquire the control lease: {error}"))?;
@@ -996,6 +997,7 @@ async fn flood(
             request_id: MutationRequestId::now(),
             terminal_id: terminal_id.clone(),
             expected_terminal_generation: view.opened().terminal.terminal_generation,
+            only_if_free: false,
         })
         .await
         .map_err(|error| format!("acquire the control lease: {error}"))?;
@@ -1699,6 +1701,7 @@ async fn write_through_a_writer(
             request_id: MutationRequestId::now(),
             terminal_id: terminal_id.clone(),
             expected_terminal_generation: view.opened().terminal.terminal_generation,
+            only_if_free: false,
         })
         .await
         .map_err(|error| format!("acquire the control lease: {error}"))?;
@@ -1897,6 +1900,7 @@ async fn stop(
             request_id: MutationRequestId::now(),
             terminal_id: terminal_id.clone(),
             expected_terminal_generation,
+            only_if_free: false,
         })
         .await
         .map_err(|error| format!("take control in {digest}: {error}"))?;

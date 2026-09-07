@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Terminal control acquisition accepts `onlyIfFree` to atomically refuse replacing an unexpired holder.
+  Omitting it preserves the existing request and explicit control transfer.
 - `CatalogueSource` gains `providerStore`: a native session catalogue named from the provider's own store
   (identity, folder, the provider's own title and time) when the provider publishes no listing surface.
   Consumers that match the source exhaustively add the arm; the schema and generated bindings carry it.

@@ -742,6 +742,18 @@ async fn the_terminal_engine_publishes_only_proved_generic_states() {
         "one write is one output"
     );
 
+    // A passive view cannot replace a live holder through the public wire, even with the same integration key.
+    assert!(
+        second_view
+            .acquire_control(&runtrol_runtime_protocol::TerminalAcquireControlParams {
+                request_id: runtrol_runtime_protocol::MutationRequestId::now(),
+                terminal_id: terminal_id.clone(),
+                expected_terminal_generation: opened.terminal.terminal_generation,
+                only_if_free: true,
+            })
+            .await
+            .is_err()
+    );
     // lease_holder: releasing control publishes a held-less terminal; acquiring from another view transfers it
     // under a higher control generation, and the old lease no longer writes.
     first_view
@@ -762,6 +774,7 @@ async fn the_terminal_engine_publishes_only_proved_generic_states() {
             request_id: runtrol_runtime_protocol::MutationRequestId::now(),
             terminal_id: terminal_id.clone(),
             expected_terminal_generation: opened.terminal.terminal_generation,
+            only_if_free: true,
         })
         .await
         .expect("the second view takes control");
@@ -852,6 +865,7 @@ async fn the_terminal_engine_publishes_only_proved_generic_states() {
             request_id: runtrol_runtime_protocol::MutationRequestId::now(),
             terminal_id: terminal_id.clone(),
             expected_terminal_generation: opened.terminal.terminal_generation,
+            only_if_free: false,
         })
         .await
         .expect("the first view takes control back");

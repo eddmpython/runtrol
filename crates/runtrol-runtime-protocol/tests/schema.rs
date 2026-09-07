@@ -3,6 +3,23 @@
 use runtrol_runtime_protocol::{PUBLIC_SCHEMA_NAME, public_schema};
 
 #[test]
+fn conditional_terminal_control_preserves_the_existing_wire_request_when_omitted() {
+    let original = serde_json::json!({
+        "requestId": runtrol_runtime_protocol::MutationRequestId::now(),
+        "terminalId": runtrol_runtime_protocol::RuntimeTerminalId::now(), "expectedTerminalGeneration": 1,
+    });
+    let mut params: runtrol_runtime_protocol::TerminalAcquireControlParams =
+        serde_json::from_value(original.clone()).expect("existing acquisition remains valid");
+    assert!(!params.only_if_free);
+    assert_eq!(serde_json::to_value(&params).unwrap(), original);
+    params.only_if_free = true;
+    assert_eq!(
+        serde_json::to_value(&params).unwrap().get("onlyIfFree"),
+        Some(&serde_json::json!(true))
+    );
+}
+
+#[test]
 fn an_unread_account_is_a_distinct_public_verdict() {
     let encoded = serde_json::json!({
         "status": "unread", "why": "account read timed out", "checkedAtMs": 25,
