@@ -85,6 +85,8 @@ and refactoring that no user can observe do not belong here.
 
 ### Fixed
 
+- Crash reports stay within their file-size limit even when panic details or backtraces are oversized. Truncated
+  reports remain valid UTF-8 and identify the omitted tail.
 - A terminal that cannot reconnect now keeps its last screen, marks its tab as failed, and reports the connection
   error even when the sidebar can still reach Runtime. The message explains how to reopen the conversation.
 

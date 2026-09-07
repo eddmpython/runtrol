@@ -152,8 +152,8 @@ process token, the exact managed process tree, and kernel Job Object containment
 local process grants no access. Each connection proves its session again; an envelope cannot impersonate another
 source. The courier endpoint and admission proof are private to their Runtime generation.
 
-The [admission worker](../crates/runtrol-daemon/src/courier_gate/admission.rs) performs containment and process
-ancestry inspection outside the Runtime's event loop so the event loop can continue serving terminal input.
+The [admission worker](../crates/runtrol-daemon/src/courier_gate/admission.rs) checks exact process identities and
+Windows job membership outside the Runtime's event loop so the event loop can continue serving terminal input.
 It owns the listener's existing greeting permit until inspection ends, including after its caller is cancelled.
 Command admission still rechecks the exact activation after that inspection.
 
@@ -210,6 +210,19 @@ The journey leaves exact asks pending across upgrade and rollback, ends the orig
 image, and abruptly terminates the upgraded Runtime while another ask is pending. It checks contained-process exit,
 closed peers, no replay into the replacement generation, timeout retirement, malformed-frame refusals, and body
 absence after all Runtime handles close. This process fault does not invoke or test the Rust panic hook.
+
+The separate [panic-report regression](../crates/runtrol-daemon/src/crash/tests/courier.rs) runs the actual
+Runtime panic hook in an isolated child process. A production courier retains one unread ask while the panic
+formats its mailbox, wire invocation, received-envelope answer, receipt and duplicate refusal. The test checks
+the persisted crash report and both process output streams for the synthetic body and admission token, verifies
+that the hook actually wrote structural diagnostics and a backtrace, then removes its ended fixture. This covers
+the courier's diagnostic types through the real hook; the generation journey above covers process termination
+and no replay. Neither reads provider-owned transcripts.
+
+That child also exercises small reports, an oversized panic and a deep real backtrace through the
+[crash writer](../crates/runtrol-daemon/src/crash.rs). Formatting stops at the writer's byte ceiling, preserves
+UTF-8 and marks truncation. Rotation checks the projected size under a lock on the same open file before append.
+The existing foreground panic hook remains in place; the owned crash-file bound does not silently replace it.
 
 The [body-residue scanner](../extensions/runtrol-vscode/tooling/bodyResidue.mjs) checks explicit markers in raw,
 JSON-escaped and Unicode-escaped UTF-8 and UTF-16LE. New lifecycle probes create unique ASCII sentinels in memory.

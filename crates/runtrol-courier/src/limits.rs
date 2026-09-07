@@ -54,7 +54,7 @@ pub struct Limits {
     pub hop_count: u8,
     /// Sessions a message may have visited and still be routed once more.
     pub visited_sessions: usize,
-    /// Sessions one room may hold. Rooms open in a later stamp; the ceiling is declared with the others.
+    /// Sessions one room may hold, including its owner.
     pub room_participants: usize,
     /// Rounds one room may run before it closes.
     pub room_rounds: u8,

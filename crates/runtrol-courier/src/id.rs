@@ -101,8 +101,7 @@ courier_identity! {
 }
 
 courier_identity! {
-    /// One bounded dialogue room. Rooms open in a later stamp; the identifier is defined with the others so the
-    /// envelope layout does not change when they do.
+    /// One bounded dialogue room in its owning Runtime generation.
     RoomId
 }
 

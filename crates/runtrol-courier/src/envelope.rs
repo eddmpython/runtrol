@@ -128,7 +128,7 @@ pub struct CallEnvelope {
     pub kind: CallKind,
     /// The exact message a reply or a cancel answers. Absent on a tell and an ask.
     pub reply_to: Option<MessageId>,
-    /// The room this envelope speaks in. Rooms open in a later stamp; until then any room is refused.
+    /// The room assigned by an admitted room operation. Ordinary sends cannot supply their own room tag.
     pub room_id: Option<RoomId>,
     /// The moment after which this envelope is worthless and its body is released.
     pub deadline: UnixMillis,

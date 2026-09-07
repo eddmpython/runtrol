@@ -10,12 +10,14 @@
 //! recorded here is a panic, because a crash whose reason evaporates is the exact silence the error
 //! rules forbid.
 
-use std::io::Write as _;
+use std::fmt::Write as _;
+use std::io::{Seek as _, SeekFrom, Write as _};
 use std::path::{Path, PathBuf};
 
 /// The crash file never grows past this. Old words rotate away rather than accumulate: the newest
 /// crash is the one being investigated, and an unbounded file in a supervised home is its own defect.
-const CRASH_LOG_BOUND_BYTES: u64 = 128 * 1024;
+const CRASH_LOG_BOUND_BYTES: usize = 128 * 1024;
+const TRUNCATED: &str = "\n[crash report truncated]\n";
 
 /// Record every later panic of this process into `path`, then keep unwinding as before.
 ///
@@ -39,26 +41,22 @@ fn record(path: &Path, info: &std::panic::PanicHookInfo<'_>) {
     let moment = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |elapsed| elapsed.as_millis());
-    let entry = format!(
-        "at_epoch_ms={moment}\n{info}\nbacktrace:\n{}\n---\n",
-        std::backtrace::Backtrace::force_capture()
-    );
-    // A panic hook must not panic and has nobody left to tell: if these writes fail, the process is
-    // already dying and the fallback stderr line below is the only remaining honest move.
-    if std::fs::metadata(path).is_ok_and(|meta| meta.len() > CRASH_LOG_BOUND_BYTES)
-        && std::fs::remove_file(path).is_err()
+    let mut entry = Entry(String::with_capacity(CRASH_LOG_BOUND_BYTES));
+    if write!(&mut entry, "at_epoch_ms={moment}\n{info}\nbacktrace:\n").is_err()
+        || writeln!(
+            &mut entry,
+            "{}\n---",
+            std::backtrace::Backtrace::force_capture()
+        )
+        .is_err()
     {
-        eprintln!(
-            "runtrol could not rotate its crash file at {}",
-            path.display()
-        );
+        // The formatter stops at the byte ceiling. Do not build an unbounded intermediate string, and
+        // do not capture or format a backtrace after the panic information already exhausted the budget.
+        entry.0.push_str(TRUNCATED);
     }
-    let written = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-        .and_then(|mut file| file.write_all(entry.as_bytes()));
-    if let Err(error) = written {
+    // A panic hook must not panic and has nobody left to tell: stderr is the remaining channel when
+    // the owned crash file cannot be opened, locked, rotated or written.
+    if let Err(error) = append(path, entry.0.as_bytes()) {
         eprintln!(
             "runtrol could not record its own crash at {}: {error}",
             path.display()
@@ -66,51 +64,40 @@ fn record(path: &Path, info: &std::panic::PanicHookInfo<'_>) {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+/// One bounded UTF-8 report. The reserved suffix makes truncation explicit without exceeding the ceiling.
+struct Entry(String);
 
-    fn a_panic_record(path: &Path, filler: &str) {
-        // The hook shape cannot be driven without a real panic, and a test that installs the global
-        // hook races every other test. The writer is exercised directly instead, through the same
-        // entry `record` builds, which keeps the global hook a two-line glue nobody needs to test.
-        let entry = format!("at_epoch_ms=0\n{filler}\n---\n");
-        if std::fs::metadata(path).is_ok_and(|meta| meta.len() > CRASH_LOG_BOUND_BYTES) {
-            std::fs::remove_file(path).expect("test rotation removes its own file");
+impl std::fmt::Write for Entry {
+    fn write_str(&mut self, value: &str) -> std::fmt::Result {
+        let remaining = CRASH_LOG_BOUND_BYTES.saturating_sub(TRUNCATED.len() + self.0.len());
+        if value.len() <= remaining {
+            self.0.push_str(value);
+            return Ok(());
         }
-        let mut file = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)
-            .expect("test crash file opens");
-        file.write_all(entry.as_bytes())
-            .expect("test crash entry writes");
-    }
-
-    #[test]
-    fn crash_entries_append_and_rotate_at_the_bound() {
-        let directory =
-            std::env::temp_dir().join(format!("runtrol-crash-log-test-{}", std::process::id()));
-        std::fs::create_dir_all(&directory).expect("test directory");
-        let path = directory.join("daemon-crash.log");
-        let _cleared = std::fs::remove_file(&path);
-
-        a_panic_record(&path, "first crash");
-        a_panic_record(&path, "second crash");
-        let both = std::fs::read_to_string(&path).expect("crash file readable");
-        assert!(both.contains("first crash") && both.contains("second crash"));
-
-        let oversized =
-            "x".repeat(usize::try_from(CRASH_LOG_BOUND_BYTES).expect("small bound") + 1);
-        a_panic_record(&path, &oversized);
-        a_panic_record(&path, "after rotation");
-        let rotated = std::fs::read_to_string(&path).expect("rotated crash file readable");
-        assert!(
-            !rotated.contains("first crash"),
-            "rotation dropped old words"
-        );
-        assert!(rotated.contains("after rotation"));
-
-        std::fs::remove_dir_all(&directory).expect("remove the crash test directory");
+        if let Some(prefix) = value.get(..value.floor_char_boundary(remaining)) {
+            self.0.push_str(prefix);
+        }
+        Err(std::fmt::Error)
     }
 }
+
+/// The same open file owns rotation and append, serialized across simultaneous Runtime generations.
+fn append(path: &Path, entry: &[u8]) -> std::io::Result<()> {
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(path)?;
+    file.lock()?;
+    let bound = u64::try_from(CRASH_LOG_BOUND_BYTES).map_err(std::io::Error::other)?;
+    let added = u64::try_from(entry.len()).map_err(std::io::Error::other)?;
+    if file.metadata()?.len().saturating_add(added) > bound {
+        file.set_len(0)?;
+    }
+    file.seek(SeekFrom::End(0))?;
+    file.write_all(entry)
+}
+
+#[cfg(test)]
+#[path = "crash/tests/courier.rs"]
+mod courier_tests;

@@ -57,8 +57,8 @@ pub enum Refusal {
     /// The target is not a live managed session.
     #[error("target {0} is not a live managed session")]
     UnknownTarget(ManagedSessionId),
-    /// The envelope names a room, and rooms are not open.
-    #[error("rooms are not open")]
+    /// An ordinary send supplied a room tag instead of using an admitted room operation.
+    #[error("ordinary sends cannot supply a room tag")]
     RoomsClosed,
     /// The body is larger than the courier's own ceiling, however it was constructed.
     #[error("a body of {len} bytes exceeds the courier ceiling of {ceiling} bytes")]
