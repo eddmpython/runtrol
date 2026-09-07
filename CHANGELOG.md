@@ -85,6 +85,8 @@ and refactoring that no user can observe do not belong here.
 
 ### Fixed
 
+- Restarting extensions from the sidebar closes Runtrol's conversation tabs before the host restarts, including
+  retained failed tabs. Canceling keeps them open, and other terminals and running provider processes are preserved.
 - Crash reports stay within their file-size limit even when panic details or backtraces are oversized. Truncated
   reports remain valid UTF-8 and identify the omitted tail.
 - A terminal that cannot reconnect now keeps its last screen, marks its tab as failed, and reports the connection

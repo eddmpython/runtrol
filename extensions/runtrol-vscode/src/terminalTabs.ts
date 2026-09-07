@@ -23,8 +23,9 @@ export class TerminalTabs implements vscode.Disposable {
   private readonly changedEmitter = new vscode.EventEmitter<void>();
   readonly onDidChange = this.changedEmitter.event;
   private readonly open = new Map<string, vscode.Terminal>();
-  /// The extension PTY behind each tab, which owns the public name-change event for active and inactive tabs.
-  private readonly hosts = new Map<vscode.Terminal, RuntimeTerminal>();
+  /// Exact tabs created here. A disconnected view releases its PTY but retains ownership until the tab closes.
+  private readonly hosts = new Map<vscode.Terminal, RuntimeTerminal | null>();
+  private restarting = false;
   /// Exact public identities returned for open tabs, retained until that tab closes even if its watch drops.
   private readonly journeyTargets = new Map<string, TerminalDescriptor>();
   private readonly journeyTargetByTab = new Map<vscode.Terminal, string>();
@@ -162,12 +163,13 @@ export class TerminalTabs implements vscode.Disposable {
     }
     if (this.started.delete(terminal)) this.startedChanged();
     this.named.delete(terminal);
-    this.hosts.delete(terminal);
+    this.hosts.set(terminal, null);
     this.changedEmitter.fire();
   }
 
   /// Show the conversation's terminal: the tab that already shows it, or a new one beside the active editor.
   show(conversation: Conversation, preserveFocus: boolean): vscode.Terminal {
+    this.checkRestart();
     const existing = this.open.get(conversation.key)
       ?? (conversation.hostedKey ? this.open.get(conversation.hostedKey) : undefined);
     if (existing) {
@@ -210,6 +212,7 @@ export class TerminalTabs implements vscode.Disposable {
   /// conversation to reopen, and the service creates one. The tab is named for the folder until the
   /// service's own listing gives the conversation a title (the sidebar shows it once the store does).
   showFresh(providerId: string, workspace: string, name: string, projectless = false): vscode.Terminal {
+    this.checkRestart();
     // A fresh conversation carries no resume proof, so there is nothing to refresh if the open is refused.
     // The same identity the row will carry, so the signal lands on the row a person is looking at.
     const startedId = `${providerId}:${this.nextStarted + 1}`;
@@ -412,14 +415,14 @@ export class TerminalTabs implements vscode.Disposable {
     target: { providerId: string; workspace: string } | { runtimeGeneration: string; terminalId: string },
   ): [vscode.Terminal, RuntimeTerminal] | null {
     for (const [terminal, host] of this.hosts) {
-      const descriptor = host.descriptor();
+      const descriptor = host?.descriptor();
       if (!descriptor) continue;
       if (
         "terminalId" in target
           ? descriptor.runtimeGeneration === target.runtimeGeneration && descriptor.terminalId === target.terminalId
           : descriptor.providerId === target.providerId && descriptor.workspace === target.workspace
       ) {
-        return [terminal, host];
+        return [terminal, host!];
       }
     }
     return null;
@@ -496,9 +499,35 @@ export class TerminalTabs implements vscode.Disposable {
     });
   }
 
+  private checkRestart(): void {
+    if (this.restarting) throw new Error("Restarting.");
+  }
+
+  /// Close only this host's exact tabs while its terminal RPC is still alive. Deactivation runs too late.
+  async restartHost(restart: () => Thenable<unknown>): Promise<void> {
+    this.checkRestart();
+    this.restarting = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let closed: vscode.Disposable | undefined;
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const check = () => { if (this.hosts.size === 0) resolve(); };
+        closed = this.onDidChange(check);
+        timer = setTimeout(() => reject(new Error("Tabs remain open. Restart canceled.")), 2_000);
+        for (const terminal of this.hosts.keys()) terminal.dispose();
+        check();
+      });
+      await restart();
+    } finally {
+      clearTimeout(timer);
+      closed?.dispose();
+      this.restarting = false;
+    }
+  }
+
   dispose(): void {
     this.closing.dispose();
-    for (const terminal of this.open.values()) terminal.dispose();
+    for (const terminal of this.hosts.keys()) terminal.dispose();
     this.open.clear();
     this.hosts.clear();
     this.journeyTargets.clear();

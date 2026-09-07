@@ -50,9 +50,14 @@ public streaming connection, so terminal output never poisons the ordinary reque
 The private connection is limited to Runtime bootstrap and optional owner administration. Studio's private protocol
 projection contains no terminal open, attach, input, resize, output, or exit variants.
 
-The bundled Runtime is copied by streaming digest into a stable extension-global location. A hard link protects any
-mapped Windows image before replacement. Extension Host restart, VSIX upgrade, and rollback reconnect to the same
-Runtime generations and provider processes.
+The bundled Runtime is materialized as an immutable, content-named executable in extension-global storage.
+[Automatic updates](automaticUpdates.md#ownership) routes delivery and generation lifetime to their owners.
+Restarting the Extension Host detaches its views; Runtime retains the provider processes under their existing
+generation, and opening a conversation again attaches to that exact owner.
+The sidebar's restart command first asks for confirmation, then closes this host's exact conversation tabs while
+the editor connection is still available. It waits for their close events before restarting extensions. Canceling
+leaves the tabs untouched; an unconfirmed close cancels the restart. Tabs created by other extensions are preserved,
+including tabs with the same label. This command does not stop Runtime or the provider processes.
 
 ## One sidebar page
 
@@ -320,7 +325,7 @@ before termination, so nothing lists a dead process afterwards.
 | Module | Owns | Must not own |
 |---|---|---|
 | `core/locator.ts` | Runtime candidate order and endpoint probe | provider names or session policy |
-| `core/managedCore.ts` | digest verification and stable bundled Runtime replacement | session state or provider policy |
+| `core/managedCore.ts` | digest verification and content-named Runtime materialization | session state or provider policy |
 | `core/framing.ts`, `protocol.ts` | bounded private administration frames and their TypeScript projection | public terminal operations or provider fields |
 | `runtimeClient.ts` | approved public identity, locator lifetime, inventory, sessions, approvals, terminal generations | provider credentials or transcript storage |
 | `terminalFleet.ts` | merge exact terminal indexes from current and draining Runtime generations | opening, redirecting, or duplicating provider processes |
@@ -329,7 +334,7 @@ before termination, so nothing lists a dead process afterwards.
 | `sidebarPage.ts` | pure sidebar HTML, CSS, project and conversation row markup | Runtime access, provider policy, or durable state |
 | `usageDisplay.ts`, `usageStrip.ts` | provider-neutral usage semantics, chips, gauges, and detail panels | inferred capacity or provider-specific branches |
 | `providerAccountAction.ts` | explicit provider account tasks and exact completion refresh | credentials, browser authentication, or interpreting command output |
-| `connectionActions.ts`, `connectionSurface.ts` | bounded command-only loading for phone and provider account actions | activation-time account work or provider discovery |
+| `connectionActions.ts`, `connectionSurface.ts` | bounded command-only loading for phone, account, and extension restart actions | activation-time account work or provider discovery |
 | `stateRows.ts` | exact row equality and incomplete-discovery notices | rendering, Runtime calls, or transcript inspection |
 | `controller.ts` | explicit user actions, provider-neutral navigation, workspace binding | transcript discovery or an agent loop |
 | `terminalTabs.ts` | one public Runtime terminal view per editor tab | reading, storing, rewriting, or retrying terminal input |

@@ -30,7 +30,7 @@ import { projectlessRoot } from "./projectlessWorkspace";
 import { accentForWorkspace, ProjectStore } from "./projects";
 import { isBroken, isUsable } from "./providerHealth";
 import { materializeProviderShims } from "./providerShims";
-import { managePhones, pairPhone, reviewPhonePairings } from "./connectionSurface";
+import { managePhones, pairPhone, reviewPhonePairings, restartExtensionHost } from "./connectionSurface";
 import type { RemoteConnection } from "./protocol";
 import { SelectionStore } from "./selectionStore";
 import { ServiceTroubleReported } from "./serviceHelp";
@@ -328,7 +328,7 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     ),
     vscode.commands.registerCommand(
       "runtrol.restartExtensionHost",
-      () => run(restartExtensionHost),
+      () => run(() => restartExtensionHost(terminals)),
     ),
     vscode.commands.registerCommand(
       "runtrol.checkProviderUpdates",
@@ -1077,16 +1077,6 @@ async function run(action: () => Promise<void>): Promise<void> {
     if (error instanceof ServiceTroubleReported) return;
     await vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
   }
-}
-
-async function restartExtensionHost(): Promise<void> {
-  const confirmed = await vscode.window.showWarningMessage(
-    "Restart the VS Code Extension Host? Other extensions in this window will restart too.",
-    { modal: true },
-    "Restart extensions",
-  );
-  if (confirmed !== "Restart extensions") return;
-  await vscode.commands.executeCommand("workbench.action.restartExtensionHost");
 }
 
 function percentile(values: readonly number[], at: number): number {
