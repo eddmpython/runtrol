@@ -415,14 +415,18 @@ export class TerminalTabs implements vscode.Disposable {
     target: { providerId: string; workspace: string } | { runtimeGeneration: string; terminalId: string },
   ): [vscode.Terminal, RuntimeTerminal] | null {
     for (const [terminal, host] of this.hosts) {
-      const descriptor = host?.descriptor();
-      if (!descriptor) continue;
-      if (
-        "terminalId" in target
-          ? descriptor.runtimeGeneration === target.runtimeGeneration && descriptor.terminalId === target.terminalId
-          : descriptor.providerId === target.providerId && descriptor.workspace === target.workspace
-      ) {
-        return [terminal, host!];
+      if (!host) continue;
+      if ("terminalId" in target) {
+        // Recovery temporarily withdraws the transport view, not this tab's exact terminal identity.
+        // Retired hosts are excluded above; their remembered descriptor cannot resurrect a failed view.
+        if (this.journeyTargetByTab.get(terminal) === terminalIdentity(target.runtimeGeneration, target.terminalId)) {
+          return [terminal, host];
+        }
+        continue;
+      }
+      const descriptor = host.descriptor();
+      if (descriptor?.providerId === target.providerId && descriptor.workspace === target.workspace) {
+        return [terminal, host];
       }
     }
     return null;
