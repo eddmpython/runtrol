@@ -99,6 +99,49 @@ export type SidebarAssets = UsageStripAssets & {
   readonly accentIconUris: ReadonlyMap<string, string>;
 };
 
+export type SidebarPaint = { readonly model: SidebarModel; readonly assets: SidebarAssets };
+
+// Compare the projection's plain values without serializing every conversation on each event.
+function sameValue(left: unknown, right: unknown): boolean {
+  if (left === right) return true;
+  if (!left || !right || typeof left !== "object" || typeof right !== "object") return false;
+  const a = Object.entries(left);
+  const b = Object.entries(right);
+  return a.length === b.length && a.every(([key, value]) =>
+    Object.hasOwn(right, key) && sameValue(value, (right as Record<string, unknown>)[key]));
+}
+
+function sameAssets(left: SidebarAssets, right: SidebarAssets): boolean {
+  return ["iconUris", "accentIconUris"].every((name) => {
+    const a = left[name as "iconUris" | "accentIconUris"];
+    const b = right[name as "iconUris" | "accentIconUris"];
+    return a.size === b.size && [...a].every(([key, value]) => b.get(key) === value);
+  });
+}
+
+export function sidebarChanged(current: SidebarPaint, previous: SidebarPaint): boolean {
+  return !sameValue(current.model, previous.model) || !sameAssets(current.assets, previous.assets);
+}
+
+function retained(tag: string, identity: string): string {
+  return `<${tag} data-retain="${escapeHtml(identity)}"></${tag}>`;
+}
+
+type PaintContext = {
+  readonly previous: SidebarPaint;
+  readonly rows: ReadonlyMap<string, SidebarConversationRow>;
+};
+
+function rowHtml(row: SidebarConversationRow, assets: SidebarAssets, paint?: PaintContext): string {
+  const before = paint?.rows.get(row.key);
+  const oldAssets = paint?.previous.assets;
+  const icon = `${row.icon}\0${row.accent}`;
+  return before && oldAssets && sameValue(row, before)
+    && assets.iconUris.get(row.icon) === oldAssets.iconUris.get(row.icon)
+    && assets.accentIconUris.get(icon) === oldAssets.accentIconUris.get(icon)
+    ? retained("div", `conversation:${row.key}`) : conversationHtml(row, assets);
+}
+
 /// Bytes as the short figure a row can carry: whole megabytes below a gigabyte, one decimal above.
 export function formatMemory(bytes: number): string {
   const megabytes = bytes / (1024 * 1024);
@@ -140,33 +183,42 @@ export function sidebarHtml(model: SidebarModel, assets: SidebarAssets): string 
 /// they had scrolled to all go with it. The usage figures tick on their own clock, so a detail panel closed
 /// itself while the hand was still moving towards it, which is the mouse losing its way (operator, 2026-08-28)
 /// and is also the plainest kind of stutter this panel can have.
-export function sidebarBody(model: SidebarModel, assets: SidebarAssets): string {
+export function sidebarBody(model: SidebarModel, assets: SidebarAssets, previous?: SidebarPaint): string {
+  const paint = previous ? {
+    previous,
+    rows: new Map([...previous.model.projects.flatMap((project) => project.rows), ...previous.model.loose]
+      .map((row) => [row.key, row])),
+  } : undefined;
+  const part = (id: string, value: unknown, before: unknown, render: () => string): string =>
+    previous && sameValue(value, before) && sameAssets(assets, previous.assets)
+      ? retained("div", `id:${id}`) : `<div id="${id}">${render()}</div>`;
   // Every top-level part has a fixed id, present even when empty. The repaint matches elements by key, and
   // an unkeyed part that comes and goes (a notice, the service choice) shifted every part after it onto the
   // wrong element: the list was rebuilt from scratch and jumped to the top whenever a notice appeared
   // (measured 2026-08-29).
-  return `<div id="notices">${model.notices.map(noticeHtml).join("")}</div>
-<div id="choice">${model.serviceChoice ? serviceChoiceHtml(model.serviceChoice, assets) : ""}</div>
-<div id="first-run">${model.firstRun ? firstRunHtml() : ""}</div>
-${zonesHtml(model, assets)}`;
+  return `${part("notices", model.notices, previous?.model.notices, () => model.notices.map(noticeHtml).join(""))}
+${part("choice", model.serviceChoice, previous?.model.serviceChoice, () => model.serviceChoice ? serviceChoiceHtml(model.serviceChoice, assets) : "")}
+${part("first-run", model.firstRun, previous?.model.firstRun, () => model.firstRun ? firstRunHtml() : "")}
+${zonesHtml(model, assets, paint)}`;
 }
 
-function zonesHtml(model: SidebarModel, assets: SidebarAssets): string {
+function zonesHtml(model: SidebarModel, assets: SidebarAssets, paint?: PaintContext): string {
   const projects = model.projects.length === 0
     ? ""
     : `<section class="zone" aria-label="Projects">
 <h2 class="zone-title">Projects</h2>
-${model.projects.map((project) => projectHtml(project, assets)).join("")}
+${model.projects.map((project) => projectHtml(project, assets, paint)).join("")}
 </section>`;
   const loose = model.loose.length === 0
     ? ""
     : `<section class="zone" aria-label="Conversations">
 <h2 class="zone-title">Conversations</h2>
-<div class="rows">${model.loose.map((row) => conversationHtml(row, assets)).join("")}</div>
+<div class="rows">${model.loose.map((row) => rowHtml(row, assets, paint)).join("")}</div>
 </section>`;
   const usage = model.usage.length === 0
     ? ""
-    : `<section class="zone usage-zone" id="usage" aria-label="Usage">
+    : paint && sameValue(model.usage, paint.previous.model.usage) && sameAssets(assets, paint.previous.assets)
+      ? retained("section", "id:usage") : `<section class="zone usage-zone" id="usage" aria-label="Usage">
 <h2 class="zone-title"><i class="ci ci-gauge" aria-hidden="true"></i>Usage</h2>
 ${usagePanelsMarkup(model.usage)}
 ${usageChipsMarkup(model.usage, assets)}
@@ -203,7 +255,11 @@ export function countText(value: number): string {
   return Math.max(0, Math.trunc(value)).toLocaleString("en-US");
 }
 
-function projectHtml(project: SidebarProjectRow, assets: SidebarAssets): string {
+function projectHtml(project: SidebarProjectRow, assets: SidebarAssets, paint?: PaintContext): string {
+  const before = paint?.previous.model.projects.find((row) => row.key === project.key);
+  if (before && paint && sameValue(project, before) && sameAssets(assets, paint.previous.assets)) {
+    return retained("div", `project-container:${project.key}`);
+  }
   // What the project holds, not what fits: the rows are capped at five and the count is the reason a person
   // knows there is more before they reach the row that says so.
   const count = project.rows.length + project.hidden;
@@ -235,7 +291,7 @@ ${badges}
 ${repository ? `<span class="project-repository">${repository}</span>` : ""}
 ${actions}
 </div>
-<div class="rows">${project.rows.map((row) => conversationHtml(row, assets)).join("")}${moreHtml(project)}</div>
+<div class="rows">${project.rows.map((row) => rowHtml(row, assets, paint)).join("")}${moreHtml(project)}</div>
 </div>`;
 }
 
@@ -604,25 +660,45 @@ const SCRIPT = `
   function morphInto(target, html) {
     var template = document.createElement("template");
     template.innerHTML = html;
-    morphChildren(target, template.content);
+    var existing = new Map();
+    target.querySelectorAll("[data-key], [data-project], [id]").forEach(function (node) {
+      var key = keyOf(node);
+      if (key !== null) existing.set(key, node);
+    });
+    // Validate before touching the page. A recreated webview can have an older document: ask the existing
+    // ready path for its full current body instead of silently displaying a missing referenced row.
+    var references = template.content.querySelectorAll("[data-retain]");
+    for (var reference of references) {
+      var retained = existing.get(keyOf(reference));
+      if (!retained || retained.tagName !== reference.tagName) { post({ type: "ready" }); return; }
+    }
+    var focus = document.activeElement;
+    var scroll = document.getElementById("scroll");
+    var top = scroll ? scroll.scrollTop : 0;
+    morphChildren(target, template.content, existing, new WeakSet());
+    if (focus && focus.isConnected && document.activeElement !== focus) focus.focus({ preventScroll: true });
+    if (scroll) scroll.scrollTop = top;
   }
   function keyOf(node) {
     if (node.nodeType !== 1) return null;
-    return node.getAttribute("data-key") || node.getAttribute("data-project") || node.id || null;
+    if (node.hasAttribute("data-retain")) return node.getAttribute("data-retain");
+    if (node.hasAttribute("data-key")) return (node.getAttribute("data-kind") || "row") + ":" + node.getAttribute("data-key");
+    if (node.hasAttribute("data-project")) return "project-container:" + node.getAttribute("data-project");
+    return node.id ? "id:" + node.id : null;
   }
-  function morphChildren(from, to) {
+  function morphChildren(from, to, existing, claimed) {
     var wanted = Array.prototype.slice.call(to.childNodes);
     var have = Array.prototype.slice.call(from.childNodes);
-    var byKey = {};
-    have.forEach(function (node) { var key = keyOf(node); if (key !== null && !byKey[key]) byKey[key] = node; });
     var matched = new Array(wanted.length);
     var used = new WeakSet();
     // Keyed parts keep their element wherever they moved to.
     wanted.forEach(function (next, index) {
       var key = keyOf(next);
       if (key === null) return;
-      var match = byKey[key];
-      if (match && match.tagName === next.tagName && !used.has(match)) { matched[index] = match; used.add(match); }
+      var match = existing.get(key);
+      if (match && match.tagName === next.tagName && !claimed.has(match)) {
+        matched[index] = match; used.add(match); claimed.add(match);
+      }
     });
     // Unkeyed parts pair up in order with the free unkeyed old nodes of the same kind, so one that appeared
     // or vanished shifts nothing onto the wrong element.
@@ -638,19 +714,23 @@ const SCRIPT = `
     // What nothing wanted leaves first, so what stays is not moved past it: moving an element is a removal
     // and a reinsertion, which restarts its animation and drops its focus (measured 2026-08-29: closing the
     // row above a working one restarted that one's icon and lost the keyboard).
-    have.forEach(function (node) { if (!used.has(node)) from.removeChild(node); });
+    have.forEach(function (node) { if (!used.has(node) && node.parentNode === from) from.removeChild(node); });
     wanted.forEach(function (next, index) {
       var current = from.childNodes[index];
       var match = matched[index];
       if (match) {
         if (match !== current) from.insertBefore(match, current || null);
-        morphNode(match, next);
+        if (!next.hasAttribute || !next.hasAttribute("data-retain")) morphNode(match, next, existing, claimed);
       } else {
-        from.insertBefore(next.cloneNode(true), current || null);
+        // New containers may contain references to rows moved from another project. Build their children
+        // through the same morph so placeholders are never cloned into the live document.
+        var added = next.cloneNode(false);
+        from.insertBefore(added, current || null);
+        if (next.nodeType === 1) morphChildren(added, next, existing, claimed);
       }
     });
   }
-  function morphNode(node, next) {
+  function morphNode(node, next, existing, claimed) {
     if (node.nodeType === 3) { if (node.nodeValue !== next.nodeValue) node.nodeValue = next.nodeValue; return; }
     if (node.nodeType !== 1) return;
     var names = {};
@@ -661,7 +741,7 @@ const SCRIPT = `
     Array.prototype.slice.call(node.attributes).forEach(function (attribute) {
       if (!names[attribute.name]) node.removeAttribute(attribute.name);
     });
-    morphChildren(node, next);
+    morphChildren(node, next, existing, claimed);
   }
   bindProjects();
   window.addEventListener("message", function (event) {

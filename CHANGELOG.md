@@ -92,6 +92,9 @@ and refactoring that no user can observe do not belong here.
 
 ### Fixed
 
+- Sidebar updates send only changed rows instead of rebuilding the entire conversation list. Keyboard focus,
+  scroll position and open usage details remain in place when rows change or move between projects.
+
 - Narrow project headings wrap repository details so large addition and deletion counts remain visible.
 - Account status changes update usage and recovery actions even when the installed CLI has not changed.
 - A failed terminal screen snapshot no longer prevents the next view from recovering the screen. Existing input

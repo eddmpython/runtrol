@@ -28,7 +28,9 @@ import {
   formatMemory,
   rowKeys,
   sidebarBody,
+  sidebarChanged,
   sidebarHtml,
+  type SidebarPaint,
   type SidebarConversationRow,
   type SidebarModel,
   type SidebarNotice,
@@ -102,7 +104,8 @@ type ServiceOffer = () => readonly { providerId: string; displayName: string; ic
 export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposable {
   private view: vscode.WebviewView | null = null;
   private readonly subscriptions: { dispose(): void }[] = [];
-  private lastRendered = "";
+  private lastRendered: SidebarPaint | null = null;
+  private pageReady = false;
   /// The nonce of the document currently in the view, or null while no document has been written. A repaint
   /// changes only the body, so the head that carries the policy and the scripts has to stay the one written
   /// here.
@@ -162,6 +165,9 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
     view.onDidDispose(() => {
       if (this.view === view) {
         this.view = null;
+        this.lastRendered = null;
+        this.pageReady = false;
+        this.documentNonce = null;
         if (this.usageReset) clearTimeout(this.usageReset);
         this.usageReset = null;
       }
@@ -170,9 +176,11 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
       if (view.visible) this.render();
     });
     view.webview.onDidReceiveMessage((message: unknown) => {
+      if (this.view !== view) return;
       this.receive(message).catch(this.report);
     });
-    this.lastRendered = "";
+    this.lastRendered = null;
+    this.pageReady = false;
     this.documentNonce = null;
     this.render();
   }
@@ -223,12 +231,19 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
     if (this.usageReset) clearTimeout(this.usageReset);
     this.usageReset = null;
     this.view = null;
+    this.lastRendered = null;
+    this.pageReady = false;
+    this.documentNonce = null;
   }
 
   private async receive(message: unknown): Promise<void> {
     if (!message || typeof message !== "object") return;
     const { type } = message as Record<string, unknown>;
     if (type === "ready") {
+      // A recreated document loads its original HTML. Its ready message establishes a new baseline.
+      this.pageReady = true;
+      this.lastRendered = null;
+      this.render();
       this.flushReveal();
       return;
     }
@@ -329,9 +344,6 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
     // Keep the packaged container title as the one heading. Assigning a view title makes VS Code synthesize a
     // colon, while the derived release manifest already names this container `Runtrol 0.1.42` exactly.
     if (view.title !== undefined) view.title = undefined;
-    const key = JSON.stringify(model);
-    if (key === this.lastRendered) return;
-    this.lastRendered = key;
     const icons = new Map<string, string>();
     const accentIcons = new Map<string, string>();
     const iconUri = (declared: string): void => {
@@ -357,13 +369,26 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
       iconUris: icons,
       accentIconUris: accentIcons,
     };
+    const paint = { model, assets };
     if (this.documentNonce === null) {
       this.documentNonce = assets.nonce;
       view.webview.html = sidebarHtml(model, assets);
     } else {
+      if (!this.pageReady || !view.visible) return;
+      if (this.lastRendered && !sidebarChanged(paint, this.lastRendered)) return;
       // Only the content changes. The document, its scripts and everything they hold (the open detail panel,
       // the focused row, the scroll position) stay exactly where the person left them.
-      void view.webview.postMessage({ type: "paint", body: sidebarBody(model, assets) });
+      const body = sidebarBody(model, assets, this.lastRendered ?? undefined);
+      this.lastRendered = paint;
+      void view.webview.postMessage({ type: "paint", body }).then((sent) => {
+        if (!sent && this.view === view) {
+          // A retained page sends no new ready event when it becomes visible again.
+          this.lastRendered = null;
+        }
+      }, (error: unknown) => {
+        if (this.view === view) this.lastRendered = null;
+        this.report(error);
+      });
     }
     this.flushReveal();
   }

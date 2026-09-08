@@ -69,6 +69,10 @@ tree cannot draw the edges between zones, the gauges, or the row density this pa
 The packaged container and its only view both use `Runtrol <version>` as their native manifest title. VS Code merges
 them into one header, so the operator sees the product version once, without a second page title or punctuation.
 
+After the initial page, updates serialize changed markup only. Unchanged conversations retain their existing
+elements across updates and project moves, preserving keyboard focus, scroll position and open usage details.
+A recreated page receives a complete current projection before incremental updates resume.
+
 The page has three zones with visible edges, in this order:
 
 - **Projects**: one row per folder the operator added (or has open in this window). A project row collapses,

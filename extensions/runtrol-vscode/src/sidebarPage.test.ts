@@ -7,6 +7,7 @@ import {
   formatMemory,
   rowKeys,
   sidebarBody,
+  sidebarChanged,
   sidebarHtml,
   type SidebarConversationRow,
   type SidebarModel,
@@ -155,6 +156,36 @@ test("what the page draws is separable from the document, so a figure ticking ne
   // The page can find what to replace, and knows to rebind what it replaced.
   assert.ok(html.includes('message.type === "paint"'));
   assert.ok(html.includes("__runtrolBindUsage"));
+});
+
+test("one changed conversation sends no unchanged conversation markup at thirty-row load", () => {
+  const rows = Array.from({ length: 30 }, (_, index) => conversation({ key: `row:${index}`, title: `Unique title ${index}` }));
+  const before = model({ projects: [project({ rows })], loose: [] });
+  const after = model({ projects: [project({ rows: rows.map((row, index) => index === 17 ? { ...row, title: "Changed title" } : row) })], loose: [] });
+  const previous = { model: before, assets };
+  const body = sidebarBody(after, assets, previous);
+  assert.equal((body.match(/data-kind="conversation"/g) ?? []).length, 1);
+  assert.equal((body.match(/data-retain="conversation:/g) ?? []).length, 29);
+  assert.ok(body.includes("Changed title"));
+  assert.ok(!body.includes("Unique title"));
+  assert.equal(sidebarChanged({ model: before, assets }, previous), false);
+  assert.equal(sidebarChanged({ model: after, assets }, previous), true);
+  assert.equal((sidebarBody(after, assets).match(/data-kind="conversation"/g) ?? []).length, 30,
+    "a new document baseline contains all current rows");
+});
+
+test("asset changes redraw their conversation and moved rows retain exact identity", () => {
+  const before = model({ projects: [project({ rows: [conversation({ open: true })] })], loose: [] });
+  const changedAssets = { ...assets, accentIconUris: new Map(assets.accentIconUris) };
+  changedAssets.accentIconUris.set("claude\0#4e94ce", "https://icons/updated.svg");
+  assert.equal(sidebarChanged({ model: before, assets: changedAssets }, { model: before, assets }), true);
+  const changed = sidebarBody(before, changedAssets, { model: before, assets });
+  assert.ok(changed.includes("https://icons/updated.svg"));
+  assert.ok(!changed.includes('data-retain="conversation:claude:one"'));
+  const moved = model({ projects: [project({ key: "project:new", rows: before.projects[0].rows })], loose: [] });
+  assert.ok(sidebarBody(moved, assets, { model: before, assets }).includes('data-retain="conversation:claude:one"'));
+  const removed = model({ projects: [], loose: [] });
+  assert.ok(!sidebarBody(removed, assets, { model: before, assets }).includes("claude:one"));
 });
 
 test("left bars are absent and open or working conversations use the exact accented provider glyph", () => {
