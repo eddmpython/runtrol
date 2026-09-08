@@ -54,10 +54,23 @@ The bundled Runtime is materialized as an immutable, content-named executable in
 [Automatic updates](automaticUpdates.md#ownership) routes delivery and generation lifetime to their owners.
 Restarting the Extension Host detaches its views; Runtime retains the provider processes under their existing
 generation, and opening a conversation again attaches to that exact owner.
+
+### Restart Studio without stopping conversations
+
+In the Runtrol sidebar menu, choose **Restart the Extension Host**, confirm **Restart extensions**, then reopen the
+conversations you need from the sidebar. Their running processes remain in Runtime; reopening attaches to those
+owners rather than starting duplicate conversations.
+
 The sidebar's restart command first asks for confirmation, then closes this host's exact conversation tabs while
 the editor connection is still available. It waits for their close events before restarting extensions. Canceling
 leaves the tabs untouched; an unconfirmed close cancels the restart. Tabs created by other extensions are preserved,
 including tabs with the same label. This command does not stop Runtime or the provider processes.
+
+VS Code's built-in **Developer: Restart Extension Host** bypasses that preparation and can leave unresponsive
+terminal tabs behind. Its stable extension API does not expose the ownership identity needed to reclaim those tabs
+automatically. Close an affected old tab manually and open the conversation from the Runtrol sidebar again. Do not
+stop its provider process just to repair the view. Automatic recovery of those orphan tabs remains unresolved;
+the Runtrol restart command above is the verified path.
 
 ## One sidebar page
 

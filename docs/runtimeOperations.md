@@ -164,4 +164,5 @@ different operation and preserves its existing owners.
 | SDK says `protocolIncompatible` | Compare revision inventories and choose a signed compatible update or rollback |
 | SDK says `integrationRevoked` | Remove obsolete consumer credentials and enroll a new identity with user intent |
 | Update leaves old daemon active | Review its exact terminal owners, finish their work and explicitly stop those terminals when appropriate; an idle prompt remains a live owner |
+| An old terminal tab stops responding after restarting extensions | Follow the [Studio restart procedure](vscodeSurface.md#restart-studio-without-stopping-conversations); closing a view does not require stopping its live conversation |
 | Uninstaller reports an existing locator or unconfirmed process completion | Review sessions, stop Runtime, and wait for confirmed completion before retrying; keep the completion process and retained state intact |
